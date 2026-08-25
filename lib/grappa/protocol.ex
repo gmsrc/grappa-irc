@@ -124,10 +124,30 @@ defmodule Grappa.Protocol do
   # cannot tell from a shape change (its moduledoc: delete and re-create, no
   # `--force`), so it is not smuggled in alongside a product change.
   #
+  # v7 (#1769) adds an INBOUND shape rather than an outbound one: the
+  # per-channel topic now reads a join param, `%{"presence" => false}`, and a
+  # socket that sends it stops being pushed peer join/part/quit. Additive in
+  # both directions — only the literal `false` suppresses, so a client that
+  # joins the way it joins today receives what it receives today — and it
+  # bumps for the #1393d reason all the same: the break it expresses runs
+  # new-client → old-server. A cic that has come to rely on the pause will
+  # ask an old server for it, be silently served the full flood, and have no
+  # way to know except this number.
+  #
+  # ⚠️ `mix grappa.wire_pin --check` was SILENT here too — measured, with the
+  # channel change already applied it answered `wire shape and protocol 6
+  # agree.` It could not have done otherwise: the digest spans the codegen
+  # artefacts, and a join param read in `GrappaWeb.GrappaChannel.join/3` is
+  # in no `*wire.ex` and on no `@extra_modules` list. Third recorded instance
+  # of the same detector gap (#1679 `BootJSON`, #1766 `UserSettingsJSON`,
+  # this one a channel callback), and the first where the un-covered surface
+  # is INBOUND — which no widening of the outbound codegen digest would ever
+  # reach. Filed as #1787. The bump here is the RULE, not the gate.
+  #
   # @min_protocol_version is NOT the same axis and stays at 1: it rises only
   # when old clients can no longer be SERVED, and every client that spoke v1
-  # is still served — v1 clients tolerate what v6 clients require.
-  @protocol_version 6
+  # is still served — v1 clients tolerate what v7 clients require.
+  @protocol_version 7
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -138,7 +158,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 6
+  @spec version() :: 7
   def version, do: @protocol_version
 
   @doc """

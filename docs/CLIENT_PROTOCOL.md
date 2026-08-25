@@ -319,6 +319,49 @@ The event is pushed on both the live edge and the user-topic cold snapshot,
 so a reload re-learns the verdict; the REST twin is the `registered` field
 of `GET /networks`' `connection` object.
 
+### 4a. Muting peer presence on a channel you are not reading (#1769)
+
+A per-channel topic accepts ONE join param. Join with
+
+```json
+{"presence": false}
+```
+
+and the server stops pushing you `join`, `part` and `quit` rows for that
+channel — the three whose only consumer is the member list. Everything else
+on that topic is delivered exactly as before: messages, `window_counts`, the
+read cursor, topic and mode changes, and the cold-subscribe snapshots.
+
+**You do not have to do anything.** Omit the param and you get everything, as
+you do today. Only the literal `false` suppresses — `true`, a string, or a
+misspelled key all mean the default — so a server that predates this reads
+your params and ignores them, and a client that never learns about them is
+unaffected. That is why this is a join param and not a negotiated capability:
+there is no flag day and nothing to coordinate.
+
+Three things are NEVER suppressed, and they are the reason the drop set is
+three kinds rather than five:
+
+* **`nick_change`** — you need it to migrate anything keyed by a nick
+  (scrollback, read cursors, an open query window). Miss one and your caches
+  point at a nick nobody holds, silently.
+* **`mode`** — channel-mode state outlives the pause.
+* **your OWN `join`/`part`/`quit`** — an own PART is how you learn the window
+  is gone. The server matches your live nick with the same ASCII fold it uses
+  everywhere else and follows it across a rename.
+
+The intended use is a window the operator has stopped looking at: leave the
+topic joined (leaving it would make the window blind, not quiet — it carries
+the messages too), re-join with `{"presence": false}` when the window goes
+cold, and re-join without the param when it comes back. **Re-join, plural:
+the param is read once, at join.** Changing your mind means joining the topic
+again — Phoenix closes the previous channel for you — and the events that
+arrive between the two joins are not replayed, so refetch the member list on
+resume and backfill messages from your last known id.
+
+Check `protocol_version >= 7` before relying on it. An older server will
+accept the join and quietly send you everything.
+
 ---
 
 ## 5. Wire format
