@@ -64172,3 +64172,138 @@ for artwork any more, so they can never fire — and a stub that cannot fire is
 worse than absent, because it would absorb a real regression in silence
 instead of letting it fail. One spec keeps the watch and makes it loud:
 `issue682` ABORTS the request and asserts the count is zero.
+<!-- entry #1769 -->
+
+---
+
+## 2026-08-25 — #1769: the choke point the issue named cannot see the traffic
+
+#1680 shipped the presence pause at cic's dispatch edge: a channel nobody has
+looked at for two minutes stops APPLYING peer join/part/quit. The events still
+cross the socket, still get decoded, still wake the main thread. This is the
+server half — a join param that stops them being sent — and three of its four
+interesting decisions came out of measuring something the issue asserted.
+
+### The choke point named in the issue is unreachable for this traffic
+
+The issue pointed at `handle_info(%Phoenix.Socket.Broadcast{})`
+(`grappa_channel.ex:474`) as "one choke point that already exists". It is not
+one for per-channel traffic, and the module says so in its own moduledoc
+twenty lines earlier: the framework installs a FASTLANE subscription on a
+channel's own topic, so `Grappa.PubSub.broadcast_event/2` is encoded once by
+the dispatcher and written straight to the transport. That clause only ever
+serves #1088's foreign socket topic, which carries no fastlane. Confirmed in
+Phoenix's own dispatcher (`phoenix/channel/server.ex:93-118`).
+
+### Why not `intercept`, which is the idiom
+
+`Phoenix.Channel.intercept/1` compiles to `__intercepts__/0`, and
+`init_join/3` copies that list into EVERY socket's fastlane metadata. It is a
+per-MODULE, all-sockets switch. Declaring it would route every `"event"`
+broadcast on every topic for every client through a channel process: one extra
+`send` and a per-socket `encode!` in place of one cached encode — small, but a
+regression on the DEFAULT path of a performance issue, paid by clients that
+never asked. The larger objection is the mailbox. With the fastlane, a channel
+process is immune to a broadcast flood; with `intercept`, every channel
+process becomes a relay for it, during exactly the netsplit bursts this work
+exists to survive (#1715, #1739).
+
+The way out is that the intercept list lives in the SUBSCRIPTION METADATA, not
+in a global. A per-socket answer is expressible: a suppressing socket trades
+its fastlane for a plain subscription, and Phoenix then routes a `%Broadcast{}`
+whose topic equals the socket's own to `handle_out/3`. Everyone else's path is
+not "equivalent" — it is untouched.
+
+Two consequences, both stated in the code rather than discovered later.
+`handle_out/3` is defined with a VARIABLE head and no `intercept` declaration;
+Phoenix's `__on_definition__` warning fires only on a literal head, i.e. only
+for the case where the declaration really would be missing. And the swap runs
+in `:after_join`, because `join/3` returns BEFORE the framework subscribes —
+so there is a window of microseconds where a presence frame still fastlanes
+past. cic's dispatch-edge drop is what makes that harmless, which is one of
+the two reasons #1680's client-side drop is KEPT rather than replaced. The
+other is an older server, which reads the param and ignores it.
+
+### Own presence, and a cache that follows a rename
+
+Dropping our OWN part would strand a dead window (an own PART is what tears it
+down client-side), so the filter needs the live nick. Reading it per event is a
+GenServer call on the hot path — the load being shed. So it is resolved once at
+join and then FOLLOWS a rename, off the `nick_change` row that the carve-out
+already guarantees delivery of. Piggybacking on that carve-out rather than
+adding a second source of truth is the whole point: the event that must not be
+dropped is exactly the event that says the identity moved.
+
+With no live session the cache is `nil` and nothing matches, so the failure
+direction is DELIVERING presence rather than dropping our own. The fold is
+`Identifier.canonical_target/1`, the same compare `Push.Triggers.own_row?/2`
+uses. Known gap, taken deliberately: an rfc1459 national-char nick echoed in
+the other spelling would not fold together, because closing it costs a second
+`Session.casemapping/2` call on the join path. Same carve-out CLAUDE.md
+already records for `dm_with` and the members map.
+
+### The wire pin was silent, and this time no widening would fix it
+
+`mix grappa.wire_pin --check` answered `wire shape and protocol 6 agree.` with
+the channel change already applied. Third recorded instance of that gap —
+#1679 (`BootJSON`), #1766 (`UserSettingsJSON`), now a channel callback — and
+the FIRST where the un-covered surface is INBOUND. Worth separating from the
+other two: widening the outbound codegen digest, which is the fix those notes
+gesture at, would not have caught this at any width. The bump to 7 is the rule
+(#1393d), not the gate. Filed as #1787.
+
+### The client half re-joins, and that changed what a ruling test asserts
+
+The param is read once, at join, so changing the answer is a re-join. #1680's
+`presenceCooldown.ts` had already anticipated needing this: it holds its
+terminal action behind an injected callback precisely because what "paused"
+DOES was the contested part.
+
+The consequence is a short window with no live delivery on that topic. Nothing
+is lost — every channel join already runs `refreshScrollback` on its ACK, the
+same mechanism every reconnect relies on — but it is a real cost of the ruled
+shape and it is not hidden. It also invalidated an existing oracle.
+`"still delivers MESSAGES on a paused channel — quiet, not blind"` asserted
+that `phx.leave()` is never called, the executable form of vjt's "messages
+must not be lost". A re-join calls leave, so that assertion would now forbid
+the correct implementation. It was replaced by a STRICTER one — the topic is
+joined AGAIN, with `{presence: false}` — which names the end state instead of
+forbidding one gesture that could reach a bad one.
+
+### Two of our own oracles were wrong, in different ways
+
+**`Process.send_after(self(), …, 0)` is a TIMER, not a `send`.** A synchronous
+call to the channel does NOT queue behind it: the timer service can enqueue
+the message after a call made later in wall-clock time. A barrier built on
+`:sys.get_state/1` therefore passed early on some seeds, and the symptom read
+as a product bug — fastlane frames (`join_ref: nil`) reaching a socket that
+had asked for suppression. The cure was to poll the framework's own
+bookkeeping (the PubSub registry) for the state the arms actually depend on.
+
+**A barrier that waits for the state you START in is not a barrier.** The
+`:plain` subscription is a state the join must REACH; `:fastlane` is what
+`init_join/3` installs before `join/3` returns. Polling for the latter is
+satisfied instantly. Measured: two mutants that made the param bite on the
+user topic both survived 13/13. The fix pins the DECISION — the assign, set
+synchronously inside `join/3` — instead of racing the effect. Both die now.
+
+Seven one-axis mutants, all killed deterministically. The `join_ref` split is
+what makes the BUG 6 arm timing-free: a fastlane frame carries `join_ref: nil`
+and a `push/3` frame carries the integer (the same distinction the V2
+serializer puts in element 0 on the real wire), and the dispatcher writes the
+fastlane copy synchronously inside `broadcast_event/2`, so a duplicate is
+already AHEAD of the push copy in the mailbox. Assert on the FIRST matching
+frame and there is no window at all.
+
+### Not measured
+
+The delivered event rate for a paused channel, before and after, on a real
+socket under real load. The issue asks for it and this work does not supply
+it: the e2e proves the frames are ABSENT, which is the qualitative claim, but
+no rate was taken — `origin/main` is undeployed by standing decision and the
+jail is unreachable from here. The `intercept` alternative's cost is likewise
+reasoned from Phoenix's dispatcher source (sends and encodes counted), not
+benchmarked. And nothing here establishes that a paused window is CHEAPER end
+to end once the pause/resume re-join, its join reply and its REST backfill are
+counted against the ~24.4 events/s it stops paying for; that trade is argued,
+not measured.
