@@ -1371,3 +1371,51 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   resume — il titolo torna a cambiare da solo.
   ⚠️ **Costo reale la prima volta: entrambe le worker ferme ~13 ORE** mentre l'orchestratore era all'87%
   e i suoi tick `STALL state=idle` scorrevano senza che nessuno agisse.
+
+## 🧭 REGOLE NATE IL 2026-08-25 (permanenti — migrate dall'handoff)
+- 🔴🔴 **FRA UN'INVOCAZIONE E L'ALTRA L'ORCHESTRATRICE NON ESISTE, E NESSUNA DISCIPLINA INTERNA COPRE
+  QUELL'INTERVALLO.** Due buchi in un giorno, **~7 h di due worker ferme** (`STALL state=idle` fino a
+  7543 s e 12370 s): gli eventi erano tutti arrivati, **in un unico blocco, alla reinvocazione. Il
+  monitor funzionava; il lettore no.** 🥇 *"Stai piu' attenta" era gia' scritto quella stessa mattina e
+  non ha retto mezza giornata* — la contromisura non puo' dipendere dalla buona volonta'.
+  🔴 **Difetto STRUTTURALE dell'auto-clear come salvagente: scatta sulla SOGLIA DI CONTESTO, e
+  un'orchestratrice inattiva non consuma contesto** ⇒ proprio nel caso in cui serve, il trigger non
+  scatta mai. Serve un tick di resume periodico (cron / `/loop`) — **domanda aperta a vjt**.
+- 🥇🥇 **IL `ctx` DENTRO L'EVENTO E' UN DISCRIMINANTE GRATIS, MA SOLO IN UN VERSO.** Un `IDLE` che
+  arriva con il `ctx` che **SALE** (`8→9→10→11→12%`) e' una sessione che genera o legge ⇒ **sta
+  lavorando, fidati, zero comandi.** 🔴 **`ctx` PIATTO NON prova niente**: misurati due eventi di fila a
+  `15%` mentre il costo andava `$1.96 → $4.23` con spinner a `6m 28s` — un turno lungo che PENSA non
+  muove il contesto alla grana dell'1%. ⇒ **sale = prova; piatto = apri il probe.**
+  🥇 *Ennesima faccia dello zero falso e plausibile, stavolta in un criterio nuovo di zecca: un segnale
+  valido in UN verso letto come valido in ENTRAMBI.*
+- 🔴🔴 **UN `grep` DI UNA FRASE SU UN PANE E' UN FALSO NEGATIVO GARANTITO.** Verificata la consegna di un
+  ordine con `grep -c 'dichiaralo nel body'`: **0**, e stavo per concludere "ingoiato" — su un pane dove
+  il re-invio era gia' costato una **tripla sottomissione**. Era arrivato: **il pane manda a capo a meta'
+  frase**, quindi una stringa contigua di piu' parole non matcha MAI. 🥇 **Cerca un TOKEN CORTO e
+  distintivo** (una parola, un path, una sha) — oppure non cercare affatto e usa **costo/ctx**.
+  ⚠️ **E su un pane col render rotto nemmeno il token corto compare**: li' la prova di consegna non
+  esiste e va sostituita col **file handoff inverso** (scrivi l'ordine su `<host>:/tmp/…` e puntacelo).
+- 🔴🔴 **`nohup … & disown` DENTRO un `run_in_background` VIENE REAPATO** (misurato: file di redirect a
+  **ZERO byte**, nessun processo). Il tell e' la notifica di *completed* **immediata** — e' l'`echo`
+  finale del compound, non il waiter. 🥇 **Per un waiter LOCALE usa un `until` NUDO in
+  `run_in_background`** (l'harness lo traccia); il `nohup` serve per gate/deploy **REMOTI**, dove il reap
+  colpisce l'altro verso.
+- 🔴🔴 **IL PATTERN DEL PROBE HOST VA USATO INTERO.** Probato con `pgrep -f "test.sh|mix test"` ⇒
+  concluso **"nessun gate in volo"** su una worker che girava `check.sh` nello **stage bats**: quello
+  stage **non matcha ne' `test.sh` ne' `mix test`, e non alza container**, quindi anche un `docker ps`
+  vuoto "confermava". Stavo per trattare un gate sano come un hang. **Pattern intero:
+  `check.sh|bats-exec|mix |integration.sh`** — ogni ramo copre uno stage che gli altri non vedono.
+  🥇 **Corollario misurato: in un giorno l'HOST ha smentito il PANE quattro volte, sempre nello stesso
+  verso** (pane dice fermo, host dice che lavora) ⇒ **un costo fermo e' quasi sempre una tool call
+  bloccante, non un hang.** Proba l'host PRIMA di concludere.
+- 🔴 **SU voyager (macOS/BSD) NIENTE FLAG GNU, E IL FALLBACK MENTE.** `ls -l --time-style=…` fallisce ⇒
+  il `|| echo "log ASSENTE"` ha dichiarato **assente un log da 339 KB in crescita**. Usa
+  `stat -f"%Sm %z %N"` (come `stat -c%s` → `-f%z`). 🥇 *Un fallback che stampa una DIAGNOSI invece di un
+  errore trasforma un flag sbagliato in un fatto falso.*
+- 🔴 **`watch-prs.sh` si invoca `<PR>:<min_check_attesi>`** e legge i check legati alla SHA
+  (`commits/<head>/check-runs`), **non** `statusCheckRollup` — quello ha detto `tot=4` su una PR da 8.
+  🥇 *Una guardia a risposta nota con la risposta SBAGLIATA e' peggio di nessuna guardia.*
+- ⚠️ **`design-notes-gate.sh` NON e' utilizzabile dall'ORCHESTRATRICE**: prende `[<base-ref>]` e misura i
+  commit di **HEAD**, e l'orchestratrice lo gira dal checkout su `main` ⇒ *"nothing to check"*, **verde
+  vuoto**. I suoi due controlli vanno verificati **a mano sul contenuto** (`---` prima del `## `,
+  marcatore unico).
