@@ -19,7 +19,7 @@
 // moduledoc names it, so the next author edits the table and has a command
 // instead of a ritual.
 //
-// THREE AXES, all reported, union verdict (the `scripts/check.ts` posture):
+// FOUR AXES, all reported, union verdict (the `scripts/check.ts` posture):
 //
 //   REACH  — the logo URL answers 200 with an `image/*` content type. This is
 //            the property the picker needs, and it covers every station
@@ -41,6 +41,24 @@
 //            not the feed's URL, so there is no upstream value to compare the
 //            baked one against. Naming that absence beats inventing a
 //            comparison that would pass on anything.
+//   BYTES  — #1739: `public/radio-logos/<id>.<ext>` still holds what upstream
+//            serves. The picker draws the VENDORED bytes now — no viewer
+//            contacts api.somafm.com — and the one thing that mirror gave up
+//            versus the caching proxy the issue proposed is self-repair: a
+//            re-uploaded logo is picked up by a human verb rather than a TTL.
+//            This axis is what keeps "picked up later" from meaning "never
+//            noticed". A station that publishes no logo is SKIPPED (there is
+//            nothing upstream to compare; the generated tile's freshness is
+//            `src/__tests__/radioLogoFiles.test.ts`'s job, offline), and so is
+//            one whose REACH already failed — a single dead fetch is reported
+//            once, not counted twice under two names.
+//
+// ⚠️ THE LOGO AXIS FETCHES WITH `GET`, NOT `HEAD`, and the feed axis still
+// uses HEAD. BYTES needs the payload, and one GET yields the status, the
+// content type and the body — so REACH is derived from the SAME response
+// rather than from a second request. Two requests to one URL would let the two
+// axes disagree about one resource, which is a worse report than either
+// verdict.
 //
 // THIS FILE IS THE IO HALF ONLY. Every rule lives in `check-radio-logos-core.ts`
 // so that it is reachable from `src` and therefore covered by `tsc --noEmit`;
@@ -52,10 +70,14 @@
 // A catalogue that cannot be fetched is a FAILURE, not a pass: "not measured"
 // must never read as "measured ok" — that equivalence is the whole bug.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { RADIO_LOGO_PATHS } from "../src/lib/radioLogoPaths";
 import { RADIO_STATIONS } from "../src/lib/radioStations";
 import {
   agreeFailure,
   brokenCount,
+  bytesFailure,
   type CatalogueBody,
   catalogueLogos,
   FEED_CONTENT_TYPE,
@@ -68,6 +90,11 @@ import {
 
 const CATALOGUE_URL = "https://api.somafm.com/channels.json";
 const TIMEOUT_MS = 15_000;
+
+/** Resolved against THIS script, so the mirror is found wherever the verb is
+    run from — the reason `gen-emoji.ts` and `sync-radio-logos.ts` do the
+    same. */
+const PUBLIC_DIR = join(import.meta.dir, "..", "public");
 
 /** The catalogue's logo URL per id, or null when the catalogue itself could not
     be read — which the caller must NOT treat as "no disagreement found". */
@@ -102,6 +129,39 @@ async function probeReach(url: string, expected: string): Promise<string | null>
   }
 }
 
+/** REACH and the payload BYTES for one logo, from ONE request.
+ *
+ * #1739 — a GET rather than the HEAD above, because the BYTES axis needs the
+ * body and a second request to the same URL would let two axes disagree about
+ * one resource. `upstream` is null exactly when `reach` is not: there is no
+ * payload to compare when the fetch did not produce one, and reporting the
+ * same dead fetch under two axis names would double-count it. */
+async function probeLogo(url: string): Promise<{
+  readonly reach: string | null;
+  readonly upstream: Uint8Array | null;
+}> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const reach = reachFailure(res.status, res.headers.get("content-type"), LOGO_CONTENT_TYPE);
+    if (reach !== null) return { reach, upstream: null };
+    return { reach: null, upstream: new Uint8Array(await res.arrayBuffer()) };
+  } catch (err) {
+    return { reach: `${err}`, upstream: null };
+  }
+}
+
+/** What `public/radio-logos/` holds for this station, or null when it holds
+    nothing — which `bytesFailure` reports rather than skips. */
+function mirroredBytes(id: string): Uint8Array | null {
+  const path = RADIO_LOGO_PATHS[id];
+  if (path === undefined) return null;
+  try {
+    return new Uint8Array(readFileSync(join(PUBLIC_DIR, path.replace(/^\//, ""))));
+  } catch {
+    return null;
+  }
+}
+
 const catalogue = await fetchCatalogue();
 if (catalogue === null) {
   console.error("\ncheck:radio — cannot verify the table without the catalogue.");
@@ -109,24 +169,33 @@ if (catalogue === null) {
 }
 
 const findings: StationFinding[] = await Promise.all(
-  RADIO_STATIONS.map(async (station) => ({
-    id: station.id,
-    logoUrl: station.logoUrl,
-    feedUrl: station.songsUrl,
+  RADIO_STATIONS.map(async (station) => {
     // #1704 — a station that publishes NO logo is not probed and is not a
     // finding, the same arm `songsUrl` has had since #1698. There is no URL to
     // reach; what the UI draws instead is our own placeholder, which cannot
     // 404. Counted out of the denominator below rather than folded into the
     // green.
-    reach:
-      station.logoUrl === null ? null : await probeReach(station.logoUrl, LOGO_CONTENT_TYPE),
-    agree: agreeFailure(station.logoUrl, station.id, catalogue),
-    // A station that publishes no feed is not probed and is not a finding.
-    feed:
-      station.songsUrl === null
-        ? null
-        : await probeReach(station.songsUrl, FEED_CONTENT_TYPE),
-  })),
+    const logo = station.logoUrl === null ? null : await probeLogo(station.logoUrl);
+    return {
+      id: station.id,
+      logoUrl: station.logoUrl,
+      feedUrl: station.songsUrl,
+      reach: logo?.reach ?? null,
+      agree: agreeFailure(station.logoUrl, station.id, catalogue),
+      // A station that publishes no feed is not probed and is not a finding.
+      feed:
+        station.songsUrl === null
+          ? null
+          : await probeReach(station.songsUrl, FEED_CONTENT_TYPE),
+      // #1739 — only when there is an upstream payload in hand. A skipped row
+      // and a row whose fetch died both report null here: the first has
+      // nothing to compare, and the second is already red on REACH.
+      bytes:
+        logo?.upstream === undefined || logo.upstream === null
+          ? null
+          : bytesFailure(logo.upstream, mirroredBytes(station.id)),
+    };
+  }),
 );
 
 // #1703 — DERIVED, not a constant. The column was a hand-typed 16, which the
@@ -162,7 +231,8 @@ const broken = brokenCount(findings);
 const probed = probedCounts(findings);
 console.log(
   `\ncheck:radio summary — ${findings.length} stations checked ` +
-    `(${probed.logos} with a logo, ${probed.feeds} with a now-playing feed), ${broken} broken`,
+    `(${probed.logos} with a logo, ${probed.mirrored} compared against the mirror, ` +
+    `${probed.feeds} with a now-playing feed), ${broken} broken`,
 );
 
 process.exit(broken === 0 ? 0 : 1);

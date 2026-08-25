@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agreeFailure,
   brokenCount,
+  bytesFailure,
   catalogueLogos,
   isCatalogueBacked,
   probedCounts,
@@ -40,6 +41,7 @@ const finding = (over: Partial<StationFinding>): StationFinding => ({
   reach: null,
   agree: null,
   feed: null,
+  bytes: null,
   ...over,
 });
 
@@ -225,11 +227,68 @@ describe("the FEED axis is not vacuous over the real table", () => {
   });
 });
 
+// #1739 — the BYTES axis: the mirror in `public/radio-logos/` still holds what
+// upstream serves TODAY.
+//
+// WHY IT EXISTS. Vendoring bought privacy and determinism and gave up one
+// thing: a proxy with a TTL would have re-fetched a re-uploaded logo within
+// four hours, while a mirror is refreshed by a human verb. This axis is what
+// keeps that from meaning "a changed logo is invisible" — it makes the staleness
+// DETECTABLE on demand, with the command the table's author already runs when
+// touching the table.
+//
+// WHY BYTES AND NOT A HEAD-AND-COMPARE-LENGTH. `Content-Length` alone would
+// pass a re-upload of the same dimensions, which is exactly what a logo refresh
+// usually is. The comparison has to be the payload.
+describe("bytesFailure", () => {
+  const bytes = (...values: number[]): Uint8Array => Uint8Array.from(values);
+
+  it("is quiet when the mirror holds exactly what upstream serves", () => {
+    expect(bytesFailure(bytes(1, 2, 3), bytes(1, 2, 3))).toBeNull();
+  });
+
+  it("names a re-upload that changed the payload's size", () => {
+    const failure = bytesFailure(bytes(1, 2, 3, 4), bytes(1, 2, 3));
+    expect(failure).toContain("4 bytes");
+    expect(failure).toContain("3 bytes");
+    // The report has to carry the cure, not just the diagnosis: the reader is
+    // an operator holding a red, and the fix is one verb.
+    expect(failure).toContain("sync:radio-logos");
+  });
+
+  it("names a re-upload that kept the size and changed the pixels", () => {
+    // The case a length compare waves through, and the reason this axis reads
+    // the body at all.
+    const failure = bytesFailure(bytes(1, 2, 3), bytes(1, 9, 3));
+    expect(failure).not.toBeNull();
+    expect(failure).toContain("sync:radio-logos");
+  });
+
+  it("names a station upstream serves and the mirror does not hold", () => {
+    // A row added to the table with no sync run behind it. The offline gate
+    // catches this too — but this axis is the one an operator runs while
+    // editing the table, so it must not stay silent and defer.
+    expect(bytesFailure(bytes(1, 2, 3), null)).toContain("sync:radio-logos");
+  });
+});
+
 describe("the union verdict", () => {
   it("reports every axis that has something to say", () => {
     expect(
-      problems(finding({ reach: "HTTP 404", agree: "catalogue ships x", feed: "HTTP 500" })),
-    ).toEqual(["REACH HTTP 404", "AGREE catalogue ships x", "FEED HTTP 500"]);
+      problems(
+        finding({
+          reach: "HTTP 404",
+          agree: "catalogue ships x",
+          feed: "HTTP 500",
+          bytes: "mirror is stale",
+        }),
+      ),
+    ).toEqual([
+      "REACH HTTP 404",
+      "AGREE catalogue ships x",
+      "FEED HTTP 500",
+      "BYTES mirror is stale",
+    ]);
   });
 
   it("counts a station broken on EITHER axis alone", () => {
@@ -241,6 +300,10 @@ describe("the union verdict", () => {
     // fine and shows a permanently empty track line, which is precisely the
     // silent failure a checkable claim is supposed to convert into a red.
     expect(brokenCount([finding({ feed: "HTTP 404" })])).toBe(1);
+    // #1739 — and on the mirror alone: every other axis is happy about a logo
+    // that still resolves and still agrees with the catalogue, while the bytes
+    // this build ships are last month's.
+    expect(brokenCount([finding({ bytes: "mirror is stale" })])).toBe(1);
   });
 
   it("counts a clean station as unbroken", () => {
@@ -282,6 +345,7 @@ describe("a station that publishes no logo (#1704)", () => {
       reach: null,
       agree: null,
       feed: null,
+      bytes: null,
     });
     const counts = probedCounts([
       finding("with-logo", "https://api.somafm.com/logos/120/x120.png", null),
@@ -291,6 +355,29 @@ describe("a station that publishes no logo (#1704)", () => {
 
     expect(counts.logos).toBe(1);
     expect(counts.feeds).toBe(1);
+    // #1739 — the mirror denominator agrees with `logos` only because every
+    // row here reached. The row below is the one that separates them.
+    expect(counts.mirrored).toBe(1);
+  });
+
+  it("counts a logo it could not FETCH out of the mirror denominator (#1739)", () => {
+    // The two numbers must be able to disagree, or `mirrored` is decoration.
+    // A run where upstream is down reaches nothing, so BYTES compared nothing
+    // — and "21 with a logo, 0 broken on BYTES" would read as agreement.
+    const counts = probedCounts([
+      {
+        id: "unreachable",
+        logoUrl: "https://api.somafm.com/logos/120/x120.png",
+        feedUrl: null,
+        reach: "HTTP 503",
+        agree: null,
+        feed: null,
+        bytes: null,
+      },
+    ]);
+
+    expect(counts.logos).toBe(1);
+    expect(counts.mirrored).toBe(0);
   });
 
   it("counts the real table, so the denominator is not a fixture", () => {
@@ -306,6 +393,7 @@ describe("a station that publishes no logo (#1704)", () => {
         reach: null,
         agree: null,
         feed: null,
+        bytes: null,
       })),
     );
     expect(
