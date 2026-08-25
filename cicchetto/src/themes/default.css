@@ -3146,9 +3146,11 @@ html.resize-dragging * {
    share one 48px-tall band and must look identical. */
 button.topic-bar-hamburger,
 .shell-chrome .shell-chrome-rail-opener {
-  /* Suppress the U+2630 text node. It stays in the DOM — it is the a11y-free
-     fallback if the sheet never loads, and ~20 specs locate these buttons —
-     but it must not paint under the bars. */
+  /* Suppress the U+2630 text node. It stays in the DOM — it is what renders
+     if this sheet never loads, and ~20 specs locate these buttons — but it
+     must not paint underneath the bars. The accessible name comes from
+     `aria-label` either way, so zeroing the glyph costs the screen reader
+     nothing. */
   font-size: 0;
 }
 
