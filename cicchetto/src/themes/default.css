@@ -7810,6 +7810,17 @@ button.topic-bar-windows-opener::before,
   padding: 0;
   margin: 0;
   cursor: default;
+  /* #1772 — the backdrop reads like a shield and, until this issue, only ever
+     intercepted CLICKS. A DRAG on it fell through to UIKit as a page pan: the
+     shell slid while the fixed-position menu stayed put, so the content came
+     out from under its own menu. `none` is the honest declaration for a
+     full-viewport shield — there is nothing beneath it that a gesture is meant
+     to reach, and `auto` (the value it had by omission) is precisely the
+     iOS chrome-drag hole #1067 records for any untouched touchable surface.
+     Defense-in-depth only: CSS alone has never stopped UIKit here (see
+     `lib/overlayScrollLock.ts`, v1-v3), and the menu now arms the JS touch
+     lock, which is the half that actually works. */
+  touch-action: none;
 }
 
 .context-menu {
@@ -7846,6 +7857,28 @@ button.topic-bar-windows-opener::before,
     )
   );
   overflow-y: auto;
+  /* #1772 — the scroller carve-out, now that the menu arms the touch lock and
+     so puts the `html.overlay-open body` none-blanket over its own parent. The
+     menu PORTALS to <body>, which is why it escaped `.shell-mobile`'s
+     permanent blanket and needed no carve-out before: it was the one overlay
+     scroller living outside it. The `max-height` + `overflow-y: auto` above
+     make a long item list genuinely scrollable, and without this that scroll
+     would be refused the moment the lock it now takes is armed — fixing the
+     pan by removing the scroll. Same shape as `.rail-actions-menu` (#913).
+     No braces in this comment on purpose: `ruleBody` in the test helper
+     captures up to the first closing brace, so a comment that spells a CSS
+     rule out literally truncates the body its own guard reads. */
+  touch-action: pan-y;
+}
+
+/* #1772 — descendant half of the carve-out above, for the reason #913 spells
+   out at `.rail-actions-menu *`: touch-action does NOT inherit, so every item
+   row sits at the default `auto` under a `none` ancestor, and iOS elects the
+   gesture consumer from the hit-test target's own value. The rows ARE the
+   hit-test target across the whole menu, so the scroller-level declaration
+   alone is the version that ships and does not work. */
+.context-menu * {
+  touch-action: pan-y;
 }
 
 /* #949 — the ruler the placement math measures (ContextMenu.tsx). Fixed, so
