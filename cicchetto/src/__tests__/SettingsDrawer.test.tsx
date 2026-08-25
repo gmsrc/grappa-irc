@@ -1953,6 +1953,38 @@ describe("SettingsDrawer (#476/#478 — per-network identity, both subjects)", (
 // preset must still be visible rather than silently rendering as the
 // nearest option.
 
+// #1766 part 3 — vjt: "da general togliamo il label 'mark me away after' che
+// e' gia' incluso nel titolo del fieldset 'auto-away'". He is right: the
+// <legend> already says it and the blurb below spells the behaviour out in
+// full. The catch is that the <label> WRAPPED the <select>, so it was the
+// select's accessible name — deleting the string alone leaves the control
+// nameless. Same cure #1227 applied to the upload-duration select next door:
+// keep the <label> as the row's flex box, move the naming onto the control.
+describe("SettingsDrawer — the redundant auto-away label (#1766)", () => {
+  it("no longer prints 'mark me away after' anywhere in the general sub-page", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const page = screen.getByTestId("general-subpage");
+    expect(page.textContent).not.toMatch(/mark me away after/i);
+  });
+
+  it("keeps the fieldset's own legend, which is what already said it", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const fieldset = screen.getByTestId("auto-away-select").closest("fieldset");
+    expect(fieldset?.querySelector("legend")?.textContent).toMatch(/auto-away/i);
+  });
+
+  // THE assertion. A bare deletion of the string passes the first test and
+  // strands `[data-testid="auto-away-select"]` with no accessible name at all.
+  it("leaves the select an accessible name", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const byName = screen.getByLabelText(/auto-away/i);
+    expect(byName).toBe(screen.getByTestId("auto-away-select"));
+  });
+});
+
 describe("SettingsDrawer — auto-away debounce (#348)", () => {
   it("offers the presets, an off entry and a custom entry", () => {
     wrap(true);

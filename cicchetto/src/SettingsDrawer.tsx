@@ -1481,9 +1481,22 @@ const SettingsDrawer: Component<Props> = (props) => {
                 everyone else's. */}
             <fieldset class="auto-away-fieldset">
               <legend>auto-away</legend>
+              {/* #1766 — the visible "mark me away after:" text is GONE (vjt:
+                  "e' gia' incluso nel titolo del fieldset"). It was a second
+                  name for the control the legend already names, with the blurb
+                  below spelling the behaviour out in full underneath it.
+
+                  The catch, and why this is not a deletion: that <label>
+                  WRAPPED the <select>, so the text WAS the select's accessible
+                  name — dropping the string alone leaves the control nameless.
+                  Same cure #1227 applied to the upload-duration select two
+                  fieldsets up: the <label> stays as the row's flex box, the
+                  name moves onto the control. NOT the <legend> instead — a
+                  legend names the GROUP, and a screen reader landing on the
+                  select would still be told nothing. */}
               <label>
-                mark me away after:
                 <select
+                  aria-label="auto-away delay"
                   data-testid="auto-away-select"
                   value={autoAwaySelectValue()}
                   onChange={(e) => {
