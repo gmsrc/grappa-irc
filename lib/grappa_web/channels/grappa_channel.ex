@@ -193,6 +193,7 @@ defmodule GrappaWeb.GrappaChannel do
   alias Grappa.Networks.Network
   alias Grappa.PresenceFilter.Resolver
   alias Grappa.PubSub.Topic
+  alias Grappa.Scrollback.Message, as: ScrollbackMessage
   alias Grappa.Scrollback.Wire, as: ScrollbackWire
   alias Grappa.ServerSettings
   alias Grappa.ServerSettings.Wire, as: ServerSettingsWire
@@ -238,7 +239,7 @@ defmodule GrappaWeb.GrappaChannel do
   @type window_state_snapshot_payload :: Session.window_state_snapshot()
 
   @impl Phoenix.Channel
-  def join(topic, _, socket) do
+  def join(topic, params, socket) do
     with {:ok, parsed} <- Topic.parse(topic),
          :ok <- authorize(parsed, socket) do
       # `authorize/2` runs on the PARSED topic, before `canonicalize_topic/1`:
@@ -248,6 +249,11 @@ defmodule GrappaWeb.GrappaChannel do
       # do work on behalf of the user named in the topic — see the authz test
       # in `GrappaWeb.GrappaChannelTest`.
       parsed = canonicalize_topic(parsed)
+
+      # #1769 — the ONLY join param this channel reads. Resolved here so the
+      # after-join leg (which swaps the fastlane) and `handle_out/3` (which
+      # filters) both read one decided assign rather than re-parsing params.
+      socket = assign_presence_suppression(parsed, params, socket)
 
       # NO manual `Phoenix.PubSub.subscribe/2` on THIS channel's own topic —
       # the framework's fastlane subscription (installed by
@@ -261,6 +267,95 @@ defmodule GrappaWeb.GrappaChannel do
       {:error, :forbidden} -> {:error, %{error: "forbidden"}}
     end
   end
+
+  # #1769 — the server half of #1680's presence pause. cic joins a per-channel
+  # topic with `%{"presence" => false}` for a window it has stopped watching;
+  # this decides, ONCE per join, whether that socket is a suppressing one and
+  # caches the identity the own-presence carve-out needs.
+  #
+  # ONLY `false` suppresses. An absent key, `true`, a string, or anything else
+  # is the DEFAULT — everything — because the compatibility guarantee is the
+  # whole reason the shape is join params: a client that joins the way it
+  # joins today receives what it receives today, by construction, so
+  # third-party clients need no coordination (vjt, 2026-08-25). That also
+  # makes the param unknown-is-never-fatal in the client→server direction.
+  #
+  # Presence only ever travels a per-channel topic, so the user- and
+  # network-level clauses ignore the param outright rather than carrying a
+  # flag that could never fire.
+  @spec assign_presence_suppression(Topic.parsed(), map(), Phoenix.Socket.t()) ::
+          Phoenix.Socket.t()
+  defp assign_presence_suppression({:channel, user_name, network_slug, _channel}, params, socket)
+       when is_map(params) do
+    case params do
+      %{"presence" => false} ->
+        socket
+        |> assign(:presence_suppressed, true)
+        |> assign(:presence_own_nick, own_nick_or_nil(user_name, network_slug))
+
+      _ ->
+        assign(socket, :presence_suppressed, false)
+    end
+  end
+
+  defp assign_presence_suppression(_, _, socket), do: assign(socket, :presence_suppressed, false)
+
+  # The own nick at join time, or `nil` when there is no live session to ask
+  # (a cold socket on a parked network). `nil` never matches a sender, so the
+  # carve-out degrades toward DELIVERING presence rather than dropping it —
+  # the safe direction, since a dropped own PART strands a dead window while a
+  # delivered peer JOIN only costs a frame.
+  @spec own_nick_or_nil(String.t(), String.t()) :: String.t() | nil
+  defp own_nick_or_nil(user_name, network_slug) do
+    with {:ok, subject} <- resolve_subject(user_name),
+         {:ok, %Network{} = network} <- Networks.get_network_by_slug(network_slug),
+         {:ok, nick} <- Session.current_nick(subject, network.id) do
+      nick
+    else
+      _ -> nil
+    end
+  end
+
+  # #1769 — trade this socket's fastlane subscription for a plain one, so its
+  # broadcasts arrive as `%Phoenix.Socket.Broadcast{}` structs the channel
+  # process can filter, instead of being encoded once and written straight to
+  # the transport.
+  #
+  # WHY NOT `intercept ["event"]`, THE OBVIOUS PHOENIX IDIOM
+  #
+  # `Phoenix.Channel.intercept/1` compiles to `__intercepts__/0`, a
+  # per-MODULE, all-sockets switch: `Phoenix.Channel.Server.init_join/3`
+  # copies it into EVERY socket's fastlane metadata. Declaring it here would
+  # route every "event" broadcast — on every topic, for every client — through
+  # the channel process, which is a regression on the default path of a
+  # PERF issue and hands each channel process the whole flood in its mailbox
+  # during exactly the netsplit bursts this work exists to survive. Measured
+  # in Phoenix's own dispatcher (`channel/server.ex:93-118`): the fastlane
+  # branch does one `send` of a once-encoded frame, the intercept branch does
+  # a `send` to the channel plus a per-socket `encode!`.
+  #
+  # The intercept list lives in the SUBSCRIPTION METADATA, not in a global, so
+  # a per-socket answer is expressible: drop the metadata and this pid becomes
+  # an ordinary subscriber. `Registry.unregister/2` (what
+  # `Phoenix.PubSub.unsubscribe/2` calls) removes ALL of this pid's entries for
+  # the key, so the pair below leaves exactly ONE subscription — it does not
+  # reintroduce BUG 6, which was a manual subscription ADDED alongside the
+  # fastlane. `grappa_channel_presence_params_test.exs` pins that with an
+  # exactly-once assertion on a message.
+  #
+  # Run from `:after_join` because `join/3` returns BEFORE the framework
+  # subscribes (`Phoenix.Channel.Server.channel_join/4` calls `init_join/3` on
+  # the way out), so there is nothing to unsubscribe from yet. The gap between
+  # the two is the few microseconds it takes the channel to return and read its
+  # mailbox; a presence frame landing inside it is delivered, and cic's
+  # dispatch-edge drop (`presencePause.ts`) is what makes that harmless.
+  @spec drop_fastlane_if_suppressing(Phoenix.Socket.t()) :: :ok
+  defp drop_fastlane_if_suppressing(%{assigns: %{presence_suppressed: true}, topic: topic}) do
+    :ok = Phoenix.PubSub.unsubscribe(Grappa.PubSub, topic)
+    :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+  end
+
+  defp drop_fastlane_if_suppressing(_), do: :ok
 
   # #1088 — addressed delivery. This IS a manual `Phoenix.PubSub.subscribe/2`
   # and it does NOT reintroduce BUG 6: the doubled push happened because a
@@ -452,6 +547,10 @@ defmodule GrappaWeb.GrappaChannel do
   end
 
   def handle_info({:after_join, {:channel, user_name, network_slug, channel}}, socket) do
+    # #1769 — FIRST, before the snapshot's DB + session round-trips: every
+    # millisecond spent here is a millisecond of presence still fastlaning
+    # past a socket that asked not to see it.
+    :ok = drop_fastlane_if_suppressing(socket)
     push_channel_snapshot(user_name, network_slug, channel, socket)
     {:noreply, socket}
   end
@@ -475,6 +574,104 @@ defmodule GrappaWeb.GrappaChannel do
     push(socket, event, payload)
     {:noreply, socket}
   end
+
+  # #1769 — the per-channel filter. Reached ONLY by a socket that joined with
+  # `presence: false`: `drop_fastlane_if_suppressing/1` traded that socket's
+  # fastlane for a plain subscription, and Phoenix routes a `%Broadcast{}`
+  # whose topic equals the socket's own topic to `handle_out/3` rather than to
+  # `handle_info/2` (`Phoenix.Channel.Server.handle_info/2`). Every other
+  # socket never gets here — its frames are still encoded once by the
+  # dispatcher and written straight to the transport, byte-for-byte as before.
+  #
+  # No `intercept/1` declaration accompanies this, deliberately, and the head
+  # is a VARIABLE rather than the `"event"` literal: `intercept` is the
+  # per-module all-sockets switch this design exists to avoid (see
+  # `drop_fastlane_if_suppressing/1`), and Phoenix's `__on_definition__` warning
+  # fires only on a literal head — i.e. only for the case where the declaration
+  # really would be missing. Stating it here rather than dodging it quietly.
+  #
+  # The `handle_out/3` contract is push-or-drop only: it must never mutate
+  # anything a consumer reads as state, because a NON-suppressing socket does
+  # not run it at all and would silently diverge.
+  @impl Phoenix.Channel
+  def handle_out(event, payload, socket) do
+    socket = track_own_nick(payload, socket)
+
+    if drop_presence?(payload, socket) do
+      {:noreply, socket}
+    else
+      push(socket, event, payload)
+      {:noreply, socket}
+    end
+  end
+
+  # Is this frame peer presence a paused window can afford never to be told
+  # about? Three conjuncts, and every one of them is load-bearing:
+  #
+  #   1. The socket ASKED (`presence_suppressed`) — nothing is ever dropped
+  #      from a client that did not opt in.
+  #   2. The kind is in `Message.pausable_presence_kinds/0`, the strict
+  #      subset whose only consumer is the members map. `nick_change` and
+  #      `mode` are OUT of that set on purpose (#372/#373 identity migration
+  #      and channel-mode state), which is why this reads the pausable list
+  #      and not `suppressed_presence_kinds/0`.
+  #   3. The row is not OURS. An own PART tears the window down client-side,
+  #      so dropping it would leak a subscription and strand a dead window —
+  #      cic's `presencePause.shouldDrop/3` carves out the same case with
+  #      `isOwnNick`, and this is its server twin.
+  #
+  # The identity test is `Identifier.canonical_target/1` on both sides, the
+  # same folded compare `Push.Triggers.own_row?/2` uses (#121/#532 C). Known
+  # gap, deliberate: on an rfc1459 network a national-char nick echoed in the
+  # other spelling would not fold together here, because that would cost a
+  # second `Session.casemapping/2` GenServer call on the join path. It is the
+  # same rfc1459-only carve-out CLAUDE.md already records for `dm_with` and
+  # the members map, and it fails toward DELIVERING.
+  @spec drop_presence?(map(), Phoenix.Socket.t()) :: boolean()
+  defp drop_presence?(payload, socket) do
+    suppressing?(socket) and pausable_peer_presence?(payload, socket.assigns[:presence_own_nick])
+  end
+
+  defp suppressing?(socket), do: socket.assigns[:presence_suppressed] == true
+
+  defp pausable_peer_presence?(%{kind: :message, message: %{kind: kind, sender: sender}}, own_nick)
+       when is_binary(sender) do
+    kind in ScrollbackMessage.pausable_presence_kinds() and not own?(sender, own_nick)
+  end
+
+  defp pausable_peer_presence?(_, _), do: false
+
+  defp own?(_sender, nil), do: false
+
+  defp own?(sender, own_nick) when is_binary(own_nick),
+    do: Identifier.canonical_target(sender) == Identifier.canonical_target(own_nick)
+
+  # The cached own nick has to survive a rename or the carve-out above starts
+  # matching a nick nobody holds, and the very next own PART is dropped. The
+  # signal is the `nick_change` row itself — which is NOT in the pausable set,
+  # so a suppressing socket is guaranteed to see it (that carve-out was taken
+  # for cic's #372/#373 migration; the server piggybacks on it rather than
+  # adding a second source of truth).
+  #
+  # Only OUR rename moves the cache: a peer's `nick_change` carries the peer's
+  # old nick as `sender` and folds against a different identity.
+  @spec track_own_nick(map(), Phoenix.Socket.t()) :: Phoenix.Socket.t()
+  defp track_own_nick(
+         %{kind: :message, message: %{kind: :nick_change, sender: sender, meta: meta}},
+         socket
+       )
+       when is_binary(sender) do
+    new_nick = meta[:new_nick]
+
+    if is_binary(new_nick) and suppressing?(socket) and
+         own?(sender, socket.assigns[:presence_own_nick]) do
+      assign(socket, :presence_own_nick, new_nick)
+    else
+      socket
+    end
+  end
+
+  defp track_own_nick(_, socket), do: socket
 
   # GH #630 — the SINGLE inbound choke point for this channel. Phoenix
   # offers no pre-dispatch hook, so EVERY inbound WS frame enters through
