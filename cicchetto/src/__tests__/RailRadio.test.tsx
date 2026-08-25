@@ -11,7 +11,7 @@ import {
   reportPlaybackFailure,
 } from "../lib/audioPlayer";
 import { closeRadioPicker, openRadioPicker, radioPickerOpen } from "../lib/radio";
-import { radioLogoPlaceholder } from "../lib/radioLogoPlaceholder";
+import { RADIO_LOGO_PATHS } from "../lib/radioLogoPaths";
 import { RADIO_STATIONS } from "../lib/radioStations";
 import RailRadio from "../RailRadio";
 
@@ -371,15 +371,16 @@ describe("RailRadio", () => {
     expect(screen.getByTestId("rail-radio-now-genres")).toBeInTheDocument();
   });
 
-  // #1704 — THE LOGO A STATION DOES NOT HAVE, and the one it has that breaks.
-  //
-  // Both render sites were a bare `<img>` with no error handling before this,
-  // so a 404 drew the browser's broken-image glyph and "no logo" could not be
-  // said at all. `logoUrl` is nullable now (Kohina publishes only a favicon),
-  // and both cases land on the same stand-in — but they are DIFFERENT facts and
-  // both are exercised here: one is declared in the table, the other happens at
-  // runtime.
-  describe("a station with no logo, and a logo that breaks (#1704)", () => {
+  // #1739 — WHERE THE ARTWORK COMES FROM, which is the whole of what this
+  // feature now decides. #1704's two facts — a station that publishes no logo,
+  // and a logo that breaks at runtime — used to be settled HERE, at render, by
+  // a null check and an `onError` signal. They are settled at BUILD time now:
+  // `bun run sync:radio-logos` mirrors every station's bytes into
+  // `public/radio-logos/`, writing our generated tile for a `logoUrl: null`
+  // row, and the render reads the resulting path. So the component has no
+  // branch left to test — what is worth testing is the OUTCOME that bought:
+  // every station draws, and no `<img>` names a third party.
+  describe("station artwork is served from our own origin (#1739)", () => {
     const logoless = RADIO_STATIONS.find((s) => s.logoUrl === null);
     const withLogo = RADIO_STATIONS.find((s) => s.logoUrl !== null);
     if (logoless === undefined || withLogo === undefined) {
@@ -394,49 +395,68 @@ describe("RailRadio", () => {
       return img;
     };
 
-    it("draws our own placeholder for a station that publishes none", () => {
+    it("points every picker row at the vendored mirror, never at the station's host", () => {
+      // The privacy outcome the issue was filed for, asserted over the WHOLE
+      // table rather than one row: before #1739 this list issued 21 requests to
+      // api.somafm.com every time the drawer painted, each one handing a third
+      // party an IP and a user agent. One row missed by a later edit is exactly
+      // as leaky as all of them, so the assertion has to be total.
       const { container } = render(() => <RailRadio />);
       openRadioPicker();
 
-      // The production generator, not a copy of its output: a test holding a
-      // hand-pasted data URI would pass while the tile silently changed.
+      for (const station of RADIO_STATIONS) {
+        expect(rowLogo(container, station.id).getAttribute("src"), `station ${station.id}`).toBe(
+          RADIO_LOGO_PATHS[station.id],
+        );
+      }
+    });
+
+    it("draws the mirrored bytes for a station that publishes a logo", () => {
+      // The control for the row below. Without it, a change that pointed every
+      // row at the placeholder would satisfy "no third party" perfectly.
+      const { container } = render(() => <RailRadio />);
+      openRadioPicker();
+
+      const src = rowLogo(container, withLogo.id).getAttribute("src");
+      expect(src).toBe(RADIO_LOGO_PATHS[withLogo.id]);
+      expect(src).not.toBe(withLogo.logoUrl);
+    });
+
+    it("draws our own generated tile for a station that publishes none", () => {
+      // Kohina. The file behind this path holds `radioLogoPlaceholderSvg`'s
+      // output — `radioLogoFiles.test.ts` is what compares the two, offline.
+      // Here the claim is narrower and still worth making: the null row is not
+      // skipped, and it does not fall back to anything.
+      const { container } = render(() => <RailRadio />);
+      openRadioPicker();
+
       expect(rowLogo(container, logoless.id).getAttribute("src")).toBe(
-        radioLogoPlaceholder(logoless.id, logoless.title),
+        RADIO_LOGO_PATHS[logoless.id],
       );
     });
 
-    it("still draws the real logo for a station that has one", () => {
-      // The control. Without it, a predicate inverted by one edit would put the
-      // placeholder on every row and every other assertion here would pass.
+    it("carries no error handler, because there is nothing left for one to do", () => {
+      // Not a mirror of the implementation: `onError` existed to swap in a
+      // placeholder when a third-party URL broke, and a same-origin asset the
+      // offline gate proves is present cannot break that way. Re-adding one
+      // would mean a second stand-in mechanism beside the vendored tile, which
+      // is the duplication #1739 removed.
       const { container } = render(() => <RailRadio />);
       openRadioPicker();
 
-      expect(rowLogo(container, withLogo.id).getAttribute("src")).toBe(withLogo.logoUrl);
+      expect(rowLogo(container, withLogo.id).getAttribute("onerror")).toBeNull();
     });
 
-    it("falls back to the placeholder when a real logo fails to load", () => {
-      // The runtime half. `check:radio` gates these URLs, so this can only fire
-      // on a transient upstream failure — which is exactly when a tile beats
-      // the browser's broken-image glyph.
-      const { container } = render(() => <RailRadio />);
-      openRadioPicker();
-      const img = rowLogo(container, withLogo.id);
-
-      img.dispatchEvent(new Event("error"));
-
-      expect(img.getAttribute("src")).toBe(radioLogoPlaceholder(withLogo.id, withLogo.title));
-    });
-
-    it("the rail chrome uses the same stand-in as the picker row", () => {
+    it("the rail chrome draws the same artwork as the picker row", () => {
       // One component behind both sites: the tuned-station chrome and the list
-      // row must not disagree about what a station looks like, and before this
+      // row must not disagree about what a station looks like, and before #1704
       // they were two hand-copied <img> tags free to drift.
       const { container } = render(() => <RailRadio />);
       openRadioPicker();
       screen.getByTestId(`rail-radio-station-${logoless.id}`).click();
 
       const chrome = container.querySelector<HTMLImageElement>(".rail-radio-now-logo");
-      expect(chrome?.getAttribute("src")).toBe(radioLogoPlaceholder(logoless.id, logoless.title));
+      expect(chrome?.getAttribute("src")).toBe(RADIO_LOGO_PATHS[logoless.id]);
     });
   });
 

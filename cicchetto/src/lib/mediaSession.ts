@@ -1,6 +1,7 @@
 import { activeAudio, audioFailureLabel, playbackFailure } from "./audioPlayer";
 import { nowPlaying } from "./nowPlaying";
 import { tunedStation } from "./radio";
+import { RADIO_LOGO_PATHS } from "./radioLogoPaths";
 
 // #1702 — what the OS is told about what we are playing.
 //
@@ -48,13 +49,20 @@ export type MediaSessionMetadata = {
   readonly artwork: readonly MediaSessionArtwork[];
 };
 
-/** Extension → mime, for the logo URLs the curated table carries.
+/** Extension → mime, for the vendored logo paths the generated map carries.
  *
- * #1696 is why this READS the URL instead of assuming one extension: the table
- * holds 10 `.jpg` and 4 `.png`, and the `<id>120.png` shape that used to be
- * assumed only LOOKED like a convention. Reading the extension off the string
- * is reading a value we were given; inferring it would be repeating the exact
- * mistake that issue existed to fix. */
+ * #1696 is why this READS the path instead of assuming one extension: the
+ * table holds a mix of `.jpg` and `.png`, and the `<id>120.png` shape that used
+ * to be assumed only LOOKED like a convention. Reading the extension off the
+ * string is reading a value we were given; inferring it would be repeating the
+ * exact mistake that issue existed to fix.
+ *
+ * #1739 — the string it reads is now OUR path rather than upstream's URL, and
+ * the extension survives the move because `sync-radio-logos-core.ts` mirrors
+ * each file under upstream's own extension AND refuses to write bytes whose
+ * content type disagrees with it. That refusal is what keeps this map honest:
+ * a `.png` holding JPEG bytes would hand the OS a type that is not the
+ * payload's, and nothing at runtime could notice. */
 const LOGO_MIME: Readonly<Record<string, string>> = {
   avif: "image/avif",
   gif: "image/gif",
@@ -71,10 +79,10 @@ const LOGO_MIME: Readonly<Record<string, string>> = {
  * dimension from a directory name, which is the guess #1696 punished, not the
  * verbatim read that fixed it. The dimensions are not in `RadioStation`, so we
  * do not claim them; `MediaImage` requires only `src`. */
-function artworkFor(logoUrl: string): MediaSessionArtwork {
-  const ext = logoUrl.split(".").pop()?.toLowerCase();
+function artworkFor(logoPath: string): MediaSessionArtwork {
+  const ext = logoPath.split(".").pop()?.toLowerCase();
   const type = ext === undefined ? undefined : LOGO_MIME[ext];
-  return type === undefined ? { src: logoUrl } : { src: logoUrl, type };
+  return type === undefined ? { src: logoPath } : { src: logoPath, type };
 }
 
 /** The last path segment of an upload's URL — the only name we hold for it.
@@ -138,8 +146,22 @@ export function mediaSessionMetadata(): MediaSessionMetadata | null {
   // NOT sent — it is an SVG built for one 120px slot in the rail, `MediaImage`
   // support for SVG is not something this codebase has measured on any
   // platform, and a lock screen that refuses it would fall back to the app icon
-  // anyway. Sending nothing gets there without the claim.
-  const artwork = station.logoUrl === null ? [] : [artworkFor(station.logoUrl)];
+  // anyway. Sending nothing gets there without the claim. #1739 vendored that
+  // tile to a FILE and did not change this: what the gate proves is that the
+  // file exists, not that a lock screen will render an SVG.
+  //
+  // #1739 — WHAT DID change is the src. This used to hand the OS
+  // `station.logoUrl`, so the platform fetched the artwork from
+  // api.somafm.com on the user's behalf — the same third-party request the
+  // picker stopped making, on the surface that outlives the drawer by hours.
+  // Leaving it would have delivered half the privacy the issue was filed for.
+  //
+  // A path the map does not carry folds into the SAME arm as a logo-less
+  // station rather than falling back to the upstream URL: the fallback would
+  // reinstate exactly the leak this line removes, and `radioLogoFiles.test.ts`
+  // makes the case unreachable in anything that can ship.
+  const logoPath = RADIO_LOGO_PATHS[station.id];
+  const artwork = station.logoUrl === null || logoPath === undefined ? [] : [artworkFor(logoPath)];
 
   // The ARTIST slot, and it is not a compromise: it is the second line, and on
   // a failure there is no track and therefore no artist to displace. `title`

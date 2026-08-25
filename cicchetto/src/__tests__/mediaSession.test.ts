@@ -15,6 +15,7 @@ import {
 } from "../lib/mediaSession";
 import { NOW_PLAYING_POLL_MS, NOW_PLAYING_STALE_MS } from "../lib/nowPlaying";
 import { tuneStation } from "../lib/radio";
+import { RADIO_LOGO_PATHS } from "../lib/radioLogoPaths";
 import { RADIO_STATIONS, type RadioStation } from "../lib/radioStations";
 
 // #1702 — Media Session metadata. On an iOS lock screen the player showed only
@@ -28,10 +29,14 @@ import { RADIO_STATIONS, type RadioStation } from "../lib/radioStations";
 
 /** A station whose logo is a `.jpg`, and one whose logo is a `.png`. #1696
     proved the extension is per-station, so the artwork `type` must be READ off
-    the URL rather than assumed; a test pinned to one extension would pass while
-    the other half of the table shipped the wrong mime. */
-const jpgStation = RADIO_STATIONS.find((s) => s.logoUrl?.endsWith(".jpg") === true);
-const pngStation = RADIO_STATIONS.find((s) => s.logoUrl?.endsWith(".png") === true);
+    the path rather than assumed; a test pinned to one extension would pass while
+    the other half of the table shipped the wrong mime.
+    #1739 — selected on the VENDORED path, which is the string `artworkFor` now
+    reads, rather than on upstream's URL. The two agree by construction (the
+    mirror keeps upstream's extension, and `radioLogoFiles.test.ts` holds them
+    to it) — picking the one under test keeps this honest if they ever stop. */
+const jpgStation = RADIO_STATIONS.find((s) => RADIO_LOGO_PATHS[s.id]?.endsWith(".jpg") === true);
+const pngStation = RADIO_STATIONS.find((s) => RADIO_LOGO_PATHS[s.id]?.endsWith(".png") === true);
 if (jpgStation === undefined || pngStation === undefined) {
   throw new Error("these tests need one .jpg-logo and one .png-logo station in the curated table");
 }
@@ -102,7 +107,7 @@ describe("mediaSessionMetadata", () => {
       title: "Structures from Silence",
       artist: "Steve Roach",
       album: jpgStation.title,
-      artwork: [{ src: jpgStation.logoUrl, type: "image/jpeg" }],
+      artwork: [{ src: RADIO_LOGO_PATHS[jpgStation.id], type: "image/jpeg" }],
     });
   });
 
@@ -118,7 +123,7 @@ describe("mediaSessionMetadata", () => {
       title: jpgStation.title,
       artist: "",
       album: "",
-      artwork: [{ src: jpgStation.logoUrl, type: "image/jpeg" }],
+      artwork: [{ src: RADIO_LOGO_PATHS[jpgStation.id], type: "image/jpeg" }],
     });
   });
 
@@ -135,12 +140,24 @@ describe("mediaSessionMetadata", () => {
     expect(mediaSessionMetadata()).toMatchObject({ title: "Unattributed", artist: "" });
   });
 
-  it("reads the artwork mime off the URL, so a .png station is not shipped as jpeg", () => {
+  it("reads the artwork mime off the path, so a .png station is not shipped as jpeg", () => {
     tuneStation(pngStation);
 
     expect(mediaSessionMetadata()?.artwork).toEqual([
-      { src: pngStation.logoUrl, type: "image/png" },
+      { src: RADIO_LOGO_PATHS[pngStation.id], type: "image/png" },
     ]);
+  });
+
+  it("hands the OS OUR path and never the station's host (#1739)", () => {
+    // The privacy half, on the surface that outlives the drawer: a lock screen
+    // holds the artwork for as long as the audio plays, and the platform
+    // fetches whatever `src` says. Before this it said api.somafm.com.
+    tuneStation(jpgStation);
+
+    const src = mediaSessionMetadata()?.artwork[0]?.src;
+    expect(src).toBe(RADIO_LOGO_PATHS[jpgStation.id]);
+    expect(src).not.toBe(jpgStation.logoUrl);
+    expect(src?.startsWith("/")).toBe(true);
   });
 
   it("stops asserting the track once the read has gone stale", async () => {
@@ -221,7 +238,7 @@ describe("mediaSessionMetadata", () => {
         title: jpgStation.title,
         artist: audioFailureLabel("network"),
         album: "",
-        artwork: [{ src: jpgStation.logoUrl, type: "image/jpeg" }],
+        artwork: [{ src: RADIO_LOGO_PATHS[jpgStation.id], type: "image/jpeg" }],
       });
     });
 

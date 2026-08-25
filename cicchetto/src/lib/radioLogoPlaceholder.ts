@@ -9,10 +9,15 @@
 // drawer opens, and worse, the rail chrome and the picker row would draw two
 // different tiles for the same station in the same frame.
 //
-// WHY A DATA URI. `img-src 'self' data: https:` (GrappaWeb.Plugs.SecurityHeaders,
-// re-read 2026-08-24) already admits it, so this costs no server change and no
-// second request. Serving the same SVG from our own origin would work under
-// `'self'` too; the data URI just skips the round trip.
+// WHY IT RETURNS AN SVG DOCUMENT AND NOT A DATA URI (#1739). It used to return
+// `data:image/svg+xml,…` and the picker put that straight in an `<img src>`.
+// #1739 vendored every station logo into `public/radio-logos/`, so the tile a
+// logo-less station draws is now a FILE written by `scripts/sync-radio-logos.ts`
+// — which needs the document, not an encoding of it. The data URI was dropped
+// rather than kept beside it: with the render site reading a path, nothing
+// consumed it, and a second exported spelling of one SVG is the drift this
+// module exists to avoid. `img-src 'self'` covers the file; the round trip it
+// costs is one same-origin GET the service worker never had to make either.
 //
 // WHY A HUE AND NOT A HAND-WRITTEN SET, which is a deviation from the letter of
 // "a set" and is deliberate. A literal set needs a size K nobody can justify,
@@ -113,24 +118,27 @@ export function placeholderInitial(title: string): string {
 }
 
 /**
- * A `data:image/svg+xml` URI for `id`'s tile: an opaque hue-derived square
- * carrying `title`'s initial.
+ * The SVG document for `id`'s tile: an opaque hue-derived square carrying
+ * `title`'s initial.
  *
  * Both parameters are required (cic forbids silent-degradation defaults): the
  * id decides the COLOUR because it is stable, and the title supplies the
  * LETTER because it is what a human reads. They are two different jobs and a
  * caller passing one for both would get a tile that moves when the station is
  * renamed.
+ *
+ * THE ONE PRODUCER, and the only caller in the shipped bundle is none: this is
+ * called by `scripts/sync-radio-logos.ts`, which writes the result to
+ * `public/radio-logos/<id>.svg`, and by the tests that measure it.
+ * `radioLogoFiles.test.ts` compares the file on disk against this function, so
+ * editing the tile without re-running the sync is red rather than silent.
  */
-export function radioLogoPlaceholder(id: string, title: string): string {
-  const svg =
+export function radioLogoPlaceholderSvg(id: string, title: string): string {
+  return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${SIDE}" height="${SIDE}" viewBox="0 0 ${SIDE} ${SIDE}">` +
     `<rect width="${SIDE}" height="${SIDE}" fill="${placeholderFill(id)}"/>` +
     `<text x="50%" y="50%" fill="${PLACEHOLDER_GLYPH}" font-family="monospace" font-size="64" ` +
     `text-anchor="middle" dominant-baseline="central">${escapeXml(placeholderInitial(title))}</text>` +
-    `</svg>`;
-  // `encodeURIComponent` rather than base64: the payload stays readable in the
-  // DOM inspector, which matters for a thing whose whole job is to be looked
-  // at when something is missing.
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    `</svg>`
+  );
 }

@@ -4,7 +4,7 @@ import {
   placeholderFill,
   placeholderHue,
   placeholderInitial,
-  radioLogoPlaceholder,
+  radioLogoPlaceholderSvg,
 } from "../lib/radioLogoPlaceholder";
 import { RADIO_STATIONS } from "../lib/radioStations";
 
@@ -71,8 +71,8 @@ describe("the placeholder logo is stable per station (#1704)", () => {
     // The ruling's own words. A `Math.random()` pick would redraw on every
     // open of the drawer, and would put two different tiles for one station on
     // screen at once — the rail chrome and the picker row render separately.
-    const first = radioLogoPlaceholder("kohina", "Kohina");
-    const second = radioLogoPlaceholder("kohina", "Kohina");
+    const first = radioLogoPlaceholderSvg("kohina", "Kohina");
+    const second = radioLogoPlaceholderSvg("kohina", "Kohina");
     expect(second).toBe(first);
   });
 
@@ -89,10 +89,10 @@ describe("the placeholder logo is stable per station (#1704)", () => {
     // station renamed in the picker keeps its colour and only its letter can
     // move, and two stations with the same initial still differ by hue.
     const fill = placeholderFill("kohina");
-    expect(decodeURIComponent(radioLogoPlaceholder("kohina", "Kohina"))).toContain(fill);
-    expect(decodeURIComponent(radioLogoPlaceholder("kohina", "Zohina"))).toContain(fill);
+    expect(radioLogoPlaceholderSvg("kohina", "Kohina")).toContain(fill);
+    expect(radioLogoPlaceholderSvg("kohina", "Zohina")).toContain(fill);
     // The letter followed the rename; the colour did not.
-    expect(decodeURIComponent(radioLogoPlaceholder("kohina", "Zohina"))).toContain(">Z</text>");
+    expect(radioLogoPlaceholderSvg("kohina", "Zohina")).toContain(">Z</text>");
     expect(placeholderFill("kohina")).not.toBe(placeholderFill("kohina-2"));
   });
 
@@ -112,9 +112,7 @@ describe("the placeholder logo reads in both themes (#1704)", () => {
     // The mechanism, not a proxy for it: a full-bleed rect at the tile's own
     // size means no theme background shows through, which is what makes the
     // contrast measured below the ONLY contrast that matters.
-    const svg = decodeURIComponent(
-      radioLogoPlaceholder("kohina", "Kohina").replace("data:image/svg+xml,", ""),
-    );
+    const svg = radioLogoPlaceholderSvg("kohina", "Kohina");
     expect(svg).toContain('<rect width="120" height="120"');
     expect(svg).not.toContain("fill-opacity");
     expect(svg).not.toContain("currentColor");
@@ -151,7 +149,7 @@ describe("the placeholder logo reads in both themes (#1704)", () => {
 
 describe("the placeholder logo's mark (#1704)", () => {
   it("carries the station's initial", () => {
-    const svg = decodeURIComponent(radioLogoPlaceholder("kohina", "Kohina"));
+    const svg = radioLogoPlaceholderSvg("kohina", "Kohina");
     expect(svg).toContain(">K</text>");
   });
 
@@ -170,22 +168,31 @@ describe("the placeholder logo's mark (#1704)", () => {
 
   it("survives a title with no characters at all", () => {
     expect(placeholderInitial("")).toBe("");
-    expect(() => radioLogoPlaceholder("x", "")).not.toThrow();
+    expect(() => radioLogoPlaceholderSvg("x", "")).not.toThrow();
   });
 
   it("escapes XML metacharacters instead of emitting a malformed document", () => {
     // A title beginning `&` or `<` would otherwise produce an SVG that renders
     // as nothing — a blank tile where the failure is invisible, which is the
     // opposite of what a placeholder is for.
-    const svg = decodeURIComponent(radioLogoPlaceholder("amp", "& Friends"));
+    const svg = radioLogoPlaceholderSvg("amp", "& Friends");
     expect(svg).toContain(">&amp;</text>");
     expect(svg).not.toContain(">&</text>");
   });
 
-  it("is a data: URI, which the CSP already admits", () => {
-    // `img-src 'self' data: https:` — re-read on GrappaWeb.Plugs.SecurityHeaders
-    // 2026-08-24. Pinned as a shape so a later switch to a fetched asset has to
-    // face the CSP question deliberately rather than at runtime in prod.
-    expect(radioLogoPlaceholder("kohina", "Kohina")).toMatch(/^data:image\/svg\+xml,/);
+  it("is an SVG DOCUMENT, which is what a file on disk has to hold", () => {
+    // #1739 — this used to assert a `data:image/svg+xml,` URI, pinned "so a
+    // later switch to a fetched asset has to face the CSP question
+    // deliberately rather than at runtime in prod". The switch happened and
+    // the question is answered: the tile is written to
+    // `public/radio-logos/<id>.svg` and served from our own origin, which
+    // `img-src 'self'` admits (GrappaWeb.Plugs.SecurityHeaders, re-read
+    // 2026-08-25) — the `data:` token is no longer what carries it.
+    //
+    // The shape is still worth pinning, one layer down: `sync-radio-logos.ts`
+    // writes this string verbatim into a `.svg`, so an encoded or wrapped
+    // return value would produce a file no browser renders.
+    expect(radioLogoPlaceholderSvg("kohina", "Kohina")).toMatch(/^<svg xmlns=/);
+    expect(radioLogoPlaceholderSvg("kohina", "Kohina")).toMatch(/<\/svg>$/);
   });
 });

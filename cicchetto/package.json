@@ -13,7 +13,8 @@
     "check:radio": "bun scripts/check-radio-logos.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "gen:emoji": "bun scripts/gen-emoji.ts"
+    "gen:emoji": "bun scripts/gen-emoji.ts",
+    "sync:radio-logos": "bun scripts/sync-radio-logos.ts"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",

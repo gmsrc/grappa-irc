@@ -1,10 +1,10 @@
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, For, Show } from "solid-js";
 import { audioFailureLabel, closeAudio, playbackFailure, showPlayer } from "./lib/audioPlayer";
 import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
 import { nowPlayingLabel } from "./lib/nowPlaying";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { closeRadioPicker, radioPickerOpen, tunedStation, tuneStation } from "./lib/radio";
-import { radioLogoPlaceholder } from "./lib/radioLogoPlaceholder";
+import { RADIO_LOGO_PATHS } from "./lib/radioLogoPaths";
 import { RADIO_STATIONS, type RadioStation } from "./lib/radioStations";
 import PaneTopBar from "./PaneTopBar";
 
@@ -56,41 +56,40 @@ import PaneTopBar from "./PaneTopBar";
 // in place and re-flips — `denoise` there — is not. Auditioning stations is
 // the second kind, so the picker stays up and marks the tuned row.
 
-// #1704 — the ONE place a station's artwork is drawn, and the two cases it has
-// to survive. Both render sites used to be a bare `<img src={station.logoUrl}>`
-// with no error handling, so a 404 drew the browser's broken-image glyph and a
-// station with no logo could not be expressed at all.
+// #1704/#1739 — the ONE place a station's artwork is drawn, and it no longer
+// decides anything.
 //
-// TWO DIFFERENT FACTS, ONE STAND-IN. `logoUrl === null` is a DECLARED absence,
-// known when the table is written and true forever (Kohina publishes no station
-// artwork — only a 192px favicon, which is why pointing the field at that
-// favicon was refused: it ANSWERS 200, so no error handler would ever fire and
-// the picker would quietly render a favicon where a logo goes). `onError` is
-// the other one: a URL we believed in that broke at runtime. `bun run
-// check:radio` already gates the URLs, so that second path can only fire on a
-// transient upstream failure — which is exactly when a placeholder beats a
-// broken-image glyph, and never a reason not to fix a logo the gate reports.
+// WHAT USED TO BE HERE, and why it left. #1704 had this component hold two
+// facts at once: `logoUrl === null` (a DECLARED absence — Kohina publishes no
+// artwork) and an `onError` signal (a URL we believed in that broke at
+// runtime), both landing on a generated data-URI tile. #1739 vendored the
+// bytes: `bun run sync:radio-logos` mirrors every station's logo into
+// `public/radio-logos/`, writing that same generated tile as a FILE for a null
+// row, and the render reads the resulting path. Both facts are settled at
+// build time, so both branches are gone.
 //
-// The swap is a SIGNAL and not `e.currentTarget.src = …` on purpose: writing
-// the src from inside `onError` re-enters the handler if the replacement also
-// fails, and the guard against that loop is a comparison somebody has to keep
-// right. A signal cannot loop — the second failure writes `true` over `true`
-// and Solid re-renders nothing.
+// WHY THAT IS THE POINT AND NOT A TIDY-UP. Every one of these `<img>` tags was
+// a request to the station's own host, so opening the drawer handed a third
+// party an IP and a user agent 21 times over. Vendoring is what stops that,
+// and vjt's #1739 ruling took it over a server-side proxy because a proxy
+// reintroduces a runtime dependency on somafm — merely relocated, and
+// per-viewer instead of per-client-cache.
+//
+// NO `onError`, DELIBERATELY. A same-origin asset that `radioLogoFiles.test.ts`
+// proves is present and non-empty cannot fail the way a third-party URL could,
+// and a handler here would be a SECOND stand-in mechanism beside the vendored
+// tile — one implementation is the whole shape of this change.
+//
+// The `undefined` arm of the lookup is unreachable by construction: that same
+// gate fails the build for any station id the map does not carry. Spelling a
+// fallback for it would put the branch back for a case no build can ship.
 const StationLogo: Component<{ readonly station: RadioStation; readonly class: string }> = (
   props,
-) => {
-  const [broken, setBroken] = createSignal(false);
-  const src = (): string =>
-    broken() || props.station.logoUrl === null
-      ? radioLogoPlaceholder(props.station.id, props.station.title)
-      : props.station.logoUrl;
-
-  return (
-    // Decorative in both slots: the title sits beside it in the markup, so alt
-    // text would be read out twice by a screen reader.
-    <img class={props.class} src={src()} alt="" onError={() => setBroken(true)} />
-  );
-};
+) => (
+  // Decorative in both slots: the title sits beside it in the markup, so alt
+  // text would be read out twice by a screen reader.
+  <img class={props.class} src={RADIO_LOGO_PATHS[props.station.id]} alt="" />
+);
 
 const RailRadio: Component = () => {
   let rootRef: HTMLDivElement | undefined;
