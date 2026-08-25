@@ -64427,3 +64427,133 @@ Also recorded because it cost a red on a correct rule: `ruleBody` in
 CSS comment that spells a rule out literally (`selector { prop: value }`)
 truncates the body its own source-level guard reads. The assertion fails on a
 declaration that is present and correct.
+<!-- entry #1773 -->
+
+---
+
+## 2026-08-26 — #1773: the credit roll's facts are derived where git still exists
+
+The easter egg needs three facts the browser cannot have: the build's commit
+sha, that commit's date, and the contributor list with commit counts. They are
+`git` facts, and the cic build runs in containers that bind-mount **only**
+`./cicchetto` (`vite.config.ts:30-39`) — there is no repository in there to
+ask. So the payload is derived OUTSIDE the container, by the same eleven
+wrappers that already derive `GRAPPA_VERSION`, on a second env var
+`GRAPPA_CREDITS`.
+
+`infra/packaging/credits.sh` is `version.sh`'s twin: POSIX sh, same
+`SCRIPT_DIR/../..`-is-the-repo-root layout, one line of JSON on stdout
+(`{"sha":…,"date":…,"contributors":[{"name":…,"commits":N}]}`). Nothing
+re-implements the read, and a new launcher inherits both facts by copying one
+pattern instead of two.
+
+### Why the deriver never fails and the CONSUMER does
+
+`credits.sh` cannot fail, and that is a measurement rather than a softening.
+Two of the eleven launchers have no `.git` **by construction**, and both are
+RELEASE builds: `infra/packaging/aur/PKGBUILD` builds from the tag tarball
+(`release.yml` asserts it — "tarball → no .git → bare"), and
+`Dockerfile.release` has `.git` in `.dockerignore`. A throw there would break
+exactly the two builds that ship. On an absent repository it emits
+`sha:null, date:null, contributors:[]` — the same posture
+`Grappa.Version.verify_build_sha/2` already takes (`{:skip, :no_git}` versus a
+degraded snapshot), not a new one.
+
+The noise lives downstream instead, and the distinction it draws is the whole
+point: `vite.config.ts` REFUSES to build when `GRAPPA_CREDITS` is **unset**, or
+when it is not valid JSON. Unset means a wrapper forgot to plumb it — a
+mistake. Empty-but-declared means a build genuinely has no history — a fact.
+A deriver that threw would have collapsed those two into one red, in the
+substrate where the fact is normal.
+
+### What is NOT in the payload
+
+The version. It already arrives through `<meta name="cicchetto-version">`
+(#292) and the modal reads it from `bundleHash.bootBundleVersionAccessor`.
+Carrying it a second time is precisely the drift #538 closed.
+
+Transport into cic is a vite `define` (`__GRAPPA_CREDITS_JSON__`), not a second
+`<meta>`: the payload is JSON, and a meta channel would have to survive HTML
+escaping of quotes and backslashes inside author names. `lib/buildCredits.ts`
+coerces PER FIELD and never throws, so one malformed field costs that field and
+not the roll. **Under vitest the define does not exist** — `vitest.config.ts` is
+a separate config with no `define` — so the entire unit suite exercises the
+DEGRADED path by construction. Only the e2e can prove the bake.
+
+### The soundtrack has no asset
+
+"Something epic" points at Star Wars and Super Mario, and both are under
+copyright; grappa ships a public PWA and a `.deb`, so either would put a
+licence violation into a distro package. The alternatives were an original
+chiptune, a CC0 track with its licence recorded in-tree, or WebAudio. A
+synthesised minor arpeggio over a drone costs zero bytes in the tree, is the
+smallest payload of the three, and sits naturally beside a modal whose graphics
+are already synthetic. The `AudioContext` is handed IN and `stop()` CLOSES it —
+an easter egg that leaves a live audio graph behind a closed modal is a battery
+bug. The mute is session-scoped and deliberately not persisted.
+
+The modal mounts in `Shell`, not in the `SettingsDrawer` that opens it:
+`.settings-drawer` animates on `transform`, and a transformed ancestor becomes
+the containing block for every `position: fixed` descendant, so a full-screen
+modal rendered from inside would be clipped to the drawer. `ShareSessionModal`,
+opened from the same drawer, already lives in Shell for that reason. Its entry
+wears the share button's shape rather than `.settings-nav-row`, because a nav
+row carries a chevron promising a sub-page push and this opens a modal.
+
+### The release image's COPY census fired, as designed
+
+`release_latest_gate_test.bats` pins `grep -c '^COPY.*infra/packaging/'` on
+`Dockerfile.release` to a LITERAL, as the tripwire that makes "neither the
+`:latest` gate nor its classifier enters the image" a reviewed claim rather
+than an assumed one. Adding `credits.sh` took it 2 → 3 and turned the case
+red — which is the case working. The literal stays a literal: deriving the
+count from the file would make it pass by construction and buy nothing.
+
+### Two gotchas worth not rediscovering
+
+**git strips trailing "crud" from an author name** (`"`, `'`, `.`, `,`, `:`,
+`;`, `<`, `>`) when it reads the author line back. A test for the JSON escaper
+must not use a name ENDING in a quote, or it measures git's stripping instead
+of the escaper.
+
+**jsdom's `getContext()` returns null without the `canvas` package**, and
+`MatrixRain` bails before it ever requests a frame. Without a 2D-context stub
+the "cancels the rAF on unmount" case passes for the wrong reason — there was
+nothing to cancel. The stub is in `MatrixRain.test.tsx`.
+
+### Cost, and the alternative not taken
+
+Roughly 25 files: eleven launchers, two compose files, `.env.example`,
+`Dockerfile.release`, the drift guard, and nine bats fixtures that stubbed
+`version.sh` and not `credits.sh` (they died under `set -e`: 21 cases across
+six files). The alternative was the SERVER side — `Grappa.Version` already owns
+a `GitProbe`, so it would have been ONE injection point. It degrades identically
+on the same two substrates, but it adds a REST door and a `protocol_version`
+bump for an easter egg, and it puts the work on the compile lane. Declined.
+
+### Not measured
+
+- **No e2e ran.** The spec EXISTS
+  (`issue1773-credits-roll-bakes-git-facts.spec.ts`) and typechecks, and the
+  harness is in place: `scripts/integration.sh` exports `GRAPPA_CREDITS` and
+  `cicchetto/e2e/compose.yaml` hands the same string to BOTH
+  `cicchetto-build-test` and `playwright-runner`, so the spec compares what the
+  modal PAINTS against `process.env.GRAPPA_CREDITS` — the exact payload the
+  wrapper derived, not a shape. But it was never INVOKED: the STACK lane
+  belonged to another worker for the whole of this work. A shape assertion
+  would not distinguish a correct roll from an EMPTY one, which is the defect
+  this chain exists to prevent — and an unrun spec distinguishes nothing at
+  all. Nothing here establishes that the payload survives the bake on any
+  substrate.
+- **Nothing was measured on a real build of the two no-git substrates.** That
+  `credits.sh` degrades rather than throwing is proven by bats against a
+  synthetic repo-less tree, not by an AUR or release-image build.
+- **`"Your Name"` has 89 commits in the real history.** `git shortlog` on this
+  repo reports 13 contributors in 544 bytes (0.4 s), and one of them is an
+  unconfigured git identity that will be PAINTED in the production roll. The
+  cure is a `.mailmap`, which `git shortlog` honours for free. That is a
+  decision about the CONTENT of the repository and it is vjt's, so it was left
+  open rather than taken.
+- **Nothing about the felt result on a device.** No notched phone, no
+  reduced-motion setting, no audio, were exercised outside jsdom and source-level
+  assertions.
