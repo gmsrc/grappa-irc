@@ -134,7 +134,14 @@ never have to say "read the handoff and resume."** If absent, first-ever run —
 every ship, dispatch, halt, design decision, and run-config change — it is the ONLY
 thing that survives the orchestrator's own `/clear` (manual OR the auto-clearer). A stale
 handoff is the highest-severity bug. **Resolve panes BY TITLE, never hardcode `%NN`** (ids
-are ephemeral): sibling = "grappa-worker", orchestrator = "grappa-orch", ircbot = "vjt-claude".
+are ephemeral ACROSS sessions): sibling = "grappa-worker", orchestrator = "grappa-orch",
+ircbot = "vjt-claude".
+⚠️ **But a TITLE is only stable across sessions, not inside one — Claude Code renames a pane to
+the conversation's topic as the session runs (#1761).** The two stabilities are on opposite axes,
+so anything LONG-LIVED resolves by title **once, at startup, and then pins the `%NN` for the life
+of that process**. Re-grepping the title on a loop is what blinded the auto-clearer, silently, for
+two days. Re-pinning the title by hand (`tmux select-pane -T grappa-orch`) buys exactly ONE clear
+and is a manual mitigation, never the cure — the rename happens again at the next topic change.
 
 **THE HANDOFF IS BOUNDED — PRUNE DONE WORK, DO NOT APPEND (vjt direct order 2026-07-15).**
 The handoff is a LIVE-STATE snapshot, NOT a log. It must not grow unbounded. Every update
@@ -349,7 +356,7 @@ is DELETE-then-write, never append-only:
   `status:queued → status:cooking`. This
   REPLACES waiting for an ircbot handover. Only when the queued set is **EMPTY** do you ping
   vjt "what next?" — don't invent work.
-- **Auto-clearer**: `lib/auto-clear-watch.sh start|status grappa-orch` runs an external
+- **Auto-clearer**: `lib/auto-clear-watch.sh start|status grappa-orch [--pane %NN]` runs an external
   watchdog that, at ctx≥40% (idle+quiet, 60s debounce), FIRST prompts the orchestrator to
   flush its handoff, WAITS for that flush turn to settle (polls busy→idle, capped at
   `AUTOCLEAR_FLUSH_MAX`=180s), and only THEN /clears + /orchestrates. The flush-before-clear
@@ -357,6 +364,12 @@ is DELETE-then-write, never append-only:
   Still: keep the handoff current proactively — the watchdog's flush-prompt is a safety net,
   not a substitute (a wedged/slow flush past the cap clears anyway; and you may be mid-halt on
   something the prompt can't fully capture). ALWAYS flush any open decision before going idle.
+  🔴 **`status` names the PANE it is bound to and re-reads it live — check that id against your own
+  `$TMUX_PANE` (#1761).** The binding is made ONCE at `start` (`--pane %NN` > `$TMUX_PANE` > the
+  title, grepped once and refused if it matches zero or several panes) and never re-resolved, so a
+  `running` line now carries either `watching (ctx=NN%)` or a `BLIND: …` naming what it cannot see.
+  A bare `running` with no pane id means a pre-#1761 build — stop and restart it. `pgrep -fl
+  'auto-clear-watch'` does NOT diagnose this: the pattern matches the probing command itself.
 - **Halt + ESCALATE** on: design picker, plan deviation, real breakage, CI regression (2nd
   recurrence), ambiguous scope, daemon/pane death, PACK COMPLETE. Don't auto-pick design/
   product choices; orchestration mechanics MAY be auto-defaulted.

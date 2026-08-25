@@ -63452,3 +63452,74 @@ either, which nothing sampled from the test process can show.
 
 It moves no timeout, weakens no assertion and does not touch
 `Grappa.Repo.LockWatch`.
+<!-- entry #1761 -->
+
+---
+
+## 2026-08-25 — #1761: a watchdog that re-resolves its target is a watchdog that can go blind quietly
+
+`.claude/skills/orchestrate/lib/auto-clear-watch.sh` clears the orchestrator's
+own Claude pane when its context crosses a threshold. It resolved that pane by
+grepping the pane TITLE **on every tick**, and when the grep came back empty the
+loop `continue`d — no log line, no error, a live pid, and `status` still reading
+`running`. Claude Code renames a pane to the conversation's topic while the
+session runs, so the first topic change ended the watch. Observed twice: once
+dead for two days, once bound to `%5`, an unrelated pane, which is worse than
+dead because it lies. Cost the first time: the orchestrator at 87% context with
+both workers idle ~13 hours.
+
+**The doctrine that produced it was half right, and the wrong half was
+load-bearing.** The skill said *"resolve panes BY TITLE, never hardcode `%NN` —
+ids are ephemeral"*. True across sessions. But a watchdog lives INSIDE one
+session, and on that axis the stability is reversed: the id does not move, the
+title does. So the binding now happens ONCE, at `start` — `--pane %NN`, else
+`$TMUX_PANE`, else the title grepped once — and the id is pinned for the life of
+the process. The skill text is narrowed rather than deleted: both halves are
+true, on different axes.
+
+`$TMUX_PANE` is a FALLBACK and not the mechanism, and that ordering was
+measured rather than assumed. On the worker harness the Claude Bash tool sees
+`TERM=tmux-256color` but no `TMUX`/`TMUX_PANE` at all and no reachable tmux
+server — the pane is on the ssh client side. On the orchestrator's host, where
+tmux is local, the variable IS present and correct (`%80`, measured the same
+evening). One environment having it is not a reason to require it.
+
+**Three silent `continue`s, not one.** The issue named the unresolved pane; the
+code had two more — an empty capture, and a capture with no `🧠 NN%` marker in
+it. The last is precisely the `%5` observable: a pane that exists and is not a
+Claude session. All three are now one classifier, `blind_reason`, shared by the
+loop and by `status` so the two cannot disagree about what blindness means.
+
+**Why the loud state is a TRANSITION and not a line per tick.** The first
+instinct — and the first draft, with a test pinning `>= 2` occurrences — was to
+log on every tick, on the reasoning that a one-shot line recreates the same
+silence from the second tick on. That is wrong about how the file is read. A
+line every 15s does not make the state more visible; it buries the transition
+that announces it and trains the reader to skip the log. So the log records
+entering a blind state, recovering from one, and any change of reason — which
+keeps `tail -4` truthful in both directions, the recovery line being the half
+that is easy to forget — and the always-available answer to *"is it watching
+right now"* is `status`, which **re-runs the observation live**. No state file:
+the blindness is derived from the pane on demand, never remembered, so there is
+nothing to go stale. Pinned by a test in which the pane still EXISTS but has
+stopped rendering a context marker — an existence check alone calls that
+healthy.
+
+Two smaller things fixed in passing, both of the same family. The title grep
+matched the whole `#{pane_id} #{pane_title}` line, so the id could satisfy the
+match; it now matches the title field only. And `head -1` over multiple matches
+presented an arbitrary binding as a resolved one — an ambiguous title is now a
+refusal naming every candidate. Both refusals are synchronous and non-zero,
+before anything is forked: a watch that cannot resolve must not become a process
+that reports `running`.
+
+**Not claimed.** The rename mechanism itself was not reproduced here — no tmux
+server is reachable from a worker host — so "Claude Code renames the pane to the
+topic" is taken from the two field observations, not re-measured. The fix does
+not depend on it: it needs only that a title CAN stop matching, which the
+ambiguity and no-match paths exercise directly. Also deliberately not done:
+`status` still exits 0 when it reports blindness, because nothing consumes its
+exit code today and an exit contract nobody reads is a guess about a future
+caller. Out of scope and filed separately: `scripts/shellcheck.sh` derives its
+set from `bin/ infra/ scripts/`, so the nine shell scripts under
+`.claude/skills/**` — this watchdog among them — have never been linted.
