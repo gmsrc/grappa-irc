@@ -264,6 +264,47 @@ defmodule Grappa.Visitors.ReaperTest do
       assert :gone = Reaper.close_incognito(Ecto.UUID.generate())
     end
 
+    # The `:failed` arm, and the only one where an unhandled error would take
+    # the Reaper down and the 1h linger with it. It is the #590 sweep twin
+    # ("sustained DB busy → best-effort drop") re-run through the fast door:
+    # the same `reap_one/2` degrades the same way, so the fast path must reach
+    # the same best-effort DROP rather than a crash or a half-wipe.
+    #
+    # The second half is the load-bearing one. `:failed` is only honest if it
+    # leaves the row exactly as the fallback expects to find it — so the test
+    # does not stop at the degraded return, it lifts the fault and shows the
+    # SAME row still collectable. A degrade that stranded the row would pass
+    # the first three assertions and fail here.
+    #
+    # `close_incognito/1` runs in the test process (it is the synchronous verb
+    # the timer calls), so the process-dictionary fault seam reaches
+    # `Visitors.delete/1`'s BusyRetry directly — the property the sweep twin
+    # relies on too.
+    test "sustained DB busy → best-effort drop: FAILED, row kept, and the fallback still collects it" do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("saturated", slug, nil, true)
+
+      log =
+        capture_log(fn ->
+          BusyRetry.inject_transient_faults(10_000)
+          assert :failed = Reaper.close_incognito(ghost.id)
+          BusyRetry.inject_transient_faults(0)
+        end)
+
+      # The wipe degraded rather than landing — the row is LEFT for the linger.
+      assert Repo.reload(ghost)
+      # No silent-swallow: the operator sees the fast door's own line, not the
+      # sweep's, and the transient classification that produced it.
+      assert log =~ "incognito close failed"
+      assert log =~ "unavailable"
+
+      # …and the safety net it was left for still works on it, unchanged.
+      expire(ghost)
+      assert {:ok, 1} = Reaper.sweep()
+      refute Repo.reload(ghost)
+    end
+
     test "client_closing/1 arms the grace and the row is gone once it elapses" do
       slug = "azzurra-#{System.unique_integer([:positive])}"
       _ = network_fixture(slug: slug)
