@@ -24,6 +24,7 @@ import { channelKey } from "../lib/channelKey";
 const h = vi.hoisted(() => ({
   channels: [] as Array<{ name: string }>,
   unread: {} as Record<string, number>,
+  farBehind: {} as Record<string, { missed: number; resumeFrom: number }>,
   selected: null as { networkSlug: string; channelName: string; kind: string } | null,
   setSelectedChannel: vi.fn(),
   isActiveSelection: vi.fn(),
@@ -46,7 +47,10 @@ vi.mock("../lib/notificationPrefs", () => ({
 // No local rows: every window's activity id falls back to 0, so the ordering
 // ties and resolves by flat (sidebar) order — deterministic without pinning
 // scrollback shapes this file does not care about.
-vi.mock("../lib/scrollback", () => ({ scrollbackByChannel: () => ({}) }));
+vi.mock("../lib/scrollback", () => ({
+  scrollbackByChannel: () => ({}),
+  farBehindByChannel: () => h.farBehind,
+}));
 
 vi.mock("../lib/selection", () => ({
   messagesUnread: () => h.unread,
@@ -71,6 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.channels = [];
   h.unread = {};
+  h.farBehind = {};
   h.selected = null;
   h.isActiveSelection.mockReturnValue(false);
 });
@@ -106,6 +111,57 @@ describe("stepActiveWindow — the resolved target is the window you are already
     expect(h.requestScrollToBottom).toHaveBeenCalledTimes(1);
     expect(h.setSelectedChannel).not.toHaveBeenCalled();
   });
+});
+
+// #1765 — the SAME resolution, one state narrower: the window the cycle
+// resolves back to is ALSO far behind (#693). #1178's exit is dead there and
+// nothing else takes its place, so the tap moves nothing at all.
+//
+// Why the exit is dead, in two halves that are each correct on their own:
+//   * selection.ts's `perChannelUnread` SKIPS a far-behind window's
+//     local-derived branch, so the frozen server seed stands as its count and
+//     `messagesUnread[key] > 0` holds wherever the pane is scrolled — which is
+//     also why the read-at-the-tail suppression is explicitly not applied to
+//     it. The window therefore never leaves `orderUnreadWindows`.
+//   * `setCursorIfAdvances` — the single cursor door every writer funnels
+//     through, `requestScrollToBottom` included — returns on its first line
+//     for a far-behind window (#1019 documents the freeze as the invariant).
+// Both halves are pinned elsewhere (`unreadBadgeAtTail.test.ts`,
+// `setCursorIfAdvances.test.ts`); what this file pins is the JOIN, at the verb
+// that has to choose between them.
+//
+// The assertion is deliberately cure-AGNOSTIC — it says only "not the dead
+// door" — because which live verb belongs here is a product call, not a
+// mechanical one. Every candidate cure satisfies it; main does not.
+describe("stepActiveWindow — that window is ALSO far behind (#1765)", () => {
+  const arrangeCrossedState = () => {
+    h.channels = [{ name: "#grappa" }];
+    // The frozen seed, not a local-row count — that IS the #693 posture.
+    h.unread = { [channelKey("net", "#grappa")]: 3000 };
+    h.farBehind = { [channelKey("net", "#grappa")]: { missed: 3000, resumeFrom: 100 } };
+    h.selected = chan("#grappa");
+    h.isActiveSelection.mockReturnValue(true);
+  };
+
+  it("does not take the #1178 exit, whose only cursor door is frozen", async () => {
+    arrangeCrossedState();
+
+    const { activeWindows, jumpToNextActiveWindow } = await load();
+    // Pin the crossed state itself, so this can never rot into a vacuous
+    // green: exactly ONE unread window (the mute mock is empty, so it is also
+    // un-muted — #1018 would otherwise drop it from the cycle), and it IS the
+    // current selection.
+    expect(activeWindows()).toEqual([chan("#grappa")]);
+
+    jumpToNextActiveWindow();
+
+    // Not a lateral move — the list has nowhere else to go.
+    expect(h.setSelectedChannel).not.toHaveBeenCalled();
+    // ...and not the vertical one either: it cannot advance the cursor here,
+    // so the seed never falls, the button never hides, and the tap is a no-op.
+    expect(h.requestScrollToBottom).not.toHaveBeenCalled();
+  });
+
 });
 
 // Regression guards, not discriminators for the fix: each of these passes both
