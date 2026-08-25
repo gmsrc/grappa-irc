@@ -62737,3 +62737,85 @@ the verdict is dogfood's. Likewise the exact termination rule of the UA's
 `touch-action` ancestor intersection at a scroll container was not measured,
 which is why the re-opening is declared on the modal element rather than relied
 upon to stop at the pane.
+<!-- entry #1765 -->
+
+---
+
+## 2026-08-25 — #1765: two correct cures cancelled, and the tap did nothing
+
+`»N` on a window that is the only one with unread AND is far behind was a
+no-op. Neither half was a bug on its own, which is the fact worth not
+rediscovering.
+
+**#1178** taught the jump verb to short-circuit: when the cycle resolves back
+to the window the operator is already in, hand it `requestScrollToBottom()`
+rather than a non-transition `setSelectedChannel` drops on the floor. That
+exit works because reaching the bottom advances the read cursor (#310), so the
+count that advertised the jump falls and the button auto-hides.
+
+**#693/#1019** freeze the read cursor while a window is far behind, on
+purpose. `setCursorIfAdvances` is the single door every writer funnels
+through, and it returns on its first line for such a window — precisely so
+that scrolling, backgrounding or *tapping to the bottom* cannot silently mark
+an abandoned region read and fan that to every device.
+
+Cross the two and the exit is dead. The cursor cannot move, so the frozen
+server seed stands, so `messagesUnread[key] > 0` holds wherever the pane is
+scrolled, so the window never leaves `orderUnreadWindows`, so the button keeps
+rendering and keeps advertising a count. #1178's own comment had already
+rejected `jumpToUnread` for this arm as "just as dead" — true in the state it
+was looking at, and exactly inverted in this one. **Each cure was measured
+against its own state and neither was measured against the other's.**
+
+### Why the fix is the jump BACK and not the bar's ×
+
+The report proposed firing `dismissFarBehind`, the `×`. Declined, with a
+measurement rather than a preference.
+
+`dismissFarBehind` accepts the abandoned region as read: irreversible, and
+fanned to every device. **#1062 has already ruled on putting that under this
+thumb.** It removed #997's second dismiss surface from the `.scrollback-float-stack`
+— the very stack the mobile `»N` button lives in — on the grounds that the
+corner is a repeated-tap route (scroll-to-bottom, then next-active in the same
+spot) and "the far-behind gesture stays on the bar, where it has a label".
+Routing the dismiss into `»` is worse than what #1062 removed, not better: it
+adds no control and no label, and `activeWindowCount()` is a count of WINDOWS,
+so the button reads `»1` while a tap would accept hundreds or thousands of
+messages as read.
+
+The bar's other exit has none of that. It is reversible (scroll back down,
+`loadNewer`), it is what the glyph promises, and the destructive door stays
+one labelled tap away on the bar that is already on screen. The general rule
+this leaves: **duplicating a non-destructive route is harmless; duplicating a
+destructive one is the thing #1062 measured and removed.**
+
+The two verbs also partition the state exactly along `farBehindByChannel`, and
+#1178's comment already says why each is dead on the other's side — so the arm
+is one predicate, not a new concept.
+
+### The nonce, and why it is not new state
+
+`stepActiveWindow` cannot call `scrollback.jumpToUnread` directly. The gesture
+must arm the #168 marker-activation latch synchronously BEFORE the swap and
+stand it back down if the fetch failed, and that latch is a pane-local signal
+— the same reason `dismissFarBehindGesture` is a named function and not an
+inline handler. So the bar's inline handler became `jumpToUnreadGesture` and
+both doors run it, bridged by `jumpToUnreadCommand`, a monotonic nonce of
+exactly #243's shape. One gesture, two callers, no second scroll authority.
+
+### What the operator sees, and what was left undecided
+
+The bar goes down and the pane lands on the unread divider at their read
+position, carrying the server-measured count (#947's carry, not the page cap).
+**The button does NOT hide on that tap** — the issue's Expected clause asked
+for it, but that followed from the dismiss proposal. After the jump the unread
+is local, real and on screen, so the count is honest for the first time;
+reading to the tail clears it, or a second tap takes #1178's exit now that the
+freeze is gone.
+
+Two candidates were weighed and are NOT built, because both are product calls
+and both are vjt's: firing the `×` after all (a one-arm change), and dropping
+a far-behind CURRENT selection from `orderUnreadWindows` so the button
+auto-hides and the labelled bar is the only affordance — which #1178
+explicitly rejected as trading a lying button for an absent one, an argument
+made before the bar was known to be up in this state.
