@@ -22,7 +22,11 @@ import {
   withConversationMute,
   withoutConversationMute,
 } from "./lib/conversationMute";
-import { syncedSetColoredNicklist, syncedSetTimeFormat } from "./lib/displayPrefs";
+import {
+  syncedSetColoredNicklist,
+  syncedSetShowBottomBar,
+  syncedSetTimeFormat,
+} from "./lib/displayPrefs";
 import { formatDuration } from "./lib/duration";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { errorMessage, friendlyApiError } from "./lib/friendlyApiError";
@@ -49,6 +53,7 @@ import { reconnectConnectedNetworks } from "./lib/reconnect";
 import { selectedChannel } from "./lib/selection";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
 import { isShareableSubject, openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
+import { getShowBottomBar } from "./lib/showBottomBar";
 import { getTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
 import { activeHost } from "./lib/uploadHost";
 import {
@@ -233,6 +238,14 @@ const SettingsDrawer: Component<Props> = (props) => {
   // straight to it and there is no second copy to keep in sync.
   const onHideNextActiveChange = (e: Event) => {
     setHideNextActive((e.currentTarget as HTMLInputElement).checked);
+  };
+
+  // #1766 — like the #914 row, no drawer-local mirror: `getShowBottomBar()` IS
+  // the module signal. Unlike it, the write goes through the coordinator, which
+  // is the single PUT authority for the #449 synced prefs — the owner module's
+  // own setter stays local-only on purpose.
+  const onShowBottomBarChange = (e: Event) => {
+    syncedSetShowBottomBar((e.currentTarget as HTMLInputElement).checked);
   };
 
   // #986 — the `onDetach` / `onQuit` handlers moved to RailActions with
@@ -1623,13 +1636,27 @@ const SettingsDrawer: Component<Props> = (props) => {
                 </label>
               </fieldset>
 
-              {/* #443 — per-nick colors in the members pane. Off by default: the
-                nicklist stays monochrome so its color reads as the mode tier,
-                not identity. When on, MembersPane drops `noColor` so NickText
-                applies the per-nick hash hue; the mode-prefix glyph keeps its
-                own tier color either way. */}
-              <fieldset class="colored-nicklist-fieldset">
-                <legend>nicklist</legend>
+              {/* #1766 — ONE fieldset for the three checkboxes (vjt: "andiamo
+                ad accorpare in un unico fieldset i checkbox esistenti e quello
+                nuovo"). They were three one-row fieldsets carrying three
+                legends — `nicklist`, `jump button`, and a third on the way —
+                which is three boxes to say three sentences. The two RADIO
+                groups above keep theirs: a radio group is a fieldset by
+                nature, because the box is what makes the exclusivity legible.
+
+                The dissolved classes (`.colored-nicklist-fieldset`,
+                `.hide-next-active-fieldset`) are referenced NOWHERE else —
+                measured, no CSS rule and no selector in the e2e tree — which
+                is what makes the churn free. The `data-testid`s are the real
+                contract and stay VERBATIM; the e2e suite addresses them. */}
+              <fieldset class="display-checkboxes-fieldset">
+                <legend>options</legend>
+
+                {/* #443 — per-nick colors in the members pane. Off by default:
+                  the nicklist stays monochrome so its color reads as the mode
+                  tier, not identity. When on, MembersPane drops `noColor` so
+                  NickText applies the per-nick hash hue; the mode-prefix glyph
+                  keeps its own tier color either way. */}
                 <label>
                   <input
                     type="checkbox"
@@ -1639,16 +1666,30 @@ const SettingsDrawer: Component<Props> = (props) => {
                   />
                   show colored nicklist
                 </label>
-              </fieldset>
 
-              {/* #914 — hide the #235 "jump to next active window" (»N)
-                button. Off by default. PRESENTATIONAL: it removes the button
-                in BOTH placements (desktop sidebar + mobile overlay) and
-                nothing else — Alt+A and Ctrl+N keep jumping. Client-local and
-                per-DEVICE, unlike the two synced rows above; the complaint is
-                the viewport-fixed mobile overlay. */}
-              <fieldset class="hide-next-active-fieldset">
-                <legend>jump button</legend>
+                {/* #1766 — the mobile window bar (BottomBar), ON by default:
+                  an opt-OUT, never a default change. #174's ruling stands
+                  ("the bottom bar must NOT be deleted, it stays opt-in from
+                  settings") and #71's second ruling reversed "kill the mobile
+                  bottom bar" outright. The bar is O(windows), not O(screens),
+                  so at 7 networks the strip is longer than the useful scroll
+                  distance and the picker stops picking. Turning it off ships a
+                  left ☰ with it, so the #1041 edge swipe is not left as the
+                  whole navigation surface. */}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={getShowBottomBar()}
+                    onChange={onShowBottomBarChange}
+                    data-testid="show-bottom-bar-toggle"
+                  />
+                  show the window bar on mobile
+                </label>
+
+                {/* #914 — hide the #235 "jump to next active window" (»N)
+                  button. Off by default. PRESENTATIONAL: it removes the button
+                  in BOTH placements (desktop sidebar + mobile overlay) and
+                  nothing else — Alt+A and Ctrl+N keep jumping. */}
                 <label>
                   <input
                     type="checkbox"
@@ -1658,6 +1699,19 @@ const SettingsDrawer: Component<Props> = (props) => {
                   />
                   hide the jump-to-next-active button
                 </label>
+
+                {/* The one thing the merge HIDES, said out loud rather than
+                  inherited: these rows do not persist alike. Two are #449
+                  server-backed and converge across every device on the
+                  account; the jump button is per-DEVICE localStorage, and
+                  deliberately so — #914's complaint was about a viewport, not
+                  an account. Under one legend three identical-looking rows
+                  would otherwise behave differently on a second device with
+                  nothing on screen to say why. */}
+                <p class="settings-section-blurb" data-testid="display-checkboxes-hint">
+                  The first two follow your account onto every device you use. The jump button is
+                  remembered on this device only.
+                </p>
               </fieldset>
             </section>
           </section>
