@@ -44,8 +44,9 @@ defmodule GrappaWeb.Endpoint do
   # Top-level entries the vite build emits at the dist root (`base=/`),
   # matched on the FIRST path segment: the hashed `assets/` chunks +
   # everything copied verbatim from `cicchetto/public/` (`backgrounds/`,
-  # `fonts/`, the `icon*.{svg,png}` set, `apple-touch-icon.png`,
-  # `favicon.ico`) + the pwa-plugin `manifest.webmanifest`. Kept in
+  # `fonts/`, `radio-logos/`, the `icon*.{svg,png}` set,
+  # `apple-touch-icon.png`, `favicon.ico`) + the pwa-plugin
+  # `manifest.webmanifest`. Kept in
   # lockstep with `cicchetto/public/` — a NEW root-level public asset MUST
   # be added here or it falls through to the SPA fallback (served as
   # index.html / text/html for a browser navigation) instead of as its own
@@ -56,7 +57,17 @@ defmodule GrappaWeb.Endpoint do
   # HTML. `index.html` (SPA fallback route) and `service-worker.js`
   # (dedicated no-cache route) are deliberately OUT so they fall through to
   # the router.
-  @cic_static_only ~w(assets backgrounds fonts manifest.webmanifest
+  #
+  # #1739 added `radio-logos/` — the vendored station artwork the radio picker
+  # draws, mirrored into the tree by `bun run sync:radio-logos` so no viewer
+  # ever fetches a logo from api.somafm.com. It is the same regression class as
+  # the #485 icons above and it would have been QUIETER: #1739 also removed the
+  # `onError` fallback from the picker's `<img>` (a same-origin asset the
+  # offline gate proves is present cannot fail the way a third-party URL
+  # could), so a logo arriving as `index.html` draws the browser's broken glyph
+  # with nothing in any gate to say why. Measured on `spa_serving_test.exs`
+  # before this line existed: `content-type: text/html; charset=utf-8`.
+  @cic_static_only ~w(assets backgrounds fonts radio-logos manifest.webmanifest
                       icon.svg icon-192.png icon-512.png
                       icon-192-maskable.png icon-512-maskable.png
                       apple-touch-icon.png favicon.ico)

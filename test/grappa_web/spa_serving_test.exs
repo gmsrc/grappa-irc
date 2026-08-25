@@ -51,6 +51,32 @@ defmodule GrappaWeb.SpaServingTest do
       assert ["font/woff2" <> _] = get_resp_header(conn, "content-type")
     end
 
+    test "GET /radio-logos/<id>.png serves the vendored station logo (allowlist lockstep)" do
+      # #1739 — the radio picker draws every station's artwork from OUR origin
+      # instead of fetching it from api.somafm.com, which is the whole privacy
+      # point of vendoring the bytes. A new root-level public directory that is
+      # absent from `@cic_static_only` falls through to the SPA history
+      # fallback, so every logo would arrive as `index.html` with
+      # `content-type: text/html` — an <img> pointed at that draws the broken
+      # glyph, and #1739 deliberately removed the `onError` handler that used
+      # to hide exactly this. The failure would therefore be silent in every
+      # gate and visible only to an operator looking at the picker.
+      conn = get(build_conn(), "/radio-logos/test-station.png")
+      assert conn.status == 200
+      assert ["image/png" <> _] = get_resp_header(conn, "content-type")
+    end
+
+    test "GET /radio-logos/<id>.svg serves the generated placeholder tile" do
+      # The other arm: a station that publishes no artwork is mirrored as our
+      # own SVG (`lib/radioLogoPlaceholder.ts`, written by
+      # `bun run sync:radio-logos`). Same allowlist, different content type —
+      # and `image/svg+xml` is what makes an <img> render it rather than
+      # download it.
+      conn = get(build_conn(), "/radio-logos/test-placeholder.svg")
+      assert conn.status == 200
+      assert ["image/svg+xml" <> _] = get_resp_header(conn, "content-type")
+    end
+
     test "GET /icon.svg serves the root-level public icon (allowlist lockstep)" do
       conn = get(build_conn(), "/icon.svg")
       assert conn.status == 200
