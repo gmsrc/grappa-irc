@@ -279,6 +279,22 @@ def main(argv: list[str]) -> int:
         print("grappa-post: refusing to send an empty line", file=sys.stderr)
         return EXIT_USAGE
 
+    # The channel is a flag, not part of the line. Writing "#grappa-live foo"
+    # as the message still sends -- the channel comes from --channel or config
+    # either way -- so the redundant prefix rides into the body unnoticed.
+    # Drop it and say so: nothing is lost, and the caller learns it is wrong.
+    prefix = channel + " "
+    if text.lower().startswith(prefix.lower()) or text.lower() == channel.lower():
+        text = text[len(channel):].lstrip()
+        print(
+            f"grappa-post: dropped a redundant {channel!r} prefix from the message; "
+            "the channel belongs in --channel, not in the text",
+            file=sys.stderr,
+        )
+        if not text:
+            print("grappa-post: refusing to send an empty line", file=sys.stderr)
+            return EXIT_USAGE
+
     # One PRIVMSG is one line. Newlines cannot ride the wire, and silently
     # sending only the first line would lose the rest without saying so.
     if "\n" in text:
