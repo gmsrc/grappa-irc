@@ -18,6 +18,26 @@ directories.
 | **cic vitest**    | TS unit tests in jsdom         | `cicchetto/src/__tests__/`       | `scripts/bun.sh run test` |
 | **e2e Playwright**| full-stack browser flows       | `cicchetto/e2e/tests/`           | `scripts/integration.sh` |
 
+**`cicchetto/src/__tests__/` is the ONLY place a cic unit test may live
+(#1582)** — the row above used to name it without saying "only", and that
+gap was not harmless. Two more locations grew alongside it,
+`cicchetto/src/lib/__tests__/` and co-located `cicchetto/src/lib/*.test.ts`,
+and five modules ended up tested from two of them at once; for
+`mobilePanel` and `channelTopic` the module's verbs were PARTITIONED across
+the pair, so a verb missing from the file you opened told you nothing. All
+three locations are now one. Enforced by the `test location` stage of
+`scripts/bun.sh run check`, because the doc line alone demonstrably did not
+hold: it has named this directory since 2026-05-24 and the second location
+was created the same day. A test file for a module that already has one goes
+INTO that file, not beside it.
+
+Two roots outside `src/` are also collected by the same vitest run, by
+deliberate exception in `cicchetto/vitest.config.ts`:
+`e2e/fixtures/**/*.test.ts` and `e2e/reporters/**/*.test.ts` — the parts of
+the Playwright fixtures and reporters that carry LOGIC rather than driver
+calls (#806, #1584). They are matched on `.test.ts` alone, never `.spec.ts`,
+so `e2e/tests/*.spec.ts` stay Playwright's.
+
 The CI pipeline runs all three on every push to main. Both `ci.yml`
 (Elixir + lint + audit + cic) and `integration.yml` (Playwright)
 must be green for the commit to count.
