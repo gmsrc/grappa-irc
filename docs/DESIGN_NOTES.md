@@ -63891,9 +63891,10 @@ suppression of the character (`font-size: 0`) is written `button.` and placed
 after `.shell-chrome-btn`, because a bare `.topic-bar-hamburger` ties that
 rule at (0,1,0) and LOSES on source order — #305's `display` trap, one
 property over. And it is **not** scoped `.topic-bar .topic-bar-hamburger`:
-good specificity, but that matches only inside the band, and the same button
-now also floats in `.shell-chrome`, where it would render as the thin
-character beside a drawn twin.
+good specificity, but that matches only inside the band, while the drawing has
+to reach the leading door too — which floats in `.shell-chrome` on non-channel
+windows, where a band-scoped rule would leave it as the thin character beside
+a drawn twin.
 
 ### The `leading` slot, and the two window kinds that knowingly have none
 
@@ -63939,3 +63940,54 @@ boundary of the rule, and it is still open for every hand-written
 `*_json.ex`. Widening the digest is a coverage change, which the pin
 deliberately cannot distinguish from a shape change, so it is not smuggled in
 here.
+
+### What the full integration run found, and what it cost to believe it
+
+Two reds, both this branch's, both on `webkit-iphone-15`; 780 other tests
+green. Neither was a flake, and neither was curable in a spec.
+
+**A CSS class can be an identity, and this one is.** The new spec died on a
+click deadline in `openMembersDrawer`, the fixture roughly twenty specs reach
+the rail through. It locates the opener BY CLASS and takes `.first()`, and
+#1073 wrote the contract in the fixture's own comment: *"the class is what
+they have in common, and it is the thing this helper actually needs — the
+in-flow opener, whichever pane is mounted."* Singular. Reusing
+`PaneTopBarRailOpener` for the left door put a second `.topic-bar-hamburger`
+in the DOM, ahead of the first, so with the window bar off the fixture opened
+the window sidebar and then had its retry occluded by the very sidebar it had
+just opened. The generalisation is the point: **a shared class is part of the
+interface when a consumer resolves it positionally**, and nothing in the type
+system or the linter says so — only the consumer's comment does. The two doors
+are now two components and two classes, still sharing `.shell-chrome-btn` and
+the drawn-bars rule, because with the bar off they occupy one 48px band and
+must look identical. Identity split; appearance not.
+
+The reading this ruled OUT is worth recording, because it was the live
+question when the red landed: hiding the bar does **not** open the sidebar by
+itself. The failure screenshot shows the server window already reached, so the
+☰ tap and the navigation through it both worked. The open sidebar was the
+fixture's own click.
+
+**The oracle that broke was measuring the wrong thing, and the code was still
+wrong.** `ux-5-bt` asserts `#305`'s legibility floor as
+`getComputedStyle(el).fontSize >= 18`, which `font-size: 0` zeroes. Softening
+that assert was refused; the ink was measured instead, in the browser the spec
+runs in. On webkit-iphone-15 (root 14px, `--chrome-icon-size` → 19.59px):
+
+| ☰ as painted | ink W | ink H |
+| --- | --- | --- |
+| U+2630 as text | 19.59 | 17.00 |
+| bars at `/3` (as first shipped) | 19.59 | **15.06** |
+| bars at `(token − 2px)/2` | 19.59 | 19.59 |
+
+So the red was right twice: the oracle had gone blind AND the glyph really had
+shrunk 11.4% in height. The divisor was a guess; the bars now span the icon
+token exactly, which is a rule with a reason instead of a number. The oracle
+moves to the painted extent, read off the computed shadow rather than
+recomputing the formula — and that is a strengthening, not an accommodation:
+`font-size` measured the em box, when #305's whole complaint was that U+2630
+is three thin strokes centred in a box that is not narrow, i.e. that the box
+overstates the glyph. The table shows the character never cleared 18 either.
+
+The cheap lesson underneath both: **a `--grep`-scoped green proves one spec,
+and neither of these defects lives in the spec you would have scoped to.**
