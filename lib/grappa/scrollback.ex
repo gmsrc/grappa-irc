@@ -266,7 +266,9 @@ defmodule Grappa.Scrollback do
 
   `op` is a zero-arity fun returning `{:ok, term()}` or `{:error,
   Ecto.Changeset.t()}`. A transient fault (a pool `queue_timeout`
-  `DBConnection.ConnectionError`, or a busy/locked `%Exqlite.Error{}`) is
+  `DBConnection.ConnectionError`, a busy/locked or INTERRUPTED
+  `%Exqlite.Error{}`, or an empty-count `%Ecto.MultiplePrimaryKeyError{}` —
+  the pool closing the connection after the write landed, #1708) is
   retried over the engine's wall-clock budget; each ridden-out attempt fires
   `Telemetry.contention/3` (#357 mechanism 2) via the engine's
   `:on_contention` observer, and budget-exhaustion degrades to `{:error,

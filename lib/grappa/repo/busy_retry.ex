@@ -21,10 +21,11 @@ defmodule Grappa.Repo.BusyRetry do
       the op. Passed straight through, **never retried** (it is not a
       fault).
     * `{:error, :db_unavailable}` — a TRANSIENT fault
-      (`DBConnection.ConnectionError`, or a busy-or-locked / INTERRUPTED
-      `%Exqlite.Error{}` — see `classify/1`) that persisted for the whole
-      retry budget. A web caller routes this through `FallbackController`
-      to a clean **503** (#518) instead of a 500 raise.
+      (`DBConnection.ConnectionError`, a busy-or-locked / INTERRUPTED
+      `%Exqlite.Error{}`, or an empty-count `%Ecto.MultiplePrimaryKeyError{}`
+      — see `classify/1`) that persisted for the whole retry budget, or
+      that is not retryable at all. A web caller routes this through
+      `FallbackController` to a clean **503** (#518) instead of a 500 raise.
 
   A **non-transient** `%Exqlite.Error{}` (syntax / corruption) is NOT
   saturation: retrying only spins. It **re-raises** with its original
@@ -38,6 +39,16 @@ defmodule Grappa.Repo.BusyRetry do
   The retry loop runs over a wall-clock BUDGET, sleeping a linear backoff
   capped per attempt, so a normal write caught behind a burst is ridden
   out; only sustained saturation degrades.
+
+  ## TRANSIENT and RETRYABLE are two axes, not one (#1708)
+
+  They coincided for the first three fault kinds and stopped coinciding with
+  the fourth. `:connection_closed` is transient by construction — only the
+  pool can produce it — but its statement **completed**, so the row is
+  already durable and a second attempt does not re-drive a lost write, it
+  inserts a duplicate. It therefore degrades on the FIRST attempt, whatever
+  the budget says. `retryable?/1` is that second axis, and a new fault kind
+  has to answer both questions, not one.
 
   ## How far the budget REACHES (#1421)
 
@@ -92,7 +103,7 @@ defmodule Grappa.Repo.BusyRetry do
   @backoff_ms Application.compile_env(:grappa, [:busy_retry, :backoff_ms], 25)
   @backoff_cap_ms Application.compile_env(:grappa, [:busy_retry, :backoff_cap_ms], 200)
 
-  @type fault_kind :: :queue_timeout | :busy_locked | :interrupted
+  @type fault_kind :: :queue_timeout | :busy_locked | :interrupted | :connection_closed
 
   @typedoc """
   Per-contention observer. Called once per RIDDEN-OUT transient attempt with
@@ -134,7 +145,7 @@ defmodule Grappa.Repo.BusyRetry do
     maybe_inject_fault()
     op.()
   rescue
-    error in [DBConnection.ConnectionError, Exqlite.Error] ->
+    error in [DBConnection.ConnectionError, Exqlite.Error, Ecto.MultiplePrimaryKeyError] ->
       elapsed_ms = System.monotonic_time(:millisecond) - started
 
       cond do
@@ -145,8 +156,12 @@ defmodule Grappa.Repo.BusyRetry do
 
         # Identical to the pre-#1421 `monotonic_time < started + @budget_ms`,
         # rearranged so the same subtraction feeds the terminal line. Same
-        # arm, same boundary, no timing change.
-        elapsed_ms < @budget_ms ->
+        # arm, same boundary, no timing change. #1708 adds the `retryable?/1`
+        # conjunct in FRONT of it, not inside it: a fault whose write already
+        # landed must skip this arm on attempt 1 regardless of the clock, and
+        # folding that into the budget comparison would make it look like a
+        # timing accident rather than a verdict.
+        retryable?(error) and elapsed_ms < @budget_ms ->
           on_contention(opts, fault_kind(error), attempt, false)
           # The backoff sleep runs after the failed checkout was already
           # released, so it holds no connection — bounded backpressure on the
@@ -178,10 +193,20 @@ defmodule Grappa.Repo.BusyRetry do
   # statement was cancelled mid-flight — and not the pool deadline that
   # caused it, which this frame never sees and which is already the subject
   # of the timing-out client's own `queue_timeout` line elsewhere in the log.
+  #
+  # #1708 adds the fourth, and it is the same rule again. It names what this
+  # frame OBSERVED — the connection it went to consult was gone — and not the
+  # pool deadline that closed it, which this frame never sees. It deliberately
+  # does NOT say "cancelled": the statement was not cancelled, it COMPLETED,
+  # and that difference is the whole reason the row survives and the retry
+  # must not happen.
   @spec observed_state(fault_kind()) :: String.t()
   defp observed_state(:queue_timeout), do: "SQLite pool saturated"
   defp observed_state(:busy_locked), do: "SQLite write lock held by another writer"
   defp observed_state(:interrupted), do: "SQLite statement cancelled by a pool timeout"
+
+  defp observed_state(:connection_closed),
+    do: "SQLite connection closed after the write completed"
 
   # The same rule, applied to the NUMBER on that line (#1421). It used to read
   # "for the full #{@budget_ms}ms retry budget", which is false in the regime
@@ -197,7 +222,23 @@ defmodule Grappa.Repo.BusyRetry do
   # `test/scripts/log_gap_scan_test.bats` in the SAME commit. A census whose
   # pattern stopped matching reports zero, and zero is what a clean run looks
   # like.
+  #
+  # 🔴 `:connection_closed` gets its OWN sentence rather than the shared
+  # template, because the template's opening clause is FALSE for it (#1708).
+  # "db write unavailable" would send an operator looking for a row that is
+  # sitting durably in the table: the statement completed and committed, and
+  # what was lost is the RETURNING id and therefore the live broadcast. The
+  # "not retried" clause is on the line for the same reason — the attempt
+  # count is 1 by verdict here, not because a budget ran out, and a reader
+  # comparing it against the other three kinds is entitled to know which.
   @spec terminal_message(fault_kind(), non_neg_integer(), pos_integer()) :: String.t()
+  defp terminal_message(:connection_closed, elapsed_ms, attempt) do
+    "db write landed but its result was lost: " <>
+      "#{observed_state(:connection_closed)}, #{elapsed_ms}ms into the write, " <>
+      "on attempt #{attempt} (not retried — the row is durable, a retry would " <>
+      "duplicate it) — returning :db_unavailable"
+  end
+
   defp terminal_message(kind, elapsed_ms, attempt) do
     "db write unavailable: #{observed_state(kind)} for #{elapsed_ms}ms across " <>
       "#{attempt} attempts (#{@budget_ms}ms retry budget) — returning :db_unavailable"
@@ -247,6 +288,38 @@ defmodule Grappa.Repo.BusyRetry do
     * `"busy"` / `"locked"` — a writer held the file lock past
       `busy_timeout`.
 
+  An `%Ecto.MultiplePrimaryKeyError{}` is the third driver symptom, and the
+  only one that does not arrive wearing a driver struct (#1708). It is the
+  OTHER half of the same pool disconnect: `Exqlite.Connection.disconnect/2`
+  runs `Sqlite3.cancel/1` and THEN `Sqlite3.close/1`, and which of the two an
+  in-flight statement meets decides the symptom.
+
+    * the cancel lands DURING the step — the statement LOSES, no row, and the
+      driver raises `"interrupted"`. That is the arm above.
+    * the close lands AFTER the step completed — the statement WON and its row
+      is durable, but the handle the driver then consults for the change count
+      is gone. `exqlite_changes` answers `{:error, :connection_closed}`,
+      `maybe_changes/2` swallows that into `nil`, and — because
+      `transaction_status/1` on a closed handle answers `{:ok, :error}` rather
+      than an error tuple — the `with` in `execute/4` sails through and reports
+      `%Result{num_rows: nil}` to Ecto as SUCCESS. `Ecto.Adapters.SQL.struct/10`
+      has clauses for `num_rows: 1` and `num_rows: 0` and then
+      `num_rows when num_rows > 1`, which `nil` satisfies (term order puts
+      every number before every atom), so it raises about a primary key that
+      is not the problem. Measured against the shipped driver in
+      `Grappa.Repo.BusyRetryFidelityTest`.
+
+  The discriminator is Ecto's own rendering: it interpolates the count
+  straight into the sentence, so `count: nil` prints as NOTHING and leaves the
+  `got  entries` double space production logged 22 times on 2026-08-22. An
+  EMPTY count is therefore `:connection_closed` (transient, and the one kind
+  that is NOT retryable — see `retryable?/1`); a count that is actually there
+  means more than one row genuinely came back, which on an UPDATE or DELETE
+  with too loose a filter is a real bug, so it stays `:permanent` and re-raises.
+  A single-row `INSERT … VALUES … RETURNING` cannot produce the latter at all
+  (`sqlite3_changes()` is 1, or the statement failed), which is why the
+  scrollback path only ever meets the former.
+
   Anything else (syntax, corruption) is `:permanent`: retrying only spins.
 
   🔴 It earns its OWN kind rather than borrowing one. #1420 split
@@ -272,14 +345,45 @@ defmodule Grappa.Repo.BusyRetry do
 
   def classify(%Exqlite.Error{}), do: :permanent
 
+  def classify(%Ecto.MultiplePrimaryKeyError{message: message}) when is_binary(message) do
+    if empty_count?(message), do: :connection_closed, else: :permanent
+  end
+
+  # Only the FIRST line is examined. The tail of Ecto's message inspects the
+  # bound PARAMS, which on the scrollback path are user-controlled message
+  # bodies — a body echoing the sentence must not be able to reclassify a
+  # genuine multi-row result as recoverable. `source` is a table name, so the
+  # first line cannot itself contain a newline.
+  #
+  # Pinned by building the error through `Ecto.MultiplePrimaryKeyError`'s OWN
+  # constructor in `Grappa.Repo.BusyRetryTest` and
+  # `Grappa.Repo.BusyRetryFidelityTest` — never against a hand-typed sentence,
+  # so an Ecto release that rewords it fails RED here instead of silently
+  # reverting the cure.
+  @spec empty_count?(String.t()) :: boolean()
+  defp empty_count?(message) do
+    message
+    |> String.split("\n", parts: 2)
+    |> hd()
+    |> String.ends_with?("but got  entries.")
+  end
+
+  # Is this fault worth a SECOND attempt? Distinct from `transient_fault?/1`
+  # (#1708): `:connection_closed` is transient — only the pool can cause it —
+  # but its statement already completed, so its write is durable and a retry
+  # would insert the row a second time rather than recover a lost one. The
+  # other three kinds all mean the write did NOT take effect, so they retry.
+  @spec retryable?(Exception.t()) :: boolean()
+  defp retryable?(error), do: classify(error) != :connection_closed
+
   # Only reached after `transient_fault?/1` returned true, so `classify/1`
   # cannot answer `:permanent` here — but the clause is explicit rather than
   # a bare pass-through, so a future transient kind that forgets to teach
   # `observed_state/1` fails LOUD at the case instead of printing a stray atom.
-  @spec fault_kind(DBConnection.ConnectionError.t() | Exqlite.Error.t()) :: fault_kind()
+  @spec fault_kind(Exception.t()) :: fault_kind()
   defp fault_kind(error) do
     case classify(error) do
-      kind when kind in [:queue_timeout, :busy_locked, :interrupted] -> kind
+      kind when kind in [:queue_timeout, :busy_locked, :interrupted, :connection_closed] -> kind
     end
   end
 

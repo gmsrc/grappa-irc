@@ -427,6 +427,31 @@ defmodule Grappa.ScrollbackTest do
       assert {:error, :persist_unavailable} = Scrollback.with_pool_retry(op)
       assert Agent.get(counter, & &1) == 1
     end
+
+    # #1708 — the exception that broke the #336 contract in production. The
+    # pool closed the connection AFTER the INSERT had completed, so the driver
+    # reported success with no row count, `Ecto.Adapters.SQL.struct/10` fell
+    # through to its `num_rows > 1` clause (which `nil` satisfies) and raised
+    # `Ecto.MultiplePrimaryKeyError`. Neither rescue list on this path named
+    # that struct, so it propagated out of `persist_event/1` and out of
+    # `Session.Persistor.persist_and_broadcast/3`, killing 22 live IRC sessions
+    # on 2026-08-22 — one of the very disconnections #336 exists to prevent.
+    #
+    # The mechanism, the term-order guard and the empty-count rendering are
+    # measured in `Grappa.Repo.BusyRetryFidelityTest`; the verdict and the
+    # no-retry rule in `Grappa.Repo.BusyRetryTest`. What THIS pins is the only
+    # thing the session cares about: the row is lost, the session is not.
+    test "a connection closed after the write degrades to :persist_unavailable — it does NOT escape (#1708)" do
+      orphaned =
+        Ecto.MultiplePrimaryKeyError.exception(
+          operation: :insert,
+          source: "messages",
+          params: [1, "#bofh"],
+          count: nil
+        )
+
+      assert {:error, :persist_unavailable} = Scrollback.with_pool_retry(fn -> raise orphaned end)
+    end
   end
 
   describe "persist_event/1" do

@@ -47,6 +47,34 @@ defmodule Grappa.Repo.BusyRetryTest do
     raise %Exqlite.Error{message: "interrupted", statement: nil}
   end
 
+  # #1708 — the pool closing the connection AFTER the statement completed.
+  # Built through Ecto's OWN constructor, never a hand-typed sentence: the
+  # empty-count rendering IS the discriminator, so a test that spelled the
+  # message itself would keep passing after Ecto reworded it. See the describe
+  # block below.
+  defp orphaned_write_error do
+    Ecto.MultiplePrimaryKeyError.exception(
+      operation: :insert,
+      source: "messages",
+      params: [1, "#bofh", "hello"],
+      count: nil
+    )
+  end
+
+  # The reading the exception's own text asserts: more than one row really came
+  # back. Unreachable on a single-row `INSERT … VALUES … RETURNING`
+  # (`sqlite3_changes()` is 1, or the statement failed) but perfectly reachable
+  # on an UPDATE or DELETE whose filter is too loose — a real bug the engine
+  # must keep surfacing LOUD.
+  defp genuine_multi_row_error do
+    Ecto.MultiplePrimaryKeyError.exception(
+      operation: :update,
+      source: "messages",
+      params: [1],
+      count: 2
+    )
+  end
+
   # Every captured terminal line tagged with this fault kind. The `fault=`
   # metadata is what the prose has to agree with, so it is also what selects
   # the lines to judge.
@@ -205,6 +233,110 @@ defmodule Grappa.Repo.BusyRetryTest do
       kinds = Agent.get(observed, & &1)
       assert kinds != []
       assert Enum.all?(kinds, &(&1 == :interrupted))
+    end
+  end
+
+  # #1708 — the OTHER half of the same pool-disconnect race #1657 closed.
+  #
+  # `disconnect/2` does two things in order: `Sqlite3.cancel(db)` and then
+  # `Sqlite3.close(db)`. Which one the in-flight statement meets decides which
+  # symptom the caller gets, and the two are complementary:
+  #
+  #   * the cancel lands DURING the step -> SQLITE_INTERRUPT -> the statement
+  #     LOST, no row -> `%Exqlite.Error{message: "interrupted"}` -> #1657.
+  #   * the close lands AFTER the step completed -> the statement WON and the
+  #     row is durable, but the handle the driver then consults for the change
+  #     count is gone. `exqlite_changes` answers `{:error, :connection_closed}`,
+  #     `maybe_changes/2` turns that into `nil`, and `%Result{num_rows: nil}` is
+  #     reported to Ecto as SUCCESS. `Ecto.Adapters.SQL.struct/10` has no clause
+  #     for it and falls through to `num_rows > 1`, which `nil` satisfies (term
+  #     order: every number sorts before every atom), so it raises
+  #     `Ecto.MultiplePrimaryKeyError` about a primary key that is not the
+  #     problem. Its `count: nil` renders as NOTHING — the `got  entries` with a
+  #     double space that prod printed 22 times on 2026-08-22.
+  #
+  # `Ecto.MultiplePrimaryKeyError` is in NEITHER rescue list on the persistence
+  # path (`loop/4` here, `Scrollback.with_pool_retry/1` above it), so it
+  # propagated out of `Session.Persistor.persist_and_broadcast/3` and killed 22
+  # live IRC sessions — several of them 19 hours old — for a scrollback row
+  # that had already landed. The driver-level halves of that chain are measured
+  # in `Grappa.Repo.BusyRetryFidelityTest`; this block pins the verdict.
+  #
+  # It earns its OWN kind for the #1420 reason, and here the borrowing would be
+  # worse than a mislabel: `:interrupted` says the statement was cancelled, and
+  # this statement COMPLETED. It is also the first NON-RETRYABLE transient —
+  # the row is durable, so a retry does not re-attempt a lost write, it inserts
+  # a second one.
+  describe "a connection closed after the write completed (#1708)" do
+    test "the empty count is what prod printed — Ecto renders `got  entries` for count: nil" do
+      assert orphaned_write_error().message =~ "but got  entries."
+    end
+
+    test "classify/1 answers :connection_closed for an EMPTY count" do
+      assert BusyRetry.classify(orphaned_write_error()) == :connection_closed
+    end
+
+    test "classify/1 keeps a GENUINE multi-row result :permanent — the real PK bug stays loud" do
+      assert BusyRetry.classify(genuine_multi_row_error()) == :permanent
+    end
+
+    test "a genuine multi-row result still RE-RAISES out of run/1" do
+      assert_raise Ecto.MultiplePrimaryKeyError, fn ->
+        BusyRetry.run(fn -> raise genuine_multi_row_error() end)
+      end
+    end
+
+    test "an orphaned write degrades to {:error, :db_unavailable} — it never reaches the caller" do
+      assert {:error, :db_unavailable} = BusyRetry.run(fn -> raise orphaned_write_error() end)
+    end
+
+    test "an orphaned write is NEVER retried — a retry would insert the row a second time" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      op = fn ->
+        Agent.update(counter, &(&1 + 1))
+        raise orphaned_write_error()
+      end
+
+      assert {:error, :db_unavailable} = BusyRetry.run(op)
+
+      # The discriminator against every other transient kind. This op raises
+      # instantly, so the 1_500ms budget is untouched and `:busy_locked` /
+      # `:interrupted` would both re-enter the loop dozens of times here (the
+      # #1657 sibling test asserts exactly that, `> 1`). Exactly one attempt
+      # means the no-retry decision came from the VERDICT, not from the clock.
+      assert Agent.get(counter, & &1) == 1
+    end
+
+    test "the observer sees a distinct :connection_closed kind, once, flagged terminal" do
+      {:ok, observed} = Agent.start_link(fn -> [] end)
+      on_contention = fn kind, attempt, terminal? -> Agent.update(observed, &[{kind, attempt, terminal?} | &1]) end
+
+      assert {:error, :db_unavailable} =
+               BusyRetry.run(fn -> raise orphaned_write_error() end, on_contention: on_contention)
+
+      assert Agent.get(observed, &Enum.reverse(&1)) == [{:connection_closed, 1, true}]
+    end
+
+    test "the terminal line says the write LANDED — it must not report an unavailable write" do
+      log =
+        capture_log(fn ->
+          assert {:error, :db_unavailable} = BusyRetry.run(fn -> raise orphaned_write_error() end)
+        end)
+
+      lines =
+        log
+        |> String.split("\n")
+        |> Enum.filter(&(&1 =~ "fault=connection_closed"))
+
+      assert lines != []
+      assert Enum.all?(lines, &(&1 =~ "SQLite connection closed after the write completed"))
+
+      # CLAUDE.md log honesty: the row is durably in the table, so the shared
+      # `db write unavailable:` opening of the other three kinds is FALSE here
+      # and this kind does not borrow it. An operator reading this line must
+      # not go looking for a lost row.
+      refute Enum.any?(lines, &(&1 =~ "db write unavailable"))
     end
   end
 

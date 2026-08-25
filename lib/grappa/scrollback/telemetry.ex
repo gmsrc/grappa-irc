@@ -55,6 +55,11 @@ defmodule Grappa.Scrollback.Telemetry do
   `:telemetry.attach_many/4` — no code here changes when it lands.
   """
 
+  # Typespec-only reference: the fault set's SSOT is the retry engine, so this
+  # module names it rather than keeping a third copy (#1708). A remote type in
+  # a `@spec` is metadata, not a call, so it adds no Boundary edge.
+  alias Grappa.Repo.BusyRetry
+
   @type subject :: :user | :visitor | :unknown
   @type persist_outcome :: :ok | :validation_error | :unavailable
 
@@ -93,10 +98,23 @@ defmodule Grappa.Scrollback.Telemetry do
   final attempt (the row is lost), `false` while the loop is still riding it
   out. Fires ONLY on the contention path — already the slow path — so it adds
   zero cost to an uncontended insert.
+
+  🔴 `dropped: true` is the BUDGET-EXHAUSTED reading of "terminal", and for
+  `:connection_closed` (#1708) the row is NOT lost — that fault degrades on
+  attempt 1 with its write already durable. The flag is left as-is rather than
+  renamed: it is the metadata key an attached exporter keys off, and the fault
+  kind on the same event already discriminates the two. A consumer that counts
+  LOST rows must exclude `:connection_closed`, not sum `dropped`.
+
+  The fault set is `Grappa.Repo.BusyRetry.fault_kind/0` and that module is its
+  SSOT. The guard below has to spell the atoms out (a guard cannot reference a
+  type), so it is a second copy by necessity — a new kind added there without
+  being added here fails LOUD at this clause, which is how #1708 found it.
   """
-  @spec contention(:queue_timeout | :busy_locked | :interrupted, pos_integer(), boolean()) :: :ok
+  @spec contention(BusyRetry.fault_kind(), pos_integer(), boolean()) :: :ok
   def contention(fault, attempt, dropped)
-      when fault in [:queue_timeout, :busy_locked, :interrupted] and is_integer(attempt) and
+      when fault in [:queue_timeout, :busy_locked, :interrupted, :connection_closed] and
+             is_integer(attempt) and
              attempt > 0 and
              is_boolean(dropped) do
     :telemetry.execute(
