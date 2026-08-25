@@ -107,10 +107,27 @@ defmodule Grappa.Protocol do
   # with protocol 3 at rc=0 beforehand, because the digested set is a glob
   # over `lib/grappa/**` plus a hand-kept list of web-layer envelopes.
   #
+  # v6 (#1766) adds `show_bottom_bar` to the `display_prefs` object on
+  # `GET/PUT /me/settings/display-prefs` — the mobile window bar's per-user
+  # off switch. Additive, and it bumps for the #1393d reason: a client that
+  # comes to REQUIRE the key cannot be served by a server predating it, and
+  # nothing server-side would express that break without this number moving.
+  #
+  # ⚠️ `mix grappa.wire_pin --check` did NOT force this one and could not, so
+  # do not read a green pin as "no bump needed". The digest spans the codegen
+  # artefacts, whose sources are `lib/grappa/**/*wire.ex` plus a hand-kept
+  # `@extra_modules` list of web-layer envelopes, and
+  # `GrappaWeb.UserSettingsJSON` is not on it. That is the SAME silence #1679
+  # hit with `BootJSON` — recorded there as a gap in the detector, not as a
+  # boundary of the rule, and still open for every hand-written `*_json.ex`.
+  # Widening the digest is a COVERAGE change, which the pin deliberately
+  # cannot tell from a shape change (its moduledoc: delete and re-create, no
+  # `--force`), so it is not smuggled in alongside a product change.
+  #
   # @min_protocol_version is NOT the same axis and stays at 1: it rises only
   # when old clients can no longer be SERVED, and every client that spoke v1
-  # is still served — v1 clients tolerate what v5 clients require.
-  @protocol_version 5
+  # is still served — v1 clients tolerate what v6 clients require.
+  @protocol_version 6
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -121,7 +138,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 5
+  @spec version() :: 6
   def version, do: @protocol_version
 
   @doc """
