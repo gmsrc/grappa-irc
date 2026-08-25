@@ -40,6 +40,7 @@ Grappa.Application
 ├── Grappa.RateLimit.TokenBucket       (#340 per-(subject, network) send token bucket)
 ├── Grappa.Net.PtrCache                (#252 vhost reverse-DNS (PTR) name cache)
 ├── Task.Supervisor                    (name: Grappa.TaskSupervisor — detached tasks)
+├── Grappa.WindowCounts.Pusher.Coalescer (#1768 one window_counts snapshot per window per window_ms; after TaskSupervisor — flushes into it)
 ├── DynamicSupervisor                  (name: Grappa.SessionSupervisor)
 │   └── Grappa.Session.Server          (one per (user, network), :transient)
 ├── GrappaWeb.Endpoint                 (Phoenix HTTP + WS)

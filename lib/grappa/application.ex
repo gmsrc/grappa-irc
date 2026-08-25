@@ -36,6 +36,10 @@ defmodule Grappa.Application do
       # #364 J/cross-module-S2: start/2 calls WindowCounts.PushSource.boot/0
       # + Themes.boot/0 to inject the two remaining DI-seams at boot.
       Grappa.WindowCounts,
+      # #1768 — supervises WindowCounts.Pusher.Coalescer. This edge is on
+      # the SUPERVISOR, not on Session: the DI seam exists so `Session`
+      # carries no static edge onto the impl, and it still does not.
+      Grappa.WindowCounts.Pusher,
       Grappa.Themes,
       Grappa.WSPresence,
       GrappaWeb
@@ -363,6 +367,14 @@ defmodule Grappa.Application do
         # is a visible SASL report. Must precede SessionSupervisor so a
         # session terminating on its start path can already reach it.
         {Task.Supervisor, name: Grappa.TaskSupervisor},
+        # #1768 — window_counts snapshot coalescer. AFTER TaskSupervisor
+        # (every flush hands its snapshot to it) and BEFORE
+        # SessionSupervisor, because the first persisted row of the first
+        # session touches it. Its absence is not fatal — `touch/1` is a
+        # cast, so an un-started coalescer silently skips the live-render
+        # optimization instead of crashing the persist path — but that is
+        # a degradation contract, not a licence to start it late.
+        Grappa.WindowCounts.Pusher.Coalescer,
         # max_restarts: 10_000, max_seconds: 60 — DynamicSupervisor's
         # default (3 restarts in 5s) is GLOBAL across all children; one
         # upstream network-wide outage causing several Session.Server

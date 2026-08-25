@@ -16,12 +16,20 @@ defmodule Grappa.WindowCounts.Pusher do
   `push/1` gates on live WS presence (`WSPresence.ws_count/1` > 0): if
   no socket is connected for the subject, it skips — the next
   `join_reply` / `/me` re-seeds the absolute snapshot on reconnect, so a
-  disconnected subject costs nothing. When connected, it hands the work
-  to `Grappa.TaskSupervisor` (like `Push.Triggers`) so the Session hot
-  path never blocks on the snapshot's DB work, then `emit/1` computes the fresh
-  `WindowCounts.snapshot/7` (cursor from `ReadCursor`, highlight patterns
-  from `UserSettings`) and broadcasts the `window_counts` event on the
-  per-channel topic. cic replaces its stored snapshot verbatim.
+  disconnected subject costs nothing. When connected, it hands the window
+  to `Coalescer` (#1768), which folds a burst of rows in the same window
+  into ONE flush and runs it under `Grappa.TaskSupervisor` (like
+  `Push.Triggers`) so the Session hot path never blocks on the snapshot's
+  DB work. `emit/1` then computes the fresh `WindowCounts.snapshot/7`
+  (cursor from `ReadCursor`, highlight patterns from `UserSettings`) and
+  broadcasts the `window_counts` event on the per-channel topic. cic
+  replaces its stored snapshot verbatim.
+
+  `emit/1` reads the DB at FLUSH time, which is what makes the coalescing
+  lossless: the one snapshot that survives a burst has seen every row of
+  it. That property is load-bearing — see `Coalescer`'s moduledoc — so a
+  future change that pre-computes any part of the snapshot at `push/1`
+  time breaks the coalescer without touching it.
   """
 
   @behaviour Grappa.WindowCounts.PushSource
@@ -36,33 +44,37 @@ defmodule Grappa.WindowCounts.Pusher do
       Grappa.UserSettings,
       Grappa.WindowCounts,
       Grappa.WSPresence
-    ]
+    ],
+    # #1768 — the coalescer is a supervised singleton, so `Grappa.Application`
+    # has to name it in the child list. Nothing else outside this boundary
+    # may: `push/1` is still the only door in.
+    exports: [Coalescer]
 
   alias Grappa.PresenceFilter.Resolver
   alias Grappa.PubSub.Topic
   alias Grappa.{ReadCursor, UserSettings, WindowCounts, WSPresence}
+  alias Grappa.WindowCounts.Pusher.Coalescer
   alias Grappa.WindowCounts.{PushSource, Wire}
 
   @impl PushSource
   @spec push(PushSource.ctx()) :: :ok
   def push(%{subject_label: subject_label} = ctx) do
-    # `_ =` — the `if` is evaluated for its side effect (starting the
-    # emit task); its value is intentionally discarded (dialyzer
+    # `_ =` — the `if` is evaluated for its side effect (arming the
+    # coalescer's flush); its value is intentionally discarded (dialyzer
     # `:unmatched_returns`).
     _ =
       if WSPresence.ws_count(subject_label) > 0 do
-        # Detached, but not orphaned: under `Grappa.TaskSupervisor` (S37)
-        # the worker is visible to the operator and a crash in it is a
-        # report rather than a silent disappearance. The snapshot DB work
-        # stays off the Session hot path either way. A worker that never
-        # runs just means the live-render optimization is skipped for this
-        # row; the next seed re-bases the count.
+        # #1768 — through the coalescer, NOT straight to a Task. One row
+        # used to be one task and one snapshot; a burst in one window is
+        # now one snapshot, so in-flight snapshot work is bounded by the
+        # windows touched instead of by the rows persisted. See
+        # `Coalescer`'s moduledoc for the measurement and for why dropping
+        # the intermediate emits is lossless.
         #
-        # The return is DISCARDED, not matched. `Task.start/1` could not
-        # fail, but a supervisor can refuse — and the day this supervisor
-        # is given a child ceiling, a strict match here would turn a
-        # skipped optimization into a crash on the session hot path.
-        Task.Supervisor.start_child(Grappa.TaskSupervisor, fn -> emit(ctx) end)
+        # The presence gate stays HERE, ahead of the cast, so a subject
+        # with no socket still costs nothing at all — not even a message
+        # into the coalescer's mailbox.
+        Coalescer.touch(ctx)
       end
 
     :ok
