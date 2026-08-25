@@ -26,6 +26,7 @@ setup() {
     BATS_SH="$BATS_TEST_DIRNAME/../../scripts/bats.sh"
     LIB_SH="$BATS_TEST_DIRNAME/../../scripts/_lib.sh"
     VERSION_SH="$BATS_TEST_DIRNAME/../../infra/packaging/version.sh"
+    CREDITS_SH="$BATS_TEST_DIRNAME/../../infra/packaging/credits.sh"
 
     FAKE_DIR="$BATS_TEST_TMPDIR/fake"
     mkdir -p "$FAKE_DIR"
@@ -51,7 +52,10 @@ setup() {
     # version.sh (#652) BEFORE the submodule branch — under set -e it must
     # succeed or the script dies before we reach the code under test.
     cp "$VERSION_SH" "$MAIN/infra/packaging/version.sh"
-    chmod +x "$MAIN/infra/packaging/version.sh"
+    # #1773 — GRAPPA_CREDITS is derived on the same lines, before the same
+    # branch, and dies the same way when the script is missing.
+    cp "$CREDITS_SH" "$MAIN/infra/packaging/credits.sh"
+    chmod +x "$MAIN/infra/packaging/version.sh" "$MAIN/infra/packaging/credits.sh"
     printf '9.9.9\n' > "$MAIN/VERSION"
     printf 'defmodule Grappa.MixProject do\n  @version "9.9.9"\nend\n' > "$MAIN/mix.exs"
     # testnet.sh's compose.yaml existence check must pass; the infra

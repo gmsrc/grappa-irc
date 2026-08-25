@@ -1,7 +1,24 @@
 #!/usr/bin/env bats
 #
 # Drift guard: every entrypoint that can launch a cicchetto build must derive
-# GRAPPA_VERSION from the repo-root VERSION file and export it (#538/#652).
+# the repo-root build facts and export them —
+#
+#   * GRAPPA_VERSION, from infra/packaging/version.sh (#538/#652);
+#   * GRAPPA_CREDITS, from infra/packaging/credits.sh (#1773).
+#
+# ONE guard for both, not two files, for the reason the WHY below already
+# gives: what can be shared is the CHECK, and a second file would carry a
+# second copy of the roster — the drift this exists to catch. The filename
+# still says "version" because two DESIGN_NOTES entries cite it by path
+# (2026-07-… and later), and renaming it would falsify a historical record to
+# buy a naming nicety.
+#
+# Both payloads travel the SAME channel and for the same measured reason: the
+# cic build containers mount only ./cicchetto, so the repo root — VERSION file
+# and git alike — is unreachable inside them. They differ in one place only,
+# and it is deliberate: an unset GRAPPA_VERSION makes vite throw, while
+# credits.sh cannot fail, because the AUR tarball and Dockerfile.release have
+# no `.git` by construction (see that script's header).
 #
 # WHY a guard and not a shared helper: the derive+export pair is two lines, but
 # it lives in bash (scripts/*.sh), POSIX sh (the FreeBSD jail, which has no bash
@@ -86,19 +103,38 @@ launches_cic_build() {
     grep -qE 'cicchetto-build|(bun|npm) run build|--profile prod|cicchetto/e2e|oven/bun' <<< "$(code_of "$1")"
 }
 
-# Compliance is BOTH halves. `export GRAPPA_VERSION=0.10.0` alone would pass an
-# export-only check while planting a second hand-edited version carrier —
-# exactly what the VERSION file is the single source of truth against.
+# Compliance is BOTH halves, per payload. `export GRAPPA_VERSION=0.10.0` alone
+# would pass an export-only check while planting a second hand-edited version
+# carrier — exactly what the VERSION file is the single source of truth
+# against; `export GRAPPA_CREDITS='{}'` would bake a hand-written empty roll,
+# which is the #1773 failure with extra steps.
+exports_var() {
+    grep -q "export $2" <<< "$(code_of "$1")"
+}
+
+derives_from() {
+    grep -q "$2" <<< "$(code_of "$1")"
+}
+
 exports_version() {
-    grep -q 'export GRAPPA_VERSION' <<< "$(code_of "$1")"
+    exports_var "$1" GRAPPA_VERSION
 }
 
 derives_version() {
-    grep -q 'version\.sh' <<< "$(code_of "$1")"
+    derives_from "$1" 'version\.sh'
+}
+
+exports_credits() {
+    exports_var "$1" GRAPPA_CREDITS
+}
+
+derives_credits() {
+    derives_from "$1" 'credits\.sh'
 }
 
 complies() {
-    derives_version "$1" && exports_version "$1"
+    derives_version "$1" && exports_version "$1" \
+        && derives_credits "$1" && exports_credits "$1"
 }
 
 # The shell/build entrypoints a cic build can be launched from. compose files
@@ -151,7 +187,25 @@ discovered_launchers() {
     }
 }
 
-@test "scan: no shell or build entrypoint launches a cic build without exporting GRAPPA_VERSION" {
+# Its own case, not a second pair of lines inside the one above: the two
+# payloads fail independently, and a merged case would report "the roster is
+# broken" without saying which fact went missing.
+@test "roster: every known cic-build launcher derives GRAPPA_CREDITS from credits.sh and exports it (#1773)" {
+    local missing=()
+    for rel in "${ROSTER[@]}"; do
+        local f="$REPO_SRC/$rel"
+        [ -f "$f" ] || { missing+=("$rel (file is gone)"); continue; }
+        derives_credits "$f" || missing+=("$rel (no credits.sh derive)")
+        exports_credits "$f" || missing+=("$rel (no export GRAPPA_CREDITS)")
+    done
+    [ "${#missing[@]}" -eq 0 ] || {
+        printf 'launchers that stopped deriving/exporting GRAPPA_CREDITS:\n' >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        return 1
+    }
+}
+
+@test "scan: no shell or build entrypoint launches a cic build without exporting BOTH build facts" {
     run --separate-stderr unexported_launchers "$REPO_SRC"
     [ "$status" -eq 0 ]
     # The scan's own errors are not findings, and must not pass silently
@@ -195,9 +249,31 @@ discovered_launchers() {
 @test "scan: RED — a launcher that hardcodes the version instead of deriving it is caught" {
     local fake="$BATS_TEST_TMPDIR/repo"
     mkdir -p "$fake/scripts"
+    # Compliant on the CREDITS axis on purpose, so this case can only fail for
+    # the reason it names. A fixture missing both would report green-for-the-
+    # wrong-reason the day the version half stopped being checked.
     cat > "$fake/scripts/ship-the-bundle.sh" <<'EOF'
 #!/usr/bin/env bash
 export GRAPPA_VERSION=0.10.0
+GRAPPA_CREDITS="$(infra/packaging/credits.sh)"
+export GRAPPA_CREDITS
+docker compose --profile prod run --rm cicchetto-build
+EOF
+
+    run --separate-stderr unexported_launchers "$fake"
+    [ "$status" -eq 0 ]
+    [ "$output" = "scripts/ship-the-bundle.sh" ]
+}
+
+@test "scan: RED — a launcher that plumbs the version but forgets the credits is caught (#1773)" {
+    local fake="$BATS_TEST_TMPDIR/repo"
+    mkdir -p "$fake/scripts"
+    # The #1773 shape: fully compliant on the axis the guard already had, and
+    # silently baking an EMPTY credit roll on the axis it did not.
+    cat > "$fake/scripts/ship-the-bundle.sh" <<'EOF'
+#!/usr/bin/env bash
+GRAPPA_VERSION="$(infra/packaging/version.sh)"
+export GRAPPA_VERSION
 docker compose --profile prod run --rm cicchetto-build
 EOF
 
@@ -257,6 +333,8 @@ EOF
 #!/usr/bin/env bash
 GRAPPA_VERSION="$(infra/packaging/version.sh)"
 export GRAPPA_VERSION
+GRAPPA_CREDITS="$(infra/packaging/credits.sh)"
+export GRAPPA_CREDITS
 docker compose --profile prod run --rm cicchetto-build
 EOF
 

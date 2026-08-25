@@ -28,6 +28,16 @@ STAGE_DIR="$(cic_dist_staging "${OUT_DIR}")"
 # injected into the run_as_grappa command string below.
 GRAPPA_VERSION="$("${REPO_ROOT}/infra/packaging/version.sh")"
 
+# #1773 — the credit roll's git facts (sha, date, per-author commit counts),
+# same channel and same env-scrubbing constraint.
+GRAPPA_CREDITS="$("${REPO_ROOT}/infra/packaging/credits.sh")"
+# Unlike the version — a bare X.Y.Z — this payload carries contributor NAMES,
+# and a name can hold an apostrophe (O'Brien). It is spliced into a
+# single-quoted assignment inside a `sudo bash -c` string, where one raw
+# apostrophe would close the quote and hand the rest of the JSON to the shell
+# as code. `'\''` is the POSIX idiom for a literal quote inside single quotes.
+GRAPPA_CREDITS_SQ="${GRAPPA_CREDITS//\'/\'\\\'\'}"
+
 # PATH must include ~grappa/.local/bin, where install_toolchain.sh put bun:
 # `sudo -u ... bash -c` otherwise falls back to the system default PATH.
 run_as_grappa() {
@@ -39,7 +49,7 @@ echo "[cic_build] bun install && bun run build (outDir=${STAGE_DIR} → ${OUT_DI
 # and the interesting signal is the exit code.
 log="$(mktemp)"
 trap 'rm -f "${log}"' EXIT
-if ! run_as_grappa "export GRAPPA_VERSION='${GRAPPA_VERSION}'; cd '${CIC_DIR}' && bun install && bun run build -- --outDir '${STAGE_DIR}' --emptyOutDir" >"${log}" 2>&1; then
+if ! run_as_grappa "export GRAPPA_VERSION='${GRAPPA_VERSION}'; export GRAPPA_CREDITS='${GRAPPA_CREDITS_SQ}'; cd '${CIC_DIR}' && bun install && bun run build -- --outDir '${STAGE_DIR}' --emptyOutDir" >"${log}" 2>&1; then
 	echo "[cic_build] ERROR: build failed — output:" >&2
 	cat "${log}" >&2
 	exit 1

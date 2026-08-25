@@ -35,6 +35,13 @@ staged="$(cic_dist_staging "$served")"
 # Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)" (#538/#652).
 GRAPPA_VERSION="$(../infra/packaging/version.sh)"
 export GRAPPA_VERSION
+# #1773 — the git facts behind the credit roll, on the same channel and inside
+# the same login shell, for the same env-scrubbing reason. Derived HERE rather
+# than spliced in from the parent: this whole body is one single-quoted string
+# in the outer script, and a contributor name carrying an apostrophe would end
+# that quote and hand the rest of the payload to the shell as code.
+GRAPPA_CREDITS="$(../infra/packaging/credits.sh)"
+export GRAPPA_CREDITS
 # Never pipe npm into tail: buffer to a log and print the tail only on
 # failure, so set -e still sees the npm exit status.
 # Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)".

@@ -39,6 +39,14 @@ TESTNET="$(cd "$(dirname "$0")" && pwd)/testnet.sh"
 GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
 export GRAPPA_VERSION
 
+# #1773 — the credit roll's git facts, on the same channel and for the same
+# reason. Exported here as well as in testnet.sh so the playwright-runner
+# service sees it too: the e2e spec compares what the modal PAINTS against
+# what this wrapper DERIVED, and a runner that cannot see the payload could
+# only assert a shape — which cannot tell a correct roll from an empty one.
+GRAPPA_CREDITS="$("$SRC_ROOT/infra/packaging/credits.sh")"
+export GRAPPA_CREDITS
+
 LOG_DIR="$E2E_DIR/container-logs"
 CENSUS_FILE="$LOG_DIR/gap-scan.tsv"
 SCAN_AWK="$(cd "$(dirname "$0")" && pwd)/log-gap-scan.awk"

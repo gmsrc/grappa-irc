@@ -556,6 +556,11 @@ services:
       # cannot read mix.exs; scripts/integration.sh derives it from mix.exs
       # @version (infra/packaging/version.sh) and exports it before compose.
       GRAPPA_VERSION: ${GRAPPA_VERSION:-}
+      # #1773 — the credit roll's git facts, on the same channel and for the
+      # same reason (this container mounts only ../../cicchetto). The credits
+      # e2e compares what the modal PAINTS against this exact payload, which
+      # the playwright-runner service receives too.
+      GRAPPA_CREDITS: ${GRAPPA_CREDITS:-}
     command: ["sh", "-c", "bun install --frozen-lockfile && bun run build"]
 
   # nginx-cert-init — push notifications cluster B5 (2026-05-14).
@@ -675,6 +680,12 @@ services:
       # Specs GET /api/v1/messages (list) + /api/v1/message/{id} (body)
       # to extract the NickServ confirmation code/link.
       E2E_MAILPIT_URL: http://mailpit:8025
+      # #1773 — the SAME payload cicchetto-build-test baked into the bundle.
+      # The credits spec reads it here and compares it against what the modal
+      # paints: without it the spec could only assert a shape, and a shape
+      # assertion cannot tell a correct roll from an empty one — which is the
+      # exact failure the whole build-time channel exists to prevent.
+      GRAPPA_CREDITS: ${GRAPPA_CREDITS:-}
     networks:
       grappa-e2e: {}
     command: ["npx", "playwright", "test"]

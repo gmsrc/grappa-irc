@@ -29,6 +29,7 @@ setup() {
     DEPLOY_CIC_SH="$BATS_TEST_DIRNAME/../../scripts/deploy-cic.sh"
     LIB_SH="$BATS_TEST_DIRNAME/../../scripts/_lib.sh"
     VERSION_SH="$BATS_TEST_DIRNAME/../../infra/packaging/version.sh"
+    CREDITS_SH="$BATS_TEST_DIRNAME/../../infra/packaging/credits.sh"
 
     FAKE_DIR="$BATS_TEST_TMPDIR/fake"
     mkdir -p "$FAKE_DIR"
@@ -65,7 +66,10 @@ setup() {
     # the real derivation dies under `set -e` before the build.
     mkdir -p "$MAIN/infra/packaging"
     cp "$VERSION_SH" "$MAIN/infra/packaging/version.sh"
-    chmod +x "$MAIN/infra/packaging/version.sh"
+    # #1773 — the same paths also derive GRAPPA_CREDITS, on the same channel
+    # and under the same `set -e`.
+    cp "$CREDITS_SH" "$MAIN/infra/packaging/credits.sh"
+    chmod +x "$MAIN/infra/packaging/version.sh" "$MAIN/infra/packaging/credits.sh"
     printf '9.9.9\n' > "$MAIN/VERSION"
     printf 'defmodule Grappa.MixProject do\n  @version "9.9.9"\nend\n' > "$MAIN/mix.exs"
     : > "$MAIN/compose.yaml"

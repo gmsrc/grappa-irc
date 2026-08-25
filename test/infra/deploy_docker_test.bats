@@ -77,6 +77,16 @@ setup() {
 echo 0.0.0-test
 EOF
     chmod +x "$UPSTREAM/infra/packaging/version.sh"
+    # #1773 — credits.sh delegate, same shape and for the same reason: the cic
+    # launch derives GRAPPA_CREDITS from it under `set -e`. A fixed payload,
+    # not the real script: this sandbox is a throwaway git repo whose history
+    # is one "base" commit, so the real derivation would answer with THAT and
+    # make these cases depend on fixture history they do not care about.
+    cat > "$UPSTREAM/infra/packaging/credits.sh" <<'EOF'
+#!/bin/sh
+echo '{"sha":"0000000","date":"2026-01-01T00:00:00+00:00","contributors":[]}'
+EOF
+    chmod +x "$UPSTREAM/infra/packaging/credits.sh"
     touch "$UPSTREAM/runtime/.gitkeep"
     echo base > "$UPSTREAM/lib/base.txt"
     git -C "$UPSTREAM" add -A

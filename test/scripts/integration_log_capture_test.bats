@@ -39,6 +39,7 @@ setup() {
     LIB_SH="$BATS_TEST_DIRNAME/../../scripts/_lib.sh"
     SCAN_AWK="$BATS_TEST_DIRNAME/../../scripts/log-gap-scan.awk"
     VERSION_SH="$BATS_TEST_DIRNAME/../../infra/packaging/version.sh"
+    CREDITS_SH="$BATS_TEST_DIRNAME/../../infra/packaging/credits.sh"
 
     TMP="$(cd "$BATS_TEST_TMPDIR" && pwd -P)"
     MAIN="$TMP/main"
@@ -54,7 +55,9 @@ setup() {
     # integration.sh derives GRAPPA_VERSION from the repo-root VERSION file
     # (#652) before anything else; under set -e it must succeed.
     cp "$VERSION_SH" "$MAIN/infra/packaging/version.sh"
-    chmod +x "$MAIN/infra/packaging/version.sh"
+    # #1773 — and GRAPPA_CREDITS on the next line of the same prelude.
+    cp "$CREDITS_SH" "$MAIN/infra/packaging/credits.sh"
+    chmod +x "$MAIN/infra/packaging/version.sh" "$MAIN/infra/packaging/credits.sh"
     printf '9.9.9\n' >"$MAIN/VERSION"
     printf 'defmodule Grappa.MixProject do\n  @version "9.9.9"\nend\n' >"$MAIN/mix.exs"
     echo base >"$MAIN/lib/base.ex"

@@ -45,6 +45,10 @@ CIC_BUILD_OUT="$(cic_dist_docker_stage "$CIC_SERVED")"
 # repo root, so pass the version through the compose env (#538).
 GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")"
 export GRAPPA_VERSION
+# #1773 — same channel, same reason: the credit roll's git facts cannot be read
+# from inside that container either.
+GRAPPA_CREDITS="$("$REPO_ROOT/infra/packaging/credits.sh")"
+export GRAPPA_CREDITS
 echo "Building cicchetto dist..."
 CIC_BUILD_OUT="$CIC_BUILD_OUT" docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm cicchetto-build
 # Swap the finished bundle in; the promote plants the tracked .gitkeep.

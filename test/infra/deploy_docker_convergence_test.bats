@@ -58,7 +58,11 @@ setup() {
     fi
     cp "$REPO_SRC/VERSION" "$UPSTREAM/VERSION"
     cp "$REPO_SRC/infra/packaging/version.sh" "$UPSTREAM/infra/packaging/version.sh"
-    chmod +x "$UPSTREAM/infra/docker/deploy.sh" "$UPSTREAM/infra/packaging/version.sh"
+    # #1773 — the cic launch derives GRAPPA_CREDITS from this one, under
+    # `set -e`; a checkout without it is not a checkout the deploy can drive.
+    cp "$REPO_SRC/infra/packaging/credits.sh" "$UPSTREAM/infra/packaging/credits.sh"
+    chmod +x "$UPSTREAM/infra/docker/deploy.sh" "$UPSTREAM/infra/packaging/version.sh" \
+        "$UPSTREAM/infra/packaging/credits.sh"
     cat > "$UPSTREAM/compose.yaml" <<'EOF'
 services:
   grappa:

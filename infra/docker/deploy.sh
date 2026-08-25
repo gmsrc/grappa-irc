@@ -131,17 +131,25 @@ require_docker() {
 	docker compose version >/dev/null 2>&1 || die "docker compose v2 not found — install the Compose plugin."
 }
 
-# ---- the cic build's version input ------------------------------------
+# ---- the cic build's repo-root inputs ---------------------------------
 # vite bakes GRAPPA_VERSION into <meta cicchetto-version> and REFUSES to build
 # without it. The cicchetto-build container mounts only ./cicchetto, so it
 # cannot read the repo-root VERSION itself: this derives it and compose passes
 # it through. Call it AT each launch point, never once at startup — `update`
 # pulls before it builds, and `stop` must not depend on a readable VERSION.
 # Why: docs/OPERATIONS.md § "The Docker deploy driver (infra/docker/)" (#652).
+#
+# #1773 adds the credit roll's git facts on the same channel, for the same
+# reason — and derived at the same launch point, so a bundle built after a
+# pull credits the history the box moved TO. Unlike the version it never
+# fails: credits.sh reports an absent repo honestly rather than aborting a
+# deploy over an easter egg (see that script's header).
 export_cic_version() {
 	GRAPPA_VERSION="$(infra/packaging/version.sh)" \
 		|| die "could not derive the version from $REPO_ROOT/VERSION — is this a complete checkout?"
 	export GRAPPA_VERSION
+	GRAPPA_CREDITS="$(infra/packaging/credits.sh)"
+	export GRAPPA_CREDITS
 }
 
 # ---- one-box-per-host ownership guard ---------------------------------

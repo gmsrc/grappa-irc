@@ -39,6 +39,12 @@ mkdir -p "$CICCHETTO_DIR" "$BUN_CACHE_DIR"
 GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
 export GRAPPA_VERSION
 
+# #1773 — the credit roll's git facts (sha, date, per-author commit counts),
+# same channel and same reason: this container has no repo to read them from.
+# Derived from SRC_ROOT so the roll describes THIS worktree's history.
+GRAPPA_CREDITS="$("$SRC_ROOT/infra/packaging/credits.sh")"
+export GRAPPA_CREDITS
+
 # Run bun inside the oven/bun:1 oneshot. Args are the trailing `docker run`
 # operands (extra flags + image + `bun` + bun args), so the implicit install
 # and the real invocation share one definition of the mount/uid/cache wiring.
@@ -58,6 +64,7 @@ run_bun() {
         -e HOME=/tmp \
         -e BUN_INSTALL_CACHE_DIR=/cache \
         -e GRAPPA_VERSION \
+        -e GRAPPA_CREDITS \
         -w /app \
         "$@"
 }

@@ -29,10 +29,20 @@ COPY cicchetto/ ./
 # layout version.sh expects (SCRIPT_DIR/../.. == repo root, so it reads
 # ./VERSION, #652), so nothing re-implements the read. `--emptyOutDir`
 # because the outDir is outside the vite project root.
+#
+# #1773 — the credit roll's git facts arrive on the same channel, through the
+# same script layout. THIS image is one of the two substrates where they do
+# not exist: `.git` is .dockerignore'd (see the Stage-2 note below, which is
+# why Grappa.Version takes its no-git path here), so credits.sh reports the
+# absence honestly and the roll degrades to the version alone. It must not
+# fail, or the release image stops building over an easter egg.
 COPY VERSION ./VERSION
 COPY infra/packaging/version.sh ./infra/packaging/version.sh
+COPY infra/packaging/credits.sh ./infra/packaging/credits.sh
 RUN GRAPPA_VERSION="$(sh infra/packaging/version.sh)" \
     && export GRAPPA_VERSION \
+    && GRAPPA_CREDITS="$(sh infra/packaging/credits.sh)" \
+    && export GRAPPA_CREDITS \
     && echo "cic build: GRAPPA_VERSION=${GRAPPA_VERSION}" \
     && bun run build -- --outDir /cic-dist --emptyOutDir
 

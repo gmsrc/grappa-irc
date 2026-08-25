@@ -44,6 +44,42 @@ if (!CIC_VERSION) {
   );
 }
 
+// #1773 — the credits easter egg's git facts (commit sha, its date, every
+// contributor with their commit count), on the SAME channel and for the same
+// reason: this build sees only ./cicchetto, so it has no repo to read them
+// from. A `git shortlog` here would find nothing and bake an EMPTY roll,
+// silently, on every containerised build — release included. So they arrive
+// derived, from infra/packaging/credits.sh, through GRAPPA_CREDITS.
+//
+// UNSET is fatal, exactly like GRAPPA_VERSION, and for exactly its reason: it
+// means a wrapper forgot to plumb it, and a silently empty credit roll is
+// worse than a broken build. A build that HAS NO GIT is a different thing and
+// is NOT an error — the AUR source tarball and Dockerfile.release both build
+// with `.git` absent by construction, and credits.sh reports that as a
+// well-formed payload of nulls. The two states are kept distinct here on
+// purpose; the same distinction `Grappa.Version.verify_build_sha/2` draws
+// between `{:skip, :no_git}` and a degraded snapshot.
+//
+// Parsed rather than passed through: the parse IS the validation, so a
+// malformed payload fails the build here instead of reaching the browser as a
+// roll that silently renders nothing. Re-serialised so what lands in the
+// bundle is canonical JSON and not whatever whitespace the env carried.
+const CIC_CREDITS_RAW = process.env.GRAPPA_CREDITS;
+if (!CIC_CREDITS_RAW) {
+  throw new Error(
+    "vite.config.ts: GRAPPA_CREDITS is unset — the cic build must be launched by a wrapper that derives it from the repo root (infra/packaging/credits.sh, #1773). Refusing to bake an empty credit roll. Note that a build with no .git is NOT this case: credits.sh answers that with a payload of nulls.",
+  );
+}
+let CIC_CREDITS_JSON: string;
+try {
+  CIC_CREDITS_JSON = JSON.stringify(JSON.parse(CIC_CREDITS_RAW));
+} catch (cause) {
+  throw new Error(
+    `vite.config.ts: GRAPPA_CREDITS is not valid JSON (#1773) — it must be the verbatim output of infra/packaging/credits.sh, not a hand-written value. Got: ${CIC_CREDITS_RAW.slice(0, 120)}`,
+    { cause },
+  );
+}
+
 // Dev-only proxy: vite serves the SolidJS app on :5173 and forwards the
 // REST + Channels surfaces to grappa on :4000. In prod, sub-task 6's
 // nginx service handles the same routing — keeping the dev proxy
@@ -217,6 +253,17 @@ export default defineConfig({
         ws: true,
       },
     },
+  },
+  // #1773 — the credit roll's payload, as a plain string literal in the JS
+  // chunk. A define rather than a second `<meta>` tag: the value is JSON, and
+  // the meta channel would have to survive HTML attribute serialisation of the
+  // quotes and backslashes a contributor name can carry. Nothing server-side
+  // reads it back (unlike the version meta, which `Grappa.Cic.Bundle` parses
+  // out of the deployed dist), so the meta channel buys nothing here. Read by
+  // `src/lib/buildCredits.ts`, which coerces it — the define is ABSENT under
+  // vitest, whose config is a separate file.
+  define: {
+    __GRAPPA_CREDITS_JSON__: JSON.stringify(CIC_CREDITS_JSON),
   },
   build: {
     target: "es2022",

@@ -58,6 +58,13 @@ if [ -z "${GRAPPA_VERSION:-}" ]; then
 fi
 export GRAPPA_VERSION
 
+# #1773 — the git facts behind the credit roll (sha, date, per-author commit
+# counts), which the cic build cannot read for itself. No env override and no
+# die: the payload is derived, never hand-set, and an absent repo is reported
+# honestly rather than failing a package build (see credits.sh).
+GRAPPA_CREDITS="$("${SCRIPT_DIR}/credits.sh")"
+export GRAPPA_CREDITS
+
 # The client keeps its OWN version line (frontends/shottino/version.h) — two
 # artifacts, two cadences (#1447). Same script, different component, so the
 # "which file carries which number" answer stays in one place.

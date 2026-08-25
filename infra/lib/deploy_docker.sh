@@ -244,6 +244,12 @@ substrate_cic() {
 	GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")" \
 		|| die "could not derive the version from $REPO_ROOT/VERSION — is this a complete checkout?"
 	export GRAPPA_VERSION
+	# #1773 — the credit roll's git facts, derived HERE for the same reason
+	# the version is: after substrate_pull, so the roll credits the history
+	# the box is moving TO. It never fails — an absent repo is reported
+	# honestly rather than aborting a deploy (see credits.sh's header).
+	GRAPPA_CREDITS="$("$REPO_ROOT/infra/packaging/credits.sh")"
+	export GRAPPA_CREDITS
 	echo "Building cicchetto dist..."
 	CIC_BUILD_OUT="$cic_build_out" "${DOCKER_COMPOSE[@]}" --profile prod run --rm cicchetto-build
 	# The promote plants the tracked .gitkeep into the tree that lands.

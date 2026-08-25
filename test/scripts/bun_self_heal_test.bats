@@ -37,7 +37,10 @@ setup() {
     cp "$REAL_ROOT/scripts/_lib.sh" "$FIXTURE/scripts/_lib.sh"
     cp "$REAL_ROOT/scripts/bun.sh" "$FIXTURE/scripts/bun.sh"
     cp "$REAL_ROOT/infra/packaging/version.sh" "$FIXTURE/infra/packaging/version.sh"
-    chmod +x "$FIXTURE/scripts/bun.sh" "$FIXTURE/infra/packaging/version.sh"
+    # #1773 — bun.sh derives GRAPPA_CREDITS here too, before any verb runs.
+    cp "$REAL_ROOT/infra/packaging/credits.sh" "$FIXTURE/infra/packaging/credits.sh"
+    chmod +x "$FIXTURE/scripts/bun.sh" "$FIXTURE/infra/packaging/version.sh" \
+        "$FIXTURE/infra/packaging/credits.sh"
     # bun.sh derives GRAPPA_VERSION through version.sh, which reads this.
     printf '9.9.9\n' > "$FIXTURE/VERSION"
 

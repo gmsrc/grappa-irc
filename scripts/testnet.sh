@@ -31,6 +31,9 @@ E2E_DIR="$SRC_ROOT/cicchetto/e2e"
 # Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)" (#538).
 GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
 export GRAPPA_VERSION
+# #1773 — the credit roll's git facts, same channel, same reason.
+GRAPPA_CREDITS="$("$SRC_ROOT/infra/packaging/credits.sh")"
+export GRAPPA_CREDITS
 
 if [ ! -f "$E2E_DIR/compose.yaml" ]; then
     die "missing $E2E_DIR/compose.yaml"

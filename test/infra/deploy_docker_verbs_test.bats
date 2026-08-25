@@ -38,7 +38,10 @@ setup() {
     # in gets a real number instead of refusing to start (#692).
     cp "$REPO_SRC/VERSION" "$BOX/VERSION"
     cp "$REPO_SRC/infra/packaging/version.sh" "$BOX/infra/packaging/version.sh"
-    chmod +x "$BOX/infra/packaging/version.sh"
+    # #1773 — and GRAPPA_CREDITS beside it, derived at the same launch point
+    # under `set -e`.
+    cp "$REPO_SRC/infra/packaging/credits.sh" "$BOX/infra/packaging/credits.sh"
+    chmod +x "$BOX/infra/packaging/version.sh" "$BOX/infra/packaging/credits.sh"
     # Preflight checks its presence, and the ownership guard reads the
     # pinned container names out of it — those pins are what makes two
     # checkouts collide on one docker daemon (#485 dropped the nginx one).

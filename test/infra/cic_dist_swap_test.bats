@@ -231,7 +231,10 @@ seed_fake_checkout() {
     FAKE_ROOT="$1"
     mkdir -p "$FAKE_ROOT/cicchetto" "$FAKE_ROOT/infra/packaging" "$FAKE_ROOT/infra/lib" "$FAKE_ROOT/runtime"
     cp "$REPO_SRC/infra/packaging/version.sh" "$FAKE_ROOT/infra/packaging/version.sh"
-    chmod +x "$FAKE_ROOT/infra/packaging/version.sh"
+    # #1773 — the cic builders derive GRAPPA_CREDITS here too, under `set -e`.
+    # A fake checkout missing it is a fake checkout that cannot build.
+    cp "$REPO_SRC/infra/packaging/credits.sh" "$FAKE_ROOT/infra/packaging/credits.sh"
+    chmod +x "$FAKE_ROOT/infra/packaging/version.sh" "$FAKE_ROOT/infra/packaging/credits.sh"
     cp "$LIB" "$FAKE_ROOT/infra/lib/cic_dist.sh"
     printf '9.9.9\n' > "$FAKE_ROOT/VERSION"
     printf '{"name":"cicchetto"}\n' > "$FAKE_ROOT/cicchetto/package.json"

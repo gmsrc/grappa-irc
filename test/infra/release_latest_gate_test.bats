@@ -339,11 +339,18 @@ workflow_code() {
     grep -qF 'infra/packaging/prerelease_flag.sh' <<<"$scaffolding"
 
     # And the artefact is unchanged by that, which is the reason the list may
-    # grow at all: Dockerfile.release COPYs exactly two files out of
-    # infra/packaging, and neither is one of these. Measured, not assumed —
-    # the moment a third joins, this assertion is the one that notices.
+    # grow at all: Dockerfile.release COPYs a SMALL, enumerated set out of
+    # infra/packaging, and neither of these two is in it. Measured, not
+    # assumed — the moment one more joins, this assertion is the one that
+    # notices, and the count stays a LITERAL for exactly that reason. Deriving
+    # it from the file would make it pass by construction and buy nothing.
+    #
+    # It has fired once, as designed: #1773 added credits.sh (the credit
+    # roll's git facts, on the same channel as version.sh), taking the count
+    # 2 → 3. Reviewed at that point — credits.sh is neither the gate nor the
+    # classifier, so the two refutes below still carry the property.
     run grep -c '^COPY.*infra/packaging/' "$REPO_ROOT/Dockerfile.release"
-    [ "$output" = "2" ]
+    [ "$output" = "3" ]
     refute grep -qF 'infra/packaging/latest_tag_gate.sh' "$REPO_ROOT/Dockerfile.release"
     refute grep -qF 'infra/packaging/prerelease_flag.sh' "$REPO_ROOT/Dockerfile.release"
 }

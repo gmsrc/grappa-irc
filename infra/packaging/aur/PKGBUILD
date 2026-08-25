@@ -122,6 +122,16 @@ build() {
 	GRAPPA_VERSION="$(infra/packaging/version.sh)"
 	export GRAPPA_VERSION
 
+	# #1773 — the git facts behind the credit roll, on the same channel.
+	# THIS recipe is one of the two substrates where they do not exist: the
+	# build runs on the extracted source TARBALL, which carries no `.git`, so
+	# credits.sh reports the absence honestly (sha:null, contributors:[]) and
+	# the roll degrades to the version alone — exactly as Grappa.Version
+	# reports the bare tag here for the same reason. It must NOT be a hard
+	# failure, or the package stops building over an easter egg.
+	GRAPPA_CREDITS="$(infra/packaging/credits.sh)"
+	export GRAPPA_CREDITS
+
 	echo "==> cicchetto SPA (bun + vite)"
 	cd cicchetto
 	bun install --frozen-lockfile
