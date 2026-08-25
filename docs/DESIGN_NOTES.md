@@ -64307,3 +64307,123 @@ benchmarked. And nothing here establishes that a paused window is CHEAPER end
 to end once the pause/resume re-join, its join reply and its REST backfill are
 counted against the ~24.4 events/s it stops paying for; that trade is argued,
 not measured.
+<!-- entry #1772 -->
+
+---
+
+## 2026-08-25 — #1772: the iOS touch lock and the scrollback freeze are two concerns, not one counter
+
+vjt, iPhone PWA: with the inline `/whois` card open, or with the long-press
+message context menu open, a touch drag pans the whole app shell. Everywhere
+else the shell is furniture.
+
+The only thing that makes it furniture is the JS touch lock in
+`cicchetto/src/lib/overlayScrollLock.ts` — the v6 non-passive document
+`touchmove` handler that walks the gesture target's ancestor chain and
+`preventDefault`s when no scrollable ancestor exists. The module's own v1-v6
+history already records that CSS is not enough: UIKit's `UIScrollView` claims
+the gesture at `touchstart`, and `touch-action` / `overscroll-behavior` do not
+stop it. Neither reported surface armed that handler.
+
+### The forced choice
+
+They could not arm it. ONE refcount carried two unrelated concerns — "hold the
+shell still" and "freeze the scrollback snapshot behind me" — because
+`ScrollbackPane`'s `isOverlayFrozen()` derives from the same number the class
+and the listener key off. A surface that sits in or over the flow wants the
+first and must refuse the second, so #1199 gave the inline cards
+`createOverlayEscape`, which buys the no-freeze by giving up the lock as well.
+The choice was forced by the data structure, not by anything true about the
+surfaces.
+
+### What was split, and what deliberately was not
+
+The POPULATION, not the helper. `shellLocks` counts surfaces that want the
+shell immobile without covering the pane; the `overlay-open` class and the
+document listener key off the SUM of the two counters. `overlayCount()` keeps
+its exact former population — covering overlays — and that is the load-bearing
+half of the design: its three consumers are all asking the covering question
+and none of them change. `ScrollbackPane.isOverlayFrozen`, `globalPaste`
+("respect open modals"), and `Shell`'s swipe guard against stacking a drawer
+under an open overlay. Renaming it to `coveringOverlayCount()` was considered
+and declined: ~12 files including four `vi.mock` factories, against a naming
+nicety, on a bug fix.
+
+TWO VERBS, not a `{ freeze: false }` flag on `pushOverlay`. A flag makes
+`push(el, {freeze: false})` / `pop(el, {freeze: true})` spellable, and that
+mismatch corrupts BOTH counters at once with nothing to catch it — one clamps
+at zero while the other strands a holder, and a stranded holder leaves the
+non-passive `preventDefault` attached until a full page reload, i.e. an iOS
+scroll frozen for good. Distinct verbs make the mistake unspellable.
+
+NO THIRD HELPER, which is where this departs from the issue's own sketch.
+`createOverlayEscape` gained the lock instead. The three-way split collapses to
+a two-way one because no surface wants ESC without the shell held still: the
+four callers are the whois / whowas / lusers cards and the context menu, all
+dismissable, all covering nothing. A third helper fixes the two reported
+instances and leaves whowas and lusers carrying the same defect, with two
+helpers differing on an axis nobody can name.
+
+`shellLocks` is a plain `let`, not a signal, and the asymmetry with the
+covering count is deliberate: that one is a signal because `ScrollbackPane`
+reads it inside a memo, where a stale read means a pane that never freezes.
+Nothing derives from this one — its two consumers are DOM side-effects applied
+imperatively at the push/pop edges — so a signal would advertise a reactive
+contract no reader wants.
+
+### Why arming the class for a non-covering surface is safe
+
+Measured, not assumed. The worry was real: the v3 chain puts `touch-action:
+none` on html / body / #root / #root > div, and a non-covering surface leaves
+the shell underneath LIVE and usable. But on mobile `.shell-mobile` already
+carries `touch-action: none` PERMANENTLY (UX-3 UNDEC R3) — not overlay-gated —
+so the v3 chain adds nothing there, and every inner scroller already carries
+its own `pan-y` carve-out because of it. The union of two identical blankets is
+the same blanket.
+
+Exactly one scroller escapes it: the context menu PORTALS to `<body>`, outside
+`.shell-mobile`, which is why it is the only overlay scroller in the app with
+no carve-out. It gets one now — `pan-y` on the menu AND on its descendants,
+the shape #913 arrived at for `.rail-actions-menu` after the scroller-only form
+shipped and did not work (touch-action does not inherit; iOS elects the gesture
+consumer from the hit-test target's own value, and the item rows ARE the target
+across the whole menu). Without it, arming the lock would have fixed the pan by
+removing the scroll.
+
+The backdrop takes the opposite declaration for the same cause.
+`.context-menu-backdrop` is `position: fixed; inset: 0` and reads like a
+shield, but it only ever intercepted CLICKS; a DRAG on it went to UIKit as a
+page pan, and since the menu is at fixed coordinates, the content slid out from
+under its own menu. `touch-action: none` is the honest value for a
+full-viewport shield. Defense-in-depth only — CSS never stopped UIKit here.
+
+### Coverage, and what it does not buy
+
+`overlayScrollLock` had lifecycle coverage for the refcount and NONE for which
+SURFACES enrol, and that is precisely the gap this bug walked through.
+`overlaySurfaceLockContract.test.tsx` now pins every surface against BOTH axes,
+with `WhoModal` as the covering contrast arm — a build that lost the freeze
+everywhere must not pass. Four mutants, each killing a disjoint set: dropping
+the push kills the nine "arms the lock" assertions and nothing else; routing
+the shell lock through the covering counter (the obvious fix the issue rejects)
+kills twelve including the freeze-axis ones; each CSS declaration kills exactly
+its own assertion.
+
+None of it is the gesture. jsdom sees the class, the listener and the counts;
+Playwright's webkit does not reproduce UIScrollView, so an e2e here would prove
+the refcount and the classes, not the drag. **This issue is not closable on a
+green gate** — the felt result on a real iPhone is the verdict, and the PR
+carries the device checklist.
+
+One measured non-change, stated so it is not rediscovered as new:
+`.scrollback-overlay` (the floating card layer) is `overflow-y: auto` and sits
+at `auto`, inside `.shell-mobile`'s permanent blanket. A whois card taller than
+the pane therefore cannot be scrolled on mobile TODAY, before and after this
+change. It is a real defect and a different one; fixing it here would be an
+unverifiable behaviour change riding a bug fix.
+
+Also recorded because it cost a red on a correct rule: `ruleBody` in
+`__tests__/helpers/themeCss.ts` captures up to the first CLOSING BRACE, so a
+CSS comment that spells a rule out literally (`selector { prop: value }`)
+truncates the body its own source-level guard reads. The assertion fails on a
+declaration that is present and correct.
