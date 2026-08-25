@@ -167,6 +167,12 @@ defmodule GrappaWeb.UserSocket do
   # `{_, _}` match keeps it honest. The real Phoenix transport always
   # supplies a valid `:inet.ip_address()` peer + a list of x-headers, so the
   # happy path is the only one it exercises.
+  #
+  # The resolution above stays HERE, in the connect process: reading
+  # `peer_data` / `x_headers` and folding them through
+  # `RemoteIpFromProxy.trusted_client_ip/2` is pure map work with no DB in
+  # it, and keeping it inline means a connect that has nothing to capture
+  # spawns nothing at all. Only the PERSIST detaches (#1618, below).
   @spec maybe_record_client_source(Phoenix.Socket.t(), map()) :: :ok
   defp maybe_record_client_source(socket, connect_info) do
     with %{address: peer_ip} <- Map.get(connect_info, :peer_data),
@@ -179,9 +185,73 @@ defmodule GrappaWeb.UserSocket do
         end
 
       client_ip = GrappaWeb.Plugs.RemoteIpFromProxy.trusted_client_ip(peer_ip, x_headers)
-      Grappa.Vhosts.record_client_source(subject, client_ip)
+      detach_client_source_capture(subject, client_ip)
     else
       _ -> :ok
+    end
+  end
+
+  # #1618 — the persist runs OFF the upgrade path, in a supervised
+  # fire-and-forget task.
+  #
+  # #523 already declared this sample droppable: `record_client_source/2`
+  # swallows `:db_unavailable` specifically so it can never fail a connect.
+  # What that contract did not cover is LATENCY. The call used to sit between
+  # authentication and `{:ok, socket}`, Phoenix holds the WebSocket upgrade
+  # open until `connect/3` returns, and the persist is a `BEGIN IMMEDIATE`
+  # write transaction on `user_settings` — so a writer holding the SQLite
+  # write lock made the upgrade wait the entire `busy_timeout` (31 575 ms
+  # measured on one `scripts/integration.sh` run) and then DROP the write it
+  # had waited for. A sample nobody is allowed to depend on was allowed to
+  # delay every new WebSocket by half a minute.
+  #
+  # `Grappa.TaskSupervisor` is the same door `ReadCursorController.create/2`
+  # (#273) uses for the same shape of problem at the same kind of boundary:
+  # request-critical work stays inline, eventually-consistent work moves off
+  # it. No NEW supervision child, so the fix is hot-deployable.
+  # `Task.Supervisor.start_child/2` and not the `Task.start_link/1` that
+  # CLAUDE.md's fire-and-forget line names, because a LINKED task would take
+  # the transport down with it on a crash — reinstating exactly the
+  # never-fail-a-connect hole #523 closed, one layer up.
+  #
+  # DETACHED HERE, NOT INSIDE `Vhosts.record_client_source/2`, and that is
+  # the domain boundary rather than a convenience: the verb's other callers
+  # are ordering-critical. `Visitors.Login` (#645) must have the sample
+  # PERSISTED before it spawns the anchor session in the same request, and
+  # `Vhosts.last_known_client_key/1` (#647) re-persists inside a read a
+  # session spawn is already blocking on. Detaching in the context would
+  # break both in silence.
+  #
+  # What the deferral costs, stated honestly: a session spawned in the window
+  # between the connect and the task's commit reads the PREVIOUS sample. The
+  # cold case cannot be hit — a subject with nothing recorded falls back to
+  # `sessions.ip` / `visitor.ip` (#647), which on a fresh login is the very
+  # address this connect would have written. The remaining case is an
+  # established subject that ROAMED, and there the synchronous path was not
+  # better: under the contention that makes the window wide it waited the
+  # full `busy_timeout` and then dropped the write, leaving the same stale
+  # value plus half a minute of upgrade.
+  #
+  # A `start_child/2` that does not return `{:ok, pid}` is logged, never
+  # matched: `{:ok, _} = ` here would crash the transport and fail the
+  # connect over a diagnostic sample, which is the one thing this call site
+  # must never do. The log keeps it off the silent-swallow list — the
+  # operator sees a skipped sample rather than nothing.
+  @spec detach_client_source_capture(Grappa.Subject.t(), :inet.ip_address()) :: :ok
+  defp detach_client_source_capture(subject, client_ip) do
+    task = fn -> Grappa.Vhosts.record_client_source(subject, client_ip) end
+
+    case Task.Supervisor.start_child(Grappa.TaskSupervisor, task) do
+      {:ok, _} ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "ws connect: could not detach client-source capture for " <>
+            "#{inspect(subject)} — #{inspect(other)} (sample skipped)"
+        )
+
+        :ok
     end
   end
 

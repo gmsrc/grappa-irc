@@ -39,8 +39,11 @@ defmodule Grappa.UserSettings do
   writer's key — two writers touching completely DIFFERENT keys, last one
   wins, no error anywhere. That is not hypothetical: `put_last_client_prefix64/2`
   fires from `Grappa.Vhosts.record_client_source/2` on every client connect,
-  in the socket's own process and its own pool connection, while the settings
-  drawer PUTs from another.
+  on its own pool connection, while the settings drawer PUTs from another.
+  (Since #1618 the connect-side writer is a detached
+  `Grappa.TaskSupervisor` task rather than the socket process itself — that
+  moves WHICH process races, not WHETHER one does, so the argument below is
+  untouched.)
 
   So there is exactly ONE writer here — `update_data/2` — and it holds the
   read and the write in a single `Repo.immediate_transaction/1`. A new

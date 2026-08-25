@@ -73,6 +73,27 @@ defmodule GrappaWeb.UserSocketTest do
   # the exact shape the `_ -> :ok` arm swallowed in silence.
   @shipped_unreadable "1/websocket"
 
+  # #1618 — the client-source capture is a DETACHED `Grappa.TaskSupervisor`
+  # task, so its write lands after `connect/3` has already returned. Every
+  # assertion on the persisted sample waits (bounded) for the live children to
+  # exit first, and the `on_exit` twin keeps a straggler off the sandbox
+  # owner's teardown. `Task.Supervisor.children/1` is GLOBAL — the `async:
+  # false` lane is load-bearing (no concurrent case), same rationale as
+  # `GrappaWeb.ReadCursorControllerTest`'s #273 drain.
+  defp drain_capture_tasks do
+    Grappa.TaskSupervisor
+    |> Task.Supervisor.children()
+    |> Enum.each(fn pid ->
+      ref = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> :ok
+      after
+        2_000 -> Process.demonitor(ref, [:flush])
+      end
+    end)
+  end
+
   describe "connect/3" do
     test "returns :error when no token is given" do
       assert :error = Phoenix.ChannelTest.connect(UserSocket, %{}, connect_info: %{})
@@ -455,6 +476,14 @@ defmodule GrappaWeb.UserSocketTest do
     alias Grappa.Vhosts
     alias Grappa.Vhosts.SourceMapping
 
+    # Registered AFTER `ChannelCase`'s sandbox-owner `on_exit`, so LIFO runs
+    # this one FIRST — a #1618 capture task must not still be querying when
+    # `stop_owner` pulls the shared connection out from under it.
+    setup do
+      on_exit(&drain_capture_tasks/0)
+      :ok
+    end
+
     # Mirrors the transport: `peer_data.address` is the peer IP tuple,
     # `x_headers` are the forwarded (`x-*`) request headers, both riding
     # `connect_info` alongside the subprotocol bearer.
@@ -480,6 +509,9 @@ defmodule GrappaWeb.UserSocketTest do
                  {"x-forwarded-for", "2001:db8:1:2:3:4:5:6"}
                ])
 
+      # #1618 — the capture is detached, so wait for it before reading.
+      drain_capture_tasks()
+
       # The stored key equals the production derivation of the RESOLVED IP —
       # the /64 of the XFF client, NOT the loopback peer. No hardcoded bytes.
       assert Vhosts.last_client_prefix64(subject) ==
@@ -491,6 +523,8 @@ defmodule GrappaWeb.UserSocketTest do
       subject = {:user, user.id}
 
       assert {:ok, _} = connect_with_peer(session.id, {203, 0, 113, 7}, [])
+
+      drain_capture_tasks()
 
       assert Vhosts.last_client_prefix64(subject) ==
                SourceMapping.client_key({203, 0, 113, 7})
@@ -506,6 +540,8 @@ defmodule GrappaWeb.UserSocketTest do
                  {"x-forwarded-for", "203.0.113.42"}
                ])
 
+      drain_capture_tasks()
+
       assert Vhosts.last_client_prefix64(subject) ==
                SourceMapping.client_key({203, 0, 113, 42})
     end
@@ -519,6 +555,11 @@ defmodule GrappaWeb.UserSocketTest do
       # proceeds; capture is silently skipped (no crash, nothing recorded).
       assert {:ok, _} =
                Phoenix.ChannelTest.connect(UserSocket, %{}, connect_info: %{auth_token: session.id})
+
+      # #1618 — drain first, so "nothing recorded" cannot pass merely because
+      # a detached capture task had not got there yet: the skip must be a
+      # skip, not a race we outran.
+      drain_capture_tasks()
 
       assert Vhosts.last_client_prefix64(subject) == nil
     end
@@ -541,7 +582,69 @@ defmodule GrappaWeb.UserSocketTest do
                  }
                )
 
+      drain_capture_tasks()
+
       assert Vhosts.last_client_prefix64(subject) == nil
+    end
+  end
+
+  # #1618 — the capture write is best-effort by CONTRACT already: #523 made
+  # `Vhosts.record_client_source/2` swallow `:db_unavailable` precisely so it
+  # could never fail a connect. What it was not is best-effort in LATENCY.
+  # The call sat between authentication and `{:ok, socket}`, and Phoenix holds
+  # the WebSocket upgrade open until `connect/3` returns — so a writer holding
+  # the SQLite write lock made the upgrade wait the whole `busy_timeout`
+  # (31 575 ms measured on one `scripts/integration.sh` run) and then DROP the
+  # write it had waited for. Detaching it to `Grappa.TaskSupervisor` is what
+  # makes "this can never hurt a connect" true of the clock as well as of the
+  # result.
+  #
+  # Proven by the PROCESS the write runs in, not by a wall-clock threshold
+  # (which would be flaky and would need a real 30 s lock to be honest):
+  # `Phoenix.ChannelTest.connect/3` invokes `connect/3` in THIS test process,
+  # so a synchronous capture reports `self()` and the `refute` fails. The
+  # probe is Ecto's own `[:grappa, :repo, :query]` event — the one
+  # `Grappa.DbLatency` already consumes — which fires in whichever process ran
+  # the query, so there is no production seam this test could be satisfied by
+  # instead of the real write.
+  describe "connect/3 client-source capture is off the upgrade path (#1618)" do
+    setup do
+      on_exit(&drain_capture_tasks/0)
+      :ok
+    end
+
+    test "runs the user_settings write in a task process, not the connect process" do
+      {user, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+      test_pid = self()
+      handler = "ws-client-source-probe-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:grappa, :repo, :query],
+        fn _, _, metadata, _ ->
+          if Map.get(metadata, :source) == "user_settings" do
+            send(test_pid, {:user_settings_query_in, self()})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # Nothing before the capture touches `user_settings` (auth reads
+      # `accounts_sessions` + `users`), so the FIRST such query after the
+      # attach is the capture's own.
+      assert {:ok, _} = connect_with_peer(session.id, {203, 0, 113, 7}, [])
+
+      assert_receive {:user_settings_query_in, exec_pid}, 2_000
+      refute exec_pid == test_pid
+
+      # And it is a DEFERRAL, not a drop — once the task exits the sample is
+      # persisted exactly as the synchronous path persisted it.
+      drain_capture_tasks()
+
+      assert Grappa.Vhosts.last_client_prefix64({:user, user.id}) ==
+               Grappa.Vhosts.SourceMapping.client_key({203, 0, 113, 7})
     end
   end
 

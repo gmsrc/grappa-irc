@@ -7,8 +7,11 @@ defmodule Grappa.UserSettingsConcurrencyTest do
   key another writer committed in between — silently, with `{:ok, _}` on both
   sides. The pair driven here is the pair the issue names as reachable in
   production: `put_last_client_prefix64/2` fires from
-  `Grappa.Vhosts.record_client_source/2` on every client connect, in the
-  socket's own process, while a settings-drawer PUT runs in another.
+  `Grappa.Vhosts.record_client_source/2` on every client connect — since
+  #1618 from a detached `Grappa.TaskSupervisor` task rather than the socket
+  process itself — while a settings-drawer PUT runs in another. The detach
+  moves which process races, not whether one does, so the pair below is the
+  same pair.
 
   ## How the interleave is forced
 
