@@ -64140,3 +64140,35 @@ unmeasured, which is why that arm was left alone rather than "improved" now
 that the tile is a file. And the issue's original premise about refetching:
 this change makes it moot for logos rather than answering it, since the
 question was about a third-party host nothing contacts any more.
+
+### What the red taught, after the fact
+
+The first CI run was 7/9. Two e2e specs went red and both were caused by this
+change, in the same way and for a reason worth writing down: **they asserted
+the OLD mechanism by VALUE, and no grep for the symbols this change touched
+could see them.** `issue1704-kohina-undecodable-surface.spec.ts` held the
+regex `/^data:image\/svg\+xml,/`; `issue1702-media-session-metadata.spec.ts`
+held the literal `https://api.somafm.com/logos/120/groovesalad120.png`.
+Neither file mentions `radioLogoPlaceholder` or `logoUrl`, so the sweep that
+found every other call site — a grep for the identifiers — was blind to
+exactly the two places that encoded the contract being replaced. **When a
+change swaps a MECHANISM, grep for the claim (`data:image/svg`,
+`somafm.com/logos`), not for the identifier.**
+
+The #1704 assertion was not simply retargeted, and that is the second half.
+Its stated claim is that a logo-less station "draws SOMETHING — our own
+placeholder, never a broken-image glyph", and a `src` shape check carried that
+claim only because a data URI cannot 404. A FILE can, and this change removed
+the `onError` that used to hide the difference — so the same assertion,
+retargeted, would have been strictly weaker than before. It asserts the
+decoded `naturalWidth` now: a missing mirror, a `radio-logos/` outside
+`@cic_static_only`, and an id missing from the map all leave the `src` intact
+and the width at zero.
+
+Four logo stubs elsewhere (#1702, #1751, #1701, #1737) were DELETED rather
+than left. They fulfilled `api.somafm.com/logos/**` with empty bytes so a
+somafm outage could not redden a layout assertion; nothing requests that host
+for artwork any more, so they can never fire — and a stub that cannot fire is
+worse than absent, because it would absorb a real regression in silence
+instead of letting it fail. One spec keeps the watch and makes it loud:
+`issue682` ABORTS the request and asserts the count is zero.
