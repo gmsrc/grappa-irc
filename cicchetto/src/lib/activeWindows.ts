@@ -1,12 +1,13 @@
 import { createMemo, untrack } from "solid-js";
 import { type ChannelKey, channelKey } from "./channelKey";
 import { isConversationMuted, windowMuteKey } from "./conversationMute";
+import { requestJumpToUnread } from "./jumpToUnreadCommand";
 import { mentionCounts } from "./mentions";
 import { moduleRoot } from "./moduleRoot";
 import { channelsBySlug, networks } from "./networks";
 import { notificationPrefs } from "./notificationPrefs";
 import { queryWindowsByNetwork } from "./queryWindows";
-import { scrollbackByChannel } from "./scrollback";
+import { farBehindByChannel, scrollbackByChannel } from "./scrollback";
 import { requestScrollToBottom } from "./scrollToBottomCommand";
 import {
   isActiveSelection,
@@ -285,8 +286,42 @@ function stepActiveWindow(dir: 1 | -1): void {
   // exact negation of the setter's short-circuit (both route through
   // `sameSelection`), so this arm cannot drift from the non-transition
   // rule that makes it necessary.
+  //
+  // #1765 — the sentence above names its own boundary, and the boundary
+  // turned out to be a hole. `requestScrollToBottom` reaches the cursor
+  // ONLY through `setCursorIfAdvances`, which returns on its first line for
+  // a far-behind window (#693's freeze, #1019's invariant). So on a window
+  // that IS far behind, #1178's exit is as dead as the `jumpToUnread` it
+  // rejected — two correct cures cancelling — and the tap moves nothing at
+  // all: the seed count cannot fall, so the button cannot hide.
+  //
+  // The two verbs partition the state exactly along `farBehindByChannel`,
+  // and the comment above already says why each is dead on the other's
+  // side. So take the live one: far behind ⇒ the bar's OWN primary exit,
+  // the jump BACK into the unread region.
+  //
+  // NOT the bar's `×` (`dismissFarBehind`), which the report proposed.
+  // That verb accepts the abandoned region as read — irreversible, fanned
+  // to every device — and #1062 already ruled on putting it under this
+  // thumb: it removed #997's second dismiss surface from the very float
+  // stack this button lives in, on the grounds that "the far-behind gesture
+  // stays on the bar, where it has a label". `»` carries no label but
+  // "jump to next active window", and the count it shows is a WINDOW count
+  // (1), so a tap would destroy thousands of unread while reading `»1`.
+  // The jump is reversible (scroll back down / `loadNewer`) and is what the
+  // glyph promises; the destructive exit stays one labelled tap away on the
+  // bar. Duplicating a non-destructive route is harmless — duplicating a
+  // destructive one is what #1062 measured and removed.
+  //
+  // A nonce rather than a direct `scrollback.jumpToUnread` call for the
+  // same reason #243 is one: the #168 marker-activation latch the gesture
+  // must arm is pane-local. See `jumpToUnreadCommand`.
   if (isActiveSelection(next)) {
-    requestScrollToBottom();
+    if (untrack(farBehindByChannel)[channelKey(next.networkSlug, next.channelName)]) {
+      requestJumpToUnread();
+    } else {
+      requestScrollToBottom();
+    }
     return;
   }
   setSelectedChannel(next);

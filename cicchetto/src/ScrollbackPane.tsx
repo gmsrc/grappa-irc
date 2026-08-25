@@ -22,6 +22,7 @@ import { isDocumentVisible } from "./lib/documentVisibility";
 import { highlightPatterns } from "./lib/highlightList";
 import { type InviteAckEntry, inviteAckBySlug } from "./lib/inviteAck";
 import { chantypesForNetwork, prefixForNetwork } from "./lib/isupport";
+import { jumpToUnreadRequest } from "./lib/jumpToUnreadCommand";
 import { membersByChannel } from "./lib/members";
 import { matchesWatchlist } from "./lib/mentionMatch";
 import {
@@ -3792,6 +3793,32 @@ const ScrollbackPane: Component<Props> = (props) => {
   // re-latch below is the half a second caller would forget — see #997's
   // measurement in DESIGN_NOTES: dropping it slams a stale divider across
   // the top of the buffer.
+  // #693's OTHER exit, the bar's primary one — lifted out of the button's
+  // inline handler by #1765 so a second door can reach the same gesture
+  // (`»N` on a far-behind window; see `jumpToUnreadCommand`). It is a named
+  // function for exactly the reason the dismiss below is: the latch arming is
+  // the half a direct caller of `scrollback.jumpToUnread` would forget.
+  const jumpToUnreadGesture = () => {
+    // Arm the EXISTING marker-activation latch (#168) before the swap:
+    // clearing the far-behind flag re-injects the divider, and the rows-change
+    // that lands the anchor region is exactly the content change that latch
+    // scrolls to. Set synchronously so it is armed when the awaited rows
+    // arrive — one more trigger on the existing scroll writer, not a second
+    // scroll authority. Stood back down if the fetch failed, so a dead latch
+    // can't yank a later unrelated rows() change.
+    setMarkerActivationPending(true);
+    void jumpToUnread(props.networkSlug, props.channelName).then((jumped) => {
+      if (!jumped) setMarkerActivationPending(false);
+    });
+  };
+
+  // #1765 — the `»N` affordance resolves to THIS window when it is the only
+  // one with unread, and on a far-behind window #1178's scroll-to-bottom exit
+  // cannot move the frozen cursor. The jump back is the live verb there, and
+  // it is the same one the bar fires. `defer` skips the value read at mount,
+  // so only a genuine request runs it.
+  createEffect(on(jumpToUnreadRequest, () => jumpToUnreadGesture(), { defer: true }));
+
   const dismissFarBehindGesture = () => {
     // Re-latch the frozen divider to whatever was marked read. Dismiss is an
     // explicit "I've read to here" gesture — the same class as the
@@ -3865,20 +3892,7 @@ const ScrollbackPane: Component<Props> = (props) => {
               type="button"
               class="scrollback-far-behind-jump"
               data-testid="far-behind-jump"
-              onClick={() => {
-                // Arm the EXISTING marker-activation latch (#168) before the
-                // swap: clearing the far-behind flag re-injects the divider,
-                // and the rows-change that lands the anchor region is exactly
-                // the content change that latch scrolls to. Set synchronously
-                // so it is armed when the awaited rows arrive — one more
-                // trigger on the existing scroll writer, not a second scroll
-                // authority. Stood back down if the fetch failed, so a dead
-                // latch can't yank a later unrelated rows() change.
-                setMarkerActivationPending(true);
-                void jumpToUnread(props.networkSlug, props.channelName).then((jumped) => {
-                  if (!jumped) setMarkerActivationPending(false);
-                });
-              }}
+              onClick={jumpToUnreadGesture}
             >
               {far().missed} unread — jump back
             </button>

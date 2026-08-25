@@ -6,6 +6,10 @@ import { activeAudio, closeAudio } from "../lib/audioPlayer";
 // #1156 — the REAL compose store: the swipe's whole outcome is what lands in
 // the draft, and a mock here would assert that the pane called something.
 import { getDraft, setDraft } from "../lib/compose";
+// #1765 — the REAL nonce the `»N` verb bumps. Not mocked: what this file
+// pins is that the pane ANSWERS it with the bar's own gesture, and a mock
+// would leave the wiring untested on both sides.
+import { requestJumpToUnread } from "../lib/jumpToUnreadCommand";
 import { closeMediaViewer, mediaViewerState } from "../lib/mediaViewer";
 import {
   popOverlay,
@@ -2630,6 +2634,28 @@ describe("ScrollbackPane", () => {
           <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
         ));
         screen.getByTestId("far-behind-jump").click();
+        expect(jumpToUnreadSpy).toHaveBeenCalledWith("freenode", "#grappa");
+      });
+
+      // #1765 — the far-behind window can be the ONLY one with unread, and
+      // then the `»N` cycle resolves back to it. #1178's scroll-to-bottom exit
+      // is dead there (the cursor is frozen), so the verb asks the pane for
+      // the bar's jump instead. Asserted through the REAL nonce so both ends
+      // of the bridge are pinned; the pane must answer with the SAME gesture
+      // the button fires, latch included, not a second copy of it.
+      it("runs that same gesture when the »N verb asks for it (#1765)", async () => {
+        seedReadCursor("freenode", "#grappa", 1);
+        setScrollback({ "freenode #grappa": fixture });
+        setFarBehind({ "freenode #grappa": { missed: 3000, resumeFrom: 1 } });
+        render(() => (
+          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
+        ));
+        // `defer` — the nonce value standing at mount is not a request.
+        expect(jumpToUnreadSpy).not.toHaveBeenCalled();
+
+        requestJumpToUnread();
+        await Promise.resolve();
+
         expect(jumpToUnreadSpy).toHaveBeenCalledWith("freenode", "#grappa");
       });
 
