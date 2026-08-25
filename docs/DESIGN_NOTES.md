@@ -63523,3 +63523,121 @@ exit code today and an exit contract nobody reads is a guess about a future
 caller. Out of scope and filed separately: `scripts/shellcheck.sh` derives its
 set from `bin/ infra/ scripts/`, so the nine shell scripts under
 `.claude/skills/**` — this watchdog among them — have never been linted.
+<!-- entry #1768 -->
+
+---
+
+## 2026-08-25 — #1768: the badge fan-out was O(rows); the lever is the emit, not the wire
+
+The request arrived as "a batching endpoint to relieve the multi-network
+load". Batching the WIRE saves bytes, and it would not have touched this: the
+snapshot tasks are spawned before any framing exists, and what saturated the
+SQLite pool was their NUMBER. `Grappa.Session.Persistor.dispatch_push/2` fires
+the #267 push for EVERY persisted row, and `Grappa.WindowCounts.Pusher.push/1`
+handed each one straight to `Grappa.TaskSupervisor` — one task, one fresh
+`WindowCounts.snapshot/7`, per row, with nothing bounding the fan-out against
+a pool 10 connections wide.
+
+`Grappa.WindowCounts.Pusher.Coalescer` folds a burst of rows in one
+`{subject, network_id, channel}` window into ONE flush. In-flight snapshot
+work becomes **O(distinct windows touched)** instead of **O(rows persisted)**,
+which is the property that maps onto a fixed-size pool: rows per unit time are
+unbounded (a netsplit delivers one presence row per shared channel per peer)
+while windows are bounded by the channels the subject is in.
+
+### What was measured here, and what was inherited
+
+Inherited from the issue, measured on prod in jail `grappa-new`,
+`runtime/log/erlang.log.19` around `00:15:24.891`: of 413 queries dropped from
+the pool in the saturation burst, **412 were badge arithmetic** — 304 stack
+frames in `WindowCounts.count_mentions/6`, 108 in
+`Scrollback.count_after_split/6`, 1 in the visitors reaper.
+
+Measured HERE, on this branch, by attaching to `[:grappa, :repo, :query]`
+around one `Pusher.emit/1`: **one emit costs 5 DB queries, not 2** —
+`user_settings` twice (the highlight patterns, then the display prefs the #505
+presence decision reads), `read_cursors` once, and `messages` twice (the
+`count_after_split/6` aggregate and the capped mention tail). The issue's "two
+queries per row per window" counted only the two on `messages`, because those
+are the two the dropped frames named. So each row the coalescer suppresses
+saves five queries, not two — and the pool pressure attributable to badges in
+that burst was correspondingly larger than the frame census alone can show.
+
+That the same `user_settings` row is read TWICE per emit is a real, separate
+inefficiency. It is named here and deliberately not fixed: it is a different
+lever (fold two reads into one), it is now behind the coalescer, and widening
+this change to chase it would have been scope creep.
+
+### A throttle, never a debounce — the starvation trap
+
+The timer is armed by the FIRST touch of an idle window and is **never
+extended** by later ones. A debounce that restarts on every arrival emits
+NOTHING while rows keep arriving faster than the window, and the presence rate
+measured for #1680 on a 7-network account (24.4 presence events/s sustained,
+one every ~41 ms) is exactly that regime. A badge that freezes during the only
+period it matters would be a worse bug than the one being fixed.
+
+So the contract is two-sided and both sides are load-bearing: **at most one**
+emit per window per `Coalescer.window_ms/0`, and **at least one** within
+`window_ms/0` of any row that arrives.
+
+250 ms is set by two ceilings and not by the floor. Ceiling one is perception:
+this is the lag a sidebar badge takes on after its message is already
+rendered, because the ROW's own broadcast is not delayed — only the derived
+count waits. Ceiling two is the at-least-once bound above. The floor is
+irrelevant: an IRC flood arrives at socket speed, sub-millisecond between
+rows, so anything above a few milliseconds already collapses it.
+
+### Dropping the intermediate emits is lossless BY CONSTRUCTION
+
+Not by argument. The snapshot is absolute — cic "replaces its stored snapshot
+verbatim" — and `emit/1` reads the DB at FLUSH time, not at touch time, so the
+one snapshot that survives a burst has seen every row of it. This makes a
+property of `emit/1` load-bearing for a module that does not call it on the
+hot path: **a future change that pre-computes any part of the snapshot at
+`push/1` time breaks the coalescer without touching it.** Recorded in both
+moduledocs for that reason.
+
+### The key takes the channel VERBATIM
+
+`{subject, network_id, channel}`, unfolded, because it must partition the same
+way the broadcast topic does (`PubSub.Topic.channel/3`, also verbatim).
+Folding it would let one casing's flush stand in for another's and leave the
+losing topic's subscribers with nothing — a fold that silently merges two
+DESTINATIONS, which is the opposite of what the #537 key fold exists to do.
+This is the case where the channel pattern's "fold at every key boundary" does
+not apply: the key is not a storage or lookup key, it is a partition of an
+output stream.
+
+### Rejected: gating presence kinds out of the snapshot entirely
+
+The issue's second proposal was to decide, before spawning the task, that a
+presence row cannot change the badge. It is declined on two independent
+grounds.
+
+It is not free of a correctness cost: a JOIN/PART/QUIT DOES change `events`,
+and so can move `severity` from `:none` to `:event`. Skipping it leaves the
+events badge stale on a quiet channel where presence is the only traffic,
+until the next content row or the next seed.
+
+And the gate cannot be cheap where it would have to live. Whether presence
+counts for a window is `PresenceFilter.Resolver.hidden?/4`, which reads the
+display prefs and may call into the live session for a member count — two of
+the five queries the emit already pays. Deciding it BEFORE spawning the task
+puts those queries back on the Session hot path, which is the thing the Task
+existed to avoid. Its entire benefit is subsumed by the coalescer anyway: once
+a window's rows fold into one flush, a presence-only burst costs one snapshot,
+not none-instead-of-N.
+
+### What this does NOT establish
+
+The lever bites on the BURST, which is what the incident was. It is **not** a
+claim about the sustained rate: a subject taking ~29.5 events/s spread thinly
+across many windows coalesces very little, because each window is then already
+below one row per window length. The distribution of the incident's 412 frames
+ACROSS windows was not measured — the log carries no per-channel breakdown and
+the jail is not reachable from here — so the burst's actual collapse ratio is
+unknown, and the O(rows) → O(windows) change is asserted structurally rather
+than as a measured multiple. The issue's own caveat still stands too: at
+`00:15:24.941` the handler switched from `:async` to `:drop`, so the verdict
+that closed the socket may never have reached disk.
