@@ -1,0 +1,354 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ApiError, setOn401Handler } from "../lib/api";
+import {
+  copyTheme,
+  createTheme,
+  deleteTheme,
+  getActiveThemePair,
+  getTheme,
+  listBuiltinBackgrounds,
+  listGallery,
+  listMine,
+  listUnpublishedBuiltins,
+  publishTheme,
+  setActiveThemePair,
+  type TokenPayload,
+  unpublishTheme,
+  updateTheme,
+  uploadBackground,
+} from "../lib/themesApi";
+import { WireShapeError } from "../lib/wireNarrow";
+
+// themesApi — typed REST client for the #75 themes surface. Mirrors the
+// api.ts buildHeaders/readError pattern and reuses api.ts's `readError`
+// so the wire error token (rate_limited / forbidden / not_found / …)
+// collapses to `ApiError.code`, and the shared 401 dead-token handler
+// fires. Tests assert outcomes: the request the verb issued (method +
+// URL) and the error-token mapping — not call order.
+
+const TOKEN = "test-bearer";
+
+type StubResponse = {
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
+  headers: { get: (k: string) => string | null };
+  statusText: string;
+};
+
+function ok(body: unknown, status = 200): StubResponse {
+  return {
+    ok: true,
+    status,
+    json: async () => body,
+    headers: { get: () => null },
+    statusText: "",
+  };
+}
+
+function err(status: number, token: string): StubResponse {
+  return {
+    ok: false,
+    status,
+    json: async () => ({ error: token }),
+    headers: { get: () => null },
+    statusText: "",
+  };
+}
+
+const fetchSpy = vi.fn<(...args: unknown[]) => Promise<StubResponse>>();
+
+function samplePayload(): TokenPayload {
+  const colors: Record<string, string> = {};
+  for (const k of [
+    "bg",
+    "bg_alt",
+    "fg",
+    "accent",
+    "muted",
+    "border",
+    "mention",
+    "mode_op",
+    "mode_halfop",
+    "mode_voiced",
+    "mode_plain",
+  ]) {
+    colors[k] = "#123456";
+  }
+  for (let i = 0; i < 16; i++) colors[`nick_${i}`] = "#abcdef";
+  return {
+    colors: colors as TokenPayload["colors"],
+    font_family: "jetbrains-mono",
+    background: { image_id: null, builtin: null, size: "cover", opacity: 0.3 },
+  };
+}
+
+function sampleTheme(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 7,
+    name: "Night",
+    author: "vjt",
+    built_in: false,
+    published: false,
+    apply_count: 0,
+    in_use: 0,
+    mine: true,
+    payload: samplePayload() as unknown as Record<string, unknown>,
+    inserted_at: "2026-07-17T10:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("themesApi", () => {
+  beforeEach(() => {
+    fetchSpy.mockReset();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // #502 — the isolation tests below install a spy handler; clear it so it
+    // never leaks the dead-token callback into a sibling test or file.
+    setOn401Handler(null);
+  });
+
+  test("listGallery GETs /themes and unwraps the themes envelope", async () => {
+    fetchSpy.mockResolvedValue(ok({ themes: [sampleTheme()] }));
+    const themes = await listGallery(TOKEN);
+    expect(themes).toHaveLength(1);
+    expect(themes[0]?.name).toBe("Night");
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes");
+    expect(init.method ?? "GET").toBe("GET");
+  });
+
+  test("listMine GETs /me/themes and unwraps the envelope", async () => {
+    fetchSpy.mockResolvedValue(ok({ themes: [] }));
+    const themes = await listMine(TOKEN);
+    expect(themes).toEqual([]);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/me/themes");
+  });
+
+  test("listUnpublishedBuiltins GETs /themes/unpublished and unwraps the envelope", async () => {
+    fetchSpy.mockResolvedValue(
+      ok({ themes: [sampleTheme({ built_in: true, published: false, mine: false })] }),
+    );
+    const themes = await listUnpublishedBuiltins(TOKEN);
+    expect(themes).toHaveLength(1);
+    expect(themes[0]?.built_in).toBe(true);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/themes/unpublished");
+  });
+
+  test("getTheme GETs /themes/:id", async () => {
+    fetchSpy.mockResolvedValue(ok(sampleTheme({ id: 42 })));
+    const theme = await getTheme(TOKEN, 42);
+    expect(theme.id).toBe(42);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/themes/42");
+  });
+
+  test("createTheme POSTs /themes with name + payload", async () => {
+    fetchSpy.mockResolvedValue(ok(sampleTheme(), 201));
+    const payload = samplePayload();
+    await createTheme(TOKEN, { name: "Night", payload });
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ name: "Night", payload });
+  });
+
+  test("updateTheme PATCHes /themes/:id", async () => {
+    fetchSpy.mockResolvedValue(ok(sampleTheme({ name: "Day" })));
+    await updateTheme(TOKEN, 7, { name: "Day" });
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes/7");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ name: "Day" });
+  });
+
+  test("deleteTheme DELETEs /themes/:id and returns void", async () => {
+    fetchSpy.mockResolvedValue(ok({}, 204));
+    await expect(deleteTheme(TOKEN, 7)).resolves.toBeUndefined();
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes/7");
+    expect(init.method).toBe("DELETE");
+  });
+
+  test("publishTheme POSTs /themes/:id/publish", async () => {
+    fetchSpy.mockResolvedValue(ok(sampleTheme({ published: true })));
+    const t = await publishTheme(TOKEN, 7);
+    expect(t.published).toBe(true);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes/7/publish");
+    expect(init.method).toBe("POST");
+  });
+
+  test("unpublishTheme POSTs /themes/:id/unpublish", async () => {
+    fetchSpy.mockResolvedValue(ok(sampleTheme({ published: false })));
+    await unpublishTheme(TOKEN, 7);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/themes/7/unpublish");
+  });
+
+  test("copyTheme POSTs /themes/:id/copy", async () => {
+    fetchSpy.mockResolvedValue(ok(sampleTheme({ id: 99, mine: true }), 201));
+    const copy = await copyTheme(TOKEN, 7);
+    expect(copy.id).toBe(99);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/themes/7/copy");
+  });
+
+  test("listBuiltinBackgrounds GETs /themes/backgrounds and unwraps the envelope", async () => {
+    const catalog = [
+      {
+        key: "01-lain-dark",
+        name: "Lain",
+        variant: "dark",
+        path: "/backgrounds/01-lain-dark.webp",
+      },
+    ];
+    fetchSpy.mockResolvedValue(ok({ backgrounds: catalog }));
+    const bgs = await listBuiltinBackgrounds(TOKEN);
+    expect(bgs).toEqual(catalog);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes/backgrounds");
+    expect(init.method ?? "GET").toBe("GET");
+  });
+
+  test("getActiveThemePair GETs /me/theme and coerces a null body to an empty pair", async () => {
+    fetchSpy.mockResolvedValue(ok(null));
+    const pair = await getActiveThemePair(TOKEN);
+    expect(pair).toEqual({ light: null, dark: null });
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/me/theme");
+  });
+
+  test("getActiveThemePair returns the resolved day/night pair", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme({ id: 3 }), dark: sampleTheme({ id: 7 }) }));
+    const pair = await getActiveThemePair(TOKEN);
+    expect(pair.light?.id).toBe(3);
+    expect(pair.dark?.id).toBe(7);
+  });
+
+  // #502 — the boot active-theme refresh is a COSMETIC fetch:
+  // `customTheme.mountCustomThemeSync` fires GET /me/theme on EVERY token
+  // presence (login, reload, cold boot). Like the #449 display-prefs sync, a
+  // cosmetic refresh must NEVER be able to kill a valid session, so its 401 is
+  // ISOLATED from the shared dead-token handler — it still throws (customTheme
+  // keeps its FOUC-free boot cache via the caller's .catch) but does NOT clear
+  // the token. Before the fix, a transient boot 401 logged the user out.
+  test("getActiveThemePair on 401 throws but does NOT fire the on401 dead-token handler", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    fetchSpy.mockResolvedValue(err(401, "unauthorized"));
+
+    await expect(getActiveThemePair(TOKEN)).rejects.toBeInstanceOf(ApiError);
+    expect(on401).not.toHaveBeenCalled();
+  });
+
+  // CONTRAST: on-demand theme verbs stay on the dead-token path — a 401 while
+  // the user is actively managing themes genuinely means the session is dead,
+  // so the fix must NOT blanket-suppress the handler across the whole module.
+  test("CONTRAST: setActiveThemePair (user action) DOES fire the handler on 401", async () => {
+    const on401 = vi.fn();
+    setOn401Handler(on401);
+    fetchSpy.mockResolvedValue(err(401, "unauthorized"));
+
+    await expect(setActiveThemePair(TOKEN, 1, null)).rejects.toBeInstanceOf(ApiError);
+    expect(on401).toHaveBeenCalledTimes(1);
+  });
+
+  test("setActiveThemePair PUTs /me/theme with the {light,dark} pair", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme({ id: 3 }), dark: sampleTheme({ id: 7 }) }));
+    await setActiveThemePair(TOKEN, 3, 7);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/me/theme");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({ light: 3, dark: 7 });
+  });
+
+  test("setActiveThemePair sends a null dark for a single pick", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme({ id: 3 }), dark: null }));
+    await setActiveThemePair(TOKEN, 3, null);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ light: 3, dark: null });
+  });
+
+  test("uploadBackground by URL POSTs JSON body {url}", async () => {
+    fetchSpy.mockResolvedValue(ok({ image_id: "slug123" }));
+    const res = await uploadBackground(TOKEN, { url: "https://x/y.png" });
+    expect(res.image_id).toBe("slug123");
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/themes/background");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ url: "https://x/y.png" });
+  });
+
+  test("uploadBackground by file POSTs multipart FormData with no JSON content-type", async () => {
+    fetchSpy.mockResolvedValue(ok({ image_id: "slugfile" }));
+    const file = new File([new Uint8Array([1, 2, 3])], "bg.png", { type: "image/png" });
+    const res = await uploadBackground(TOKEN, { file });
+    expect(res.image_id).toBe("slugfile");
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBeInstanceOf(FormData);
+    const headers = init.headers as Record<string, string>;
+    // The browser sets the multipart boundary content-type itself; forcing
+    // application/json here would break the upload.
+    expect(headers["content-type"]).toBeUndefined();
+  });
+
+  test.each([
+    [429, "rate_limited"],
+    [403, "forbidden"],
+    [404, "not_found"],
+    [422, "validation_failed"],
+  ])("verb surfaces the wire error token %s → %s as ApiError.code", async (status, token) => {
+    fetchSpy.mockResolvedValue(err(status, token));
+    const thrown = await createTheme(TOKEN, { name: "x", payload: samplePayload() }).catch(
+      (e) => e,
+    );
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).status).toBe(status);
+    expect((thrown as ApiError).code).toBe(token);
+  });
+});
+
+// #1400 — the five envelope doors. `narrowThemeResponse` already covered the
+// six doors that return a bare theme; these five return an ENVELOPE around it
+// (`{themes: […]}`, `{light, dark}`) and had no generated shape to validate
+// against until `Grappa.Themes.Wire` named `index_payload/0` + `active_pair/0`.
+// The case each one models is the deploy window — cic ahead of its server —
+// where a required field the response does not carry used to reach a renderer
+// as `undefined` instead of failing where it broke.
+describe("#1400 — the themes envelope doors fail loud on a shape mismatch", () => {
+  function without(row: Record<string, unknown>, key: string): Record<string, unknown> {
+    const { [key]: _dropped, ...rest } = row;
+    return rest;
+  }
+
+  beforeEach(() => {
+    fetchSpy.mockReset();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("listGallery rejects a theme row missing `in_use`", async () => {
+    fetchSpy.mockResolvedValue(ok({ themes: [without(sampleTheme(), "in_use")] }));
+    await expect(listGallery(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("listMine rejects a body with no `themes` key at all", async () => {
+    fetchSpy.mockResolvedValue(ok({}));
+    await expect(listMine(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("listUnpublishedBuiltins rejects a theme row missing `author`", async () => {
+    fetchSpy.mockResolvedValue(ok({ themes: [without(sampleTheme(), "author")] }));
+    await expect(listUnpublishedBuiltins(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("getActiveThemePair rejects a pair whose light slot is missing `mine`", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: without(sampleTheme(), "mine"), dark: null }));
+    await expect(getActiveThemePair(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("setActiveThemePair rejects a pair with no `dark` slot", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme() }));
+    await expect(setActiveThemePair(TOKEN, 3, null)).rejects.toBeInstanceOf(WireShapeError);
+  });
+});
