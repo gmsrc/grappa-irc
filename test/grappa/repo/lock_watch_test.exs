@@ -30,7 +30,7 @@ defmodule Grappa.Repo.LockWatchTest do
   """
   use Grappa.DataCase, async: false
 
-  import ExUnit.CaptureLog
+  import ExUnit.{CaptureIO, CaptureLog}
 
   alias Grappa.Repo.LockWatch
 
@@ -89,7 +89,48 @@ defmodule Grappa.Repo.LockWatchTest do
   # diagnosis is always the one that fires.
   @barrier_budget_ms div(@test_timeout_ms, 2)
 
-  setup do
+  # 🔴 A FOURTH CLOCK, AND THIS ONE OBSERVES THE OTHER THREE (#1767).
+  #
+  # Seven reds in this file were each reported as ONE stack, sampled by ExUnit
+  # at the 60s cut, and four of them named the same frames. That looked like a
+  # block in `LockWatch.stacktrace/1` and it is not one. Measured on
+  # `c8a0bf4d`, in this file's own topology:
+  #
+  #   * `Process.info(pid, :current_stacktrace)` against a writer parked
+  #     inside `Exqlite.Sqlite3NIF.execute/2` on a contended BEGIN IMMEDIATE
+  #     answers in 2-78µs and NEVER blocked — 40 samples at 16 schedulers,
+  #     again at 2, and again with 14 parked NIFs against 10 dirty-IO slots,
+  #     with the target reading `:running`, `:runnable` AND `:waiting`;
+  #   * the WHOLE report path costs 502µs idle and 2 847µs with the dirty-IO
+  #     slots saturated threefold, and loads ZERO modules, so #1715's
+  #     code-loading mechanism has nothing to bite on here;
+  #   * the frame MOVED between occurrences — `Process.info/2` (`:682`) in
+  #     CI, `Exception.format_stacktrace_entry/1` (`:686`) in the local
+  #     repro. A block stands still in one place; a sample lands wherever the
+  #     machine stopped.
+  #
+  # What the reds share is not a place, it is a RATE. In the one run
+  # reproduced locally EVERY test cost 7.7s against 0.19s across 71 green
+  # repetitions of the same command on the same tree — the cause is OUTSIDE
+  # the test. One frame cannot tell a starved process from a blocked one, so
+  # this films the TRAJECTORY instead, and carries `reductions` as the
+  # discriminator: reductions that do not advance between two samples are
+  # positive evidence that the process was not scheduled, which no stack
+  # sample can establish.
+  #
+  # Derived from the deadline like its three siblings, never chosen: the
+  # threshold is a twentieth of it, which is ~15x a healthy test in this file
+  # and a twentieth of a budget ExUnit still allows, so a sane run is silent.
+  # It does NOT touch the production module, does not move a timeout and does
+  # not weaken an assertion — it only reports.
+  @film_interval_ms 250
+  @film_threshold_ms div(@test_timeout_ms, 20)
+  @film_answer_budget_ms 2_000
+  @film_stack_frames 3
+  @film_max_samples div(@test_timeout_ms, @film_interval_ms) + 10
+
+  setup context do
+    start_filmer(context.test)
     LockWatch.put_test_enabled(true)
     on_exit(fn -> LockWatch.put_test_enabled(false) end)
 
@@ -473,7 +514,371 @@ defmodule Grappa.Repo.LockWatchTest do
     end
   end
 
+  describe "the filmer itself (#1767)" do
+    test "the canary proves the sampler reads the stack it claims to read" do
+      # The control has to answer in BOTH directions or it proves nothing: a
+      # predicate that always says yes would pass the positive half alone.
+      canary = spawn_canary()
+
+      assert sampler_reads_stack?(canary)
+      refute sampler_reads_stack?(self())
+
+      Process.exit(canary, :kill)
+    end
+
+    test "a test under the threshold films silently" do
+      assert film_verdict(:under, samples(20, 1_000), true, @film_threshold_ms - 1) == :silent
+    end
+
+    test "a test over the threshold reports the trajectory, and names the test" do
+      assert {:report, text} = film_verdict(:over, samples(20, 1_000), true, @film_threshold_ms)
+
+      assert text =~ "#1767 FILM"
+      assert text =~ "test=:over"
+      assert text =~ "elapsed=#{@film_threshold_ms}ms"
+      assert text =~ "reductions:"
+
+      # Relative to the first sample: a raw monotonic reading is a 12-digit
+      # negative number, and a trajectory whose clock cannot be read is not
+      # a trajectory.
+      assert text =~ "t=0ms"
+      assert text =~ "t=#{@film_interval_ms}ms"
+    end
+
+    test "an over-threshold test with no samples says so instead of printing an empty film" do
+      # Noisy blindness: a film with nothing in it reads as "the test was
+      # idle", which is the one conclusion the filmer must never invite.
+      assert {:report, text} = film_verdict(:empty, [], true, @film_threshold_ms)
+
+      assert text =~ "NO SAMPLES"
+    end
+
+    test "a broken sampler is reported even under the threshold, and produces no film" do
+      # A plausible film from a sampler that cannot read a stack is worse
+      # than no film: it would be believed.
+      assert {:report, text} = film_verdict(:broken, samples(20, 1_000), false, 0)
+
+      assert text =~ "SAMPLER BROKEN"
+      refute text =~ "reductions:"
+    end
+
+    test "a filmer that missed its own ticks names its own starvation" do
+      expected = div(@film_threshold_ms, @film_interval_ms)
+
+      assert {:report, starved} = film_verdict(:starved, samples(1, 1_000), true, @film_threshold_ms)
+      assert starved =~ "SAMPLER STARVED"
+      assert starved =~ "1 of #{expected}"
+
+      assert {:report, full} = film_verdict(:full, samples(expected, 1_000), true, @film_threshold_ms)
+      refute full =~ "SAMPLER STARVED"
+    end
+
+    test "reductions that never advance are named, and reductions that do are not" do
+      # The discriminator #1767 lacked: a stack sample cannot separate a
+      # process blocked inside a call from one that was never scheduled.
+      # Reductions can — they are monotonic and local to the process.
+      assert {:report, frozen} = film_verdict(:frozen, samples(20, 0), true, @film_threshold_ms)
+      assert frozen =~ "REDUCTIONS DID NOT ADVANCE"
+
+      assert {:report, moving} = film_verdict(:moving, samples(20, 1_000), true, @film_threshold_ms)
+      refute moving =~ "REDUCTIONS DID NOT ADVANCE"
+    end
+
+    test "the filmer collects real samples of the test process, not an empty reel" do
+      # The verdict tests above are pure. This one buys the other half: that
+      # the loop, the sampler and the ask/answer protocol actually produce a
+      # trajectory of THIS process, so a green verdict suite cannot sit on
+      # top of a filmer that never films.
+      filmer = spawn_filmer()
+
+      Process.sleep(@film_interval_ms * 3)
+
+      assert {:film, true, samples} = ask_filmer(filmer)
+      assert length(samples) >= 2
+
+      assert Enum.all?(samples, &(&1.reductions > 0))
+      assert List.last(samples).reductions > hd(samples).reductions
+      assert Enum.any?(samples, fn s -> Enum.any?(s.stack, &match?({__MODULE__, _, _, _}, &1)) end)
+
+      Process.exit(filmer, :kill)
+    end
+
+    test "the printing door emits over the threshold and stays quiet under it" do
+      filmer = spawn_filmer()
+      Process.sleep(@film_interval_ms * 2)
+
+      over = capture_io(fn -> print_film(filmer, :over, @film_threshold_ms) end)
+      under = capture_io(fn -> print_film(filmer, :under, @film_threshold_ms - 1) end)
+
+      assert over =~ "#1767 FILM test=:over"
+      assert under == ""
+
+      Process.exit(filmer, :kill)
+    end
+
+    test "a filmer that cannot answer is reported as UNAVAILABLE, never as silence" do
+      # The failure this file is built around is a test ExUnit KILLED. If the
+      # filmer is gone too, the honest output is that there is no trajectory
+      # — silence here would read exactly like a healthy run.
+      dead = spawn(fn -> :ok end)
+      ref = Process.monitor(dead)
+      assert_receive {:DOWN, ^ref, :process, ^dead, :normal}, 5_000
+
+      output = capture_io(fn -> print_film(dead, :gone, @film_threshold_ms) end)
+
+      assert output =~ "#1767 FILM UNAVAILABLE"
+      assert output =~ "test=:gone"
+    end
+
+    test "a film longer than the printable window declares what it dropped" do
+      # No silent caps: a window that quietly discards the middle of the
+      # trajectory reads as a complete film of a shorter run.
+      assert {:report, text} = film_verdict(:long, samples(@film_max_samples, 1_000), true, @film_threshold_ms)
+
+      assert text =~ "sample(s) omitted"
+    end
+  end
+
   ## ----- helpers --------------------------------------------------------
+
+  # A run of samples derived from a REAL one, so every field carries the
+  # shape `film_sample/1` actually produces rather than a hand-written
+  # stand-in that could not fail the way the real thing does.
+  defp samples(count, reductions_step) do
+    base = film_sample(self())
+
+    Enum.map(0..(count - 1), fn i ->
+      %{base | at_ms: i * @film_interval_ms, reductions: base.reductions + i * reductions_step}
+    end)
+  end
+
+  defp spawn_canary do
+    me = self()
+    canary = spawn(fn -> film_canary(me) end)
+
+    receive do
+      {:canary_parked, ^canary} -> canary
+    after
+      @film_answer_budget_ms -> flunk("the filmer canary never parked")
+    end
+  end
+
+  # A filmer aimed at THIS process but without `start_filmer/1`'s `on_exit`
+  # printing hook, so a test can drive the reel and assert on it directly.
+  defp spawn_filmer do
+    test_pid = self()
+    spawn(fn -> film_loop(test_pid, true, []) end)
+  end
+
+  defp ask_filmer(filmer) do
+    send(filmer, {:film, self()})
+
+    receive do
+      {:film, _, _} = answer -> answer
+    after
+      @film_answer_budget_ms -> flunk("the filmer never answered")
+    end
+  end
+
+  ## ----- the filmer (#1767) ---------------------------------------------
+
+  # Unlinked on purpose: the film is worth most for a test ExUnit KILLS, and
+  # a linked filmer would die with it carrying the only record of what
+  # happened. The `on_exit` hook is the printing door rather than the filmer
+  # itself, so the output is ordered with the runner instead of racing it,
+  # and it runs for a killed test too.
+  defp start_filmer(test_name) do
+    test_pid = self()
+    started_at = System.monotonic_time(:millisecond)
+    filmer = spawn(fn -> film_loop(test_pid, film_sampler_ok?(), []) end)
+
+    on_exit(fn ->
+      print_film(filmer, test_name, System.monotonic_time(:millisecond) - started_at)
+      Process.exit(filmer, :kill)
+    end)
+  end
+
+  # The known-answer control, INSIDE the tool and run in the filmer's own
+  # process, so what it certifies is the sampler that will actually shoot.
+  # A canary parked in a distinctively named function is the same oracle
+  # `park_until_released/0` is for the holder-stack assertion above.
+  defp film_sampler_ok? do
+    me = self()
+    canary = spawn(fn -> film_canary(me) end)
+
+    ok? =
+      receive do
+        {:canary_parked, ^canary} -> sampler_reads_stack?(canary)
+      after
+        @film_answer_budget_ms -> false
+      end
+
+    Process.exit(canary, :kill)
+    ok?
+  end
+
+  defp film_canary(parent) do
+    send(parent, {:canary_parked, self()})
+
+    receive do
+      :never -> :ok
+    end
+  end
+
+  defp sampler_reads_stack?(pid) do
+    case film_sample(pid) do
+      nil -> false
+      %{stack: stack} -> Enum.any?(stack, &match?({__MODULE__, :film_canary, _, _}, &1))
+    end
+  end
+
+  # Answering does NOT end the reel. A filmer that died on its first answer
+  # would turn any second read into `FILM UNAVAILABLE` — an honest message
+  # about the wrong thing, and the exact shape of report this issue is
+  # trying to stop producing.
+  defp film_loop(test_pid, sampler_ok?, samples) do
+    receive do
+      {:film, from} ->
+        send(from, {:film, sampler_ok?, Enum.reverse(samples)})
+        film_loop(test_pid, sampler_ok?, samples)
+    after
+      @film_interval_ms -> film_loop(test_pid, sampler_ok?, film_collect(test_pid, samples))
+    end
+  end
+
+  defp film_collect(test_pid, samples) do
+    cond do
+      length(samples) >= @film_max_samples -> samples
+      sample = film_sample(test_pid) -> [sample | samples]
+      true -> samples
+    end
+  end
+
+  # `reductions` is the field the seven reds were missing. `status` alone
+  # cannot separate "blocked in a call" from "never scheduled": both read
+  # `:running` often enough to be useless. Reductions are monotonic and
+  # local, so their DERIVATIVE answers it.
+  defp film_sample(pid) do
+    case Process.info(pid, [:status, :reductions, :current_function, :current_stacktrace]) do
+      nil ->
+        nil
+
+      info ->
+        %{
+          at_ms: System.monotonic_time(:millisecond),
+          status: Keyword.get(info, :status),
+          reductions: Keyword.get(info, :reductions),
+          current_function: Keyword.get(info, :current_function),
+          stack: info |> Keyword.get(:current_stacktrace, []) |> Enum.take(@film_stack_frames)
+        }
+    end
+  end
+
+  defp print_film(filmer, test_name, elapsed_ms) do
+    send(filmer, {:film, self()})
+
+    receive do
+      {:film, sampler_ok?, samples} -> emit_film(film_verdict(test_name, samples, sampler_ok?, elapsed_ms))
+    after
+      @film_answer_budget_ms ->
+        IO.puts(
+          "#1767 FILM UNAVAILABLE: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms — the filmer " <>
+            "did not answer within #{@film_answer_budget_ms}ms, so this run has NO trajectory"
+        )
+    end
+  end
+
+  defp emit_film(:silent), do: :ok
+  defp emit_film({:report, text}), do: IO.puts(text)
+
+  # Pure, so every branch below is a test above rather than something only a
+  # real 60s red could exercise.
+  defp film_verdict(test_name, _, false, elapsed_ms) do
+    {:report,
+     "#1767 FILM SAMPLER BROKEN: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms — the canary's own " <>
+       "frame was absent from the stack the sampler read, so NO film is produced: a plausible " <>
+       "trajectory from a sampler that cannot read a stack would be believed"}
+  end
+
+  defp film_verdict(_, _, true, elapsed_ms) when elapsed_ms < @film_threshold_ms do
+    :silent
+  end
+
+  defp film_verdict(test_name, [], true, elapsed_ms) do
+    {:report,
+     "#1767 FILM NO SAMPLES: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms over a #{@film_interval_ms}ms " <>
+       "tick — the filmer was alive and collected nothing, which is a reading about the VM, not an idle test"}
+  end
+
+  defp film_verdict(test_name, samples, true, elapsed_ms) do
+    collected = length(samples)
+    expected = div(elapsed_ms, @film_interval_ms)
+    advanced = List.last(samples).reductions - hd(samples).reductions
+
+    lines =
+      [
+        "#1767 FILM test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms threshold=#{@film_threshold_ms}ms",
+        "  samples: #{collected} collected / #{expected} expected at #{@film_interval_ms}ms",
+        "  reductions: #{hd(samples).reductions} -> #{List.last(samples).reductions} (+#{advanced})",
+        starved_line(collected, expected),
+        frozen_line(advanced, collected, elapsed_ms),
+        truncated_line(collected)
+      ] ++ film_frames(samples, hd(samples).at_ms)
+
+    {:report, lines |> Enum.reject(&(&1 == "")) |> Enum.join("\n")}
+  end
+
+  # The filmer missing its OWN ticks is a reading in its own right: it says
+  # the VM was not scheduling the observer either, which no sample of the
+  # test process can show.
+  defp starved_line(collected, expected) when collected * 2 < expected do
+    "  ⚠ SAMPLER STARVED: the filmer collected #{collected} of #{expected} ticks it was due — " <>
+      "the VM was not scheduling the FILMER either, so this is not only the test"
+  end
+
+  defp starved_line(_, _), do: ""
+
+  defp frozen_line(0, collected, elapsed_ms) when collected > 1 do
+    "  ⚠ REDUCTIONS DID NOT ADVANCE across #{collected} samples spanning #{elapsed_ms}ms — the test " <>
+      "process ran no code at all, so any frame below is where it STOPPED, not where it is working"
+  end
+
+  defp frozen_line(_, _, _), do: ""
+
+  defp truncated_line(collected) when collected >= @film_max_samples do
+    "  ⚠ FILM TRUNCATED: the filmer stopped collecting at #{@film_max_samples} samples"
+  end
+
+  defp truncated_line(_), do: ""
+
+  # A window, declared. Printing 250 lines per slow test buries the report
+  # it exists to deliver, and dropping the middle silently would read as a
+  # complete film of a shorter run.
+  defp film_frames(samples, origin_ms) when length(samples) <= 25 do
+    Enum.map(samples, &film_frame(&1, origin_ms))
+  end
+
+  defp film_frames(samples, origin_ms) do
+    {head, rest} = Enum.split(samples, 5)
+    tail = Enum.take(rest, -20)
+    omitted = length(samples) - length(head) - length(tail)
+
+    Enum.map(head, &film_frame(&1, origin_ms)) ++
+      ["  ... #{omitted} sample(s) omitted ..."] ++ Enum.map(tail, &film_frame(&1, origin_ms))
+  end
+
+  # `t` is relative to the FIRST sample. A raw monotonic reading is a
+  # 12-digit negative number that says nothing about a trajectory.
+  defp film_frame(sample, origin_ms) do
+    top =
+      Enum.map_join(sample.stack, " <- ", &(&1 |> Exception.format_stacktrace_entry() |> String.trim()))
+
+    "  t=#{sample.at_ms - origin_ms}ms #{sample.status} reds=#{sample.reductions} " <>
+      "#{format_current(sample.current_function)} | #{top}"
+  end
+
+  defp format_current({m, f, a}), do: Exception.format_mfa(m, f, a)
+  defp format_current(_), do: "unknown"
 
   # Drives the REAL `init/1` — the only way to prove the priming is wired
   # into it rather than merely available as a function. Calling `init/1`
