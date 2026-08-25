@@ -30,8 +30,9 @@ const LusersCard: Component<Props> = (props) => {
   const snapshot = () => lusersBundleByNetwork()[props.networkSlug];
   // #1199 — Escape dismisses through the shared ordered ESC stack (the same
   // door every modal uses), invoking the SAME verb the × does, so a modal
-  // opened over the card still closes first. Escape-only, no scroll-lock
-  // refcount: the card sits IN the scrollback flow, not over it.
+  // opened over the card still closes first. No COVERING refcount: the card
+  // sits IN the scrollback flow, not over it, so the pane behind must not
+  // freeze. #1772 — the iOS touch lock is not part of what that gives up.
   createOverlayEscape(
     () => snapshot() !== undefined,
     () => dismissLusersCard(props.networkSlug),

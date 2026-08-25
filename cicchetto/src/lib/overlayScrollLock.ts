@@ -41,8 +41,40 @@
 // lock chain (`html.overlay-open body/#root/#root>div { touch-action:
 // none }`) stays as defense-in-depth.
 //
+// #1772 — TWO CONCERNS, TWO COUNTERS. Until this issue a single refcount
+// carried both "arm the iOS touch lock" and "freeze the scrollback
+// snapshot", and the two are not the same question. A surface that sits
+// IN or OVER the flow (the inline whois/whowas/lusers cards, the
+// long-press context menu) wants the shell immobile and the pane behind
+// LIVE; only a surface that COVERS the pane wants the freeze. Welded to
+// one number, those surfaces had to choose, chose no-freeze via
+// `createOverlayEscape` (#1199), and thereby also gave up the touch lock
+// — so on an iPhone a drag with a whois card or a context menu open
+// panned the whole app shell.
+//
+//   coveringCount  — surfaces that COVER the pane. Read by
+//                    `overlayCount()`, which `ScrollbackPane` derives
+//                    `isOverlayFrozen()` from and which `globalPaste` /
+//                    `Shell`'s swipe guard read as "something is
+//                    covering the shell". Its population is unchanged by
+//                    #1772, so every one of those consumers is too.
+//   shellLocks     — surfaces that want the shell immobile WITHOUT
+//                    covering the pane. Touch lock only.
+//
+// The class + the document listener key off the SUM: the touch lock is
+// one global thing, and either population arming it is enough.
+//
+// Safe to arm the class for a NON-covering surface, measured rather than
+// assumed: on mobile the shell already carries `.shell-mobile {
+// touch-action: none }` permanently (default.css, UX-3 UNDEC R3), so the
+// v3 chain adds nothing there and every inner scroller already carries
+// its own `pan-y` carve-out. The one surface that ESCAPES that blanket
+// is the context menu — it portals to `<body>`, outside `.shell-mobile`
+// — which is why it gains a `pan-y` carve-out of its own in this issue,
+// exactly like `.rail-actions-menu` (#913) did.
+//
 // Test surface: pure module state + DOM side-effects. `__resetForTest()`
-// clears refcount + class + detaches the listener so vitest order
+// clears both counters + class + detaches the listener so vitest order
 // doesn't leak state across tests.
 
 import { createEffect, createSignal, onCleanup } from "solid-js";
@@ -58,15 +90,29 @@ const CLASS_NAME = "overlay-open";
 // it, the mutators set it. iOS touch-lock semantics are unchanged (the class +
 // listener side-effects still key off the same numeric value).
 const [count, setCount] = createSignal(0);
+
+// #1772 — the non-covering half of the touch lock. A plain `let`, NOT a signal,
+// and deliberately so: nothing DERIVES from it. The covering count above is a
+// signal because `ScrollbackPane` reads it inside a memo (a stale read there
+// means a pane that never freezes); this one has exactly two consumers, the DOM
+// class and the document listener, and both are imperative side-effects applied
+// at the push/pop edges below. A signal would advertise a reactive contract that
+// no reader wants and that no test could hold anyone to.
+let shellLocks = 0;
 let listenerAttached = false;
 
-// #232 — ordered ESC-close stack. Parallel to the scroll-lock refcount but
-// a DIFFERENT population: it carries the close verb, and only overlays that
-// pass an `onEscape` to createOverlayLock register here (scroll-lock-only
-// overlays — the members/settings drawers, admin pane — push the refcount
-// but NOT this stack). Cannot be derived from the refcount (onEscape ⊆
-// pushed), so it's a separate structure, but its lifecycle is bolted to the
-// SAME push/pop edges inside createOverlayLock so the two never drift.
+/** Holders of the iOS touch lock, from BOTH populations. */
+function touchLockHolders(): number {
+  return count() + shellLocks;
+}
+
+// #232 — ordered ESC-close stack. Parallel to the two counters above but a
+// THIRD population: it carries the close verb, and only overlays that pass an
+// `onEscape` to createOverlayLock register here (lock-only overlays — the
+// members/settings drawers, admin pane — push the covering refcount but NOT
+// this stack). Cannot be derived from either count (onEscape ⊆ pushed), so
+// it's a separate structure, but its lifecycle is bolted to the SAME push/pop
+// edges inside createOverlayLock / createOverlayEscape so they never drift.
 //
 // `runTopmostOverlayEscape()` invokes the LAST-registered overlay's onEscape
 // (topmost-first) — the single ESC authority `keybindings.ts` calls before
@@ -99,11 +145,23 @@ function root(): HTMLElement | null {
 function applyClass(): void {
   const el = root();
   if (el === null) return;
-  if (count() > 0) {
+  if (touchLockHolders() > 0) {
     el.classList.add(CLASS_NAME);
   } else {
     el.classList.remove(CLASS_NAME);
   }
+}
+
+/**
+ * Re-derive both touch-lock side-effects from the current holder total. Called
+ * from EVERY push/pop edge on either counter, so the class and the listener can
+ * never disagree with the numbers — and so a new counter, if this ever grows a
+ * third population, has one place to join rather than four.
+ */
+function syncTouchLock(): void {
+  applyClass();
+  if (touchLockHolders() > 0) attachListener();
+  else detachListener();
 }
 
 /**
@@ -154,27 +212,67 @@ function detachListener(): void {
  */
 export function pushOverlay(_target: HTMLElement | null): void {
   setCount(count() + 1);
-  applyClass();
-  attachListener();
+  syncTouchLock();
 }
 
 /**
  * Pop an overlay off the lock stack. Pops below zero are clamped.
- * Detaches the touchmove listener when the refcount drops to zero.
+ * Detaches the touchmove listener when the last holder — of EITHER
+ * population — drops off.
  */
 export function popOverlay(_target: HTMLElement | null): void {
   setCount(Math.max(0, count() - 1));
-  applyClass();
-  if (count() === 0) detachListener();
+  syncTouchLock();
 }
 
 /**
- * Current refcount — a TRACKED Solid source. Reading it inside a memo /
- * effect subscribes to overlay open/close transitions (#219-general).
- * Also exposed for vitest assertions.
+ * #1772 — take the iOS touch lock WITHOUT joining the covering-overlay count:
+ * "the shell must not move while I am open", said by a surface that does not
+ * cover the scrollback pane. Pair with `popShellLock()`.
+ *
+ * Same global effect as `pushOverlay` (the `overlay-open` class + the
+ * non-passive document `touchmove` handler) and a DIFFERENT population:
+ * `overlayCount()` does not move, so the pane behind keeps scrolling, keeps
+ * following the tail, and never freezes its snapshot.
+ *
+ * Not a parameter on `pushOverlay`: the two verbs have different pop
+ * obligations, and a `push(el, {freeze:false})` / `pop(el, {freeze:true})`
+ * mismatch would corrupt both counters at once with nothing to catch it.
+ * Distinct verbs make that mistake unspellable.
+ */
+export function pushShellLock(): void {
+  shellLocks += 1;
+  syncTouchLock();
+}
+
+/** Release a shell lock. Pops below zero are clamped, as with `popOverlay`. */
+export function popShellLock(): void {
+  shellLocks = Math.max(0, shellLocks - 1);
+  syncTouchLock();
+}
+
+/**
+ * Current COVERING-overlay refcount — a TRACKED Solid source. Reading it
+ * inside a memo / effect subscribes to overlay open/close transitions
+ * (#219-general). Also exposed for vitest assertions.
+ *
+ * #1772 — this counts surfaces that COVER the pane, which is narrower than
+ * "surfaces holding the touch lock": an in-flow card or the context menu arms
+ * the lock and is deliberately absent here, because every consumer of this
+ * number is asking the covering question (freeze the snapshot, suppress the
+ * global paste, refuse a swipe that would stack a drawer under something).
  */
 export function overlayCount(): number {
   return count();
+}
+
+/**
+ * Current non-covering shell-lock count. Exposed for vitest assertions only —
+ * production code has no business asking, since the two side-effects this
+ * number drives are applied here.
+ */
+export function shellLockCount(): number {
+  return shellLocks;
 }
 
 /** Whether the document-level touchmove listener is currently attached. */
@@ -204,9 +302,10 @@ export function overlayEscapeDepth(): number {
   return escapeStack.length;
 }
 
-/** Test reset — clears refcount, DOM class, detaches listener, empties the ESC stack. */
+/** Test reset — clears BOTH counters, the DOM class, the listener, the ESC stack. */
 export function __resetForTest(): void {
   setCount(0);
+  shellLocks = 0;
   const el = root();
   if (el !== null) el.classList.remove(CLASS_NAME);
   detachListener();
@@ -292,19 +391,28 @@ export function createOverlayLock(
 }
 
 /**
- * #1199 — the ESC half of `createOverlayLock` on its own: the SAME ordered
- * stack and the same open/close/unmount edges, WITHOUT the scroll-lock
- * refcount. Call from a component body:
+ * #1199 — the NO-FREEZE variant of `createOverlayLock`: the SAME ordered ESC
+ * stack, the same iOS touch lock, the same open/close/unmount edges — WITHOUT
+ * the covering-overlay refcount. Call from a component body:
  *
  *   createOverlayEscape(() => myBundle() !== undefined, dismissMyCard);
  *
- * For a surface that is dismissable but covers nothing — the inline scrollback
+ * For a surface that is dismissable but covers nothing: the inline scrollback
  * cards (whois / whowas / lusers), which render in the message flow rather than
- * over it. Going through `createOverlayLock` would ALSO hold a refcount for the
- * whole life of the card, which freezes the scrollback snapshot behind it
- * (`ScrollbackPane`'s `isOverlayFrozen`) and adds the iOS `overlay-open` touch
- * lock: the hazard `RailActions.tsx` already records for the permanent rail
- * column. A surface that DOES cover the pane still wants `createOverlayLock`.
+ * over it, and the long-press context menu, which floats at fixed coordinates
+ * over a pane that stays live behind it. Going through `createOverlayLock`
+ * would ALSO hold a COVERING refcount for the whole life of the surface, which
+ * freezes the scrollback snapshot behind it (`ScrollbackPane`'s
+ * `isOverlayFrozen`) — the hazard `RailActions.tsx` records for the permanent
+ * rail column. A surface that DOES cover the pane still wants
+ * `createOverlayLock`.
+ *
+ * #1772 — the touch lock is on this side of the split. It used to be welded to
+ * the covering refcount, so a card or a menu could have the shell immobile or
+ * the pane live but not both, and the surfaces here silently took the second:
+ * on an iPhone a drag with a whois card or a context menu open panned the whole
+ * app shell. The shell is meant to be furniture. Now `pushShellLock` arms the
+ * lock from the non-covering population and `overlayCount()` never moves.
  *
  * Membership of the one shared stack is the point, not an implementation
  * detail: it is what makes a modal opened over a card close FIRST. A private
@@ -313,7 +421,12 @@ export function createOverlayLock(
  *
  * No deferred microtask, unlike `createOverlayLock`: that deferral exists only
  * so Solid can commit the render before `querySelector` looks for the lock
- * element, and there is no element to look for here.
+ * element, and there is no element to look for here. Leak-safety therefore
+ * comes from the shape rather than from a re-check — the `registered` latch
+ * makes push and release idempotent and pairs them one-to-one, `onCleanup`
+ * releases on unmount-while-open, and `popShellLock` clamps at zero. There is
+ * no window in which a queued push can outlive the close that should have
+ * cancelled it, which is the failure `createOverlayLock` has to guard against.
  */
 export function createOverlayEscape(isOpen: () => boolean, onEscape: () => void): void {
   const escapeToken = {};
@@ -321,6 +434,7 @@ export function createOverlayEscape(isOpen: () => boolean, onEscape: () => void)
   const release = (): void => {
     if (!registered) return;
     unregisterEscape(escapeToken);
+    popShellLock();
     registered = false;
   };
   createEffect(() => {
@@ -330,6 +444,7 @@ export function createOverlayEscape(isOpen: () => boolean, onEscape: () => void)
     }
     if (registered) return;
     registerEscape(escapeToken, onEscape);
+    pushShellLock();
     registered = true;
   });
   onCleanup(release);

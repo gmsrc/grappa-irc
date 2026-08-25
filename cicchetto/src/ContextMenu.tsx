@@ -72,11 +72,19 @@ const ContextMenu: Component<Props> = (props) => {
   // Stack membership also gives the menu LIFO precedence, so a modal opened
   // over it closes first.
   //
-  // The ESC-only variant (#1199), not `createOverlayLock`: the menu is a
-  // dismissable surface that holds no scroll-lock refcount today, and taking
-  // one would freeze the scrollback snapshot behind it and arm the iOS
-  // `overlay-open` touch lock. The predicate is the constant `true` because all
-  // three hosts mount this component behind a `<Show>` on their own open state.
+  // The NO-FREEZE variant (#1199), not `createOverlayLock`: the menu floats at
+  // fixed coordinates over a pane that stays live behind it, so taking a
+  // COVERING refcount would freeze the scrollback snapshot for the life of a
+  // long-press. The predicate is the constant `true` because all three hosts
+  // mount this component behind a `<Show>` on their own open state.
+  //
+  // #1772 — it does take the iOS touch lock, which this helper now carries on
+  // the other side of that split. It did not, and the shell panned under an
+  // open menu: `.context-menu-backdrop` is `position: fixed; inset: 0`, which
+  // reads like a shield but only ever intercepted CLICKS, so a DRAG went to
+  // UIKit as a page pan while the menu itself — `position: fixed` — stayed put
+  // and the content slid out from under it. The stylesheet half (backdrop
+  // claims the stream, menu re-opens its own pan) is in `default.css`.
   createOverlayEscape(
     () => true,
     () => props.onClose(),

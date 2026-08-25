@@ -28,8 +28,11 @@ import {
   overlayCount,
   overlayEscapeDepth,
   popOverlay,
+  popShellLock,
   pushOverlay,
+  pushShellLock,
   runTopmostOverlayEscape,
+  shellLockCount,
 } from "../lib/overlayScrollLock";
 
 // createOverlayLock defers its push + Esc-registration a microtask (so the
@@ -149,6 +152,77 @@ describe("overlayScrollLock refcount + class", () => {
   });
 });
 
+// #1772 — the touch lock and the freeze used to be one number. They are two
+// populations now, summed for the lock and read separately for the freeze.
+// These pin the arithmetic; which SURFACES land in which population is pinned
+// in overlaySurfaceLockContract.test.ts.
+describe("overlayScrollLock — the shell lock is a second population (#1772)", () => {
+  test("a shell lock arms the class + listener without moving overlayCount", () => {
+    pushShellLock();
+    expect(shellLockCount()).toBe(1);
+    expect(document.documentElement.classList.contains(CLASS)).toBe(true);
+    expect(isListenerAttached()).toBe(true);
+    // The freeze axis is untouched — this is the whole point of the split.
+    expect(overlayCount()).toBe(0);
+  });
+
+  test("the lock survives until the LAST holder drops, across both populations", () => {
+    pushOverlay(makeEl());
+    pushShellLock();
+    expect(document.documentElement.classList.contains(CLASS)).toBe(true);
+
+    popOverlay(null); // the covering half goes; the shell lock still holds
+    expect(overlayCount()).toBe(0);
+    expect(document.documentElement.classList.contains(CLASS)).toBe(true);
+    expect(isListenerAttached()).toBe(true);
+
+    popShellLock();
+    expect(document.documentElement.classList.contains(CLASS)).toBe(false);
+    expect(isListenerAttached()).toBe(false);
+  });
+
+  test("the covering half can drop last and still hold the lock meanwhile", () => {
+    pushShellLock();
+    pushOverlay(makeEl());
+
+    popShellLock();
+    expect(shellLockCount()).toBe(0);
+    expect(document.documentElement.classList.contains(CLASS)).toBe(true);
+    expect(isListenerAttached()).toBe(true);
+
+    popOverlay(null);
+    expect(document.documentElement.classList.contains(CLASS)).toBe(false);
+    expect(isListenerAttached()).toBe(false);
+  });
+
+  test("popping a shell lock below zero is clamped", () => {
+    popShellLock();
+    popShellLock();
+    expect(shellLockCount()).toBe(0);
+    // A negative counter would leave the class un-removable by the NEXT
+    // surface's balanced pop — the mirror of the covering clamp above.
+    pushShellLock();
+    popShellLock();
+    expect(document.documentElement.classList.contains(CLASS)).toBe(false);
+  });
+
+  test("a shell lock does NOT make the pane freeze predicate's source move", () => {
+    createRoot((dispose) => {
+      const observed: number[] = [];
+      const derived = createMemo(() => overlayCount());
+      observed.push(derived());
+      pushShellLock();
+      observed.push(derived());
+      popShellLock();
+      observed.push(derived());
+      dispose();
+      // Flat 0: ScrollbackPane's memo never even recomputes to a new value, so
+      // the snapshot behind an in-flow surface is never captured.
+      expect(observed).toEqual([0, 0, 0]);
+    });
+  });
+});
+
 describe("overlayScrollLock listener lifecycle", () => {
   test("listener attaches on first push, detaches on last pop", () => {
     expect(isListenerAttached()).toBe(false);
@@ -186,7 +260,7 @@ describe("overlay escape stack (#232)", () => {
       createOverlayLock(open, ".x-scroll-only");
       setOpen(true);
       await flush();
-      expect(overlayCount()).toBe(1); // scroll-lock refcount pushed
+      expect(overlayCount()).toBe(1); // covering refcount pushed
       expect(overlayEscapeDepth()).toBe(0); // but not ESC-closable
       expect(runTopmostOverlayEscape()).toBe(false);
       dispose();
@@ -241,15 +315,18 @@ describe("overlay escape stack (#232)", () => {
   });
 });
 
-// #1199 — `createOverlayEscape` is the ESC half of `createOverlayLock` on its
-// own: the SAME LIFO stack and the same lifecycle edges, minus the scroll-lock
-// refcount. It exists because the scrollback cards (whois/whowas/lusers) are
-// inline content, not covering overlays — enrolling them through
-// createOverlayLock would hold a refcount for the life of the card, freezing
-// the scrollback snapshot behind it and adding the iOS `overlay-open` touch
-// lock (`RailActions.tsx:74-77` records the same hazard for the rail column).
+// #1199 — `createOverlayEscape` is the NO-FREEZE variant of `createOverlayLock`:
+// the SAME LIFO stack, the same lifecycle edges, minus the COVERING refcount. It
+// exists because the scrollback cards (whois/whowas/lusers) are inline content,
+// not covering overlays — enrolling them through createOverlayLock would hold a
+// covering refcount for the life of the card, freezing the scrollback snapshot
+// behind it (`RailActions.tsx` records the same hazard for the rail column).
+//
+// #1772 — the iOS touch lock is NOT part of what it gives up. It used to be, and
+// that was the bug: a drag with a card or the context menu open panned the whole
+// app shell, because the lock and the freeze were one number.
 describe("overlay escape-only registration (#1199)", () => {
-  test("joins the Esc stack without touching the scroll-lock refcount", async () => {
+  test("joins the Esc stack + the touch lock, without the covering refcount", async () => {
     await createRoot(async (dispose) => {
       const [open, setOpen] = createSignal(false);
       createOverlayEscape(open, () => setOpen(false));
@@ -257,14 +334,19 @@ describe("overlay escape-only registration (#1199)", () => {
       setOpen(true);
       await flush();
       expect(overlayEscapeDepth()).toBe(1);
+      // The freeze axis stays clear — the pane behind keeps its own behaviour.
       expect(overlayCount()).toBe(0);
-      expect(document.documentElement.classList.contains(CLASS)).toBe(false);
-      expect(isListenerAttached()).toBe(false);
+      // …and the touch-lock axis is armed, which is the whole of #1772.
+      expect(shellLockCount()).toBe(1);
+      expect(document.documentElement.classList.contains(CLASS)).toBe(true);
+      expect(isListenerAttached()).toBe(true);
 
       expect(runTopmostOverlayEscape()).toBe(true);
       await flush();
       expect(open()).toBe(false);
       expect(overlayEscapeDepth()).toBe(0);
+      expect(shellLockCount()).toBe(0);
+      expect(isListenerAttached()).toBe(false);
       dispose();
     });
   });
@@ -287,6 +369,62 @@ describe("overlay escape-only registration (#1199)", () => {
       expect(overlayEscapeDepth()).toBe(1);
       dispose();
       expect(overlayEscapeDepth()).toBe(0);
+    });
+  });
+
+  // #1772 — the ESC registration and the shell lock share ONE lifecycle, so
+  // the two structures cannot drift. Asserted on the SAME edges as above, on
+  // the lock axis: a shell lock stranded by a close-then-teardown leaves the
+  // non-passive document `preventDefault` attached until a full page reload —
+  // i.e. an iOS scroll frozen for good, the exact hazard `createOverlayLock`'s
+  // deferred-push re-check exists to avoid on the covering side.
+  test("the shell lock follows the same open / close / unmount edges", async () => {
+    await createRoot(async (dispose) => {
+      const [open, setOpen] = createSignal(true);
+      createOverlayEscape(open, vi.fn());
+      await flush();
+      expect(shellLockCount()).toBe(1);
+
+      setOpen(false);
+      await flush();
+      expect(shellLockCount()).toBe(0);
+      expect(isListenerAttached()).toBe(false);
+
+      setOpen(true); // re-opened, then torn down while still open
+      await flush();
+      expect(shellLockCount()).toBe(1);
+      dispose();
+      expect(shellLockCount()).toBe(0);
+      expect(isListenerAttached()).toBe(false);
+      expect(document.documentElement.classList.contains(CLASS)).toBe(false);
+    });
+  });
+
+  // The re-entrancy guard, on the lock axis. `createEffect` re-runs on any
+  // tracked read, and an open surface whose predicate recomputes to the same
+  // `true` must NOT push a second time — the `registered` latch is what makes
+  // push/release one-to-one, and a double push would survive the release.
+  test("a re-run of the open predicate does not double-push the shell lock", async () => {
+    await createRoot(async (dispose) => {
+      const [open, setOpen] = createSignal(false);
+      const [nudge, setNudge] = createSignal(0);
+      createOverlayEscape(() => {
+        nudge();
+        return open();
+      }, vi.fn());
+
+      setOpen(true);
+      await flush();
+      expect(shellLockCount()).toBe(1);
+
+      setNudge(1); // predicate re-runs, still open
+      await flush();
+      expect(shellLockCount()).toBe(1);
+
+      setOpen(false);
+      await flush();
+      expect(shellLockCount()).toBe(0);
+      dispose();
     });
   });
 

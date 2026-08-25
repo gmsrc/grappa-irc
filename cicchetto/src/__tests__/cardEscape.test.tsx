@@ -26,11 +26,14 @@ import WhowasCard from "../WhowasCard";
 // only on the ordering arm (`MediaViewerModal.tsx` records the same warning).
 //
 // The cards are inline scrollback content, NOT covering overlays, so they
-// join the ESC stack WITHOUT the scroll-lock refcount: `overlayCount()` must
-// stay 0 while a card is up. A refcount held for the life of a card would
-// freeze the scrollback snapshot behind it and add the iOS `overlay-open`
-// touch lock — the hazard `RailActions.tsx:74-77` already records for the
-// permanent rail column.
+// join the ESC stack WITHOUT the covering refcount: `overlayCount()` must
+// stay 0 while a card is up. A covering refcount held for the life of a card
+// would freeze the scrollback snapshot behind it — the hazard
+// `RailActions.tsx` already records for the permanent rail column.
+//
+// #1772 — that is the FREEZE axis and it is the only one this file speaks to.
+// The iOS touch lock rides the same helper but a different counter now, and
+// which surfaces arm it is pinned in `overlaySurfaceLockContract.test.tsx`.
 
 // Dispatched on a real in-document target and left to BUBBLE, exactly as a
 // browser delivers a keypress. Not on `window` directly: an event whose target
@@ -196,14 +199,13 @@ describe("#1199 scrollback cards close on Escape", () => {
     expect(screen.queryByTestId("lusers-card")).toBeNull();
   });
 
-  it("a card holds no scroll-lock refcount while it is up", async () => {
+  it("a card holds no COVERING refcount while it is up", async () => {
     setWhowasBundle("net-esc-refcount", WHOWAS_BUNDLE);
     render(() => <WhowasCard networkSlug="net-esc-refcount" />);
     await flush();
 
     expect(overlayEscapeDepth()).toBe(1);
     expect(overlayCount()).toBe(0);
-    expect(document.documentElement.classList.contains("overlay-open")).toBe(false);
   });
 });
 
@@ -284,7 +286,7 @@ describe("#1199 Escape ordering: a modal over a card", () => {
 
 // #1411 (review K-S4) — the context-menu shell is the same contract as the
 // cards above: dismissable, covering nothing, therefore an ESC-stack member
-// with no scroll-lock refcount. It was never enumerated among #232's twelve
+// with no COVERING refcount. It was never enumerated among #232's twelve
 // and kept the private `document` keydown listener that #232 ("ONE global
 // listener, the sole ESC authority") and `createOverlayEscape`'s own doc both
 // state cannot exist. The cost is not theoretical: on a phone `MembersPane`
@@ -310,7 +312,7 @@ describe("#1411 the context menu closes on Escape through the shared stack", () 
     expect(handlers.closeDrawer).not.toHaveBeenCalled();
   });
 
-  it("holds no scroll-lock refcount while it is up", async () => {
+  it("holds no COVERING refcount while it is up", async () => {
     render(() => <ContextMenu items={MENU_ITEMS} position={{ x: 10, y: 10 }} onClose={vi.fn()} />);
     await flush();
 

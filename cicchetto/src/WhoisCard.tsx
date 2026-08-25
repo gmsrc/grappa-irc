@@ -86,8 +86,11 @@ const WhoisCard: Component<Props> = (props) => {
   // first. Gated on `onDismiss`: it is the dismissability of the mount site,
   // and the rail card (which omits it) must NOT be closable — a persistent
   // per-window surface Escape can close is one the operator cannot bring back.
-  // Escape-only, no scroll-lock refcount: the card sits IN the scrollback flow,
-  // not over it.
+  // No COVERING refcount: the card sits IN the scrollback flow, not over it, so
+  // the pane behind must keep scrolling and must not freeze its snapshot.
+  // #1772 — the iOS touch lock is NOT part of what that gives up (it was, and a
+  // drag with the card open panned the whole app shell). The gate below decides
+  // both: the rail card, which cannot be dismissed, takes neither.
   createOverlayEscape(
     () => bundle() !== undefined && props.onDismiss !== undefined,
     () => props.onDismiss?.(),
