@@ -130,7 +130,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{})
 
-      settle(socket)
+      settle(socket, :fastlane)
 
       assert Enum.any?(subscription_metadata(topic), &match?({:fastlane, _, _, _}, &1)),
              "a default join must stay a fastlane subscriber — that is what makes it " <>
@@ -153,7 +153,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{})
 
-      settle(socket)
+      settle(socket, :fastlane)
 
       for kind <- Message.pausable_presence_kinds() do
         payload = broadcast_row(user, network, chan, %{kind: kind, sender: "peer"})
@@ -171,7 +171,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{"presence" => "nope"})
 
-      settle(socket)
+      settle(socket, :fastlane)
 
       payload = broadcast_row(user, network, chan, %{kind: :join, sender: "peer"})
       assert_push("event", ^payload)
@@ -189,15 +189,14 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{"presence" => false})
 
-      settle(socket)
+      settle(socket, :plain)
 
       %{user: user, network: network, chan: chan, topic: topic}
     end
 
     test "drops every pausable peer presence kind", ctx do
       for kind <- Message.pausable_presence_kinds() do
-        broadcast_row(ctx.user, ctx.network, ctx.chan, %{kind: kind, sender: "peer"})
-        refute_push("event", _, 50)
+        refute_delivered(ctx, %{kind: kind, sender: "peer"})
       end
     end
 
@@ -231,7 +230,11 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
                "still holds the subscription `drop_fastlane_if_suppressing/1` was meant to " <>
                "trade away (BUG 6: one broadcast, two frames)"
 
-      refute_receive %Phoenix.Socket.Message{event: "event", payload: ^payload}, 50
+      # Zero window for the same reason as `refute_delivered/2`: the duplicate
+      # this guards is written by the DISPATCHER, synchronously inside
+      # `broadcast_event/2`, so it is in the mailbox before the push copy the
+      # assertion above just consumed.
+      refute_receive %Phoenix.Socket.Message{event: "event", payload: ^payload}, 0
     end
 
     test "still delivers the non-pausable presence kinds (nick_change, mode)", ctx do
@@ -270,7 +273,10 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{"presence" => false})
 
-      settle(socket)
+      # `:fastlane`, not `:plain` — that IS the assertion. The param is only
+      # read for a channel-shaped topic, so the user topic must keep the
+      # subscription the framework gave it even though the join asked.
+      settle(socket, :fastlane)
 
       assert Enum.any?(subscription_metadata(topic), &match?({:fastlane, _, _, _}, &1)),
              "presence never travels the user topic, so the param must not cost it its fastlane"
@@ -321,7 +327,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
 
       # Barrier + drain: the arms below must assert on their own frame, and
       # must not race the fastlane swap.
-      settle(joined_socket)
+      settle(joined_socket, :plain)
 
       %{user: user, network: network, chan: chan, topic: topic, irc_server: irc_server}
     end
@@ -337,8 +343,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
     end
 
     test "still drops a peer part on the same socket — the carve-out is not a bypass", ctx do
-      broadcast_row(ctx.user, ctx.network, ctx.chan, %{kind: :part, sender: "someone-else"})
-      refute_push("event", _, 50)
+      refute_delivered(ctx, %{kind: :part, sender: "someone-else"})
     end
 
     test "the own-nick cache follows an own nick_change", ctx do
@@ -361,23 +366,145 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
     end
   end
 
-  # The barrier every arm below needs, and the reason it is a barrier rather
-  # than a wait. `:after_join` is a `Process.send_after(self(), …, 0)`, so a
-  # synchronous call to the channel queues BEHIND it: when `:sys.get_state/1`
-  # returns, the after-join leg has run to completion — which means the
-  # fastlane swap (its first statement) is installed and the cold-subscribe
-  # snapshot pushes are already in this process's mailbox.
+  # Assert a row was DROPPED, with no timing window anywhere.
   #
-  # Measured, not precautionary: without it the BUG 6 mutant (subscribe
-  # without unsubscribing) was caught on one seed and missed on the next.
-  # The `refute_push` was racing `push_channel_snapshot/4`'s DB round-trips,
-  # so the duplicate frame sometimes landed after the refute window. The cure
-  # is the deterministic setup, never a longer window — a timeout raised to
-  # cover a race turns the assertion into a coin toss with better odds.
-  defp settle(socket) do
-    :sys.get_state(socket.channel_pid)
+  # A bare `refute_push(..., 50)` is wrong twice. It is a race (the suppressed
+  # path runs dispatcher -> channel mailbox -> `handle_out` -> `push`, so the
+  # frame can land after the window), and with a wildcard payload it also
+  # catches unrelated live traffic — measured: a session's own `window_state`
+  # broadcast tripped it once in 6893 tests.
+  #
+  # Instead: broadcast the row under test, then a SENTINEL on the same topic.
+  # Both travel the same process pair, so Erlang's message ordering makes the
+  # sentinel a barrier — once it has arrived, the row under test has either
+  # arrived before it or was dropped. `assert_receive` scans the mailbox
+  # selectively and leaves non-matching messages in place, so a delivered row
+  # is still sitting there for the refute, which can therefore use a ZERO
+  # window: the answer is already in the mailbox or it is never coming.
+  defp refute_delivered(ctx, attrs) do
+    dropped = broadcast_row(ctx.user, ctx.network, ctx.chan, attrs)
+
+    sentinel =
+      broadcast_row(ctx.user, ctx.network, ctx.chan, %{
+        kind: :privmsg,
+        sender: "sentinel",
+        body: "barrier-#{System.unique_integer([:positive])}"
+      })
+
+    assert_push("event", ^sentinel)
+    refute_push("event", ^dropped, 0)
+  end
+
+  # The barrier every arm needs, and the two corrections it took to get right
+  # — both measured, both worth keeping written down.
+  #
+  # FIRST TRY, WRONG: `:sys.get_state(socket.channel_pid)` alone. The
+  # reasoning was that a synchronous call queues behind the `:after_join`
+  # message, so returning proves the after-join leg ran. It does not.
+  # `:after_join` arrives via `Process.send_after(self(), …, 0)`, which is a
+  # TIMER and not a `send`: the message is enqueued by the timer service and
+  # can land AFTER a call made later in wall-clock time. Symptom, on some
+  # seeds only — frames arriving with `join_ref: nil`, i.e. FASTLANE frames,
+  # on a socket that had asked for suppression.
+  #
+  # SECOND TRY, AND WHY THIS ONE IS A BARRIER: poll the PubSub registry until
+  # this channel pid's subscription metadata has reached the expected shape.
+  # That is the exact state every arm depends on, read out of the framework's
+  # own bookkeeping rather than inferred from a proxy, so it cannot be early.
+  # `:sys.get_state/1` stays afterwards doing the job it IS good for —
+  # draining a mid-flight callback so the snapshot pushes are in this
+  # process's mailbox before we clear it.
+  #
+  # `expect` is asserted rather than assumed: a barrier that gave up quietly
+  # would leave every arm downstream racing again, which is the failure it
+  # exists to remove.
+  # ⚠️ THE TWO EXPECTATIONS ARE NOT SYMMETRIC, and pretending they were is what
+  # let two mutants live.
+  #
+  # `:plain` is a state the join must REACH, so polling for it is a genuine
+  # barrier: it cannot pass early.
+  #
+  # `:fastlane` is the state the join STARTS in — `init_join/3` installs it
+  # before `join/3` has even returned. Polling for it is satisfied instantly
+  # and proves nothing about what `:after_join` did afterwards. Measured:
+  # mutants that made the param bite on the user topic (M6: assign it for
+  # every topic shape; M7: M6 plus a swap in the user arm) both survived a
+  # suite that only polled for `:fastlane`.
+  #
+  # So the `:fastlane` side pins the DECISION instead of racing the effect.
+  # `presence_suppressed` is assigned synchronously inside `join/3`, so
+  # reading it out of the channel's state is timing-free and is exactly the
+  # fact the non-channel clause exists to establish. Both mutants die on it.
+  #
+  # Honest residual, since the difference matters: nothing here forbids a swap
+  # arriving LATER on a default socket. What forbids it is structural — only
+  # the `{:channel, …}` after-join clause calls the swap verb — and this suite
+  # does not independently prove that.
+  defp settle(socket, expect) when expect in [:fastlane, :plain] do
+    if expect == :plain, do: wait_for_subscription(socket, expect, 200)
+
+    state = :sys.get_state(socket.channel_pid)
+
+    assert state.assigns.presence_suppressed == (expect == :plain),
+           """
+           the join's presence DECISION is wrong for this topic.
+
+             topic:               #{socket.topic}
+             presence_suppressed: #{inspect(state.assigns.presence_suppressed)}
+             expected:            #{inspect(expect == :plain)}
+
+           Only a channel-shaped topic reads the param — presence never travels
+           the user or network topics, so a flag there could only ever cost
+           them their fastlane for nothing.
+           """
+
+    if expect == :fastlane do
+      assert match?({:fastlane, _, _, _}, channel_metadata(socket)),
+             "expected this channel to still hold the framework fastlane, got " <>
+               inspect(channel_metadata(socket))
+    end
+
     drain_pushes()
     socket
+  end
+
+  defp wait_for_subscription(socket, expect, 0) do
+    flunk("""
+    the channel never reached the #{expect} subscription state.
+
+      topic:   #{socket.topic}
+      channel: #{inspect(socket.channel_pid)}
+      now:     #{inspect(channel_metadata(socket))}
+
+    `:fastlane` is what the framework installs in `init_join/3`; `:plain` is
+    what `drop_fastlane_if_suppressing/1` trades it for in `:after_join`.
+    """)
+  end
+
+  defp wait_for_subscription(socket, expect, tries) do
+    actual =
+      case channel_metadata(socket) do
+        {:fastlane, _, _, _} -> :fastlane
+        nil -> :plain
+        _ -> :unknown
+      end
+
+    if actual == expect do
+      :ok
+    else
+      Process.sleep(5)
+      wait_for_subscription(socket, expect, tries - 1)
+    end
+  end
+
+  defp channel_metadata(socket) do
+    Grappa.PubSub
+    |> Registry.lookup(socket.topic)
+    |> Enum.find_value(fn {pid, meta} -> if pid == socket.channel_pid, do: {:found, meta} end)
+    |> case do
+      {:found, meta} -> meta
+      nil -> :absent
+    end
   end
 
   defp drain_pushes do
