@@ -3048,6 +3048,36 @@ html.resize-dragging * {
   margin: var(--pane-chrome-inset-block) var(--pane-chrome-inset-inline) 0 0;
 }
 
+/* #1766 — the LEADING ☰ (window list), mounted in this same zero-height box
+   only while the mobile window bar is off. It floats over the pane's top-LEFT
+   corner for the same zero vertical pixels the rail opener costs on the right,
+   which is what keeps this short of a new band — #985 deleted the last one at
+   `--chrome-tap-min + 1rem + 1px` on every mobile window, and #985's argument
+   has not expired.
+
+   `margin-right: auto` and NOT `justify-content: space-between` on the parent,
+   which is what the issue proposed. Measured: this child is CONDITIONAL, and
+   `space-between` with a SINGLE item resolves to flex-start — so on every
+   window where the bar is on (the default, i.e. everyone) it would move the
+   EXISTING rail opener from the right corner to the left. The auto margin
+   absorbs the free space before `justify-content` is consulted, so the
+   one-child case stays byte-identical to today's.
+
+   The other three sides mirror the opener's, mirrored: same block inset, same
+   inline inset on the near edge, bottom collapsed so the float stays out of
+   the flow it overflows (#1039's contract, read as a 4-value shorthand).
+   `background: var(--bg)` for the same reason it carries one — floating puts
+   the glyph over arbitrary scrollback text and over a themed background image.
+
+   Selector: `.shell-chrome .topic-bar-hamburger`. It cannot collide with the
+   trailing opener, which wears `.shell-chrome-rail-opener` and not this class;
+   and `.topic-bar .topic-bar-hamburger`'s desktop `display: none` does not
+   reach here, which is moot anyway — `.shell-chrome` is mobile-only. */
+.shell-chrome .topic-bar-hamburger {
+  background: var(--bg);
+  margin: var(--pane-chrome-inset-block) auto 0 var(--pane-chrome-inset-inline);
+}
+
 .shell-chrome-btn {
   background: transparent;
   color: var(--muted);
@@ -3084,6 +3114,57 @@ html.resize-dragging * {
 .shell-chrome-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* #1766 — the ☰ is DRAWN, not typed.
+   U+2630 is three thin strokes centred on the em box, so the CHARACTER is thin
+   while the box is not narrow: next to `⚙` and `@` the glyph reads small even
+   at a 48px tap target. vjt asked for a 40px box; refused with the measure and
+   he confirmed ("si confermo") — `--chrome-tap-min` is ABSOLUTE px on purpose
+   (the root is 14px, so 40px in `rem` lands under the HIG floor, which is
+   #305's "defect 2"). The box was never the problem; the strokes were. vjt on
+   the remedy: "va bene css" — three bars, no SVG, no codepoint swap, no icon
+   set. With the bars drawn, perceived size is set to the pixel, which is why
+   the 40px request has no motive left.
+
+   NOT a bump of `--chrome-icon-size`: that token is #305's "desired parity",
+   and raising it grows the cog, mentions, archive, the presence toggle and
+   this ☰ together — not what was asked. The bars are still SIZED off it, so a
+   text-size change moves them exactly as it moved the glyph.
+
+   Placed AFTER `.shell-chrome-btn` AND written `button.…` — belt and braces
+   against the trap #305 already documented for `display`. `.shell-chrome-btn`
+   declares `font-size: var(--chrome-icon-size)` below its own selector's
+   (0,1,0); a bare `.topic-bar-hamburger` ties and LOSES on source order, and
+   the character would come back at full size underneath the bars.
+
+   NOT `.topic-bar .topic-bar-hamburger`: good specificity, but it matches only
+   inside the band, and since #1766 the same button also floats in
+   `.shell-chrome` on non-channel windows — it would render there as the thin
+   character next to a drawn twin. `.shell-chrome-rail-opener` is listed for
+   the same reason from the other side: with the window bar off, the two ☰
+   share one 48px-tall band and must look identical. */
+button.topic-bar-hamburger,
+.shell-chrome .shell-chrome-rail-opener {
+  /* Suppress the U+2630 text node. It stays in the DOM — it is the a11y-free
+     fallback if the sheet never loads, and ~20 specs locate these buttons —
+     but it must not paint under the bars. */
+  font-size: 0;
+}
+
+button.topic-bar-hamburger::before,
+.shell-chrome .shell-chrome-rail-opener::before {
+  content: "";
+  width: var(--chrome-icon-size);
+  height: 2px;
+  /* `currentColor`, never a literal: `.shell-chrome-btn:hover` /
+     `:focus-visible` lift the button's colour to var(--fg), and a hardcoded
+     paint would leave the bars dead under the one hover the rest of the chrome
+     answers. */
+  background: currentColor;
+  box-shadow:
+    0 calc(-1 * var(--chrome-icon-size) / 3) 0 currentColor,
+    0 calc(var(--chrome-icon-size) / 3) 0 currentColor;
 }
 
 /* Scrollback (existing rules — minor additions for mention highlight) */

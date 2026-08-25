@@ -1,4 +1,4 @@
-import type { Component } from "solid-js";
+import type { Component, JSX } from "solid-js";
 
 // UX-4 bucket L (2026-05-19) — sticky chrome bar at the top of
 // `.shell-main`. Always rendered, regardless of selected window kind
@@ -54,7 +54,7 @@ import type { Component } from "solid-js";
 // chrome buttons). The wrapper default export is the only consumer
 // of the archive/cog rendering today; folded back inline.
 
-export type Props = {
+export type RailOpenerProps = {
   /**
    * #71 INC-2 — opens the right rail (the `.shell-members` drawer that hosts
    * the RailActions labelled action drawer). Required — the rail opener is always
@@ -62,6 +62,28 @@ export type Props = {
    * this bar's button now opens the rail rather than the settings drawer.
    */
   onOpenRail: () => void;
+};
+
+/**
+ * #1766 — the BAR's props are the button's plus the leading slot. Split
+ * because the two are no longer the same shape: `RailOpenerButton` is a lone
+ * control that other panes mount inline, and it must not inherit a slot it has
+ * nowhere to put.
+ */
+export type Props = RailOpenerProps & {
+  /**
+   * #1766 — the LEFT ☰, mirroring `PaneTopBar`'s slot of the same name so the
+   * channel band and this float carry the same door. Non-empty only while the
+   * mobile window bar is off; Shell owns that decision and passes the built
+   * control, not a callback this box wraps.
+   *
+   * It costs ZERO vertical pixels: `.shell-chrome` is a `height: 0` box whose
+   * children overflow it, so a second child floats over the pane's top-LEFT
+   * corner exactly as the rail opener floats over the top-right. That is why
+   * this is not a new band — #985 deleted the last one, priced at
+   * `--chrome-tap-min + 1rem + 1px` on every mobile window.
+   */
+  leading: JSX.Element;
 };
 
 /**
@@ -89,7 +111,7 @@ export type Props = {
  * refresh. So the suppression stops an overlap now, where before it only saved
  * a row.
  */
-export const RailOpenerButton: Component<Props> = (props) => {
+export const RailOpenerButton: Component<RailOpenerProps> = (props) => {
   return (
     <button
       type="button"
@@ -106,6 +128,7 @@ export const RailOpenerButton: Component<Props> = (props) => {
 const ShellChrome: Component<Props> = (props) => {
   return (
     <header class="shell-chrome" data-testid="shell-chrome">
+      {props.leading}
       <RailOpenerButton onOpenRail={props.onOpenRail} />
     </header>
   );

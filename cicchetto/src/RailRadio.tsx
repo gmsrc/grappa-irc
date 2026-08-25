@@ -224,6 +224,9 @@ const RailRadio: Component = () => {
               picker its only dismiss control on the form factor where it
               works today. */}
           <PaneTopBar
+            /* #1766 — the picker is INSIDE the rail; a window-list door here
+               would be a second rail opened from within one. */
+            leading={null}
             trailing={
               <button
                 type="button"

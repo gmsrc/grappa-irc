@@ -44,14 +44,14 @@ describe("ShellChrome (bucket L)", () => {
   // #71 INC-2 — the cog left this bar for the rail; the always-present
   // right-edge button is now the ☰ rail opener.
   it("always renders the rail opener (no window selected)", () => {
-    render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    render(() => <ShellChrome leading={null} onOpenRail={vi.fn()} />);
     const opener = screen.getByTestId("shell-chrome-rail-opener");
     expect(opener).toBeInTheDocument();
   });
 
   it("clicking the rail opener fires onOpenRail", () => {
     const onOpenRail = vi.fn();
-    render(() => <ShellChrome onOpenRail={onOpenRail} />);
+    render(() => <ShellChrome leading={null} onOpenRail={onOpenRail} />);
     fireEvent.click(screen.getByTestId("shell-chrome-rail-opener"));
     expect(onOpenRail).toHaveBeenCalled();
   });
@@ -59,13 +59,13 @@ describe("ShellChrome (bucket L)", () => {
   // #71 INC-2 — the cog no longer lives in ShellChrome (moved to the rail's
   // ActionCluster). Guard against a regression that reintroduces it here.
   it("does NOT render the settings cog (moved to the rail's ActionCluster)", () => {
-    render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    render(() => <ShellChrome leading={null} onOpenRail={vi.fn()} />);
     expect(screen.queryByTestId("shell-chrome-cog")).toBeNull();
     expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
   });
 
   it("UX-5 bucket A — does NOT render a hamburger button (slot dropped)", () => {
-    const { container } = render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    const { container } = render(() => <ShellChrome leading={null} onOpenRail={vi.fn()} />);
     expect(container.querySelectorAll(".shell-chrome-hamburger").length).toBe(0);
     expect(screen.queryByLabelText(/open channel sidebar/i)).toBeNull();
     expect(screen.queryByLabelText(/open members sidebar/i)).toBeNull();
@@ -75,7 +75,7 @@ describe("ShellChrome (bucket L)", () => {
   // was a third archive entry point). Guard against a regression that
   // reintroduces it: it must never render, on any window kind or viewport.
   it("does NOT render an archive button (#473 — archive lives in the RailActions drawer)", () => {
-    render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    render(() => <ShellChrome leading={null} onOpenRail={vi.fn()} />);
     expect(screen.queryByTestId("shell-chrome-archive")).toBeNull();
   });
 
@@ -87,9 +87,41 @@ describe("ShellChrome (bucket L)", () => {
   // to re-import them and this bar would stop being the lone-☰ band #985
   // is about to delete.
   it("#986 — renders the opener and NOTHING else (no @ mentions button)", () => {
-    const { container } = render(() => <ShellChrome onOpenRail={vi.fn()} />);
+    const { container } = render(() => <ShellChrome leading={null} onOpenRail={vi.fn()} />);
     expect(screen.queryByTestId("shell-chrome-mentions")).toBeNull();
     expect(screen.queryByLabelText(/open mentions/i)).toBeNull();
     expect(container.querySelectorAll("button")).toHaveLength(1);
+  });
+});
+
+// #1766 — the float grew a LEADING slot: with the mobile window bar off, this
+// zero-height box hosts the windows ☰ on the left as well as the rail opener
+// on the right. `leading={null}` above is what every pre-#1766 assertion in
+// this file was written against, and it must keep emitting no element — a
+// placeholder would put a layout box in a `height: 0` flow row and the rail
+// opener's `justify-content: flex-end` corner would stop being the corner.
+describe("ShellChrome — the leading slot (#1766)", () => {
+  it("emits nothing extra when the host passes null", () => {
+    const { container } = render(() => <ShellChrome leading={null} onOpenRail={vi.fn()} />);
+    const chrome = container.querySelector(".shell-chrome") as HTMLElement;
+    expect(chrome.children.length).toBe(1);
+    expect(chrome.firstElementChild).toHaveClass("shell-chrome-rail-opener");
+  });
+
+  it("puts a passed control FIRST, ahead of the rail opener", () => {
+    const { container } = render(() => (
+      <ShellChrome
+        leading={
+          <button type="button" data-testid="lead">
+            l
+          </button>
+        }
+        onOpenRail={vi.fn()}
+      />
+    ));
+    const chrome = container.querySelector(".shell-chrome") as HTMLElement;
+    expect(chrome.children.length).toBe(2);
+    expect(chrome.firstElementChild).toBe(screen.getByTestId("lead"));
+    expect(chrome.lastElementChild).toHaveClass("shell-chrome-rail-opener");
   });
 });

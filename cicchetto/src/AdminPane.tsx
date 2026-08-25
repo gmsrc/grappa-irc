@@ -145,6 +145,11 @@ const AdminPane: Component<Props> = (props) => {
           the ☰ comes with the band, and comes LAST, which is what finally puts
           it on the same side as the channel bar's. */}
       <PaneTopBar
+        /* #1766 — no left door here. The admin window suppresses `.shell-chrome`
+           and its own ✕ already exits to a window that carries one, so a second
+           ☰ in this band would be a door onto a floor you reach in one tap
+           anyway. Stated at the call site because the slot is required. */
+        leading={null}
         trailing={
           /* #1697 — passed in rather than baked into the band; see the note on
              the channel bar's identical call. */

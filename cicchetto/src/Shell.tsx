@@ -3,6 +3,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  type JSX,
   Match,
   onCleanup,
   Show,
@@ -45,6 +46,7 @@ import {
   setSelectedChannel,
 } from "./lib/selection";
 import { settingsOpenTick } from "./lib/settingsNav";
+import { getShowBottomBar } from "./lib/showBottomBar";
 import { isMobile } from "./lib/theme";
 import { bindEdgeGesture } from "./lib/touchGesture";
 import { loadUploadTtlSeconds } from "./lib/uploadOrchestrator";
@@ -56,6 +58,7 @@ import MentionsWindow from "./MentionsWindow";
 import ModeModal from "./ModeModal";
 import NamesModal from "./NamesModal";
 import NextActiveButton from "./NextActiveButton";
+import { PaneTopBarRailOpener } from "./PaneTopBar";
 import PrivacyModal from "./PrivacyModal";
 import RailActions from "./RailActions";
 import RailContext from "./RailContext";
@@ -189,6 +192,24 @@ const Shell: Component = () => {
   onCleanup(() => {
     if (sidebarExitTimer !== undefined) clearTimeout(sidebarExitTimer);
   });
+
+  // #1766 — the LEFT ☰, and the only reason it exists: turning the mobile
+  // window bar off leaves #1041's left-edge swipe as the whole navigation
+  // surface, and a gesture with zero affordance is the "drawer-only
+  // navigation" #71's second ruling refused as a default. With the bar ON
+  // there is already a picker in flow, so no door renders — a second one
+  // nobody asked for is just chrome.
+  //
+  // Built ONCE and handed to both mobile hosts — the channel band's `leading`
+  // slot and `.shell-chrome` — so the two surfaces cannot drift apart the way
+  // #1073 found them drifted on the trailing side. It opens the SAME sidebar
+  // the swipe opens (`openSidebar`, mount-on-demand + dispose-on-exit), not a
+  // second panel: one door, two handles.
+  const windowsRailOpener = (): JSX.Element => (
+    <Show when={!getShowBottomBar()}>
+      <PaneTopBarRailOpener onOpenRail={openSidebar} railLabel="open windows sidebar" />
+    </Show>
+  );
 
   // #356 — cross-module "open settings" request. A bare watch-family compose
   // verb (/notify, /watch, /hilight, …) can't reach the local setSettingsOpen,
@@ -697,6 +718,12 @@ const Shell: Component = () => {
                       networkSlug={selectedChannel()?.networkSlug ?? ""}
                       channelName={selectedChannel()?.channelName ?? ""}
                       onToggleMembers={() => setMembersOpen((v) => !v)}
+                      /* #1766 — desktop has a permanent sidebar, so there is
+                         no window-list door to open and nothing to hide. The
+                         band's ☰ is `display: none` up here anyway; passing
+                         `null` means the button is never MOUNTED rather than
+                         mounted-and-hidden. */
+                      leading={null}
                     />
                   </Show>
                   <ScrollbackPane
@@ -938,6 +965,7 @@ const Shell: Component = () => {
               switches on — rather than re-deriving the kind here. */}
           <Show when={selKind() !== "channel" && selKind() !== "list" && !isAdminPaneVisible()}>
             <ShellChrome
+              leading={windowsRailOpener()}
               onOpenRail={() =>
                 toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
               }
@@ -990,6 +1018,7 @@ const Shell: Component = () => {
                         setSettingsOpen,
                       })
                     }
+                    leading={windowsRailOpener()}
                   />
                 </Show>
                 <ScrollbackPane
@@ -1037,7 +1066,17 @@ const Shell: Component = () => {
           </Switch>
         </section>
 
-        <BottomBar />
+        {/* #1766 — the window bar is opt-OUT (default shown). A MOUNT gate and
+            not `display: none`: BottomBar carries no internal display guard by
+            design, and a CSS-hidden bar would keep running #327's double-rAF
+            scroll-into-view work against a strip nobody can see. Turning it
+            off is survivable because #1041's left-edge swipe exists — and
+            because `windowsRailOpener()` above gives that swipe an
+            affordance, which is what keeps this short of the drawer-only
+            navigation #71's second ruling refused. */}
+        <Show when={getShowBottomBar()}>
+          <BottomBar />
+        </Show>
 
         {/* GH #235 — "jump to next active window" affordance (mobile).
             #280: on scrollback windows (channel/query/server) it renders

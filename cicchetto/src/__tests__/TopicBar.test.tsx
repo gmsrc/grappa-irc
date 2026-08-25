@@ -65,10 +65,16 @@ import {
 } from "../lib/overlayScrollLock";
 import TopicBar from "../TopicBar";
 
+// #1766 — `leading` is a REQUIRED slot (`PaneTopBar`'s contract, threaded
+// through this bar). `null` is what a host with no left door passes, and it is
+// the shape every assertion in this file was written against: the band keeps
+// exactly two children. The one test that exercises a NON-null leading lives
+// in `Shell.test.tsx`, because it is Shell that decides when the door exists.
 const baseProps = () => ({
   networkSlug: "freenode",
   channelName: "#italia",
   onToggleMembers: vi.fn(),
+  leading: null,
 });
 
 // A resolved-promise + macrotask drain: lets an awaited postTopic/clear settle

@@ -1,4 +1,4 @@
-import { type Component, createSignal, Show } from "solid-js";
+import { type Component, createSignal, type JSX, Show } from "solid-js";
 import { postTopic } from "./lib/api";
 import { token } from "./lib/auth";
 import { ownHoldsChannelEditorSigil } from "./lib/channelEditPerm";
@@ -84,6 +84,17 @@ export type Props = {
   networkSlug: string;
   channelName: string;
   onToggleMembers: () => void;
+  /**
+   * #1766 — `PaneTopBar`'s leading slot, passed straight through. REQUIRED
+   * and not defaulted, mirroring the band's own contract: Shell's DESKTOP
+   * branch passes `null` (there is a permanent sidebar; the band's ☰ is
+   * `display: none` up there anyway) and the MOBILE branch passes the windows
+   * opener only while the bottom bar is off. Threaded rather than read from
+   * `showBottomBar.ts` here so this component stays presentation-only and the
+   * mobile/desktop decision keeps living in the one place that already knows
+   * the form factor.
+   */
+  leading: JSX.Element;
 };
 
 type ModalState = "closed" | "open";
@@ -304,6 +315,9 @@ const TopicBar: Component<Props> = (props) => {
           and while closed `<Show>` renders no element, which is what
           keeps the bar's child list at exactly two. */}
       <PaneTopBar
+        /* #1766 — the windows ☰ when the mobile bottom bar is off; `null`
+           otherwise and always on desktop. Shell decides; this bar carries. */
+        leading={props.leading}
         trailing={
           /* #1697 — the ☰ is passed IN now: the band's trailing control became
              a slot when the rail's radio picker needed a ✕ there instead. Same

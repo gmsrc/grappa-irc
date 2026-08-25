@@ -62,8 +62,30 @@ import type { Component, JSX } from "solid-js";
  * The slot is REQUIRED, not defaulted to the ☰: a default would let a new host
  * inherit a rail door it never asked for, silently, which is the degradation
  * pattern this codebase bans.
+ *
+ * ## #1766 — a matching LEADING slot, for the same reason on the other edge
+ *
+ * Turning the mobile window bar off (`showBottomBar.ts`) leaves #1041's
+ * left-edge swipe as the only way to the window list, and a gesture with zero
+ * affordance is the "drawer-only navigation" #71's second ruling refused as a
+ * default. So a second ☰ ships with the opt-out — and it has to appear on
+ * every surface wearing this band, not only the channel one, which is what
+ * puts it here rather than in `TopicBar`.
+ *
+ * REQUIRED and not optional, by the same argument `trailing` already makes: a
+ * host with no left door passes `null` and says so at the call site, instead
+ * of a new host silently inheriting one. `null` emits no element, so a band
+ * that opted out keeps its two children exactly — which is what #1073's
+ * characterization pins.
  */
 export type Props = {
+  /**
+   * The band's FIRST child, or `null`. Being first is what places it on the
+   * left, by the same construction that puts `trailing` on the right — the
+   * `.topic-bar-header` between them carries `flex: 1`, so no margin or
+   * `justify-content` term is involved on this band.
+   */
+  leading: JSX.Element;
   /**
    * The bar's left group, rendered inside `.topic-bar-header`. That wrapper
    * carries `flex: 1; min-width: 0`, so a caller wanting ellipsis gets the
@@ -114,6 +136,7 @@ export const PaneTopBarRailOpener: Component<RailOpenerProps> = (props) => {
 const PaneTopBar: Component<Props> = (props) => {
   return (
     <div class="topic-bar">
+      {props.leading}
       <div class="topic-bar-header">{props.children}</div>
       {props.trailing}
     </div>

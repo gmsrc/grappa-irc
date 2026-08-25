@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAudio, playAudio } from "../lib/audioPlayer";
+import { setShowBottomBar } from "../lib/showBottomBar";
 import { LIST_WINDOW_NAME } from "../lib/windowKinds";
 import { nestedRuleBodies } from "./helpers/themeCss";
 import { swipeHorizontally } from "./helpers/touchEvents";
@@ -1632,5 +1633,179 @@ describe("#1701 — the docked player sits below the compose box", () => {
     const bodies = nestedRuleBodies(".drop-upload-zone");
     expect(bodies.length, ".drop-upload-zone must be declared in exactly one block").toBe(1);
     expect(bodies[0]).toMatch(/flex-direction:\s*column/);
+  });
+});
+
+// #1766 — the mobile window bar becomes opt-OUT, and turning it off must not
+// leave the phone navigable only by an invisible edge swipe.
+//
+// Two halves, and the second is the one worth the file. The gate itself is one
+// `<Show>`; what needs pinning is that it is a MOUNT gate and not a CSS one
+// (BottomBar carries no internal display guard by design, and a hidden bar
+// would keep running #327's double-rAF scroll-into-view against a strip nobody
+// can see), and that the door which replaces it actually appears — #71's
+// second ruling refused drawer-only navigation as a default, and #1041's
+// left-edge swipe is gesture-only with zero affordance.
+//
+// The default-ON case is asserted next to the off case on purpose: a dozen e2e
+// specs address `.bottom-bar`, so a gate that got the polarity backwards would
+// be caught here rather than in the e2e cascade.
+describe("#1766 — the mobile window bar is opt-out, and the ☰ ships with the opt-out", () => {
+  afterEach(() => {
+    setShowBottomBar(true);
+  });
+
+  it("renders the bar by default — the preference ships ON", () => {
+    mobileState.value = true;
+    const { container } = render(() => <Shell />);
+    expect(container.querySelector(".bottom-bar")).not.toBeNull();
+  });
+
+  it("drops the bar from the DOM when the preference is off (a MOUNT gate, not display:none)", () => {
+    mobileState.value = true;
+    setShowBottomBar(false);
+    const { container } = render(() => <Shell />);
+    expect(container.querySelectorAll(".bottom-bar").length).toBe(0);
+  });
+
+  it("re-mounts the bar live when the preference flips back on", async () => {
+    mobileState.value = true;
+    setShowBottomBar(false);
+    const { container } = render(() => <Shell />);
+    expect(container.querySelector(".bottom-bar")).toBeNull();
+
+    setShowBottomBar(true);
+    await waitFor(() => {
+      expect(container.querySelector(".bottom-bar")).not.toBeNull();
+    });
+  });
+
+  describe("the left ☰ on a CHANNEL window (PaneTopBar's leading slot)", () => {
+    it("is absent while the bar is shown — no second door nobody asked for", async () => {
+      mobileState.value = true;
+      selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+      const { container } = render(() => <Shell />);
+      await waitFor(() => {
+        expect(container.querySelector(".topic-bar")).not.toBeNull();
+      });
+      // The members ☰ is the only one: same count the C6.3 pin above asserts.
+      expect(container.querySelectorAll(".topic-bar .topic-bar-hamburger").length).toBe(1);
+    });
+
+    it("appears FIRST in the band when the bar is off, with the members ☰ still LAST", async () => {
+      mobileState.value = true;
+      setShowBottomBar(false);
+      selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+      const { container } = render(() => <Shell />);
+      const bar = await waitFor(() => {
+        const b = container.querySelector(".topic-bar");
+        expect(b).not.toBeNull();
+        return b as HTMLElement;
+      });
+
+      // Side is CHILD ORDER, not a CSS override — the same fact #1073's
+      // characterization pins for the trailing side.
+      expect(bar.firstElementChild).toHaveClass("topic-bar-hamburger");
+      expect(bar.lastElementChild).toHaveClass("topic-bar-hamburger");
+      expect(bar.children.length).toBe(3);
+      expect(bar.children[1]).toHaveClass("topic-bar-header");
+    });
+
+    it("names the two doors apart — left is windows, right is members", async () => {
+      mobileState.value = true;
+      setShowBottomBar(false);
+      selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+      render(() => <Shell />);
+      await waitFor(() => {
+        expect(screen.getByLabelText(/open windows sidebar/i)).toBeInTheDocument();
+      });
+      expect(screen.getByLabelText(/open members sidebar/i)).toBeInTheDocument();
+    });
+
+    it("opens the #1041 channel sidebar — the door the swipe already opens", async () => {
+      mobileState.value = true;
+      setShowBottomBar(false);
+      selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+      const { container } = render(() => <Shell />);
+      const opener = await waitFor(() => screen.getByLabelText(/open windows sidebar/i));
+
+      expect(container.querySelector(".shell-sidebar")).toBeNull();
+      fireEvent.click(opener);
+      await waitFor(() => {
+        expect(container.querySelector(".shell-sidebar")).not.toBeNull();
+      });
+    });
+  });
+
+  describe("the left ☰ on a NON-channel window (.shell-chrome)", () => {
+    it("is absent while the bar is shown", async () => {
+      mobileState.value = true;
+      selectionState.setSelSig({
+        networkSlug: "freenode",
+        channelName: "$server",
+        kind: "server",
+      });
+      const { container } = render(() => <Shell />);
+      await waitFor(() => {
+        expect(container.querySelector(".shell-chrome")).not.toBeNull();
+      });
+      const chrome = container.querySelector(".shell-chrome") as HTMLElement;
+      expect(chrome.children.length).toBe(1);
+      expect(chrome.firstElementChild).toHaveClass("shell-chrome-rail-opener");
+    });
+
+    it("appears FIRST when the bar is off, with the rail opener still LAST", async () => {
+      mobileState.value = true;
+      setShowBottomBar(false);
+      selectionState.setSelSig({
+        networkSlug: "freenode",
+        channelName: "$server",
+        kind: "server",
+      });
+      const { container } = render(() => <Shell />);
+      const chrome = await waitFor(() => {
+        const c = container.querySelector(".shell-chrome");
+        expect(c).not.toBeNull();
+        return c as HTMLElement;
+      });
+
+      expect(chrome.children.length).toBe(2);
+      expect(chrome.firstElementChild).toHaveClass("topic-bar-hamburger");
+      expect(chrome.lastElementChild).toHaveClass("shell-chrome-rail-opener");
+    });
+
+    it("opens the channel sidebar from a non-channel window too", async () => {
+      mobileState.value = true;
+      setShowBottomBar(false);
+      selectionState.setSelSig({
+        networkSlug: "freenode",
+        channelName: "$server",
+        kind: "server",
+      });
+      const { container } = render(() => <Shell />);
+      const opener = await waitFor(() => screen.getByLabelText(/open windows sidebar/i));
+
+      fireEvent.click(opener);
+      await waitFor(() => {
+        expect(container.querySelector(".shell-sidebar")).not.toBeNull();
+      });
+    });
+  });
+
+  // DESKTOP is untouched. The preference is about a bar that only ever renders
+  // on mobile, so a desktop shell must gain no ☰ from it — the permanent
+  // sidebar is already there, and the topic bar's own ☰ is `display: none`
+  // above the breakpoint. This is a JSX assertion and not a CSS one on
+  // purpose: the desktop branch must not MOUNT a door it then hides.
+  it("desktop mounts no left ☰, whatever the preference says", async () => {
+    mobileState.value = false;
+    setShowBottomBar(false);
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    const { container } = render(() => <Shell />);
+    await waitFor(() => {
+      expect(container.querySelector(".topic-bar")).not.toBeNull();
+    });
+    expect(screen.queryByLabelText(/open windows sidebar/i)).toBeNull();
+    expect(container.querySelector(".topic-bar")?.children.length).toBe(2);
   });
 });
