@@ -16,6 +16,14 @@ defmodule Grappa.WindowCounts.Pusher.CoalescerTest do
   be a correctness regression, since the payload is per-channel and each
   channel's subscribers get their own topic.
 
+  The third covers the half the first two cannot see. "At most one emit
+  per window" is satisfied by a resetting DEBOUNCE as well, and a debounce
+  emits nothing at all while rows keep arriving faster than the window —
+  which is the regime the whole change exists for. So the third test keeps
+  the arrivals coming and asserts an emit lands anyway. Verified by
+  mutation: turning `arm/3` into a resetting debounce leaves the first two
+  green and takes only this one red.
+
   ## Why the setup carries no race
 
   Every row is inserted BEFORE the first push, so the counts the flush
@@ -95,6 +103,41 @@ defmodule Grappa.WindowCounts.Pusher.CoalescerTest do
 
     assert Enum.sort(Enum.map(payloads, & &1.channel)) == ["#one", "#two"]
     assert Enum.all?(payloads, &(&1.messages == @burst))
+  end
+
+  test "arrivals faster than the window still emit — a throttle, not a debounce", ctx do
+    subscribe(ctx, "#chan")
+    insert(ctx, "#chan")
+
+    window = Coalescer.window_ms()
+
+    # Feeds for THREE windows at one push every fifth of a window, so the
+    # arrivals never stop while the assertion below is waiting.
+    {feeder, ref} =
+      spawn_monitor(fn ->
+        feed_until(ctx, "#chan", System.monotonic_time(:millisecond) + window * 3, div(window, 5))
+      end)
+
+    # The discriminator. A debounce restarts its timer on every arrival and
+    # so emits NOTHING before the feeder stops — not before three windows.
+    # The armed-once flush lands one window in, and the budget here is two,
+    # so the two designs are separated by a whole window rather than by a
+    # margin. This is the "at least one emit within `window_ms/0` of any
+    # arrival" half of the contract; the other tests only pin "at most one".
+    assert_receive %Phoenix.Socket.Broadcast{payload: %{kind: :window_counts}}, window * 2
+
+    # Let the feeder retire and its last flush land before the test ends,
+    # so nothing from this window leaks into the next test's sandbox.
+    assert_receive {:DOWN, ^ref, :process, ^feeder, :normal}, window * 8
+    drain()
+  end
+
+  defp feed_until(ctx, channel, deadline, gap_ms) do
+    if System.monotonic_time(:millisecond) < deadline do
+      push(ctx, channel)
+      Process.sleep(gap_ms)
+      feed_until(ctx, channel, deadline, gap_ms)
+    end
   end
 
   defp subscribe(ctx, channel) do
