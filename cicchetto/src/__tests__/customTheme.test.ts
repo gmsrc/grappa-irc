@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/auth";
 import {
   activePair,
+  applyCachedCustomTheme,
   applyCustomTheme,
   COLOR_KEYS,
   getAppliedThemePayload,
   mountCustomThemeSync,
+  resolvePayloadForMode,
   setThemePreviewMode,
+  THEME_CSS_VARS,
   tokenToCssVars,
 } from "../lib/customTheme";
 import { EDITOR_BASE_KEYS, EDITOR_MODE_KEYS, EDITOR_NICK_KEYS } from "../lib/themeEditor";
@@ -22,6 +25,30 @@ import type { ThemesWireT } from "../lib/wireTypes";
 // deliberately does NOT touch the cache, so during an editing session
 // the cache still holds the pre-edit active theme — exactly what
 // cancel/ESC/backdrop must restore.
+//
+// #1582 — merged with a second file that tested this same module from
+// `src/lib/__tests__/`. The two overlapped only on `tokenToCssVars`, and the
+// overlap was resolved by the rule that a case may vanish only when it is
+// byte-identical to a survivor or strictly weaker than one:
+//
+//   * the `mono-default` omission was asserted twice with byte-identical
+//     bodies — one copy kept, one dropped;
+//   * the named-family mapping was asserted twice differing ONLY in
+//     strictness, one `toContain('"jetbrains-mono"')` and one
+//     `toContain("jetbrains-mono")` — the QUOTED one is kept, because a fold
+//     that dropped the CSS quoting would slip past the looser assertion.
+//
+// Nothing else was dropped, and no surviving case was renamed: the two
+// `tokenToCssVars` describes below are deliberately left under their original
+// names (the first covers the FONT axis, the second colors + background), so
+// that the only case-name difference this consolidation makes is the two
+// deletions above and a reviewer can audit that by diffing names alone.
+//
+// The two files also carried near-identical `payload()` builders seeding
+// different colors. They are ONE builder now, on the values the merged-in
+// cases assert literally (#111111 / #0000<hex>0); the cases from this side
+// only ever assert colors they override, so the unification is inert for them
+// and loud if it were not.
 
 const CACHE_KEY = "grappa-custom-theme";
 
@@ -40,8 +67,8 @@ function fullColors(): TokenColors {
     "mode_plain",
   ];
   const colors: Record<string, string> = {};
-  for (const k of base) colors[k] = "#101010";
-  for (let i = 0; i < 16; i++) colors[`nick_${i}`] = "#20a0c0";
+  for (const k of base) colors[k] = "#111111";
+  for (let i = 0; i < 16; i++) colors[`nick_${i}`] = `#0000${(i + 10).toString(16)}0`;
   return colors as TokenColors;
 }
 
@@ -119,6 +146,80 @@ describe("customTheme.tokenToCssVars font mapping", () => {
   });
 });
 
+// The other axis of the same pure map: colors and the background layer. The
+// font cases live in the describe above — they were written against this
+// module from the other location and are kept under the name they had.
+describe("tokenToCssVars", () => {
+  it("maps color keys to their CSS custom properties", () => {
+    const vars = tokenToCssVars(payload());
+    expect(vars["--bg"]).toBe("#111111");
+    expect(vars["--bg-alt"]).toBe("#111111");
+    expect(vars["--mode-op"]).toBe("#111111");
+    expect(vars["--mode-halfop"]).toBe("#111111");
+    expect(vars["--nick-color-0"]).toBe("#0000a0");
+    expect(vars["--nick-color-15"]).toBe("#0000190");
+  });
+
+  it("background with no image maps to none + the opacity var", () => {
+    const vars = tokenToCssVars(
+      payload({ background: { image_id: null, builtin: null, size: "cover", opacity: 0.3 } }),
+    );
+    expect(vars["--theme-bg-image"]).toBe("none");
+    expect(vars["--theme-bg-opacity"]).toBe("0.3");
+  });
+
+  it("background with a slug maps to a /uploads url()", () => {
+    const vars = tokenToCssVars(
+      payload({ background: { image_id: "abc123", builtin: null, size: "cover", opacity: 0.5 } }),
+    );
+    expect(vars["--theme-bg-image"]).toBe('url("/uploads/abc123")');
+    expect(vars["--theme-bg-opacity"]).toBe("0.5");
+  });
+
+  // #294 — a built-in key resolves to the static /backgrounds/<key>.webp asset
+  // (the BuiltinBackgrounds.path convention); it takes precedence over image_id.
+  it("a builtin key maps to a /backgrounds url()", () => {
+    const vars = tokenToCssVars(
+      payload({
+        background: { image_id: null, builtin: "01-lain-dark", size: "cover", opacity: 0.4 },
+      }),
+    );
+    expect(vars["--theme-bg-image"]).toBe('url("/backgrounds/01-lain-dark.webp")');
+    expect(vars["--theme-bg-opacity"]).toBe("0.4");
+  });
+
+  it("size cover maps the sizing vars to cover + no-repeat", () => {
+    const vars = tokenToCssVars(
+      payload({
+        background: { image_id: null, builtin: "01-lain-dark", size: "cover", opacity: 0.3 },
+      }),
+    );
+    expect(vars["--theme-bg-size"]).toBe("cover");
+    expect(vars["--theme-bg-repeat"]).toBe("no-repeat");
+  });
+
+  it("size repeat maps the sizing vars to auto + repeat (forward-compat tile mode)", () => {
+    const vars = tokenToCssVars(
+      payload({
+        background: { image_id: null, builtin: "01-lain-dark", size: "repeat", opacity: 0.3 },
+      }),
+    );
+    expect(vars["--theme-bg-size"]).toBe("auto");
+    expect(vars["--theme-bg-repeat"]).toBe("repeat");
+  });
+
+  it("a pre-#294 payload (no builtin/size) degrades to the upload path + cover", () => {
+    const legacy = payload();
+    // An old cached / wire payload lacking the new fields (a theme row saved
+    // before #294, returned as-is by the server until re-saved).
+    legacy.background = { image_id: "abc123", opacity: 0.3 } as TokenPayload["background"];
+    const vars = tokenToCssVars(legacy);
+    expect(vars["--theme-bg-image"]).toBe('url("/uploads/abc123")');
+    expect(vars["--theme-bg-size"]).toBe("cover");
+    expect(vars["--theme-bg-repeat"]).toBe("no-repeat");
+  });
+});
+
 // #75 producer path C — the background wallpaper layer is CSS-gated on a
 // `theme-has-bg` class (default.css can't branch on a var being "none").
 // applyCustomTheme toggles it so the layer + pane translucency only engage
@@ -161,6 +262,151 @@ describe("customTheme.applyCustomTheme background class", () => {
     );
     applyCustomTheme(null);
     expect(document.documentElement.classList.contains("theme-has-bg")).toBe(false);
+  });
+});
+
+describe("applyCustomTheme", () => {
+  const root = () => document.documentElement;
+
+  beforeEach(() => {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+  });
+  afterEach(() => {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+  });
+
+  it("writes the token vars onto documentElement", () => {
+    applyCustomTheme(payload({ font_family: "jetbrains-mono" }));
+    expect(root().style.getPropertyValue("--bg")).toBe("#111111");
+    expect(root().style.getPropertyValue("--nick-color-3")).toBe("#0000d0");
+    expect(root().style.getPropertyValue("--font-mono")).toContain("jetbrains-mono");
+  });
+
+  it("null clears every theme var back to the base cascade", () => {
+    applyCustomTheme(payload());
+    expect(root().style.getPropertyValue("--bg")).toBe("#111111");
+    applyCustomTheme(null);
+    expect(root().style.getPropertyValue("--bg")).toBe("");
+    expect(root().style.getPropertyValue("--nick-color-0")).toBe("");
+    expect(root().style.getPropertyValue("--theme-bg-image")).toBe("");
+  });
+});
+
+describe("applyCachedCustomTheme boot guard", () => {
+  const root = () => document.documentElement;
+
+  beforeEach(() => {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+    localStorage.removeItem(CACHE_KEY);
+  });
+  afterEach(() => {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+    localStorage.removeItem(CACHE_KEY);
+  });
+
+  it("a malformed cached payload does not throw and applies nothing", () => {
+    // Valid JSON but wrong shape (no colors/background) — reaches the apply
+    // engine at module top-level BEFORE render, outside any ErrorBoundary,
+    // so a throw here would white-screen the PWA on every boot.
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ foo: 1 }));
+    expect(() => applyCachedCustomTheme()).not.toThrow();
+    expect(root().style.getPropertyValue("--bg")).toBe("");
+  });
+
+  it("a non-JSON cache does not throw", () => {
+    localStorage.setItem(CACHE_KEY, "not json{{");
+    expect(() => applyCachedCustomTheme()).not.toThrow();
+  });
+
+  it("a well-formed cached payload applies", () => {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(payload()));
+    applyCachedCustomTheme();
+    expect(root().style.getPropertyValue("--bg")).toBe("#111111");
+  });
+});
+
+// #358 — day/night pair resolution. `resolvePayloadForMode` is the re-apply
+// DECISION (which slot paints for a given mode); the live wiring that flips
+// `dark` on an OS change is proven in theme.test.ts (`prefersDark` updates)
+// and end-to-end in the Playwright emulateMedia spec. The boot path applies
+// the resolved slot for the CURRENT mode with no FOUC.
+describe("resolvePayloadForMode (#358 day/night resolution)", () => {
+  const day = payload();
+  const night = payload();
+
+  it("light mode paints the light (day) slot", () => {
+    expect(resolvePayloadForMode({ light: day, dark: night }, false)).toBe(day);
+  });
+
+  it("dark mode paints the dark (night) slot", () => {
+    expect(resolvePayloadForMode({ light: day, dark: night }, true)).toBe(night);
+  });
+
+  it("dark mode falls back to the light slot when unpaired (single pick)", () => {
+    expect(resolvePayloadForMode({ light: day, dark: null }, true)).toBe(day);
+  });
+
+  it("an empty pair resolves to null in both modes", () => {
+    expect(resolvePayloadForMode({ light: null, dark: null }, true)).toBeNull();
+    expect(resolvePayloadForMode({ light: null, dark: null }, false)).toBeNull();
+  });
+});
+
+describe("applyCachedCustomTheme day/night pair boot (#358)", () => {
+  const root = () => document.documentElement;
+  // Captured before the first override: `bootWith` REPLACES window.matchMedia
+  // outright (a plain assignment, so `vi.restoreAllMocks` cannot undo it).
+  // In its own file that leaked no further than the file; sharing a file with
+  // the #837 mount cases below makes restoring it load-bearing rather than
+  // tidy — those read the real one.
+  const realMatchMedia = window.matchMedia;
+
+  function payloadBg(bg: string): TokenPayload {
+    const p = payload();
+    return { ...p, colors: { ...p.colors, bg } };
+  }
+
+  // Boot a FRESH customTheme module with matchMedia reporting `dark`, so the
+  // OS-mode read at boot resolves to the right slot. resetModules re-imports
+  // theme.ts too, which reads this mock to seed `prefersDark`.
+  async function bootWith(dark: boolean, cache: unknown): Promise<void> {
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+    vi.resetModules();
+    window.matchMedia = vi.fn().mockImplementation((media: string) => ({
+      media,
+      matches: media.includes("dark") ? dark : false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    const mod = await import("../lib/customTheme");
+    mod.applyCachedCustomTheme();
+  }
+
+  afterEach(() => {
+    window.matchMedia = realMatchMedia;
+    for (const v of THEME_CSS_VARS) root().style.removeProperty(v);
+    localStorage.removeItem(CACHE_KEY);
+  });
+
+  it("dark OS mode paints the dark slot's --bg", async () => {
+    await bootWith(true, { light: payloadBg("#d1d1d1"), dark: payloadBg("#0a0a0a") });
+    expect(root().style.getPropertyValue("--bg")).toBe("#0a0a0a");
+  });
+
+  it("light OS mode paints the light slot's --bg", async () => {
+    await bootWith(false, { light: payloadBg("#d1d1d1"), dark: payloadBg("#0a0a0a") });
+    expect(root().style.getPropertyValue("--bg")).toBe("#d1d1d1");
+  });
+
+  it("dark OS mode with an unpaired cache falls back to the light slot", async () => {
+    await bootWith(true, { light: payloadBg("#d1d1d1"), dark: null });
+    expect(root().style.getPropertyValue("--bg")).toBe("#d1d1d1");
+  });
+
+  it("a legacy #75 bare-payload cache applies in both modes (backward-compat)", async () => {
+    await bootWith(true, payloadBg("#cafe00"));
+    expect(root().style.getPropertyValue("--bg")).toBe("#cafe00");
   });
 });
 
