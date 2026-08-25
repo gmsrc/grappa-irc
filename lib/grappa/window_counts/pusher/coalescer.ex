@@ -117,7 +117,7 @@ defmodule Grappa.WindowCounts.Pusher.Coalescer do
   The coalescing window, in milliseconds. Public so a test can express its
   waits in terms of the shipped value instead of restating it.
   """
-  @spec window_ms() :: pos_integer()
+  @spec window_ms() :: unquote(@window_ms)
   def window_ms, do: @window_ms
 
   @spec start_link(keyword()) :: GenServer.on_start()
