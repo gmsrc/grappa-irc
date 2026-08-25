@@ -4800,9 +4800,18 @@ the same reason the `.deb` does.
 - **No `--warnings-as-errors` in `build()`.** The recipe compiles on the
   user's own Arch toolchain, which can be newer than the dev pin; a distro
   rebuild must not hard-fail on a newer compiler's warnings.
-- **The committed `pkgver=@GRAPPA_VERSION@` sentinel is deliberate.**
-  `makepkg`'s pkgver lint REFUSES `@`, so an UNDERIVED build fails LOUDLY
-  instead of silently shipping `grappa-@GRAPPA_VERSION@`. `regen.sh` is
+- **The committed `pkgver=@GRAPPA_VERSION@` sentinel is deliberate — and
+  NOTHING IS KNOWN TO CATCH IT (#1592).** This entry used to say `makepkg`'s
+  pkgver lint bars `@`, so an underived build failed loudly instead of
+  silently shipping `grappa-@GRAPPA_VERSION@`. It does not: `check_pkgver`
+  rejects only `*[[:space:]/:-]*` and `*[![:ascii:]]*` (the first is
+  transcribed from makepkg's source, with its measurement, in
+  `aur/pkgver.sh`'s header), and `@` is ASCII and in neither — rc=0 through
+  both `makepkg -sf` and `--printsrcinfo`, against rc=12 for `1.3.0-rc1`.
+  Which stage WOULD stop an underived build is unmeasured; the
+  `v@GRAPPA_VERSION@.tar.gz` fetch is a candidate, not a finding. So running
+  `regen.sh` is mandatory PROCEDURE, not something a tool reminds you of.
+  `regen.sh` is
   the ONE path that fills it (from `version.sh`), refreshes the checksums
   with `updpkgsums` and regenerates `.SRCINFO`. Run it from a checkout ON
   the release tag — `updpkgsums` fetches the `vX.Y.Z` tarball, so the tag

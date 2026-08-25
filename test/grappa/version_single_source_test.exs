@@ -14,8 +14,10 @@ defmodule Grappa.VersionSingleSourceTest do
       `VERSION`), and `nfpm.yaml` interpolates `${GRAPPA_VERSION}`;
     * the Arch `pkgver` — `infra/packaging/aur/regen.sh` derives it from the
       same `version.sh` at release time, filling the committed
-      `@GRAPPA_VERSION@` sentinel (a value `makepkg` REFUSES, so an
-      underived build fails loudly instead of shipping `grappa-@…@`).
+      `@GRAPPA_VERSION@` sentinel (a MARKER that `regen.sh` has not run —
+      not, as this said until #1592, a value `makepkg` bars: its pkgver
+      lint accepts `@`, measured, and what would stop an underived build
+      is unmeasured).
       DERIVED ≠ EQUAL since #1591: `makepkg` also refuses the hyphen a semver
       pre-release spells its suffix with, so the value goes through
       `aur/pkgver.sh` (`1.3.0-rc1` → `1.3.0rc1`, identity on a bare `X.Y.Z`).
@@ -101,7 +103,14 @@ defmodule Grappa.VersionSingleSourceTest do
       assert version_line == "${GRAPPA_VERSION}"
     end
 
-    test "PKGBUILD pkgver is the @GRAPPA_VERSION@ sentinel (makepkg refuses it → loud)" do
+    test "PKGBUILD pkgver stays the @GRAPPA_VERSION@ sentinel, never a derived number" do
+      # The name used to carry a parenthetical crediting the sentinel's
+      # safety net to makepkg's pkgver lint — which measurably accepts '@'
+      # (#1592). The assertion never depended on it: this pins the CARRIER'S
+      # SHAPE, which is all it ever pinned. So the mechanism came OUT of the
+      # name rather than a correct one going in, because which stage stops
+      # an underived build is not measured. The recipe's pkgver comment says
+      # exactly that, and is the one place to keep it.
       pkgver = carrier_value("infra/packaging/aur/PKGBUILD", ~r/^pkgver=(.+)$/m)
       assert pkgver == "@GRAPPA_VERSION@"
     end

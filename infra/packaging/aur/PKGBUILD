@@ -20,9 +20,20 @@
 pkgname=grappa
 # pkgver is DERIVED, not hand-edited. The single source of truth is the
 # repo-root `VERSION` file; `regen.sh` (run by release.yml's Arch job and by
-# the human AUR publish) fills this from `version.sh` before makepkg. The
-# `@GRAPPA_VERSION@` sentinel is deliberate: makepkg's pkgver lint REFUSES '@',
-# so an underived build fails loudly instead of shipping `grappa-@GRAPPA_VERSION@`.
+# the human AUR publish) fills this from `version.sh` before makepkg.
+#
+# `regen.sh` IS NOT OPTIONAL — and until #1592 this comment told you why with
+# a mechanism that does not exist. It said makepkg's pkgver lint bars '@', so
+# an underived build could not ship. It does not bar it: `check_pkgver`'s
+# whole rejecting surface is `*[[:space:]/:-]*` and `*[![:ascii:]]*` (the
+# first is transcribed, cited and measured in `pkgver.sh`'s header), and '@'
+# is ASCII and in neither. Measured rc=0 through `makepkg -sf` and through
+# `--printsrcinfo`, against rc=12 for `1.3.0-rc1`.
+#
+# WHICH stage would actually stop an underived build is NOT MEASURED, so this
+# file names none. The `v@GRAPPA_VERSION@.tar.gz` download below is a
+# candidate, not a finding. Read the sentinel as a MARKER that regen.sh has
+# not run, never as a net that will catch you if it did not.
 #
 # DERIVED ≠ EQUAL, since #1591: makepkg's same lint refuses the hyphen a
 # semver pre-release spells its suffix with, so `regen.sh` fills this through

@@ -26,8 +26,10 @@
 pkgname=shottino
 # DERIVED, never hand-edited — and from a DIFFERENT carrier than the bouncer's:
 # frontends/shottino/version.h, read via `infra/packaging/version.sh shottino`.
-# The `@SHOTTINO_VERSION@` sentinel is deliberate: makepkg's pkgver lint refuses
-# '@', so an underived build fails loudly instead of publishing the sentinel.
+# The `@SHOTTINO_VERSION@` sentinel marks "../regen.sh has not run yet". It is
+# NOT a value makepkg catches — its pkgver lint accepts '@' (#1592, measured;
+# the refuted mechanism and what replaced it are in ../PKGBUILD's pkgver
+# comment). Nothing is known to stop an underived build of this recipe either.
 pkgver=@SHOTTINO_VERSION@
 pkgrel=1
 # The grappa tag that carries this source. Distinct from pkgver ON PURPOSE:

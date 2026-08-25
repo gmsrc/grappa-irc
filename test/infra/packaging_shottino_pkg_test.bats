@@ -145,8 +145,9 @@ upload_dirs() {
 @test "#1447 the AUR client recipe carries its OWN version sentinel, plus the tag that has the source" {
     # THE property that forced a second pkgbase. pkgver comes from the client
     # carrier; _grappaver names the tag that actually exists on GitHub, since
-    # one repository ships both. Sentinels, not numbers: makepkg's pkgver lint
-    # refuses '@', so an underived build fails loudly.
+    # one repository ships both. Sentinels, not numbers — markers that
+    # ../regen.sh has not run, NOT values makepkg catches: its pkgver lint
+    # accepts '@' (#1592, measured).
     grep -qx 'pkgver=@SHOTTINO_VERSION@' "$PKGBUILD_CLIENT"
     grep -qx '_grappaver=@GRAPPA_VERSION@' "$PKGBUILD_CLIENT"
     refute grep -qx 'pkgver=@GRAPPA_VERSION@' "$PKGBUILD_CLIENT"

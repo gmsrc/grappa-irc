@@ -51,8 +51,9 @@ three first.
 cd infra/packaging/aur
 # Derive the version from the VERSION file (#538/#652) + refresh checksums/.SRCINFO
 # against the tag tarball. The committed pkgver is the @GRAPPA_VERSION@
-# sentinel (makepkg REFUSES it), so regen.sh is REQUIRED first — and makepkg
-# downloads the vX.Y.Z source tarball anyway, so the tag must already exist:
+# sentinel and nothing is known to catch it downstream (#1592), so regen.sh is
+# REQUIRED first — and makepkg downloads the vX.Y.Z source tarball anyway, so
+# the tag must already exist:
 ./regen.sh
 # builds the mix release + cicchetto, stages FHS, produces the package.
 # -s auto-installs makedepends (elixir, erlang-headless, bun) via pacman:
@@ -120,9 +121,13 @@ tag, because there is only ever one.
 The committed `PKGBUILD`/`.SRCINFO` are a **template**, turned into the
 concrete publishable recipe by `regen.sh`:
 
-- `pkgver=@GRAPPA_VERSION@` is a sentinel `makepkg` REFUSES (#538) — an
-  underived build fails loudly instead of silently shipping
-  `grappa-@GRAPPA_VERSION@`. `regen.sh` fills it from the repo-root `VERSION`
+- `pkgver=@GRAPPA_VERSION@` is a sentinel marking "not derived yet" (#538).
+  It was documented here as a value `makepkg` bars, so that an underived
+  build would fail loudly rather than silently ship
+  `grappa-@GRAPPA_VERSION@`. **It is not** — the pkgver lint accepts `@`
+  (#1592, measured), and which stage would stop such a build is unmeasured.
+  Treat running `regen.sh` as mandatory procedure, not as something a tool
+  will remind you about. `regen.sh` fills it from the repo-root `VERSION`
   file, the single source of truth — **through `pkgver.sh`, which is the
   identity on a bare `X.Y.Z` and not on a pre-release** (#1591: `makepkg`
   refuses the hyphen too, so `1.3.0-rc1` becomes `1.3.0rc1`). That is why
