@@ -63641,3 +63641,163 @@ unknown, and the O(rows) → O(windows) change is asserted structurally rather
 than as a measured multiple. The issue's own caveat still stands too: at
 `00:15:24.941` the handler switched from `:async` to `:drop`, so the verdict
 that closed the socket may never have reached disk.
+<!-- entry #1708 -->
+
+---
+
+## 2026-08-25 — #1708: the exception that named the wrong bug, and the half of a race nobody closed
+
+22 live IRC sessions died on m42 between 16:37 and 16:39 on 2026-08-22, some
+of them 19 hours old, each one killed by an `Ecto.MultiplePrimaryKeyError`
+raised out of `Scrollback.persist_event/1`. The error says the primary key on
+`messages` does not uniquely identify a row. It is wrong about that, and the
+proof was printed on every one of the 22 lines: the message renders `got
+entries` with **two spaces where the count belongs**, so the number Ecto
+interpolated was the empty string.
+
+### What actually happens
+
+`Ecto.MultiplePrimaryKeyError` carries only `:message`, and Ecto builds it by
+interpolating `count` straight into the sentence
+(`ecto/lib/ecto/exceptions.ex:232`). An empty rendering therefore means
+`count` was **`nil`**, and `nil` reaches that constructor because of the guard
+that selects the raising clause:
+
+```elixir
+# ecto_sql/lib/ecto/adapters/sql.ex:1195-1201
+{:ok, %{rows: [values], num_rows: 1}} -> {:ok, Enum.zip(returning, values)}
+{:ok, %{num_rows: 0}}                 -> ...
+{:ok, %{num_rows: num_rows}} when num_rows > 1 -> raise Ecto.MultiplePrimaryKeyError, count: num_rows, ...
+```
+
+🔴 **`nil > 1` is TRUE.** Erlang's term order sorts every number before every
+atom, so the guard written to catch "more than one row came back" also catches
+"no count at all", and the error it raises names the only cause its author had
+in mind. **The error text lies about its own cause, and the empty count is the
+tell.**
+
+`num_rows: nil` has exactly one producer. `exqlite`'s `maybe_changes/2`
+(`connection.ex:657-664`) is `case Sqlite3.changes(db) do {:ok, t} -> t; _ ->
+nil end`, and `exqlite_changes` (`c_src/sqlite3_nif.c:625`) answers `{:error,
+:connection_closed}` when `conn->db` is `NULL` — i.e. when the connection was
+closed under the caller.
+
+The failure is not caught one line earlier, and that is the non-obvious link.
+`execute/4`'s `with` binds `Sqlite3.transaction_status/1` as `{:ok, status}`,
+and on a closed handle that NIF returns **`make_ok_tuple(env, am_error)`** —
+`{:ok, :error}` (`sqlite3_nif.c:1199-1202`). It matches. The closed connection
+sails through into `maybe_changes`, and the driver reports `%Result{num_rows:
+nil}` to Ecto as **SUCCESS**.
+
+### It is the other half of #1657, not a new race
+
+`Exqlite.Connection.disconnect/2` does two things in order: `Sqlite3.cancel/1`
+then `Sqlite3.close/1`. The pool fires it from a DIFFERENT process than the one
+running the statement — `db_connection/connection_pool.ex:188-210` fires the
+checkout deadline in the POOL process, while `Holder.handle/4:166` runs
+`handle_execute` in the CLIENT process by reading module+state out of an ETS
+holder. So which of the two verbs an in-flight statement meets is a race, and
+it has two outcomes:
+
+* the **cancel** lands DURING the step — `SQLITE_INTERRUPT`, the statement
+  LOSES, no row. `%Exqlite.Error{message: "interrupted"}`. #1657 classified
+  this as contention-by-construction and it degrades correctly.
+* the **close** lands AFTER the step completed — the statement **WON**. The
+  row is committed (autocommit; `exqlite_close` rolls back only when
+  `sqlite3_get_autocommit` is 0), and what the pool took away is the handle the
+  driver then consults for the change count.
+
+🔴 **#1657 closed the arm where the write is lost and left open the arm where
+the write survives** — and the surviving-write arm is the one that killed
+sessions, because its symptom is not a driver exception at all. It arrives
+wearing an *Ecto* struct.
+
+### Why it landed on the wrong side of the degrade
+
+`BusyRetry.loop/4` and `Scrollback.with_pool_retry/1` both rescue an
+**allowlist of two driver structs**. The guarantee they implement — #336, a
+persist must never crash the calling `Session.Server` — is a statement about
+the CALLER, not about which exception the driver happened to throw. An
+allowlist is only ever as complete as the last incident, and this fault was
+not in the last incident.
+
+### The cure, and why it is not a wider net
+
+The ONE classifier learns the third driver symptom.
+`BusyRetry.classify/1` gains a clause for `%Ecto.MultiplePrimaryKeyError{}`
+and **discriminates on the count**:
+
+* **empty count** → `:connection_closed`. Only the pool can produce it, so it
+  is contention by construction, exactly like `:interrupted`.
+* **a count that is there** → stays `:permanent` and re-raises. More than one
+  row genuinely came back, which on an UPDATE or DELETE with too loose a
+  filter is a real bug that must stay loud.
+
+The scrollback path can only ever meet the first: a single-row `INSERT …
+VALUES … RETURNING` has `sqlite3_changes() == 1` or it failed. The
+discrimination exists for the *other* write paths, so widening the rescue did
+not cost the codebase the multiple-primary-key signal it is named after. The
+predicate reads only the message's FIRST line, because the tail inspects the
+bound params — user-controlled message bodies on this path — and a body
+echoing the sentence must not be able to reclassify a real bug as recoverable.
+
+🔴 **TRANSIENT and RETRYABLE stopped being the same axis.** They coincided for
+three fault kinds and stop at the fourth: `:connection_closed`'s statement
+COMPLETED, so its row is durable and a second attempt does not re-drive a lost
+write — **it inserts a duplicate**. It degrades on attempt 1 by verdict,
+never by clock. `retryable?/1` is that second axis; a new fault kind now has to
+answer two questions, not one. The engine's terminal line for it does not
+borrow the shared `db write unavailable:` opening either, because that opening
+is FALSE here and would send an operator hunting for a row sitting in the
+table.
+
+### The proven negative is worth as much as the cure
+
+**`messages` has no primary-key problem.**
+`priv/repo/migrations/20260425000000_init.exs:38` is a plain `create
+table(:messages)` with Ecto's default single `id`, and no reachable shape of
+the scrollback insert can return two rows. Anyone reading the 22 stack traces
+would have started by auditing the schema; the empty count says not to. Two of
+the issue's three open questions close with it: the contention **causes** this
+rather than co-occurring with it (the closer is the pool's own deadline,
+traced above through three deps), and it cannot fire outside a disconnect —
+but a disconnect is not exclusively a saturation event (`max_lifetime`, a
+`:disconnect` return from any callback), so **"only under contention" is NOT
+established** and is left open deliberately.
+
+### What is measured and what is read
+
+Measured against the shipped driver and the shipped Ecto, in
+`Grappa.Repo.BusyRetryFidelityTest`: `Sqlite3.changes/1` on a closed handle
+errors; `Sqlite3.transaction_status/1` on the same handle answers `{:ok,
+:error}` and does not bail the `with`; the driver-derived `nil` satisfies the
+`num_rows > 1` guard; Ecto's OWN constructor renders `count: nil` as the
+`got  entries` prod printed. **Read, not run:** `struct/10`'s clause order —
+its adapter is reached through a module-local `query/4`, so no test can inject
+the `%Result{}`. **Not reproduced at all:** the race itself.
+`Exqlite.Connection` re-prepares against `state.db` on every
+`handle_execute/4`, so a closed handle cannot be smuggled past the public
+callback, and forcing the window open would mean stepping a statement on a
+`sqlite3_close_v2`'d connection — deferred-close territory this suite will not
+build a pin on.
+
+### Accepted limitation: the census over-counts
+
+`Scrollback` maps every engine terminal onto the same `:persist_unavailable`,
+so `Persistor` logs `scrollback row dropped` for a row that is durably in the
+table — the one-atom-two-outcomes lie #1657b removed for the preload arm,
+re-entering through a different door. It was NOT fixed here: the honest fix is
+a fourth terminal atom out of `BusyRetry`, and `:db_unavailable` appears in
+roughly 150 `@spec`s across the tree, so that is a separate change with its own
+blast radius. The mitigation is the new `orphaned` counter in
+`scripts/log-gap-scan.awk`: `dropped` is the UPPER bound on lost rows and
+`dropped - orphaned` the LOWER one. Stated here so nobody reads `dropped` as
+exact again.
+
+### Upstream
+
+Both driver behaviours are defensible in isolation and wrong together:
+`maybe_changes/2` swallowing an error into `nil`, and
+`exqlite_transaction_status` reporting a closed connection as `{:ok, :error}`.
+An `%Exqlite.Error{}` from either would have made this a clean degrade in 2026
+and never reached Ecto. Worth reporting to exqlite; not worth waiting for.
