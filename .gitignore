@@ -125,3 +125,7 @@ Thumbs.db
 # shottino call helper (opt-in `make call`)
 frontends/shottino/shottino-call
 frontends/shottino/call/*.o
+
+# Python bytecode (tools/)
+__pycache__/
+*.py[co]
