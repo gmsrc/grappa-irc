@@ -1,8 +1,16 @@
 import { type Component, onCleanup, onMount } from "solid-js";
 
 // Decorative amber character rain. Absolutely positioned inside its
-// parent, which must be `position: relative` and clip its overflow —
-// today that is `.adm-matrix`, the Debug tab's phosphor panel.
+// parent, which must be `position: relative` and clip its overflow.
+//
+// #1773 moved this OUT of `src/admin/` and gave it two required props. It
+// had one consumer (the Debug tab's `.adm-matrix` phosphor panel) and now
+// has two (the credits easter egg's full-screen modal), and a shared
+// component sitting in the admin-only directory is a lie the next reader
+// trips on. The props are the only thing that differs between the two
+// surfaces — everything below, including the four constraints, is one
+// implementation. NOT defaulted: a default class would silently give the
+// second caller the first caller's stylesheet hook.
 //
 // Sized off the PARENT box rather than the window: it is a panel effect,
 // not a page overlay, so it must follow the panel through a resize, a
@@ -26,10 +34,19 @@ const GLYPHS = "01アイウエオカキクケコサシスセソタチツテト�
 const FONT_SIZE = 14;
 const FRAME_MS = 66;
 
-// No props: the caller gates it with `<Show>`, so being MOUNTED is the
+// No `on` prop: the caller gates it with `<Show>`, so being MOUNTED is the
 // on state and unmounting stops the loop through `onCleanup`. An `on`
 // prop would be a second switch that has to agree with the first.
-const MatrixRain: Component = () => {
+type MatrixRainProps = {
+  /** Stylesheet hook on the wrapper. The parent it sits in must be
+      `position: relative` and clip its overflow. */
+  readonly class: string;
+  /** `data-testid` on the wrapper, so each surface is addressable on its
+      own — a shared id would make a spec unable to say WHICH rain it found. */
+  readonly testId: string;
+};
+
+const MatrixRain: Component<MatrixRainProps> = (props) => {
   let canvas: HTMLCanvasElement | undefined;
 
   onMount(() => {
@@ -107,7 +124,7 @@ const MatrixRain: Component = () => {
   // that announces nothing. The wrapper is not focusable, so the hint
   // belongs there; `tabindex={-1}` keeps the canvas out of the tab order.
   return (
-    <div class="adm-rain" aria-hidden="true" data-testid="admin-matrix-rain">
+    <div class={props.class} aria-hidden="true" data-testid={props.testId}>
       <canvas
         tabindex={-1}
         ref={(node) => {

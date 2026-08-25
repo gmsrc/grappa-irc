@@ -1,7 +1,7 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import AdminCard from "./admin/AdminCard";
-import MatrixRain from "./admin/MatrixRain";
 import { isDiagEnabled, setDiagEnabled } from "./DiagFloat";
+import MatrixRain from "./MatrixRain";
 
 // UX-6 D12 (2026-05-21) — Admin → Debug tab. Hosts the iOS PWA
 // keyboard / viewport diagnostics. Previously lived inside
@@ -186,7 +186,7 @@ const AdminDebugTab: Component = () => {
           {/* biome-ignore lint/a11y/noStaticElementInteractions: same. */}
           <div class="adm-matrix" onClick={tapHeading}>
             <Show when={rainOn()}>
-              <MatrixRain />
+              <MatrixRain class="adm-rain" testId="admin-matrix-rain" />
             </Show>
             <p class="adm-matrix-prompt" aria-hidden="true">
               grappa@cicchetto:~$ tail -f /dev/viewport
