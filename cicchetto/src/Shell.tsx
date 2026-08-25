@@ -58,7 +58,7 @@ import MentionsWindow from "./MentionsWindow";
 import ModeModal from "./ModeModal";
 import NamesModal from "./NamesModal";
 import NextActiveButton from "./NextActiveButton";
-import { PaneTopBarRailOpener } from "./PaneTopBar";
+import { PaneTopBarWindowsOpener } from "./PaneTopBar";
 import PrivacyModal from "./PrivacyModal";
 import RailActions from "./RailActions";
 import RailContext from "./RailContext";
@@ -207,7 +207,7 @@ const Shell: Component = () => {
   // second panel: one door, two handles.
   const windowsRailOpener = (): JSX.Element => (
     <Show when={!getShowBottomBar()}>
-      <PaneTopBarRailOpener onOpenRail={openSidebar} railLabel="open windows sidebar" />
+      <PaneTopBarWindowsOpener onOpenWindows={openSidebar} />
     </Show>
   );
 

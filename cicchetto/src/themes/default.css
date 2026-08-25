@@ -3069,11 +3069,17 @@ html.resize-dragging * {
    `background: var(--bg)` for the same reason it carries one — floating puts
    the glyph over arbitrary scrollback text and over a themed background image.
 
-   Selector: `.shell-chrome .topic-bar-hamburger`. It cannot collide with the
-   trailing opener, which wears `.shell-chrome-rail-opener` and not this class;
-   and `.topic-bar .topic-bar-hamburger`'s desktop `display: none` does not
-   reach here, which is moot anyway — `.shell-chrome` is mobile-only. */
-.shell-chrome .topic-bar-hamburger {
+   Selector: `.shell-chrome .topic-bar-windows-opener`. This class is the
+   left door's OWN, and the first cut of #1766 got that wrong: it reused
+   `.topic-bar-hamburger`, reasoning that the trailing opener here wears
+   `.shell-chrome-rail-opener` and so could not collide. True in THIS host and
+   false in the other one — the channel band's trailing control IS a
+   `.topic-bar-hamburger`, and the e2e fixture that reaches the rail resolves
+   that class with `.first()` (#1073). Measured on the integration run: the
+   fixture opened the window sidebar, the members rail never appeared, and the
+   retry was occluded by the sidebar it had just opened. A selector comment
+   that reasons about one host is not a non-collision proof. */
+.shell-chrome .topic-bar-windows-opener {
   background: var(--bg);
   margin: var(--pane-chrome-inset-block) auto 0 var(--pane-chrome-inset-inline);
 }
@@ -3145,6 +3151,7 @@ html.resize-dragging * {
    the same reason from the other side: with the window bar off, the two ☰
    share one 48px-tall band and must look identical. */
 button.topic-bar-hamburger,
+button.topic-bar-windows-opener,
 .shell-chrome .shell-chrome-rail-opener {
   /* Suppress the U+2630 text node. It stays in the DOM — it is what renders
      if this sheet never loads, and ~20 specs locate these buttons — but it
@@ -3155,6 +3162,7 @@ button.topic-bar-hamburger,
 }
 
 button.topic-bar-hamburger::before,
+button.topic-bar-windows-opener::before,
 .shell-chrome .shell-chrome-rail-opener::before {
   content: "";
   width: var(--chrome-icon-size);

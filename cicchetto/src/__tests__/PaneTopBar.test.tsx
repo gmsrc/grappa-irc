@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
-import PaneTopBar, { PaneTopBarRailOpener } from "../PaneTopBar";
+import PaneTopBar, { PaneTopBarRailOpener, PaneTopBarWindowsOpener } from "../PaneTopBar";
 
 // #1766 — the band grew a LEADING slot, and the band is where it belongs
 // rather than in `TopicBar`: turning the mobile window bar off has to leave a
@@ -76,26 +76,65 @@ describe("PaneTopBar — the band's slots", () => {
   });
 });
 
-describe("PaneTopBarRailOpener — one button, two doors", () => {
-  // The same button serves both sides; only the accessible name differs, and
-  // it MUST differ — a screen-reader user meeting two "open sidebar" controls
-  // in one 48px-tall band has been told nothing.
+describe("PaneTopBarRailOpener — one button, two hosts", () => {
+  // The same button serves the channel bar and the admin console; only the
+  // accessible name differs, and it MUST differ — a screen-reader user meeting
+  // two "open sidebar" controls in one 48px-tall band has been told nothing.
   it("wears the caller's label", () => {
-    render(() => <PaneTopBarRailOpener onOpenRail={vi.fn()} railLabel="open windows sidebar" />);
-    expect(screen.getByLabelText("open windows sidebar")).toBeInTheDocument();
+    render(() => <PaneTopBarRailOpener onOpenRail={vi.fn()} railLabel="open actions" />);
+    expect(screen.getByLabelText("open actions")).toBeInTheDocument();
   });
 
-  it("keeps the shared classes whichever side it lands on", () => {
-    render(() => <PaneTopBarRailOpener onOpenRail={vi.fn()} railLabel="open windows sidebar" />);
-    const btn = screen.getByLabelText("open windows sidebar");
+  it("keeps the shared classes whichever host it lands in", () => {
+    render(() => <PaneTopBarRailOpener onOpenRail={vi.fn()} railLabel="open members sidebar" />);
+    const btn = screen.getByLabelText("open members sidebar");
     expect(btn).toHaveClass("topic-bar-hamburger");
     expect(btn).toHaveClass("shell-chrome-btn");
   });
 
   it("calls its handler on click", () => {
     const onOpenRail = vi.fn();
-    render(() => <PaneTopBarRailOpener onOpenRail={onOpenRail} railLabel="open windows sidebar" />);
-    fireEvent.click(screen.getByLabelText("open windows sidebar"));
+    render(() => <PaneTopBarRailOpener onOpenRail={onOpenRail} railLabel="open members sidebar" />);
+    fireEvent.click(screen.getByLabelText("open members sidebar"));
     expect(onOpenRail).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #1766 — the LEFT door. A separate component from the rail opener, and the
+// separation is the whole point of the tests below.
+describe("PaneTopBarWindowsOpener — the other door", () => {
+  it("names itself for the sidebar it opens", () => {
+    render(() => <PaneTopBarWindowsOpener onOpenWindows={vi.fn()} />);
+    expect(screen.getByLabelText("open windows sidebar")).toBeInTheDocument();
+  });
+
+  // 🔴 The load-bearing assertion in this file. `.topic-bar-hamburger` is the
+  // NAME of the rail door, not a style hook: `openMembersDrawer` locates it by
+  // class and takes `.first()` (#1073, stated in the fixture). The first cut of
+  // #1766 reused the rail opener here, so with the window bar off two buttons
+  // wore that class, `.first()` resolved to THIS one, and the fixture opened
+  // the window sidebar instead of the rail — then had its retry occluded by the
+  // sidebar it had just opened. Measured on the integration run, not reasoned
+  // about. Roughly twenty specs reach the rail through that helper.
+  it("does NOT wear the rail door's class", () => {
+    render(() => <PaneTopBarWindowsOpener onOpenWindows={vi.fn()} />);
+    const btn = screen.getByLabelText("open windows sidebar");
+    expect(btn).not.toHaveClass("topic-bar-hamburger");
+    expect(btn).toHaveClass("topic-bar-windows-opener");
+  });
+
+  // What the two doors DO still share: the sizing tokens. With the window bar
+  // off they sit in one 48px band, so #305's tap floor and icon size have to
+  // reach both. Only the identity was split.
+  it("still shares the chrome button's sizing", () => {
+    render(() => <PaneTopBarWindowsOpener onOpenWindows={vi.fn()} />);
+    expect(screen.getByLabelText("open windows sidebar")).toHaveClass("shell-chrome-btn");
+  });
+
+  it("calls its handler on click", () => {
+    const onOpenWindows = vi.fn();
+    render(() => <PaneTopBarWindowsOpener onOpenWindows={onOpenWindows} />);
+    fireEvent.click(screen.getByLabelText("open windows sidebar"));
+    expect(onOpenWindows).toHaveBeenCalledTimes(1);
   });
 });

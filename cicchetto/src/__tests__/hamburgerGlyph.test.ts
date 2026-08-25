@@ -43,7 +43,18 @@ const RULES = rulesInOrder();
 /** Every rule whose selector list mentions `needle`. */
 const mentioning = (needle: string) => RULES.filter((r) => r.selectors.includes(needle));
 
-const barRules = () => RULES.filter((r) => /topic-bar-hamburger[^,{]*::before/.test(r.selectors));
+const barRules = () =>
+  RULES.filter((r) => /topic-bar-(hamburger|windows-opener)[^,{]*::before/.test(r.selectors));
+
+/**
+ * Every button that must READ as a ☰. Three classes and not one, since the
+ * left door stopped sharing `.topic-bar-hamburger` — that class names the rail
+ * door and the e2e fixture resolves it with `.first()` (#1073), so a second
+ * bearer sent every rail-reaching spec through the wrong door. The look is
+ * still shared, because with the window bar off the two ☰ sit in ONE 48px
+ * band; only the identity was split.
+ */
+const BEARERS = ["topic-bar-hamburger", "topic-bar-windows-opener", "shell-chrome-rail-opener"];
 
 describe("#1766 — the ☰'s three bars are drawn, not typed", () => {
   it("paints them on a ::before of the hamburger", () => {
@@ -129,5 +140,22 @@ describe("#1766 — the ☰'s three bars are drawn, not typed", () => {
   it("leaves the shared `.shell-chrome-btn` without a drawn glyph of its own", () => {
     const shared = RULES.filter((r) => /^\.shell-chrome-btn::before$/.test(r.selectors));
     expect(shared).toHaveLength(0);
+  });
+
+  // Splitting the left door's CLASS off `.topic-bar-hamburger` (see BEARERS)
+  // split the identity, and identity is the only thing that was meant to
+  // split. With the window bar off the two ☰ share one 48px band, so a bearer
+  // that fell out of either rule would render as the thin character next to a
+  // drawn twin — or, worse, as BOTH at once. Asserted per bearer rather than
+  // over the joined text so the failure names which one dropped out.
+  it.each(BEARERS)("draws AND suppresses `%s`, so no door drifts", (bearer) => {
+    expect(
+      barRules().some((r) => r.selectors.includes(bearer)),
+      `no ::before rule draws \`.${bearer}\``,
+    ).toBe(true);
+    expect(
+      mentioning(bearer).some((r) => /font-size:\s*0/.test(r.body)),
+      `nothing zeroes the character on \`.${bearer}\``,
+    ).toBe(true);
   });
 });

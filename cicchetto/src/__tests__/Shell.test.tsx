@@ -1705,10 +1705,39 @@ describe("#1766 — the mobile window bar is opt-out, and the ☰ ships with the
 
       // Side is CHILD ORDER, not a CSS override — the same fact #1073's
       // characterization pins for the trailing side.
-      expect(bar.firstElementChild).toHaveClass("topic-bar-hamburger");
+      expect(bar.firstElementChild).toHaveClass("topic-bar-windows-opener");
       expect(bar.lastElementChild).toHaveClass("topic-bar-hamburger");
       expect(bar.children.length).toBe(3);
       expect(bar.children[1]).toHaveClass("topic-bar-header");
+    });
+
+    // 🔴 `.topic-bar-hamburger` is not a style hook, it is the NAME OF ONE
+    // DOOR, and #1073 wrote that down where it is consumed: `openMembersDrawer`
+    // locates the opener BY CLASS and takes `.first()`, because "the class is
+    // what they have in common, and it is the thing this helper actually needs
+    // — the in-flow opener, whichever pane is mounted". Singular.
+    //
+    // The first cut of #1766 reused `PaneTopBarRailOpener` for the left door,
+    // so with the bar off two buttons wore that class and `.first()` resolved
+    // to this one — which opens the WINDOW sidebar, not the members rail.
+    // Measured on the integration run, not reasoned about: the fixture opened
+    // the sidebar, `.shell-members.open` never appeared, and the retry was
+    // occluded by `aside.shell-sidebar.open` until the click deadline elapsed.
+    // Twenty-odd specs reach the rail through that helper, so the left door
+    // carries its own class and this pins that it keeps doing so.
+    it("does NOT wear the members ☰'s class — that class names ONE door", async () => {
+      mobileState.value = true;
+      setShowBottomBar(false);
+      selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+      const { container } = render(() => <Shell />);
+      await waitFor(() => {
+        expect(container.querySelector(".topic-bar-windows-opener")).not.toBeNull();
+      });
+      expect(container.querySelectorAll(".topic-bar-hamburger").length).toBe(1);
+      expect(container.querySelector(".topic-bar-hamburger")).toHaveAttribute(
+        "aria-label",
+        "open members sidebar",
+      );
     });
 
     it("names the two doors apart — left is windows, right is members", async () => {
@@ -1795,7 +1824,7 @@ describe("#1766 — the mobile window bar is opt-out, and the ☰ ships with the
       });
 
       expect(chrome.children.length).toBe(2);
-      expect(chrome.firstElementChild).toHaveClass("topic-bar-hamburger");
+      expect(chrome.firstElementChild).toHaveClass("topic-bar-windows-opener");
       expect(chrome.lastElementChild).toHaveClass("shell-chrome-rail-opener");
     });
 

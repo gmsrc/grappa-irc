@@ -77,6 +77,10 @@ import type { Component, JSX } from "solid-js";
  * of a new host silently inheriting one. `null` emits no element, so a band
  * that opted out keeps its two children exactly — which is what #1073's
  * characterization pins.
+ *
+ * The control that fills it is `PaneTopBarWindowsOpener`, a SEPARATE component
+ * from the trailing ☰ and deliberately not wearing its class — see that
+ * component's own note for the measurement that forced the split.
  */
 export type Props = {
   /**
@@ -127,6 +131,56 @@ export const PaneTopBarRailOpener: Component<RailOpenerProps> = (props) => {
       class="topic-bar-hamburger shell-chrome-btn"
       aria-label={props.railLabel}
       onClick={props.onOpenRail}
+    >
+      {"\u{2630}"}
+    </button>
+  );
+};
+
+export type WindowsOpenerProps = {
+  onOpenWindows: () => void;
+};
+
+/**
+ * #1766 — the LEFT door: #1041's window sidebar, the navigation that has to
+ * exist once the bottom window bar can be switched off.
+ *
+ * ## Why this is a second component and not `PaneTopBarRailOpener` with
+ * another label
+ *
+ * Because `.topic-bar-hamburger` is not a style hook — it is the NAME of the
+ * rail door, and #1073 wrote that contract down where it is consumed. The e2e
+ * fixture `openMembersDrawer` locates the opener BY CLASS and takes
+ * `.first()`, explaining that "the class is what they have in common, and it
+ * is the thing this helper actually needs — the in-flow opener, whichever pane
+ * is mounted". Singular, and roughly twenty specs reach the rail through it.
+ *
+ * The first cut of #1766 did reuse the rail opener here, and the integration
+ * run measured the consequence: with the bar off, two buttons wore the class,
+ * `.first()` resolved to THIS one, the fixture opened the window sidebar
+ * instead of the members rail, and its retry was then occluded by the
+ * `aside.shell-sidebar.open` it had just opened — a click deadline, on a spec
+ * that has nothing to do with either door. Reusing the class would have made
+ * every rail-reaching spec depend on the bottom-bar preference.
+ *
+ * So the two doors are two classes. What they still SHARE is
+ * `.shell-chrome-btn` (#305's tap floor + icon token) and the drawn-bars rule,
+ * which is the part that genuinely must not drift: with the bar off the two ☰
+ * sit in one 48px band and have to look identical.
+ *
+ * The label is a literal, unlike the sibling's `railLabel` prop. That prop
+ * exists because two hosts genuinely word the same door differently; this door
+ * has one name on both surfaces it appears on — one door, two handles — and a
+ * prop only ever passed one value would state a variability that does not
+ * exist.
+ */
+export const PaneTopBarWindowsOpener: Component<WindowsOpenerProps> = (props) => {
+  return (
+    <button
+      type="button"
+      class="topic-bar-windows-opener shell-chrome-btn"
+      aria-label="open windows sidebar"
+      onClick={props.onOpenWindows}
     >
       {"\u{2630}"}
     </button>
