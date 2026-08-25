@@ -64557,3 +64557,108 @@ bump for an easter egg, and it puts the work on the compile lane. Declined.
 - **Nothing about the felt result on a device.** No notched phone, no
   reduced-motion setting, no audio, were exercised outside jsdom and source-level
   assertions.
+<!-- entry #1786 -->
+
+---
+
+## 2026-08-26 — #1786: `\b` is a transition, so it cannot anchor a punctuated edge
+
+A watchlist term whose first or last character is not a word character could
+never match. Both ports wrapped every term in `\b…\b` unconditionally —
+`Grappa.Mentions.build_matchers/1` and cic's `matchesTerm` — and `\b` is a
+TRANSITION between a word character and a non-word one. It is therefore
+satisfiable only on a side where the term's own edge character IS a word char.
+On `QUACK!` the trailing anchor demanded a word character immediately AFTER the
+`!`; end-of-line and a space both fail it. On `!list` the leading anchor failed
+the same way, taking every command-prefix highlight with it.
+
+Found in prod: a user's watchlist was `["QUACK!","flap!","quack!", …]`, every
+term trailing a `!`, so the entire list was inert. **What makes it a bug and not
+a regex footnote is the silence** — the settings pane accepted the term, listed
+it as active, and it did nothing forever. No gate, no log line and no UI state
+distinguishes "no message matched this yet" from "this can never match".
+
+### The cure is per-edge, and the lookaround is not the anchor's absence
+
+Each anchor is chosen by the term's own edge: `\b` where the edge character is a
+word char, `(?<!\w)` / `(?!\w)` where it is not. The lookarounds say what `\b`
+was always meant to say there — "not glued to a word" — while the existing rule
+is untouched wherever it was satisfiable: `vjt` still refuses `vjt123`, and a
+both-ends-word-edged term like `5+1` keeps two literal `\b`s.
+
+**Dropping the anchor on a punctuated edge is the cheaper wrong fix, and only
+two cases separate it from this one.** `!list` must still refuse `foo!list`, and
+`QUACK!` must still refuse `QUACK!x`. Measured on the client port: mutating the
+cure to emit `""` instead of the lookaround leaves **18 of 20** cases green and
+kills exactly those two. Every other new case — the punctuated matches, the
+both-edges case, the substring regressions — passes under the wrong cure. Those
+two rows are the whole reason the table is worth adding.
+
+### The edge probe is a regex, not a character class
+
+`prefix_anchor/1` asks `~r/\A\w/u` and cic asks `/^\w/`, both over the RAW term.
+That is deliberate: the probe consults the SAME `\w` the anchor it is choosing
+for will consult, under the same compile options, so there is one definition of
+"word character" and no second spelling to drift from it. A literal
+`[A-Za-z0-9_]` would have been a second spelling.
+
+It is also why **the two ports agree on a non-ASCII edge even though JavaScript's
+`\w` is unconditionally ASCII and Erlang's depends on whether `unicode` implies
+`ucp`**. Each port's probe asks its OWN engine, so each is internally consistent,
+and the two resulting formulations then accept and reject the same bodies. Take
+`café` as the term: where the engine calls `é` a word char the port emits `\b`,
+which needs a non-word char after `é`; where it does not, the port emits
+`(?!\w)`, which needs the same thing. `café ` matches on both, `cafés` on
+neither. The agreement is a property of the construction, not a coincidence to
+re-verify per term.
+
+### One site per port — the class is closed
+
+Grepped rather than assumed: there is exactly ONE `\b`-wrapping regex in each
+port, and no third site. The visual highlight is not one — `.scrollback-mention`
+/ `.scrollback-highlight` are WHOLE-LINE classes driven by the same boolean
+`matchesWatchlist`, not a span-wrapping second regex with its own anchors. Had
+it been a span wrapper it would have needed the same cure and a different one,
+because a lookaround that consumes nothing and a `\W` that consumes a character
+differ the moment match INDICES matter rather than a boolean.
+
+### Both ports in one commit
+
+Deliberate, and against the usual bite-sized instinct: splitting server from
+client would put a state on the branch where the badge cic raises and the OS
+push the server fires disagree, which is the exact divergence the `Mentions`
+moduledoc's mirror contract exists to forbid. The truth table is extended on
+both sides in that same commit for the same reason.
+
+Two stale docs were corrected in passing: the moduledoc stated the blanket
+`\b..\b` as the rule, which the cure makes false, and cited the client mirror as
+`mentionsUser/2` — a function that module does not export. A mirror contract
+whose citation has rotted is a contract nobody can check.
+
+### Not measured
+
+- **No Elixir gate ran.** The server port — the `build_matchers/1` change, the
+  two anchor helpers and the eight new truth-table cases — is UNCOMPILED and
+  UNTESTED here: the COMPILE lane belonged to another worker for the whole of
+  this work, and `mix` on the host is banned. `mix format`-cleanliness was
+  reasoned against `.formatter.exs` (`line_length: 120`, which is why the
+  `Regex.compile!/2` call is one 101-character line and not wrapped) and the
+  regex-sigil-in-a-module-attribute shape was checked against 29 existing
+  precedents in `lib/`, but reasoning is not a green gate and neither Credo nor
+  Dialyzer nor ExUnit has seen this.
+- **The client mutation proof covers the CLIENT port only.** The 18/20 figure
+  above is a vitest measurement. The server truth table is its textual twin and
+  no mutant was run against it.
+- **The lookbehind's runtime floor is argued, not exercised.** `(?<!\w)` is
+  ES2018; cic's declared build target is `es2022` (`vite.config.ts`) and
+  `tsconfig` targets ES2022, so the toolchain admits it four years over. But
+  there is no lookbehind precedent anywhere in cic's source, and nothing here
+  ran on a Safari older than Playwright's bundled WebKit. On an engine without
+  lookbehind `new RegExp` throws, and `matchesTerm` is on the per-message render
+  path.
+- **The zero-width-space cause is out of scope and stays open.** The issue
+  records that the upstream bot injects `U+200B` inside its own trigger word, so
+  `QUACK​!` defeats any literal containing the punctuation regardless of the
+  anchors. Normalising zero-width characters changes what "the body" means for
+  every sink and is a separate decision; nothing here touches it, and a user
+  whose watchlist targets that bot may still see nothing.
