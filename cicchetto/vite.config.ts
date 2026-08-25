@@ -188,6 +188,20 @@ export default defineConfig({
         // (denylist for /auth, /me, /networks, /socket) is wired
         // explicitly in `service-worker.ts` via NavigationRoute.
         globPatterns: ["**/*.{js,css,html,svg,png,webmanifest,ico}"],
+        // #1739 — the vendored station logos are NOT shell, and leaving them
+        // to the pattern above would have precached them HALF: 7 `.png` plus
+        // one `.svg` are matched by it and 14 `.jpg` are not, so the offline
+        // bundle would grow by ~96 KB of an inconsistent subset that nobody
+        // chose. Excluding the directory keeps the "shell-only" contract this
+        // block states, and makes the answer the same for every station
+        // whatever extension upstream happens to serve.
+        //
+        // The cost of NOT precaching them is a picker that draws no artwork
+        // while offline — and an IRC client with no socket has nothing to show
+        // in the pane behind it either, so the shell was never sized for that
+        // case. They are ordinary same-origin assets with the endpoint's
+        // default caching; the browser keeps them across a session either way.
+        globIgnores: ["radio-logos/**"],
       },
     }),
   ],
