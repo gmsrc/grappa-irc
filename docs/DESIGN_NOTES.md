@@ -64805,3 +64805,109 @@ The spec asserts WIRING: given a resume event a line lands, the settle schedule
 re-samples with no event in play, the hide edge takes none, and the discriminating
 readings share a line. Whether a real iOS resume shifts the content, and by how
 much, is the device leg — which is now, for the first time, capturable.
+<!-- entry #1770 -->
+
+---
+
+## 2026-08-25 — #1770: closing an incognito PWA is a /quit, and the client event alone could never say so
+
+Item 2 of #363 shipped a pipe and never connected its trigger. `client_closing`
+travelled from cic's `pagehide`/`beforeunload` through the user channel into
+`WSPresence`, marked the socket `:hidden`, and stopped. Nothing read
+`visitor.incognito`; nothing called a deletion. So an incognito session survived
+the tab close until the 1h linger stopped being renewed — the FALLBACK doing the
+entire job, with no fast path above it.
+
+### The discriminator is not `event.persisted`, and that is measured
+
+The issue offered two candidate discriminators and left the choice open:
+`event.persisted`, or requiring the socket's real `:DOWN` within a short grace.
+`pagehide` is not a teardown — it also fires on bfcache entry and on the iOS PWA
+freeze, and `documentTeardown.ts` already says so — so something has to tell
+"going away" from "coming back".
+
+A standalone chromium + webkit bench (raw-node WS server, no grappa stack, so it
+consumes no e2e lane) settles it against `persisted`:
+
+| gesture | `pagehide.persisted` | next socket |
+|---|---|---|
+| reload (chromium) | **false** | +3 ms |
+| reload (webkit) | **false** | +2 ms |
+| navigate away (both) | false | new document on back |
+
+A RELOAD fires the byte-identical signal a genuine close fires. Deleting on
+`persisted === false` would wipe a session on F5 — irreversibly, on the one
+gesture users perform without thinking. So the client's report can only ARM; what
+DECIDES is the question the event cannot answer, asked at the far end of a grace:
+does this visitor still have a socket in `WSPresence`? Reload, second device and
+a frozen-but-connected document all land there and all abstain.
+
+### What the bench could NOT establish, and why the control says so
+
+`pageshow.persisted` came back **false** on the back-navigation even for the
+WS-LESS control page. The positive control is therefore EMPTY: bfcache never
+engaged in that harness, so nothing there licenses either "a WebSocket blocks
+bfcache" or "`persisted` discriminates a freeze". That axis is **unmeasured, not
+negative**. The iOS PWA freeze is likewise unmeasured — webkit is not iOS and
+there is no device in the loop. Named here so a future reader does not mistake
+the absence for a result.
+
+One thing the bench did show, and it argues the same way: on webkit, closing the
+context delivered **no report at all** — not over the socket, not by beacon. The
+fast path is best-effort by construction, which is exactly why the linger stays.
+
+### Scope: the fast path may only ACCELERATE the fallback
+
+`Visitors.list_expired/0` excludes registered visitors (`v.id not in
+subquery(registered_ids_subquery())`), so the 1h linger — the authoritative
+guarantee this issue explicitly leaves untouched — will NEVER collect a
+registered incognito row. A fast path that deleted one would not be an
+acceleration of the fallback; it would be a new destruction with no fallback
+behind it. Hence the anon gate, which makes the fast path's scope byte-equal to
+the sweep's.
+
+That same measurement is why this does NOT route through
+`AccountDeletion.delete_account({:visitor, visitor})`, which #363 named and the
+issue repeated. That door answers `{:error, :forbidden}` for an anon visitor —
+pinned on main by `account_deletion_test.exs:128` — and `incognito` is only ever
+written on the fresh-anon branch of `create_anon/4`, so an incognito visitor is
+anon by construction at birth. The named door would have deleted nothing in
+precisely the case the issue is about. The verb that DOES fit already existed:
+the anon co-terminus quit (stop every attached session, then wipe), which is the
+sweep's own `reap_one/2`, now taking the QUIT reason from its caller so a channel
+peer reads `session closed` rather than the untrue `visitor session expired`.
+
+### Where the clock lives, and why there is no bookkeeping
+
+The grace cannot live in the channel process — that pid dies with the tab, which
+is the event it exists to survive. It lives in `Visitors.Reaper`, the process
+that already owns "delete visitors whose time is up" and already reads
+`WSPresence` for the linger reconcile: the fast close is that same verb on a
+30s clock armed by a client signal instead of a TTL.
+
+No pending-set, deliberately. cic registers BOTH `pagehide` and `beforeunload`,
+so two timers fire per close; the second finds the row gone and answers `:gone`.
+Deduplicating would add a structure whose only job is housekeeping for a case
+idempotency already covers (design discipline (1) and (4)). Every gate is
+re-derived at expiry from the DB and from live presence, never captured at arm
+time — during the grace a row can register, vanish, or come back on a new socket.
+
+### The 30s comes from an asymmetry, not from a distribution
+
+Too short wipes a session its holder is still using, and the wipe is
+irreversible. Too long merely delays a QUIT that would otherwise have waited out
+the full hour. Those costs are not comparable, so the number errs long: 120×
+faster than the linger it accelerates, four orders of magnitude above the 3 ms
+reconnect the bench measured. What has NOT been measured is a real cic reload on
+a cold cache or a slow mobile link — the bundle fetch + boot + auth + connect
+chain — so 30s is chosen from the asymmetry and should be revised by measurement,
+not by taste.
+
+### The verbs, stated once
+
+`Reaper.client_closing/1` arms (a cast; the caller is dying, and a cast to a
+down server is a no-op). `Reaper.close_incognito/1` decides, synchronously, and
+returns what it OBSERVED — `:closed | :gone | :not_incognito | :registered |
+:reconnected | :failed`. Naming the observed STATE rather than the action taken
+is the log-honesty rule applied to a return type: a fast path that reports "did
+nothing" tells an operator nothing about why.
