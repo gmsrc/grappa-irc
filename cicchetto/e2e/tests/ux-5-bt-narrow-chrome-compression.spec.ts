@@ -185,10 +185,44 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 
     Math.round(hamBox.height),
     `#305 — hamburger tap target ${hamBox.height}px must meet the 48px HIG floor`,
   ).toBeGreaterThanOrEqual(48);
-  const hamGlyphPx = await hamburger.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  // #1766 moved this oracle from `font-size` to the PAINTED ink, and the move
+  // is a strengthening, not an accommodation. `font-size` measured the em box;
+  // #305's complaint was that U+2630 is three thin strokes centred in a box
+  // that is not narrow, i.e. precisely that the box overstates the glyph. The
+  // ☰ is now DRAWN (three rules on `::before` + two box-shadow copies), so the
+  // character is suppressed and the old proxy reads 0.
+  //
+  // Measured on this project (root 14px → --chrome-icon-size 19.59px), ink
+  // extents, canvas actualBoundingBox for the character:
+  //
+  //     U+2630 as text        19.59 W × 17.00 H   ← never met this floor
+  //     bars, first cut (/3)  19.59 W × 15.06 H   ← the regression #1766 shipped
+  //     bars, shipped         19.59 W × 19.59 H
+  //
+  // So the threshold is unchanged at 18 and is met in BOTH axes for the first
+  // time. Read off the computed shadow rather than recomputing the CSS
+  // formula, so the test measures what is painted instead of restating it.
+  const ink = await hamburger.evaluate((el) => {
+    const before = getComputedStyle(el, "::before");
+    const barH = Number.parseFloat(before.height);
+    const offsets = [
+      0,
+      ...Array.from(before.boxShadow.matchAll(/(-?[\d.]+)px\s+(-?[\d.]+)px/g), (m) =>
+        Number.parseFloat(m[2] ?? "0"),
+      ),
+    ];
+    return {
+      w: Number.parseFloat(before.width),
+      h: Math.max(...offsets) + barH - Math.min(...offsets),
+    };
+  });
   expect(
-    hamGlyphPx,
-    `#305 — hamburger glyph ${hamGlyphPx}px must be enlarged from the base 14px`,
+    Math.round(ink.w),
+    `#305 — drawn ☰ is ${ink.w}px wide; the glyph must clear the 18px floor`,
+  ).toBeGreaterThanOrEqual(18);
+  expect(
+    Math.round(ink.h),
+    `#305 — drawn ☰ is ${ink.h}px tall; the glyph must clear the 18px floor`,
   ).toBeGreaterThanOrEqual(18);
 
   // Per `feedback_e2e_visitor_members_list` — UI-shape spec is

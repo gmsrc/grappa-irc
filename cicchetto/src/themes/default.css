@@ -3161,6 +3161,23 @@ button.topic-bar-windows-opener,
   font-size: 0;
 }
 
+/* The bars fill the icon box EXACTLY: three 2px rules whose outermost edges
+   are `--chrome-icon-size` apart, in a box `--chrome-icon-size` wide. So the
+   painted ☰ is a square of the token, and the token stays the one knob.
+
+   The `/3` this replaces was a guess, and measuring it is what caught the
+   regression. On webkit-iphone-15 (root 14px, so the token resolves to
+   19.59px) the numbers are:
+
+       U+2630 as TEXT at 19.59px   ink 19.59 W × 17.00 H   (canvas
+                                   actualBoundingBox, same font stack)
+       bars at `/3`                ink 19.59 W × 15.06 H   ← −1.94px, −11.4%
+       bars at `(token - 2px)/2`   ink 19.59 W × 19.59 H
+
+   #305's floor is 18, and the CHARACTER never met it either — its em box was
+   19.59 but its ink was 17.00, which is why an oracle reading `font-size` was
+   measuring the box and not the glyph. The bars are the first shape here that
+   actually clears 18 in both axes. */
 button.topic-bar-hamburger::before,
 button.topic-bar-windows-opener::before,
 .shell-chrome .shell-chrome-rail-opener::before {
@@ -3173,8 +3190,8 @@ button.topic-bar-windows-opener::before,
      answers. */
   background: currentColor;
   box-shadow:
-    0 calc(-1 * var(--chrome-icon-size) / 3) 0 currentColor,
-    0 calc(var(--chrome-icon-size) / 3) 0 currentColor;
+    0 calc(-1 * (var(--chrome-icon-size) - 2px) / 2) 0 currentColor,
+    0 calc((var(--chrome-icon-size) - 2px) / 2) 0 currentColor;
 }
 
 /* Scrollback (existing rules — minor additions for mention highlight) */
