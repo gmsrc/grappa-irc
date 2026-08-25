@@ -123,12 +123,25 @@ defmodule Grappa.Visitors.Reaper do
   @type t :: %__MODULE__{interval_ms: pos_integer(), incognito_grace_ms: non_neg_integer()}
 
   @typedoc """
+  What `close_incognito/1` OBSERVED once it has a LIVE incognito row in hand:
+  the row was kept because the identity is persistent (`:registered`) or the
+  holder came back (`:reconnected`), or it was wiped (`:closed`), or the wipe
+  degraded on a saturated DB (`:failed`).
+  """
+  @type live_close_outcome :: :closed | :failed | :reconnected | :registered
+
+  @typedoc """
   What `close_incognito/1` OBSERVED. Every value names a state the fast path
   found, never "what it did" — a skipped fast path that logs the absence of
   work instead of the state it saw is the lie CLAUDE.md's log-honesty rule is
   about.
+
+  Split in two because the row lookup can answer before any policy runs, and
+  Dialyzer is right to insist: the arm that decides on a live row can never
+  return `:gone` or `:not_incognito`, so spelling the whole set on it would be
+  a spec that promises more than the function can do.
   """
-  @type close_outcome :: :closed | :gone | :not_incognito | :registered | :reconnected | :failed
+  @type close_outcome :: :gone | :not_incognito | live_close_outcome()
 
   @spec start_link(opts()) :: GenServer.on_start()
   def start_link(opts) do
@@ -219,7 +232,7 @@ defmodule Grappa.Visitors.Reaper do
     end
   end
 
-  @spec close_live_incognito(Visitors.Visitor.t()) :: close_outcome()
+  @spec close_live_incognito(Visitors.Visitor.t()) :: live_close_outcome()
   defp close_live_incognito(%Visitors.Visitor{id: id} = visitor) do
     cond do
       Credentials.visitor_registered?(id) ->
