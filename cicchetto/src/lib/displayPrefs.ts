@@ -10,6 +10,7 @@ import {
   setChannelPresencePref,
 } from "./presenceFilter";
 import { loadInitialScrollback, purgeScrollback } from "./scrollback";
+import { getShowBottomBar, setShowBottomBar } from "./showBottomBar";
 import { getTimeFormat, setTimeFormat, type TimeFormatKey } from "./timeFormat";
 import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSettings";
 
@@ -20,6 +21,11 @@ import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSetti
 // WITHOUT collapsing the three owner modules: each keeps its signal +
 // localStorage cache (the FOUC-free boot mirror); this coordinator adds the
 // server round-trip on top.
+//
+// #1766 added a FOURTH owner module (`showBottomBar.ts`) on exactly that shape.
+// Every function below that names the wire map has to grow with it — the
+// default baseline, `buildWireMap`, `applyServerPrefs` and a `syncedSet*` — and
+// the server's `default_display_prefs/0` is the authority for the default.
 //
 // ## The THEME sync shape, not the notification-prefs shape
 //
@@ -49,10 +55,11 @@ import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSetti
 // The reset baseline — mirror of the server's `default_display_prefs/0`
 // (the authoritative default). Used by the logout clear so a logged-out
 // browser holds no subject's residual prefs.
-const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
+const DEFAULT_DISPLAY_PREFS: Required<DisplayPrefs> = {
   time_format: "hms",
   colored_nicklist: false,
   presence_filter: {},
+  show_bottom_bar: true,
 };
 
 // #449 (issue222 regression fix) — the "unconfirmed local write" marker.
@@ -84,24 +91,35 @@ function hasUnsyncedWrite(): boolean {
   return localStorage.getItem(UNSYNCED_KEY) === "1";
 }
 
-// Read the three owner modules into the wire shape (the seed-up + every PUT
-// body). Pure snapshot; no reactivity intended.
-export function buildWireMap(): DisplayPrefs {
+// Read the four owner modules into the wire shape (the seed-up + every PUT
+// body). Pure snapshot; no reactivity intended. `show_bottom_bar` is OPTIONAL
+// on the type (a pre-#1766 server omits it on the way IN) but always populated
+// here — cic is the writer, and it knows the key.
+export function buildWireMap(): Required<DisplayPrefs> {
   return {
     time_format: getTimeFormat(),
     colored_nicklist: getColoredNicklist(),
     presence_filter: getAllPresencePrefs(),
+    show_bottom_bar: getShowBottomBar(),
   };
 }
 
-// Distribute a server-authoritative payload into the three owner modules'
+// Distribute a server-authoritative payload into the four owner modules'
 // LOCAL setters (write-through to signal + localStorage). No re-PUT — this is
 // the server-wins apply path only. The presence map is a full replace so unset
 // channels stay unset.
+//
+// #1766 — `show_bottom_bar` is coalesced against the baseline rather than
+// passed through. This is a full-replace apply that runs on EVERY login
+// reconcile, so a server that does not carry the key yet (this bundle shipped
+// ahead of it, which `--cic` allows) would otherwise write `undefined` into the
+// owner module and take the primary mobile navigation away from everyone. `??`
+// and not `||`: a genuine `false` from the server must survive.
 export function applyServerPrefs(prefs: DisplayPrefs): void {
   setTimeFormat(prefs.time_format);
   setColoredNicklist(prefs.colored_nicklist);
   replacePresencePrefs(prefs.presence_filter);
+  setShowBottomBar(prefs.show_bottom_bar ?? DEFAULT_DISPLAY_PREFS.show_bottom_bar);
 }
 
 // Reactive server sync — re-runs on every `token()` change (registered inside a
@@ -193,6 +211,11 @@ export function syncedSetTimeFormat(key: TimeFormatKey): void {
 
 export function syncedSetColoredNicklist(on: boolean): void {
   setColoredNicklist(on);
+  pushDisplayPrefs();
+}
+
+export function syncedSetShowBottomBar(on: boolean): void {
+  setShowBottomBar(on);
   pushDisplayPrefs();
 }
 

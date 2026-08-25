@@ -337,6 +337,14 @@ export type DisplayPrefs = {
   time_format: TimeFormatKey;
   colored_nicklist: boolean;
   presence_filter: Record<string, PresencePref>;
+  // #1766 — OPTIONAL on the READ side, always sent on the write side. A server
+  // predating #1766 omits it, and this bundle can be deployed ahead of the
+  // server (`deploy-m42.sh --cic` ships the bundle alone). Typed as required,
+  // `applyServerPrefs` would hand `undefined` to the local setter and the bar
+  // would vanish for every user until the server caught up — the mirror of the
+  // skew the server tolerates on the PUT. Absent ⇒ the default, exactly like
+  // `persisted?` below. `buildWireMap()` always populates it.
+  show_bottom_bar?: boolean;
 };
 
 export type DisplayPrefsResponse = {

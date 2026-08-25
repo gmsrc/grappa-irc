@@ -9,6 +9,7 @@ import {
   mountDisplayPrefsSync,
   syncedSetChannelPresencePref,
   syncedSetColoredNicklist,
+  syncedSetShowBottomBar,
   syncedSetTimeFormat,
 } from "../lib/displayPrefs";
 import {
@@ -17,6 +18,7 @@ import {
   replacePresencePrefs,
 } from "../lib/presenceFilter";
 import { loadInitialScrollback, purgeScrollback } from "../lib/scrollback";
+import { getShowBottomBar, setShowBottomBar } from "../lib/showBottomBar";
 import { getTimeFormat, setTimeFormat } from "../lib/timeFormat";
 import type { DisplayPrefs } from "../lib/userSettings";
 
@@ -43,13 +45,14 @@ const TOKEN = "test-bearer";
 const KEY_A = channelKey("n", "#a");
 const KEY_B = channelKey("n", "#b");
 
-// Reset the three module singletons to defaults + drop the token so every test
+// Reset the four module singletons to defaults + drop the token so every test
 // starts from a known local baseline (the signals persist across the suite).
 function resetLocal(): void {
   localStorage.clear();
   setTimeFormat("hms");
   setColoredNicklist(false);
   replacePresencePrefs({});
+  setShowBottomBar(true);
   setToken(null);
 }
 
@@ -82,15 +85,17 @@ afterEach(() => {
 });
 
 describe("buildWireMap", () => {
-  it("reads the three module getters into the wire shape", () => {
+  it("reads the four module getters into the wire shape", () => {
     setTimeFormat("hm");
     setColoredNicklist(true);
     replacePresencePrefs({ [KEY_A]: "hide" });
+    setShowBottomBar(false);
 
     expect(buildWireMap()).toEqual({
       time_format: "hm",
       colored_nicklist: true,
       presence_filter: { [KEY_A]: "hide" },
+      show_bottom_bar: false,
     });
   });
 
@@ -100,16 +105,49 @@ describe("buildWireMap", () => {
 });
 
 describe("applyServerPrefs", () => {
-  it("distributes server prefs into the three local setters", () => {
+  it("distributes server prefs into the four local setters", () => {
     applyServerPrefs({
       time_format: "hm",
       colored_nicklist: true,
       presence_filter: { [KEY_A]: "hide" },
+      show_bottom_bar: false,
     });
 
     expect(getTimeFormat()).toBe("hm");
     expect(getColoredNicklist()).toBe(true);
     expect(getChannelPresencePref(KEY_A)).toBe("hide");
+    expect(getShowBottomBar()).toBe(false);
+  });
+
+  // #1766 — the skew this bundle can be deployed INTO. `--cic` ships the
+  // bundle alone, so a server predating the fourth key answers three. This is
+  // a FULL-REPLACE apply that runs on every login reconcile: passing the
+  // absent value straight through would write `undefined` into the owner
+  // module and take the primary mobile navigation away from every user until
+  // the server caught up.
+  it("an absent show_bottom_bar (pre-#1766 server) takes the default, not undefined", () => {
+    setShowBottomBar(false);
+
+    applyServerPrefs({
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+    });
+
+    expect(getShowBottomBar()).toBe(true);
+  });
+
+  // …and the coalesce must be `??`, not `||`: a genuine `false` is the whole
+  // point of the preference and must survive the apply.
+  it("a server-sent false survives the coalesce", () => {
+    applyServerPrefs({
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+      show_bottom_bar: false,
+    });
+
+    expect(getShowBottomBar()).toBe(false);
   });
 
   it("tri-state: an unset channel stays ABSENT after apply (never coerced)", () => {
@@ -165,9 +203,13 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
 
   it("seeds up the local values when the server has NEVER persisted", async () => {
     // Local state the operator built on this device — must survive + push up.
+    // #1766 — the fourth pref joins the seed-up with a NON-default value, so
+    // "the key is in the body" cannot pass by accident: a coordinator that
+    // forgot to read the owner module would push `true` here.
     setTimeFormat("hm");
     setColoredNicklist(true);
     replacePresencePrefs({ [KEY_A]: "hide" });
+    setShowBottomBar(false);
 
     const serverDefaults: DisplayPrefs = {
       time_format: "hms",
@@ -202,12 +244,14 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
         time_format: "hm",
         colored_nicklist: true,
         presence_filter: { [KEY_A]: "hide" },
+        show_bottom_bar: false,
       },
     });
 
     // Local values are untouched by the seed-up (no clobber to server default).
     expect(getTimeFormat()).toBe("hm");
     expect(getColoredNicklist()).toBe(true);
+    expect(getShowBottomBar()).toBe(false);
     dispose();
   });
 
@@ -274,6 +318,7 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
         time_format: "hm",
         colored_nicklist: true,
         presence_filter: { [KEY_A]: "hide" },
+        show_bottom_bar: true,
       },
     });
   });
@@ -289,6 +334,28 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
     expect(getChannelPresencePref(KEY_A)).toBe("hide");
     expect(fetchMock).not.toHaveBeenCalled(); // no token → local-only
   });
+
+  // #1766 — the fourth synced setter. The owner module's own setter stays
+  // LOCAL-only so this coordinator remains the single PUT authority; what this
+  // pins is that the settings checkbox goes through the synced door and the
+  // body carries the new value, not the pre-toggle one.
+  it("syncedSetShowBottomBar sets local and PUTs the full wire map", async () => {
+    setToken(TOKEN);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
+        status: 200,
+      }),
+    );
+
+    syncedSetShowBottomBar(false);
+    await flush();
+
+    expect(getShowBottomBar()).toBe(false);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/me/settings/display-prefs");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string).display_prefs.show_bottom_bar).toBe(false);
+  });
 });
 
 // S1 (review) — clear-on-logout so a shared browser / visitor→user upgrade can
@@ -297,7 +364,12 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
 // seed-up made it a WRITE source, so a never-persisted next login would PUT the
 // prior subject's residual values. Parity with mountCustomThemeSync's clear.
 describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", () => {
-  const DEFAULTS = { time_format: "hms", colored_nicklist: false, presence_filter: {} };
+  const DEFAULTS = {
+    time_format: "hms",
+    colored_nicklist: false,
+    presence_filter: {},
+    show_bottom_bar: true,
+  };
 
   // Phase-mutable fetch stub: the GET body changes across A-login / B-login.
   let getBody: unknown;
