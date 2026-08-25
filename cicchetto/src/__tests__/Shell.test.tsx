@@ -1722,6 +1722,31 @@ describe("#1766 — the mobile window bar is opt-out, and the ☰ ships with the
       expect(screen.getByLabelText(/open members sidebar/i)).toBeInTheDocument();
     });
 
+    // The slot is a PROP, so it is evaluated once when the band mounts. What
+    // keeps it live is the `<Show>` INSIDE it: `Show` reads its `when` in its
+    // own memo, so the toggle re-runs that memo and not the whole band. Pinned
+    // because the alternative — reading the signal where the slot is built —
+    // compiles, renders identically on first paint, and then never updates.
+    it("appears live when the preference flips, without a remount", async () => {
+      mobileState.value = true;
+      selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+      const { container } = render(() => <Shell />);
+      await waitFor(() => {
+        expect(container.querySelector(".topic-bar")).not.toBeNull();
+      });
+      expect(screen.queryByLabelText(/open windows sidebar/i)).toBeNull();
+
+      setShowBottomBar(false);
+      await waitFor(() => {
+        expect(screen.getByLabelText(/open windows sidebar/i)).toBeInTheDocument();
+      });
+
+      setShowBottomBar(true);
+      await waitFor(() => {
+        expect(screen.queryByLabelText(/open windows sidebar/i)).toBeNull();
+      });
+    });
+
     it("opens the #1041 channel sidebar — the door the swipe already opens", async () => {
       mobileState.value = true;
       setShowBottomBar(false);
