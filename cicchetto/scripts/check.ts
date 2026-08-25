@@ -42,6 +42,12 @@ const STAGES: readonly Stage[] = [
   // short-circuit the rest: a stale toolchain and a real type error are
   // separate facts and #1469's whole point is reporting the union.
   { name: "lock drift (node_modules vs bun.lock)", argv: ["bun", "scripts/lock-drift.ts"] },
+  // #1582 — a convention gate, not a correctness one: cic unit tests grew
+  // across three directories because nothing but a doc line held them to one,
+  // and the doc line was written the same day the second directory appeared.
+  // Cheap (a `src/` walk) and it fails on the file that lands in the wrong
+  // place, not months later when someone notices two tests for one module.
+  { name: "test location (one home for cic unit tests)", argv: ["bun", "scripts/test-location.ts"] },
   { name: "biome (src + e2e)", argv: ["biome", "check", "--max-diagnostics=none"] },
   { name: "tsc (src)", argv: ["tsc", "--noEmit"] },
   { name: "tsc (e2e)", argv: ["tsc", "--noEmit", "-p", "e2e/tsconfig.json"] },
