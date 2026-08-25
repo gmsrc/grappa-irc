@@ -63323,3 +63323,132 @@ a second measurement of the symptom. Also not measured: whether the roam
 window above is ever reached in production, and the Linux `integration.yml`
 substrate, which #1618 already flagged as unshared with the darwin/Docker run
 the numbers come from.
+<!-- entry #1767 -->
+
+---
+
+## 2026-08-25 — #1767: the frame was a sample, not a block, and the cause is still open
+
+`lock_watch_test.exs` reddened main seven times. Every occurrence was an
+`ExUnit.TimeoutError` at 60 000 ms — an APPENDING, never a failed assertion —
+and four of them carried the same four frames:
+
+```
+(elixir) lib/process.ex:900: Process.info/2
+(grappa) lib/grappa/repo/lock_watch.ex:682: LockWatch.stacktrace/1
+(grappa) lib/grappa/repo/lock_watch.ex:669: LockWatch.sample/2
+(grappa) lib/grappa/repo/lock_watch.ex:584: LockWatch.report_unattributed/2
+```
+
+That regularity was read as *one defect, in `LockWatch.stacktrace/1`*, on the
+hypothesis that `Process.info/2` against a pid parked in a **dirty NIF**
+inherits the NIF's `busy_timeout` — the mechanism #1715 documents for
+`persistent_term` writes and module loads. The hypothesis was labelled
+DEDUCED and NOT REPRODUCED when it was written. **It is now measured, and it
+is false.**
+
+### The four falsifications
+
+Measured on `c8a0bf4d`, in this file's own topology (holder parked in a write
+transaction, waiter genuinely blocked in its `BEGIN IMMEDIATE`,
+`busy_timeout` 120 s), each in a container under its own cache id:
+
+1. **`Process.info(pid, :current_stacktrace)` against a writer parked inside
+   `Exqlite.Sqlite3NIF.execute/2` does not block.** 2–78 µs, zero blocked
+   samples, in four configurations: 40 samples at 16 schedulers / 10 dirty-IO
+   slots; 14 parked NIFs against those same 10 slots; 1 waiter at 2 schedulers
+   / 2 slots; 6 waiters at 2 slots. The target read `:running`, `:runnable`
+   AND `:waiting` across those runs and answered in microseconds in all three
+   states — the dirty signal handler serves the request without the target
+   ever running. This agrees with what this file's own #1747 note already
+   recorded (21 µs) and with the #1420 measurement (0 ms).
+2. **The whole report path costs milliseconds, always.** `scan/1` is 502 µs
+   idle and 2 847 µs with the dirty-IO slots saturated threefold;
+   `inspect_lock/0` over 6 parked NIFs on 2 slots is 2 204 µs, 734 µs per
+   sampled process. Nothing that could be built here brings it within four
+   orders of magnitude of the 60 s cut.
+3. **The report path loads zero modules.** 502 µs on its first run in a fresh
+   VM, 219 and 204 µs after. #1715's third mechanism — `code:ensure_loaded/1`
+   serialising behind the parked NIF, which CLAUDE.md explicitly lists as NOT
+   covered by the Logger prime — has nothing to bite on here.
+4. **A test that does not reach its end leaks no parked NIF.** Measured with a
+   test that flunks before releasing: 3 NIFs parked during it, `in_nif=0` at
+   the next test's setup and for the following 6 s. `on_exit` kills the
+   holder, which sits in a `receive` and not in a NIF, so it dies at once, the
+   lock frees and the waiters leave. There is no cross-test accumulation.
+
+`persistent_term:put` behind the parked NIF was also probed and returned
+immediately. That is recorded as a NON-measurement, not as a refutation of
+#1715: CLAUDE.md already states that mechanism was measured in the field and
+never reproduced on a bench, and this bench did not reproduce it either.
+
+### What was reproduced, and what it says
+
+`mix test test/grappa/repo/lock_watch_test.exs --repeat-until-failure N` under
+`ELIXIR_ERL_OPTIONS="+S 2:2 +SDio 2"` went red on the second repetition of the
+first run: same test, same `report_unattributed/2 → sample/2`, same 60 000 ms
+`ExUnit.TimeoutError`. **1 red in 72 repetitions (1.4 %)** across four runs.
+
+Two things the local red adds, and both point the same way.
+
+**The frame moved.** In CI the top frame is `Process.info/2` (`:682`); in the
+local red it is `Exception.format_stacktrace_entry/1` (`:686`) — two different
+points inside the same `stacktrace/1`. A block stands still in one place. A
+sample lands wherever the machine stopped. And the FIRST occurrence (`:444`)
+had a different stack again — `assert_receive {:DOWN, …}, 5_000` at
+`lock_watch_test.exs:469`, with no LockWatch frame at all. That one carries
+the sharpest datum in the whole issue: **an `assert_receive` with a 5 000 ms
+timeout cannot produce a `TimeoutError` at 60 000 ms** — at 5 s it would fail
+with "No message matching". Surviving 55 s longer means the test process was
+NOT SCHEDULED. Not blocked inside something: starved.
+
+**The rate, not the place.** In the red run EVERY test cost 7.7 s against
+0.19 s in the 71 green repetitions of the same command on the same tree — 40×,
+and the cause of that is outside the test. (Coincidence worth recording
+without a claim attached: dirty-IO saturation costs 734 µs/proc against
+~20 µs/proc idle, 37×, the same order.)
+
+### What is NOT established
+
+Stated plainly, because the grouping this entry corrects was built by reading
+structure and inferring a mechanism nobody had measured — the same move, one
+level up, would be the same mistake.
+
+* **Why the sample lands inside `sample/2` three times out of three.** On a
+  0.5–2.8 ms path inside a 60 s test the per-sample probability is ~0.2 %.
+  Three out of three is not chance, and no blocking path survives measurement.
+  This is the open hole.
+* Why one test suffers ~300× while its neighbours in the same run suffer 40×.
+* Why the identical tree passes on the PR and fails on main. The local
+  1-in-72 on the same command and the same tree is consistent with an
+  executor-load reading, but that is analogy, not measurement.
+
+### The cure is an instrument, not a fix
+
+There is no cure in this entry, deliberately. Raising the timeout buys a
+slower red if the mechanism is real and hides it if it is not, and blinding
+the observer — the one thing whose job is to report contention — trades the
+instrument for nothing, since it is measured not to be the culprit.
+
+What ships instead is a **filmer** in the test file: it samples the test
+process every 250 ms and, only past a threshold derived from the ExUnit
+deadline (a twentieth of it, ~15× a healthy test here), prints the whole
+trajectory rather than the last frame. It carries `reductions` as the
+discriminator no stack sample can supply: reductions that do not advance
+between two samples are positive evidence that the process ran no code at all,
+which separates *blocked inside a call* from *never scheduled* — exactly the
+question seven single frames could not answer.
+
+Three properties make it an instrument rather than decoration, and each is
+pinned by a test. Its known-answer control runs INSIDE it, in the filmer's own
+process, against a canary parked in a distinctively named function; a sampler
+that fails the control produces NO film, because a plausible trajectory from a
+broken sampler would be believed. Its blindness is noisy in every direction —
+an over-threshold run with no samples says so, a filmer that cannot answer
+prints UNAVAILABLE instead of nothing, a film past the printable window
+declares what it dropped. And it counts its OWN missed ticks, which is a
+reading in its own right: it says the VM was not scheduling the observer
+either, which nothing sampled from the test process can show.
+
+It moves no timeout, weakens no assertion and does not touch
+`Grappa.Repo.LockWatch`.
