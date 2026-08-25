@@ -23,9 +23,23 @@
 //       `src` and draws the browser's broken glyph. #1739 removed the
 //       `onError` handler that used to hide that, so the decoded width is the
 //       only thing left that can tell the two apart;
-//   (g) #1739 — and NOTHING reaches api.somafm.com while it does. That is the
-//       privacy outcome the issue was filed for, and it is asserted as a count
-//       rather than inferred from (f) passing.
+//   (g) #1739 — and the picker issues NO cross-origin image request while it
+//       does. That is the privacy outcome the issue was filed for, and it is
+//       asserted as a count rather than inferred from (f) passing.
+//
+//       Counted on `resourceType() === "image"` and a foreign ORIGIN rather
+//       than on a somafm URL pattern, because the invariant is host-agnostic:
+//       the table already carries one row from another provider
+//       (rockantenne.de) and the next one will come from somewhere nobody has
+//       written down yet. A pattern-scoped count would go green for exactly
+//       the station it had never heard of.
+//
+//       ⚠️ NOT "no request to api.somafm.com": the now-playing FEED lives on
+//       that host and is a third-party URL by design (#1698, still true).
+//       Measured before writing this — `nowPlaying.ts` fires `void poll(url)`
+//       immediately on tune, not on the first interval — so a host-scoped
+//       counter would have counted the feed and reddened on a leak that does
+//       not exist. The image axis is the one #1739 moved.
 //
 // NO THIRD-PARTY NETWORK. The stream is served by `page.route` from local
 // bytes (fixtures/bytes `silentMp3`), so the suite never depends on somafm.com
@@ -37,8 +51,13 @@
 // still a third-party request", as this header put it — and #1739 removed the
 // need rather than the request: `bun run sync:radio-logos` mirrors every
 // station's bytes into `public/radio-logos/`, so the picker draws from our own
-// origin. What was a stub is now an ABORTING counter: anything that still asks
-// somafm for a logo both fails to paint and shows up in (g).
+// origin. What was a stub is now an ABORT, so a regression both fails to paint
+// (f) and shows up in the count (g) instead of one hiding behind the other.
+//
+// That abort also covers the now-playing feed, which this spec never routed
+// and which therefore reached the real api.somafm.com on every run — a
+// third-party dependency in a file whose header claims it has none. It is
+// closed here rather than left, and nothing in this spec asserts a track.
 //
 // WHAT THIS SPEC DELIBERATELY DOES NOT ASSERT, and where it IS asserted.
 // The transport's LIVE mode — no seek slider, no download anchor, elapsed
@@ -91,17 +110,22 @@ test("#682 — the rail picker tunes a station onto the docked transport", async
       body: silentMp3(8),
     });
   });
-  // #1739 — nothing should ask somafm for a logo any more. Scoped to the whole
-  // host rather than `/logos/**`: the now-playing feed lives on the same host
-  // and this test never tunes long enough to poll it, so a hit here is a logo
-  // request whichever path it takes — and a path this spec did not predict is
-  // exactly the regression a narrower pattern would miss.
-  let somafmApiRequests = 0;
+  // #1739 — no <img> may leave our origin. Recorded host-agnostically, because
+  // the table already holds a row from another provider and the invariant is
+  // about the picker rather than about somafm.
+  const crossOriginImages: string[] = [];
+  page.on("request", (request) => {
+    if (request.resourceType() !== "image") return;
+    if (new URL(request.url()).origin === new URL(page.url()).origin) return;
+    crossOriginImages.push(request.url());
+  });
+
+  // ABORT rather than fulfil, so a logo regression also fails to PAINT and (f)
+  // reddens beside (g) instead of the stub hiding it. The now-playing feed
+  // rides the same rule: this spec asserts no track, and leaving it unrouted
+  // is what put a real third-party request in a suite whose header says it has
+  // none.
   await page.route("https://api.somafm.com/**", async (route) => {
-    somafmApiRequests += 1;
-    // ABORT rather than fulfil: a regression must also FAIL to paint, so (f)
-    // and (g) go red together instead of (g) alone reporting a leak that the
-    // stub had made invisible.
     await route.abort();
   });
 
@@ -161,6 +185,6 @@ test("#682 — the rail picker tunes a station onto the docked transport", async
     .poll(() => paintedWidth(LOGOLESS_STATION_ID), { timeout: 10_000 })
     .toBeGreaterThan(0);
 
-  // (g) #1739 — and the third party heard nothing at all while that happened.
-  expect(somafmApiRequests).toBe(0);
+  // (g) #1739 — and every one of those pixels came from us.
+  expect(crossOriginImages).toEqual([]);
 });
