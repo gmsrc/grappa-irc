@@ -21,6 +21,22 @@
 //
 // So the subscription stays and the noise is dropped where it arrives.
 //
+// #1769 ADDS a second cut without reversing that. The subscription still
+// stays — what changes is that a paused channel RE-JOINS the same topic
+// carrying `{presence: false}`, and the server then declines to push the
+// three pausable kinds at all. The events stop crossing the socket instead of
+// being decoded and discarded here, which is the cost #1680 could not reach:
+// it saved render and store work, never bytes, parse or wakeups.
+//
+// The drop below is KEPT rather than replaced, and not out of caution. It is
+// what serves an older server (the param is read once at join and silently
+// ignored by anything predating protocol 7), and it is what covers the
+// microseconds between a re-join landing and the server swapping this
+// socket's fastlane. Two cuts, one rule — `PAUSABLE_PRESENCE_KINDS` below is
+// pinned to the server's `Message.pausable_presence_kinds/0` by
+// `presence_filter_test.exs`, so they cannot disagree about which kinds those
+// are.
+//
 // WHY NOT ALL FIVE PRESENCE KINDS
 //
 // `SUPPRESSED_PRESENCE_KINDS` (presenceFilter.ts, byte-pinned to the server
@@ -75,16 +91,39 @@ export interface PresencePause {
   dispose(): void;
 }
 
+// The two edges of a pause, as injected callbacks — the shape
+// `presenceCooldown.ts` chose for its own terminal action, for the same
+// reason: what "paused" DOES is the contested part, and holding it behind a
+// seam keeps changing it a one-line edit at the wiring site.
+//
+// `onPause` fires when a blurred channel's cooldown expires. #1769 hangs the
+// server-side half off it: a re-join carrying `{presence: false}`, so the
+// events stop crossing the socket at all instead of being decoded and thrown
+// away here.
+//
 // `onResume` fires when a channel that WAS paused regains focus — the seam
 // the members refetch hangs off, because that is the one store the pause let
 // go stale. It does not fire for a channel that was merely blurred and came
 // back inside its window: nothing was dropped, so nothing needs rebuilding.
+//
+// An OBJECT rather than two positional callbacks: they have identical types,
+// so a swapped pair would type-check and then refetch on pause and mute on
+// resume — a bug with no compiler to catch it.
+export interface PresencePauseHandlers {
+  onPause: (key: ChannelKey) => void;
+  onResume: (key: ChannelKey) => void;
+}
+
 export function createPresencePause(
-  onResume: (key: ChannelKey) => void,
+  handlers: PresencePauseHandlers,
   cooldownMs: number,
 ): PresencePause {
   const pausedKeys = new Set<ChannelKey>();
-  const cooldown = createPresenceCooldown((key) => pausedKeys.add(key), cooldownMs);
+
+  const cooldown = createPresenceCooldown((key) => {
+    pausedKeys.add(key);
+    handlers.onPause(key);
+  }, cooldownMs);
   let focused: ChannelKey | null = null;
 
   return {
@@ -96,7 +135,7 @@ export function createPresencePause(
       cooldown.focused(key);
       // `delete` returns whether it was there — so the refetch is ordered
       // exactly when presence was actually missed, never on a plain re-focus.
-      if (pausedKeys.delete(key)) onResume(key);
+      if (pausedKeys.delete(key)) handlers.onResume(key);
     },
 
     isPaused(key: ChannelKey): boolean {

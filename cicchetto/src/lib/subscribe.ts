@@ -36,7 +36,7 @@ import { applyJoinReply, applyReadCursorSet, renameReadCursorChannel } from "./r
 import { recordSeen } from "./reconnectBackfill";
 import { appendToScrollback, refreshScrollback, renameScrollbackKey } from "./scrollback";
 import { followQueryNick, selectedChannel, setServerSeedCount } from "./selection";
-import { joinChannel } from "./socket";
+import { type ChannelJoinParams, joinChannel } from "./socket";
 import { socketHealth } from "./socketHealth";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
 import {
@@ -151,32 +151,58 @@ moduleRoot(() => {
   // `PRESENCE_COOLDOWN_MS` stops applying those, and regaining focus refetches
   // the one store the pause let go stale — the members map.
   //
-  // The subscription itself is NEVER dropped: the per-channel topic also
-  // carries the messages (`Grappa.Session.Persistor` broadcasts them there),
-  // so leaving it would make the window blind rather than quiet. See
-  // `presencePause.ts` for the full argument and the carve-outs.
-  const presencePause = createPresencePause((key) => {
-    const t = untrack(token);
-    if (!t) return;
-    // `decodeChannelKey` is nullable by contract; a key that cannot be
-    // decoded cannot be refetched, and inventing a slug would fetch the
-    // wrong channel. Leave the members map alone.
-    const decoded = decodeChannelKey(key);
-    if (decoded === null) return;
-    const { slug, name } = decoded;
-    // A refetch that throws must not take the handler down with it — the
-    // members map simply stays as it was until the next seed. `null` is the
-    // server's 204 (`:uninitialized`): joined but pre-NAMES, or not joined.
-    // Seeding `[]` there would blank a good list, which is exactly the
-    // distinction CP24 bucket E drew.
-    void listMembers(t, slug, name)
-      .then((members) => {
-        if (members !== null) seedMembers(key, members);
-      })
-      .catch((err: unknown) => {
-        console.warn("[subscribe] members refetch failed on resume", key, err);
-      });
-  }, PRESENCE_COOLDOWN_MS);
+  // The channel is never ABANDONED: the per-channel topic also carries the
+  // messages (`Grappa.Session.Persistor` broadcasts them there), so a paused
+  // window must end up subscribed or it goes blind rather than quiet. Since
+  // #1769 the pause does call `phx.leave()`, immediately followed by a join
+  // carrying the new param — the param is read once at join, so a swap is the
+  // only way to change it. The cost of that swap is a short window with no
+  // live delivery, closed by the join-ACK `refreshScrollback` that every
+  // channel join already runs. See `presencePause.ts` for the full argument
+  // and the carve-outs.
+  //
+  // #1769 wires BOTH edges. `onPause` re-joins the topic with
+  // `{presence: false}` so the events stop crossing the socket; `onResume`
+  // re-joins without it AND rebuilds the members map. Both handlers reference
+  // `rejoinWithPresence`, declared further down: they only ever run from a
+  // cooldown timer or a selection change, long after this root has evaluated,
+  // and neither can fire during it (no channel is paused at boot).
+  const presencePause = createPresencePause(
+    {
+      onPause: (key) => {
+        rejoinWithPresence(key, false);
+      },
+      onResume: (key) => {
+        // Re-subscribe FIRST, then refetch. The other order races a JOIN landing
+        // between the two: the refetch would return a member list taken before
+        // it, and the event that would have corrected the list arrives while the
+        // socket is still suppressing. Subscribing first can only duplicate an
+        // apply, which the members store is idempotent under.
+        rejoinWithPresence(key, true);
+        const t = untrack(token);
+        if (!t) return;
+        // `decodeChannelKey` is nullable by contract; a key that cannot be
+        // decoded cannot be refetched, and inventing a slug would fetch the
+        // wrong channel. Leave the members map alone.
+        const decoded = decodeChannelKey(key);
+        if (decoded === null) return;
+        const { slug, name } = decoded;
+        // A refetch that throws must not take the handler down with it — the
+        // members map simply stays as it was until the next seed. `null` is the
+        // server's 204 (`:uninitialized`): joined but pre-NAMES, or not joined.
+        // Seeding `[]` there would blank a good list, which is exactly the
+        // distinction CP24 bucket E drew.
+        void listMembers(t, slug, name)
+          .then((members) => {
+            if (members !== null) seedMembers(key, members);
+          })
+          .catch((err: unknown) => {
+            console.warn("[subscribe] members refetch failed on resume", key, err);
+          });
+      },
+    },
+    PRESENCE_COOLDOWN_MS,
+  );
 
   // Selection IS focus, for the pause's purposes — deliberately NOT gated on
   // `isDocumentVisible()`. A backgrounded tab that comes back must not pay a
@@ -955,6 +981,78 @@ moduleRoot(() => {
     w.__cic_channelReady.add(key);
   };
 
+  // The one door a REAL IRC channel topic is joined through — the channels
+  // loop, the pending pre-subscribe loop, and #1769's pause/resume re-join
+  // all come here, so the join-ACK obligations (seed, backfill, ready seam)
+  // cannot be half-applied by one of them.
+  const joinRealChannel = (
+    userName: string,
+    slug: string,
+    name: string,
+    key: ChannelKey,
+    params: ChannelJoinParams,
+  ): void => {
+    const phx = joinChannel(
+      userName,
+      slug,
+      name,
+      (reply) => {
+        applyJoinReplyAndSeed(slug, name, reply);
+        // CP29 R-5: refresh on EVERY successful join (initial + every
+        // auto-rejoin). This is the ONLY refresh ordered after the
+        // subscription is live, so it is the one that closes the
+        // subscribe-vs-backfill gap (#1593); the socket-open sweep cannot.
+        // The per-key guard inside refreshScrollback keeps bursty rejoins
+        // off the wire concurrently and QUEUES the loser (never drops it);
+        // the resume-cursor heuristic keeps the fetch short.
+        //
+        // #1769 leans on this: a pause/resume re-join is a join like any
+        // other, so rows that landed while the topic was being swapped are
+        // backfilled here rather than by a second mechanism.
+        void refreshScrollback(slug, name);
+        // #79: this callback fires on the join ACK (subscribed), NOT the
+        // `joined.set(key, phx)` below which fires on join-ATTEMPT. Stamp
+        // the ready seam here so waitForChannelReady observes a live
+        // subscription, never a merely-issued join.
+        stampChannelReady(key);
+      },
+      params,
+    );
+    installChannelHandler(phx, slug, name, key, () => ownNickForSlug(slug));
+    joined.set(key, phx);
+  };
+
+  // #1769 — the pause/resume edge, server side. The param is read ONCE by
+  // `GrappaWeb.GrappaChannel.join/3`, so changing the answer means joining
+  // again; there is deliberately no verb to flip it in place (vjt ruled join
+  // params, and a verb would be a second way to say the same thing).
+  //
+  // Leave-then-join, in that order and both explicit. Phoenix closes the
+  // previous channel by itself on a duplicate join, but the stale
+  // `phx.on("event", …)` handler on the OLD Channel object would survive on
+  // this socket — the cic H2 leak, one extra handler per transition, which on
+  // a channel that pauses and resumes all day is unbounded.
+  //
+  // Called from a timer and from a selection effect, so `untrack`: this must
+  // never register `socketUserName` as a dependency of whatever reactive
+  // scope happens to be running when a cooldown expires.
+  const rejoinWithPresence = (key: ChannelKey, presence: boolean): void => {
+    untrack(() => {
+      // Not joined (parted, rotated, never seeded) — nothing to re-join, and
+      // joining here would resurrect a subscription the #200 own-part
+      // teardown deliberately dropped.
+      if (!joined.has(key)) return;
+      const userName = socketUserName();
+      if (!userName) return;
+      const decoded = decodeChannelKey(key);
+      if (decoded === null) return;
+      const { slug, name } = decoded;
+      joined.get(key)?.leave();
+      joined.delete(key);
+      joinRealChannel(userName, slug, name, key, { presence });
+    });
+  };
+
   // Channels loop — one join per real IRC channel in channelsBySlug.
   createEffect(() => {
     // Channel topics are addressed by the server's socket-side
@@ -980,24 +1078,7 @@ moduleRoot(() => {
       for (const ch of list) {
         const key = channelKey(slug, ch.name);
         if (joined.has(key)) continue;
-        const phx = joinChannel(name, slug, ch.name, (reply) => {
-          applyJoinReplyAndSeed(slug, ch.name, reply);
-          // CP29 R-5: refresh on EVERY successful join (initial + every
-          // auto-rejoin). This is the ONLY refresh ordered after the
-          // subscription is live, so it is the one that closes the
-          // subscribe-vs-backfill gap (#1593); the socket-open sweep cannot.
-          // The per-key guard inside refreshScrollback keeps bursty rejoins
-          // off the wire concurrently and QUEUES the loser (never drops it);
-          // the resume-cursor heuristic keeps the fetch short.
-          void refreshScrollback(slug, ch.name);
-          // #79: this callback fires on the join ACK (subscribed), NOT the
-          // `joined.set(key, phx)` below which fires on join-ATTEMPT. Stamp
-          // the ready seam here so waitForChannelReady observes a live
-          // subscription, never a merely-issued join.
-          stampChannelReady(key);
-        });
-        installChannelHandler(phx, slug, ch.name, key, () => ownNickForSlug(slug));
-        joined.set(key, phx);
+        joinRealChannel(name, slug, ch.name, key, { presence: true });
       }
     }
   });
@@ -1048,19 +1129,11 @@ moduleRoot(() => {
       if (joined.has(typedKey)) continue;
       const net = nets.find((n) => n.slug === slug) ?? null;
       if (net === null) continue;
-      const phx = joinChannel(name, slug, channelName, (reply) => {
-        applyJoinReplyAndSeed(slug, channelName, reply);
-        void refreshScrollback(slug, channelName);
-        // #79: the OTHER channel-topic join path (a mid-session /join goes
-        // pending → subscribed HERE → joined, at which point the
-        // channels-loop skips it via the `joined` guard and never fires its
-        // own ACK). Stamp the ready seam here too so waitForChannelReady
-        // works regardless of which loop owned the join. Uniform rule:
-        // every channel-topic join ACK stamps `__cic_channelReady`.
-        stampChannelReady(typedKey);
-      });
-      installChannelHandler(phx, slug, channelName, typedKey, () => ownNickForSlug(slug));
-      joined.set(typedKey, phx);
+      // Same door as the channels loop (`joinRealChannel`), so the #79 ready
+      // seam and the join-ACK backfill cannot drift between the two paths.
+      // `presence: true` — a window the operator just opened is by definition
+      // the one being looked at.
+      joinRealChannel(name, slug, channelName, typedKey, { presence: true });
     }
   });
 
@@ -1104,12 +1177,20 @@ moduleRoot(() => {
     if (pending) return pending;
     if (joined.has(key)) return Promise.resolve();
     const acked = new Promise<void>((resolve) => {
-      const phx = joinChannel(userName, slug, target, (reply) => {
-        applyJoinReplyAndSeed(slug, target, reply);
-        void refreshScrollback(slug, target);
-        stampQueryWindowReady(slug, target);
-        resolve();
-      });
+      // A query window is not a channel: no peer join/part/quit is broadcast
+      // on a DM topic, so the presence param would have nothing to suppress.
+      const phx = joinChannel(
+        userName,
+        slug,
+        target,
+        (reply) => {
+          applyJoinReplyAndSeed(slug, target, reply);
+          void refreshScrollback(slug, target);
+          stampQueryWindowReady(slug, target);
+          resolve();
+        },
+        {},
+      );
       installChannelHandler(phx, slug, target, key, () => ownNickForSlug(slug));
       joined.set(key, phx);
     });
@@ -1190,46 +1271,54 @@ moduleRoot(() => {
         dmListenerKeys.delete(net.slug);
       }
       if (joined.has(key)) continue;
-      const phx = joinChannel(userName, net.slug, ownNick, (reply) => {
-        applyJoinReplyAndSeed(net.slug, ownNick, reply);
-        // DM-listener topic refresh: fetches self-msgs only because
-        // the controller applies own-nick narrowing when channel ==
-        // own_nick (CP14-B3 rule). Inbound peer DMs persist with
-        // channel=ownNick AND dm_with=peer; the narrowing filters
-        // them out from this fetch by intent (the own-nick query
-        // window display would otherwise leak every peer's DMs in).
-        // Recovery for inbound peer DMs goes through each open
-        // per-peer query window's own refresh — that subscription's
-        // rejoin uses the (slug, peer) cursor and the bidirectional
-        // DM fetch shape returns BOTH directions. First-contact DMs
-        // that arrive during the gap (no per-peer subscription
-        // existed yet) are not recovered by this design — deferred
-        // edge case, documented here for traceability.
-        void refreshScrollback(net.slug, ownNick);
-        // UX-6-L e2e seam: stamp the per-slug DM-listener ready set
-        // on window after a successful phx.join() ack. Playwright
-        // polls `__cic_dmListenerReady?.has(slug)` to await the
-        // subscription before driving a peer DM — eliminates the
-        // peer-arrives-before-cic-subscribed race (silent broadcast
-        // drop) that flaked the ux-6-l e2e ~20% in suite. Production
-        // never reads the property; same seam shape as
-        // `socket.ts:__cic_dropSocketForTests`. The query-window loop
-        // has the SAME no-pre-event-DOM-signal gap (its outbound-echo
-        // topic, no self-JOIN line) and carries its own
-        // `__cic_queryWindowReady` seam (above); the real-channels loop
-        // carries `__cic_channelReady` (stampChannelReady, above) since
-        // #79 — the self-JOIN scrollback line is NOT a reliable pre-event
-        // signal (it is a boot-persisted row served by the initial REST
-        // /messages page, so it renders before the channel `phx.join()`
-        // ACKs; the own-echo then fastlanes past the not-yet-subscribed
-        // socket and the row never appears). The $server synthetic window
-        // is read-only (no compose-then-echo flow) so it needs no seam.
-        if (typeof window !== "undefined") {
-          const w = window as Window & { __cic_dmListenerReady?: Set<string> };
-          if (!w.__cic_dmListenerReady) w.__cic_dmListenerReady = new Set();
-          w.__cic_dmListenerReady.add(net.slug);
-        }
-      });
+      // The own-nick DM-listener topic carries inbound DMs, never peer
+      // presence — nothing for `{presence: false}` to suppress.
+      const phx = joinChannel(
+        userName,
+        net.slug,
+        ownNick,
+        (reply) => {
+          applyJoinReplyAndSeed(net.slug, ownNick, reply);
+          // DM-listener topic refresh: fetches self-msgs only because
+          // the controller applies own-nick narrowing when channel ==
+          // own_nick (CP14-B3 rule). Inbound peer DMs persist with
+          // channel=ownNick AND dm_with=peer; the narrowing filters
+          // them out from this fetch by intent (the own-nick query
+          // window display would otherwise leak every peer's DMs in).
+          // Recovery for inbound peer DMs goes through each open
+          // per-peer query window's own refresh — that subscription's
+          // rejoin uses the (slug, peer) cursor and the bidirectional
+          // DM fetch shape returns BOTH directions. First-contact DMs
+          // that arrive during the gap (no per-peer subscription
+          // existed yet) are not recovered by this design — deferred
+          // edge case, documented here for traceability.
+          void refreshScrollback(net.slug, ownNick);
+          // UX-6-L e2e seam: stamp the per-slug DM-listener ready set
+          // on window after a successful phx.join() ack. Playwright
+          // polls `__cic_dmListenerReady?.has(slug)` to await the
+          // subscription before driving a peer DM — eliminates the
+          // peer-arrives-before-cic-subscribed race (silent broadcast
+          // drop) that flaked the ux-6-l e2e ~20% in suite. Production
+          // never reads the property; same seam shape as
+          // `socket.ts:__cic_dropSocketForTests`. The query-window loop
+          // has the SAME no-pre-event-DOM-signal gap (its outbound-echo
+          // topic, no self-JOIN line) and carries its own
+          // `__cic_queryWindowReady` seam (above); the real-channels loop
+          // carries `__cic_channelReady` (stampChannelReady, above) since
+          // #79 — the self-JOIN scrollback line is NOT a reliable pre-event
+          // signal (it is a boot-persisted row served by the initial REST
+          // /messages page, so it renders before the channel `phx.join()`
+          // ACKs; the own-echo then fastlanes past the not-yet-subscribed
+          // socket and the row never appears). The $server synthetic window
+          // is read-only (no compose-then-echo flow) so it needs no seam.
+          if (typeof window !== "undefined") {
+            const w = window as Window & { __cic_dmListenerReady?: Set<string> };
+            if (!w.__cic_dmListenerReady) w.__cic_dmListenerReady = new Set();
+            w.__cic_dmListenerReady.add(net.slug);
+          }
+        },
+        {},
+      );
       installDmListenerHandler(phx, net.slug, net.id, ownNick);
       joined.set(key, phx);
       dmListenerKeys.set(net.slug, key);
@@ -1257,10 +1346,18 @@ moduleRoot(() => {
     for (const net of nets) {
       const key = channelKey(net.slug, SERVER_WINDOW_NAME);
       if (joined.has(key)) continue;
-      const phx = joinChannel(userName, net.slug, SERVER_WINDOW_NAME, (reply) => {
-        applyJoinReplyAndSeed(net.slug, SERVER_WINDOW_NAME, reply);
-        void refreshScrollback(net.slug, SERVER_WINDOW_NAME);
-      });
+      // The synthetic $server window carries MOTD and server NOTICEs; no
+      // peer presence is ever broadcast on it, so there is nothing to pause.
+      const phx = joinChannel(
+        userName,
+        net.slug,
+        SERVER_WINDOW_NAME,
+        (reply) => {
+          applyJoinReplyAndSeed(net.slug, SERVER_WINDOW_NAME, reply);
+          void refreshScrollback(net.slug, SERVER_WINDOW_NAME);
+        },
+        {},
+      );
       installChannelHandler(phx, net.slug, SERVER_WINDOW_NAME, key, () => null);
       joined.set(key, phx);
     }

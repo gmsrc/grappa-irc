@@ -463,11 +463,29 @@ export function joinUser(userName: string, onJoinOk?: (reply: unknown) => void):
   return ch;
 }
 
+// #1769 — the join params a per-channel topic accepts. One key today.
+//
+// `presence: false` asks the server not to push peer join/part/quit for this
+// channel (the server half of #1680's pause). OMITTING the key is the
+// default and means everything — which is the whole compatibility argument
+// for the shape, so this type must never grow a required member.
+//
+// The server reads it ONCE, in `GrappaWeb.GrappaChannel.join/3`. Changing
+// your mind is a re-join, not a push; `subscribe.ts:rejoinChannelWithPresence`
+// is the one caller that does that.
+export interface ChannelJoinParams {
+  presence?: boolean;
+}
+
 export function joinChannel(
   userName: string,
   networkSlug: string,
   channelName: string,
-  onJoinOk?: (reply: unknown) => void,
+  onJoinOk: ((reply: unknown) => void) | undefined,
+  // REQUIRED, not defaulted: a default would let a new call site acquire the
+  // presence decision without naming it, and every existing site passing an
+  // explicit `{}` is what makes "who asks for suppression?" greppable.
+  params: ChannelJoinParams,
 ): Channel {
   // UX-4 bucket A — canonicalise channel-shape segment so cic joins
   // the same Phoenix topic the server broadcasts on. Server-side
@@ -476,7 +494,12 @@ export function joinChannel(
   // fastlane fan-out would skip this socket entirely. Nicks (DM
   // windows) pass through unchanged.
   const topic = `grappa:user:${userName}/network:${networkSlug}/channel:${canonicalChannel(channelName)}`;
-  const ch = getSocket().channel(topic);
+  // Params are passed as an OBJECT rather than a thunk deliberately. phoenix.js
+  // re-evaluates a thunk on every auto-rejoin, which sounds like the safer
+  // choice and is not: it would let a socket-level reconnect silently change
+  // what this Channel asked for, so the object it joined with would stop
+  // describing it. A pause/resume transition re-joins explicitly instead.
+  const ch = getSocket().channel(topic, params);
   // Surface server-side join failures to the console + Phase 5
   // telemetry hook (the `unknown topic` and `forbidden` shapes the
   // server returns from `GrappaChannel.join/3` would otherwise vanish

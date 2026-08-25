@@ -260,11 +260,26 @@ describe("socket singleton", () => {
   it("joinChannel builds the topic-vocabulary string and calls channel.join()", async () => {
     localStorage.setItem("grappa-token", "tok-1");
     const socket = await import("../lib/socket");
-    socket.joinChannel("alice", "freenode", "#grappa");
+    socket.joinChannel("alice", "freenode", "#grappa", undefined, {});
     expect(h.mockSocketInstance.channel).toHaveBeenCalledWith(
       "grappa:user:alice/network:freenode/channel:#grappa",
+      {},
     );
     expect(h.mockChannel.join).toHaveBeenCalledTimes(1);
+  });
+
+  // #1769 — the join params reach phoenix.js verbatim. The server reads the
+  // param ONCE, in `GrappaChannel.join/3`, so a params object that never made
+  // it onto the channel would fail silently: the socket would keep receiving
+  // the full presence flood and nothing client-side would notice.
+  it("joinChannel passes the presence param through to socket.channel()", async () => {
+    localStorage.setItem("grappa-token", "tok-1");
+    const socket = await import("../lib/socket");
+    socket.joinChannel("alice", "freenode", "#grappa", undefined, { presence: false });
+    expect(h.mockSocketInstance.channel).toHaveBeenCalledWith(
+      "grappa:user:alice/network:freenode/channel:#grappa",
+      { presence: false },
+    );
   });
 
   it("joinChannel registers error + timeout handlers on the join Push (S48)", async () => {
@@ -275,7 +290,7 @@ describe("socket singleton", () => {
     // future refactor that drops one fails this test.
     localStorage.setItem("grappa-token", "tok-1");
     const socket = await import("../lib/socket");
-    socket.joinChannel("alice", "freenode", "#grappa");
+    socket.joinChannel("alice", "freenode", "#grappa", undefined, {});
     const eventNames = h.mockJoinPush.receive.mock.calls.map((c) => c[0]);
     expect(eventNames).toContain("error");
     expect(eventNames).toContain("timeout");

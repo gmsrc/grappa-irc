@@ -2,10 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { channelKey } from "../lib/channelKey";
 import { PRESENCE_COOLDOWN_MS } from "../lib/presenceCooldown";
 import { SUPPRESSED_PRESENCE_KINDS } from "../lib/presenceFilter";
-import { createPresencePause, PAUSABLE_PRESENCE_KINDS } from "../lib/presencePause";
+import {
+  createPresencePause,
+  PAUSABLE_PRESENCE_KINDS,
+  type PresencePauseHandlers,
+} from "../lib/presencePause";
 
 const alice = channelKey("azzurra", "#alice");
 const bob = channelKey("azzurra", "#bob");
+
+// #1769 made the callbacks an object of two. Most arms below care about
+// neither edge, so they take the defaults; the arms that assert on one pass
+// it in by name — which is the point of the object shape (two same-typed
+// positional callbacks would swap silently).
+function handlers(over: Partial<PresencePauseHandlers> = {}): PresencePauseHandlers {
+  return { onPause: vi.fn(), onResume: vi.fn(), ...over };
+}
 
 describe("presencePause (#1680)", () => {
   beforeEach(() => {
@@ -42,7 +54,7 @@ describe("presencePause (#1680)", () => {
 
   describe("the drop predicate", () => {
     it("drops a peer join/part/quit once the channel is paused", () => {
-      const pause = createPresencePause(vi.fn(), PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers(), PRESENCE_COOLDOWN_MS);
       pause.focus(alice);
       pause.focus(bob);
       vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
@@ -55,7 +67,7 @@ describe("presencePause (#1680)", () => {
     });
 
     it("drops nothing before the window elapses", () => {
-      const pause = createPresencePause(vi.fn(), PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers(), PRESENCE_COOLDOWN_MS);
       pause.focus(alice);
       pause.focus(bob);
       vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS - 1);
@@ -65,7 +77,7 @@ describe("presencePause (#1680)", () => {
     });
 
     it("never drops OUR OWN presence, however long the channel sat paused", () => {
-      const pause = createPresencePause(vi.fn(), PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers(), PRESENCE_COOLDOWN_MS);
       pause.focus(alice);
       pause.focus(bob);
       vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS * 10);
@@ -78,7 +90,7 @@ describe("presencePause (#1680)", () => {
     });
 
     it("never drops a message, whatever the pause state", () => {
-      const pause = createPresencePause(vi.fn(), PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers(), PRESENCE_COOLDOWN_MS);
       pause.focus(alice);
       pause.focus(bob);
       vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
@@ -91,7 +103,7 @@ describe("presencePause (#1680)", () => {
     });
 
     it("never drops on the focused channel", () => {
-      const pause = createPresencePause(vi.fn(), PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers(), PRESENCE_COOLDOWN_MS);
       pause.focus(alice);
       vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS * 10);
 
@@ -100,10 +112,64 @@ describe("presencePause (#1680)", () => {
     });
   });
 
+  // #1769 — the pause edge exists so the events can be stopped at the SERVER
+  // (a re-join carrying `{presence: false}`), not merely discarded here. It
+  // has to fire exactly once, at the moment the window elapses, because each
+  // firing costs a leave + join + backfill round trip.
+  describe("the pause seam", () => {
+    it("fires once, when the window elapses — not on the blur", () => {
+      const onPause = vi.fn();
+      const pause = createPresencePause(handlers({ onPause }), PRESENCE_COOLDOWN_MS);
+
+      pause.focus(alice);
+      pause.focus(bob);
+      expect(onPause).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
+      expect(onPause).toHaveBeenCalledTimes(1);
+      expect(onPause).toHaveBeenCalledWith(alice);
+
+      // The window is spent; nothing re-arms it while the channel stays
+      // blurred, so no second re-join is ever ordered.
+      vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS * 3);
+      expect(onPause).toHaveBeenCalledTimes(1);
+      pause.dispose();
+    });
+
+    it("does not fire for a channel refocused inside its window", () => {
+      const onPause = vi.fn();
+      const pause = createPresencePause(handlers({ onPause }), PRESENCE_COOLDOWN_MS);
+
+      pause.focus(alice);
+      pause.focus(bob);
+      vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS / 2);
+      pause.focus(alice);
+      vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS * 2);
+
+      // alice never paused, so she never re-joins. bob did — he was blurred
+      // by the refocus and his own window then elapsed.
+      expect(onPause).toHaveBeenCalledTimes(1);
+      expect(onPause).toHaveBeenCalledWith(bob);
+      pause.dispose();
+    });
+
+    it("dispose cancels a pending window, so no re-join is ordered after teardown", () => {
+      const onPause = vi.fn();
+      const pause = createPresencePause(handlers({ onPause }), PRESENCE_COOLDOWN_MS);
+
+      pause.focus(alice);
+      pause.focus(bob);
+      pause.dispose();
+      vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS * 2);
+
+      expect(onPause).not.toHaveBeenCalled();
+    });
+  });
+
   describe("the resume seam", () => {
     it("refetches exactly when presence was actually missed", () => {
       const onResume = vi.fn();
-      const pause = createPresencePause(onResume, PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers({ onResume }), PRESENCE_COOLDOWN_MS);
 
       pause.focus(alice);
       pause.focus(bob);
@@ -123,7 +189,7 @@ describe("presencePause (#1680)", () => {
     // prevent — #1679's failure mode, reintroduced at the other end.
     it("does not refetch for a channel that was never paused", () => {
       const onResume = vi.fn();
-      const pause = createPresencePause(onResume, PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers({ onResume }), PRESENCE_COOLDOWN_MS);
 
       pause.focus(alice);
       pause.focus(bob);
@@ -136,7 +202,7 @@ describe("presencePause (#1680)", () => {
 
     it("re-focusing the already-focused channel is a no-op", () => {
       const onResume = vi.fn();
-      const pause = createPresencePause(onResume, PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers({ onResume }), PRESENCE_COOLDOWN_MS);
 
       pause.focus(alice);
       pause.focus(alice);
@@ -152,7 +218,7 @@ describe("presencePause (#1680)", () => {
 
   describe("selection leaving channel-shaped windows", () => {
     it("arms the window when selection goes to null", () => {
-      const pause = createPresencePause(vi.fn(), PRESENCE_COOLDOWN_MS);
+      const pause = createPresencePause(handlers(), PRESENCE_COOLDOWN_MS);
       pause.focus(alice);
       pause.focus(null);
       vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
@@ -164,7 +230,7 @@ describe("presencePause (#1680)", () => {
 
   it("dispose un-pauses everything and cancels pending windows", () => {
     const onResume = vi.fn();
-    const pause = createPresencePause(onResume, PRESENCE_COOLDOWN_MS);
+    const pause = createPresencePause(handlers({ onResume }), PRESENCE_COOLDOWN_MS);
 
     pause.focus(alice);
     pause.focus(bob);

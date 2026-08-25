@@ -400,12 +400,14 @@ describe("subscribe — WS join effect", () => {
       "freenode",
       "#grappa",
       expect.any(Function),
+      { presence: true },
     );
     expect(socket.joinChannel).toHaveBeenCalledWith(
       "alice",
       "freenode",
       "#cicchetto",
       expect.any(Function),
+      { presence: true },
     );
     // DM-listener join uses the operator's own nick as the channel
     // segment — server broadcasts inbound PRIVMSGs on this topic.
@@ -414,6 +416,7 @@ describe("subscribe — WS join effect", () => {
       "freenode",
       "alice",
       expect.any(Function),
+      {},
     );
     // BUG2: server-messages loop joins the $server synthetic channel.
     expect(socket.joinChannel).toHaveBeenCalledWith(
@@ -421,6 +424,7 @@ describe("subscribe — WS join effect", () => {
       "freenode",
       "$server",
       expect.any(Function),
+      {},
     );
     expect(mockChannel.on).toHaveBeenCalledWith("event", expect.any(Function));
   });
@@ -823,6 +827,7 @@ describe("subscribe — WS join effect", () => {
         "freenode",
         "#grappa",
         expect.any(Function),
+        { presence: true },
       );
 
       fireMessageEvent("#grappa", { id: 1, body: "as A" });
@@ -875,6 +880,7 @@ describe("subscribe — WS join effect", () => {
           "freenode",
           "bob",
           expect.any(Function),
+          {},
         );
       });
       expect(socket.joinChannel).toHaveBeenCalledWith(
@@ -882,12 +888,14 @@ describe("subscribe — WS join effect", () => {
         "freenode",
         "#grappa",
         expect.any(Function),
+        { presence: true },
       );
       expect(socket.joinChannel).toHaveBeenCalledWith(
         "bob",
         "freenode",
         "#cicchetto",
         expect.any(Function),
+        { presence: true },
       );
     });
 
@@ -959,6 +967,7 @@ describe("subscribe — WS join effect", () => {
           "freenode",
           "#grappa",
           expect.any(Function),
+          { presence: true },
         );
       });
 
@@ -1520,6 +1529,7 @@ describe("subscribe — query-window WS subscribe (DM live-WS gap)", () => {
       "freenode",
       "#grappa",
       expect.any(Function),
+      { presence: true },
     );
     // Query topic uses the targetNick as the channel-name segment —
     // matches the server-side broadcast on Topic.channel(user,
@@ -1529,6 +1539,7 @@ describe("subscribe — query-window WS subscribe (DM live-WS gap)", () => {
       "freenode",
       "vjt",
       expect.any(Function),
+      {},
     );
   });
 
@@ -1557,12 +1568,14 @@ describe("subscribe — query-window WS subscribe (DM live-WS gap)", () => {
       "freenode",
       "vjt",
       expect.any(Function),
+      {},
     );
     expect(socket.joinChannel).toHaveBeenCalledWith(
       "alice",
       "freenode",
       "carol",
       expect.any(Function),
+      {},
     );
   });
 
@@ -1644,6 +1657,7 @@ describe("subscribe — query-window WS subscribe (DM live-WS gap)", () => {
       "freenode",
       "vjt",
       expect.any(Function),
+      {},
     );
   });
 
@@ -1721,6 +1735,7 @@ describe("subscribe — DM-listener (own-nick topic, inbound DM re-key)", () => 
       "freenode",
       "alice",
       expect.any(Function),
+      {},
     );
   });
 
@@ -2311,18 +2326,21 @@ describe("subscribe — query-window loop skips own-nick topic (Bug A root cause
       "freenode",
       "#grappa",
       expect.any(Function),
+      { presence: true },
     );
     expect(socket.joinChannel).toHaveBeenCalledWith(
       "alice",
       "freenode",
       "alice",
       expect.any(Function),
+      {},
     );
     expect(socket.joinChannel).toHaveBeenCalledWith(
       "alice",
       "freenode",
       "$server",
       expect.any(Function),
+      {},
     );
     // Exactly 3 calls — no extra join for the own-nick query window.
     expect(socket.joinChannel).toHaveBeenCalledTimes(3);
@@ -2415,13 +2433,20 @@ describe("subscribe — nick-clash regression (user.name === targetNick, IRC nic
       expect(socket.joinChannel).toHaveBeenCalledTimes(4);
     });
     // query-windows-loop must join channel:vjt (targetNick != IRC nick "grappa").
-    expect(socket.joinChannel).toHaveBeenCalledWith("vjt", "freenode", "vjt", expect.any(Function));
+    expect(socket.joinChannel).toHaveBeenCalledWith(
+      "vjt",
+      "freenode",
+      "vjt",
+      expect.any(Function),
+      {},
+    );
     // DM-listener must join channel:grappa (the actual IRC nick, from net.nick).
     expect(socket.joinChannel).toHaveBeenCalledWith(
       "vjt",
       "freenode",
       "grappa",
       expect.any(Function),
+      {},
     );
     // $server loop joins $server.
     expect(socket.joinChannel).toHaveBeenCalledWith(
@@ -2429,6 +2454,7 @@ describe("subscribe — nick-clash regression (user.name === targetNick, IRC nic
       "freenode",
       "$server",
       expect.any(Function),
+      {},
     );
   });
 
@@ -3551,6 +3577,7 @@ describe("subscribe - not-joined pre-subscribe loop (CP15 B5 fix + #78)", () => 
         "freenode",
         "#new-room",
         expect.any(Function),
+        { presence: true },
       );
     });
   };
@@ -4330,6 +4357,7 @@ describe("subscribe — the DM listener releases its own-nick topic on a rename 
         "freenode",
         "alice",
         expect.any(Function),
+        {},
       );
     });
 
@@ -4340,6 +4368,7 @@ describe("subscribe — the DM listener releases its own-nick topic on a rename 
         "freenode",
         "zelda",
         expect.any(Function),
+        {},
       );
     });
 
@@ -4372,6 +4401,7 @@ describe("subscribe — the DM listener releases its own-nick topic on a rename 
         "freenode",
         "alice",
         expect.any(Function),
+        {},
       );
     });
 
@@ -4384,6 +4414,7 @@ describe("subscribe — the DM listener releases its own-nick topic on a rename 
         "freenode",
         "zelda",
         expect.any(Function),
+        {},
       );
     });
 
@@ -4570,7 +4601,24 @@ describe("subscribe — presence pause on unfocused channels (#1680)", () => {
   // A paused channel must go QUIET, never BLIND. This is the assertion that
   // encodes vjt's ruling ("messages must not be lost") as a test rather than
   // as a comment — and the one that fails the moment someone "simplifies"
-  // the pause into a `phx.leave()`.
+  // the pause into an abandoned topic.
+  //
+  // #1769 CHANGED WHAT "NEVER BLIND" LOOKS LIKE, so the oracle changed with
+  // it — deliberately, and toward being stricter rather than looser. The
+  // pause now also asks the SERVER to stop sending peer presence, and the
+  // only way to say that is a join param, which is read once at join. So a
+  // pause is a re-join, and a re-join calls `phx.leave()`. The old assertion
+  // ("leave was never called") can no longer tell abandonment from a swap,
+  // and would now forbid the correct implementation.
+  //
+  // What it was protecting is asserted DIRECTLY instead: the topic is joined
+  // AGAIN, with `{presence: false}`. That is a stronger statement than the
+  // absence of a leave — it names the end state rather than one gesture that
+  // could reach a bad one.
+  //
+  // What this arm does NOT prove, and cannot: that no message is lost across
+  // the swap. `fireMessageEvent` drives the installed handler directly, so
+  // there is no socket here to have a gap. The live-side proof is the e2e.
   it("still delivers MESSAGES on a paused channel — quiet, not blind", async () => {
     localStorage.setItem("grappa-token", "tok");
     localStorage.setItem(
@@ -4596,6 +4644,65 @@ describe("subscribe — presence pause on unfocused channels (#1680)", () => {
 
     const rows = store.scrollbackByChannel()[channelKey("freenode", "#grappa")] ?? [];
     expect(rows.some((r: { id: number }) => r.id === 4006)).toBe(true);
-    expect(mockChannel.leave).not.toHaveBeenCalled();
+
+    // Still subscribed, and now suppressing at the server too.
+    const socket = await import("../lib/socket");
+    expect(socket.joinChannel).toHaveBeenCalledWith(
+      "alice",
+      "freenode",
+      "#grappa",
+      expect.any(Function),
+      { presence: false },
+    );
+  });
+
+  // The other half of the same rule, and the one an implementation can fail
+  // silently: a channel that regains focus must be re-joined WITHOUT the
+  // param. Miss it and the window stays muted forever — the operator is
+  // looking straight at a member list that has stopped updating, with no
+  // error anywhere.
+  it("re-joins WITHOUT the param when the channel regains focus", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const socket = await import("../lib/socket");
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    focus(store, "#cicchetto");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
+    vi.useRealTimers();
+
+    // Pre-state, asserted rather than assumed: without this the arm below
+    // would pass on an implementation that never paused at all.
+    expect(socket.joinChannel).toHaveBeenCalledWith(
+      "alice",
+      "freenode",
+      "#grappa",
+      expect.any(Function),
+      { presence: false },
+    );
+
+    vi.mocked(socket.joinChannel).mockClear();
+    focus(store, "#grappa");
+    await flushEffects();
+
+    expect(socket.joinChannel).toHaveBeenCalledWith(
+      "alice",
+      "freenode",
+      "#grappa",
+      expect.any(Function),
+      { presence: true },
+    );
   });
 });
