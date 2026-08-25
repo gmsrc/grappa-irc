@@ -63991,3 +63991,152 @@ overstates the glyph. The table shows the character never cleared 18 either.
 
 The cheap lesson underneath both: **a `--grep`-scoped green proves one spec,
 and neither of these defects lives in the spec you would have scoped to.**
+<!-- entry #1739 -->
+
+---
+
+## 2026-08-25 — #1739: the station logos are vendored, not proxied — and the one thing that gave up is now an axis
+
+The issue asked for `GET /api/radio/logos/:id`: a server-side proxy with a
+cache and a server-side fallback, so the client stops carrying the logic. vjt
+ruled the other branch on `#grappa` at ~11:02 Rome: **B, the vendored mirror.
+No runtime fetch at all, and the fallback decided at build time.** The proxy
+arm — ETS with a 4h TTL, the #1704 placeholder ported into Elixir, an upstream
+stub in the e2e compose — is dropped in full, nothing salvaged from it.
+
+**The argument that decided it is this repo's own, one level down.**
+`radioStations.ts` had already refused to read SomaFM's catalogue at render
+time, in its own words: *"a cosmetic pixel is a thin reason to put a third
+party in the render path"*, and *"when somafm is unreachable the picker still
+draws the logos it drew yesterday."* A logo **is** a cosmetic pixel. B extends
+that ruling from the URL to the bytes; A would have reinstated exactly the
+runtime failure mode that file chose not to have, merely relocated from the
+client to the server — where it is per-VIEWER rather than per-client-cache.
+Privacy, which the issue rightly calls the strongest argument on the table, is
+delivered identically by both, so it could not separate them.
+
+**Measured before any of it was written, correcting the issue's own
+arithmetic.** The issue said "24KB per logo, 14 stations", which was
+`groovesalad120.png` against the table as it stood. Today: **22 rows, 21 with
+a logo, 265,926 bytes upstream**, median ~8.4 KB, largest `defcon120.png` at
+46,022, smallest `u80s120.png` at 3,356. On disk after the sync the mirror is
+**266,210 bytes over 22 files** — the extra 284 being Kohina's generated tile,
+the one row with `logoUrl: null`.
+
+**One implementation of the placeholder, reused rather than ported.**
+`radioLogoPlaceholder.ts` used to return a `data:image/svg+xml,…` URI that the
+picker put straight in an `<img src>`. It now returns the SVG DOCUMENT
+(`radioLogoPlaceholderSvg/2`) and `scripts/sync-radio-logos.ts` writes that
+document to `public/radio-logos/kohina.svg`. The data-URI spelling was
+DELETED rather than kept beside it: with the render site reading a path
+nothing consumed it, and two exported encodings of one SVG is the drift the
+module exists to avoid. The #1704 test that pinned `^data:image/svg\+xml,`
+said it was doing so *"so a later switch to a fetched asset has to face the CSP
+question deliberately"* — the switch happened, the question is answered
+(`img-src 'self'` carries a same-origin file), and the test now pins the
+document shape instead, which is what a file has to hold.
+
+**The render lost both branches, and that is the point rather than a
+tidy-up.** `StationLogo` is `<img src={RADIO_LOGO_PATHS[props.station.id]}>`:
+no null check, no `onError`. A same-origin asset the offline gate proves is
+present cannot fail the way a third-party URL could, and a handler would be a
+second stand-in mechanism beside the vendored tile. The `undefined` arm of the
+lookup is unreachable by construction — the gate fails the build for any
+station id the map does not carry — and a fallback spelled for it would put
+the branch back for a case no build can ship.
+
+**Why a GENERATED map and not a derived path.** `/radio-logos/${id}.${ext}`
+is computable from the table, and it was rejected: the map is the sync's
+RECEIPT, recording what the script actually wrote, which is a different fact
+from what a template predicts. A generated map keyed on the ID (not on
+upstream's filename — `groovesalad120.png` is SomaFM's size convention and the
+Rock Antenne row's name is a content hash) also survives an upstream file-type
+change without the render site ever learning about it.
+
+**Rejected on the way: typing `RadioStation.id` as `keyof typeof
+RADIO_LOGO_PATHS`.** It would have made the lookup total at compile time and
+turned "every id has an entry" into a `tsc` error. It was declined because it
+INVERTS the authority: the table is what decides which stations exist, and
+taking its id type from a generated file is the "split ONE record across two
+authorities" shape that same file's header warns about. The totality is bought
+by an executable claim instead, which is this table's posture everywhere else.
+
+### The gate is five offline claims, and each one was reddened before it was believed
+
+`src/__tests__/radioLogoFiles.test.ts` runs in `bun run test` with no network,
+because the whole point of vendoring is that drawing a logo touches none.
+COVERED (every station has a path), PRESENT (every path a non-empty file),
+NAMED (the committed map is what the sync's own `vendoredPath` produces — the
+production function, not a second copy of the rule), NO ORPHAN, and FRESH (a
+logo-less station's file is byte-identical to what the generator produces
+today — the only place the FUNCTION and the FILE are compared, so editing the
+tile without re-syncing is red rather than silent). Plus a vacuity control:
+NAMED and FRESH split on `logoUrl === null`, so a table that lost either arm
+would run one of them over nothing.
+
+Two-sided, measured 2026-08-25 by planting mutants: deleting `metal.png` →
+PRESENT red (`/radio-logos/metal.png is missing or empty`); appending ten
+bytes to `kohina.svg` → FRESH red; an empty `ghost.png` → NO ORPHAN red. All
+three restored, and the restore verified with `cmp`.
+
+### BYTES: the one thing the mirror gave up, made detectable
+
+A proxy with a 4h TTL would pick up a re-uploaded logo on its own; a mirror is
+refreshed by a human verb. So `check:radio` grew a fourth axis comparing the
+vendored bytes against upstream's — the middle road offered on the issue and
+accepted with the ruling. It is the WHOLE PAYLOAD and not `Content-Length`: a
+re-upload usually keeps the dimensions and therefore roughly the size, so a
+length compare is the check that passes in exactly the case it exists for.
+
+⚠️ **The logo axis fetches with `GET` now; the feed axis still uses `HEAD`.**
+BYTES needs the body, and one GET yields status, content type and payload — so
+REACH is derived from the SAME response. Two requests to one URL would let two
+axes disagree about one resource, which is a worse report than either verdict.
+A row whose REACH failed reports `bytes: null`: one dead fetch is named once,
+not counted twice. `probedCounts` gained a THIRD denominator (`mirrored`) for
+the reason it already had two — a run where every logo timed out would print
+"21 with a logo, 0 broken" having compared nothing.
+
+Measured live: clean run `22 stations checked (21 with a logo, 21 compared
+against the mirror, 20 with a now-playing feed), 0 broken`. With mutants: a
+single flipped byte at offset 3000 in `u80s.png` → `BYTES same length,
+different payload (first difference at byte 3000)`; `metal.png` removed →
+`BYTES upstream serves it, the mirror holds nothing`. `rc=1`, 2 broken.
+
+### The server edit, and why it would have been the QUIETEST failure here
+
+`radio-logos` joins `@cic_static_only` in `endpoint.ex`. That comment already
+states the rule (#485: a new root-level public asset absent from the allowlist
+falls through to the SPA fallback), and this instance is worse than the icons
+that wrote it: #1739 removed the `onError` handler, so a logo arriving as
+`index.html` draws the browser's broken glyph with nothing in any gate to say
+why. Measured on `spa_serving_test.exs` before the line existed:
+`content-type: text/html; charset=utf-8` for both `/radio-logos/*.png` and
+`*.svg`. Two tests and two dist fixtures now pin it.
+
+### Two things changed that the ruling did not name, both stated rather than slipped in
+
+**The lock screen.** `mediaSession.ts` handed the OS `station.logoUrl`, so the
+platform fetched the artwork from api.somafm.com on the user's behalf — the
+same third-party request the picker stopped making, on the surface that
+outlives the drawer by hours. It hands over the vendored path now. #1704's
+decision is UNCHANGED: a logo-less station still sends an empty `artwork` so
+the OS keeps the app icon, because what the gate proves is that the SVG file
+exists, not that any lock screen renders one. A path the map does not carry
+folds into that same arm rather than falling back to the upstream URL, which
+would reinstate the leak.
+
+**The service worker.** `globPatterns` matches `svg` and `png` but not `jpg`,
+so without an exclusion the precache would have grown by an inconsistent
+SUBSET — 7 PNGs plus one SVG in, 14 JPEGs out, ~96 KB nobody chose. The block
+states a "shell-only" contract, and station artwork is not shell, so
+`globIgnores: ["radio-logos/**"]` makes the answer the same for every station
+whatever extension upstream happens to serve.
+
+### Not established here
+
+Whether an OS lock screen renders an SVG `MediaImage` on any platform — still
+unmeasured, which is why that arm was left alone rather than "improved" now
+that the tile is a file. And the issue's original premise about refetching:
+this change makes it moot for logos rather than answering it, since the
+question was about a third-party host nothing contacts any more.
