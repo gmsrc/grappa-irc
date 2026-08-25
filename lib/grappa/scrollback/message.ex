@@ -196,6 +196,19 @@ defmodule Grappa.Scrollback.Message do
   # never drop a real message.
   @suppressed_presence_kinds [:join, :part, :quit, :nick_change, :mode]
 
+  # #1769 — the subset a socket that ASKED for the #1680 presence pause may be
+  # denied outright. A strict subset of @suppressed_presence_kinds and NOT
+  # derived from it, because the two answer different questions: that one is
+  # "is this presence?" (what the history fetch omits), this one is "is this
+  # presence we can afford never to receive?". A kind landing in the
+  # suppressed set must be considered HERE on purpose rather than inherited
+  # silently — `nick_change` drives the #372/#373 identity migration and
+  # `mode` feeds channel-mode state, so both stay deliverable even to a paused
+  # window. Mirrors cic's PAUSABLE_PRESENCE_KINDS
+  # (cicchetto/src/lib/presencePause.ts), same order; the subset relation and
+  # the cross-language agreement are both gated by `presence_filter_test.exs`.
+  @pausable_presence_kinds [:join, :part, :quit]
+
   # M8 fix 2026-05-08: kinds for which `:dm_with` may legitimately
   # carry a peer nick. CP23 cluster `code-reload` extended the list to
   # include :notice — peer-to-peer NOTICEs (CTCP-VERSION-query
@@ -276,6 +289,30 @@ defmodule Grappa.Scrollback.Message do
   """
   @spec suppressed_presence_kinds() :: [:join | :part | :quit | :nick_change | :mode, ...]
   def suppressed_presence_kinds, do: @suppressed_presence_kinds
+
+  @doc """
+  Returns the droppable subset of `suppressed_presence_kinds/0` —
+  `[:join, :part, :quit]`. #1769 SINGLE SOURCE: the kinds
+  `GrappaWeb.GrappaChannel` refuses to push to a socket that joined a
+  per-channel topic with `presence: false`, the server half of #1680's
+  pause.
+
+  The two presence sets are deliberately distinct rather than one derived
+  from the other. `suppressed_presence_kinds/0` answers "is this presence?"
+  and governs what the HISTORY fetch omits — a row the operator can always
+  scroll back to. This one answers "is this presence the client can afford
+  never to be told about?", and a kind that says no has a consumer that
+  breaks silently without it: `nick_change` drives the #372/#373 client-side
+  identity migration, `mode` feeds channel-mode state that outlives the
+  pause. Their only consumer being the members map is what makes
+  join/part/quit safe to drop — the refetch on resume rebuilds exactly that.
+
+  Mirrors cic's `PAUSABLE_PRESENCE_KINDS`
+  (`cicchetto/src/lib/presencePause.ts`), same order; `presence_filter_test.exs`
+  gates both the subset relation and the cross-language agreement.
+  """
+  @spec pausable_presence_kinds() :: [:join | :part | :quit, ...]
+  def pausable_presence_kinds, do: @pausable_presence_kinds
 
   @type kind ::
           :privmsg

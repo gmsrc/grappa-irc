@@ -135,4 +135,92 @@ defmodule Grappa.PresenceFilterTest do
              """
     end
   end
+
+  # #1769 — the PAUSABLE set is a second cross-language pair, and it fails
+  # differently from the one above. The suppressed set governs what the
+  # history fetch OMITS (a row the operator can still scroll to); this one
+  # governs what the socket is never SENT. A kind that drifts INTO it on one
+  # side alone is a frame the client is entitled to and never receives, with
+  # no page-up that recovers it — which is exactly the `nick_change` /`mode`
+  # case, whose consumers (#372/#373 identity migration, channel-mode state)
+  # break silently rather than loudly.
+  describe "cross-language pausable-presence parity (#1769)" do
+    @pause_path "cicchetto/src/lib/presencePause.ts"
+
+    test "pausable_presence_kinds/0 is a STRICT subset of suppressed_presence_kinds/0" do
+      pausable = Message.pausable_presence_kinds()
+      suppressed = Message.suppressed_presence_kinds()
+
+      assert pausable -- suppressed == [],
+             """
+             `pausable_presence_kinds/0` contains a kind that is not presence at all:
+
+               pausable:   #{inspect(pausable)}
+               suppressed: #{inspect(suppressed)}
+
+             The pausable set answers "is this presence we can afford to miss?",
+             so every member must first BE presence. A kind outside the
+             suppressed set landing here means the socket is dropping something
+             that is not presence noise.
+             """
+
+      refute suppressed -- pausable == [],
+             """
+             `pausable_presence_kinds/0` has grown to cover the WHOLE presence set.
+
+             The carve-out is the point: `nick_change` drives the #372/#373
+             identity migration and `mode` feeds channel-mode state, and neither
+             has a refetch that rebuilds it on resume. If the sets are now equal
+             this assertion is the only thing left saying so — decide it on
+             purpose, in `Message`, and change this test with the reason.
+             """
+    end
+
+    test "pausable_presence_kinds/0 equals cic's PAUSABLE_PRESENCE_KINDS, in order" do
+      source = File.read!(@pause_path)
+
+      body =
+        case Regex.run(
+               ~r/export\s+const\s+PAUSABLE_PRESENCE_KINDS[^=]*=\s*new\s+Set\(\[(.*?)\]\)/s,
+               source
+             ) do
+          [_, captured] ->
+            captured
+
+          _ ->
+            flunk("Could not locate `export const PAUSABLE_PRESENCE_KINDS = new Set([...])` in #{@pause_path}")
+        end
+
+      cic_kinds =
+        ~r/"([a-z_]+)"/
+        |> Regex.scan(body)
+        |> Enum.map(fn [_, kind] -> String.to_atom(kind) end)
+
+      # Same positive control as the sibling gate above: a parse that yields
+      # nothing must fail as "the gate stopped reading", not as a puzzling
+      # empty-list mismatch.
+      refute cic_kinds == [],
+             """
+             Parsed ZERO kinds out of #{@pause_path}.
+
+             The literal was located but no `"kind"` strings came out of it, so
+             this parity gate is no longer reading anything. Fix the parse, not
+             the assertion.
+             """
+
+      assert cic_kinds == Message.pausable_presence_kinds(),
+             """
+             The pausable KIND SET has drifted between the two languages.
+
+               #{@pause_path}: #{inspect(cic_kinds)}
+               Grappa.Scrollback.Message:       #{inspect(Message.pausable_presence_kinds())}
+
+             cic drops these at its dispatch edge (#1680) and the server refuses
+             to push them to a socket that joined with `presence: false` (#1769).
+             A kind present only server-side is one the client will never see and
+             cannot recover; a kind present only client-side merely wastes a
+             frame. Both are drift. Move BOTH or neither.
+             """
+    end
+  end
 end
