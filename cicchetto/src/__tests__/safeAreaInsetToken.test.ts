@@ -129,6 +129,14 @@ const CENSUS = [
   // load-bearing comments to remove an inert fallback is not this change.
   ".context-menu | max-height: max( 0px, calc( var(--viewport-height, 100vh) - var(--safe-area-inset-top, 0px) - var(--safe-area-inset-bottom, 0px) ) )",
   ".context-menu-safe-area | inset: var(--safe-area-inset-top) var(--safe-area-inset-right) var(--safe-area-inset-bottom) var(--safe-area-inset-left)",
+  // #1773 — the credits modal is full-bleed (`inset: 0`, no `.modal-backdrop`
+  // ancestor to inherit clearance from), so it insets itself. The `.credits-roll`
+  // row lives inside the `prefers-reduced-motion` arm, where the roll stops
+  // animating and becomes an ordinary scrollable column: only THEN does its
+  // padding reach the physical edges, which is why the animated rule has none.
+  ".credits-chrome | right: max(0.5rem, var(--safe-area-inset-right))",
+  ".credits-chrome | top: max(0.5rem, var(--safe-area-inset-top))",
+  ".credits-roll | padding: max(3rem, var(--safe-area-inset-top)) 1.5rem max(3rem, var(--safe-area-inset-bottom))",
   ".delete-account-modal | padding: max(0.75rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom))",
   ".diag-float | top: max(0.5rem, var(--safe-area-inset-top))",
   ".error-banners | padding-top: var(--safe-area-inset-top)",

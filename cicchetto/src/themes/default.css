@@ -13843,3 +13843,178 @@ audio.media-viewer-media {
 .share-modal-error {
   color: #d04040;
 }
+
+/* ── credits easter egg (#1773) ──────────────────────────────────────────
+   A full-viewport modal: falling characters behind an end-titles roll, on
+   a loop. Opened from the bottom of the settings drawer, mounted in Shell.
+
+   ONE fixed box rather than the `.modal-backdrop` + centred-dialog pair the
+   other modals wear: the rain IS the backdrop here, and a scrim between the
+   two would only mute it. That also makes `.credits-modal` the element the
+   overlay lock targets, which is the selector CreditsModal passes.
+
+   `position: relative` is NOT decoration — `MatrixRain` sizes its canvas off
+   `parentElement.clientWidth/Height` through a ResizeObserver and positions
+   absolutely inside it, so the parent must establish the containing block
+   and clip. Same contract `.adm-matrix` carries for the Debug tab. */
+.credits-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow: hidden;
+  background: #000;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  /* The roll animates upward past both edges; nothing here scrolls, so the
+     iOS gesture must not be handed to a pan that has nowhere to go. */
+  touch-action: none;
+}
+
+/* Brighter than the Debug tab's `.adm-rain` (0.55): there it sits under
+   readouts an operator must read, here it IS the picture. The glyph alpha
+   itself is shared — one implementation, one look. */
+.credits-rain {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.85;
+  mix-blend-mode: screen;
+}
+
+.credits-rain canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Above the rain, and inside the safe areas — a full-bleed modal puts its
+   top-right controls under the notch otherwise, exactly as `.settings-drawer`
+   and `.modal-backdrop-viewport` guard against. */
+.credits-chrome {
+  position: absolute;
+  z-index: 2;
+  top: max(0.5rem, var(--safe-area-inset-top));
+  right: max(0.5rem, var(--safe-area-inset-right));
+  display: flex;
+  gap: 0.25rem;
+}
+
+/* The window the titles travel through. Masked top and bottom so they fade
+   in and out of the void instead of being guillotined by the viewport edge. */
+.credits-viewport {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 12%,
+    #000 88%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+}
+
+.credits-roll {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Starts fully below the fold and ends fully above it, so the loop has no
+     visible seam. 28s: the issue asked for "under ~30s, then it loops". */
+  animation: credits-roll 28s linear infinite;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 1.5rem;
+  text-align: center;
+  text-shadow: 0 0 0.5rem var(--accent);
+}
+
+@keyframes credits-roll {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(-100%);
+  }
+}
+
+.credits-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.8em;
+  letter-spacing: 0.35em;
+  color: var(--accent);
+}
+
+.credits-version {
+  margin: 0;
+  font-size: 1.1em;
+}
+
+.credits-build {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.credits-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.9em;
+  font-weight: normal;
+  letter-spacing: 0.3em;
+  color: var(--muted);
+}
+
+.credits-list {
+  margin: 0 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: min(20rem, 80vw);
+}
+
+.credits-person {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.credits-person-count {
+  color: var(--muted);
+}
+
+.credits-empty,
+.credits-coda {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+/* The falling characters turn themselves off (MatrixRain watches the query
+   live). The ROLL cannot simply stop — a frozen roll shows whichever three
+   lines it happened to be on — so it becomes an ordinary scrollable column
+   that reads top to bottom, and the mask goes with the animation it framed. */
+@media (prefers-reduced-motion: reduce) {
+  .credits-viewport {
+    overflow-y: auto;
+    pointer-events: auto;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .credits-modal {
+    touch-action: pan-y;
+  }
+
+  .credits-roll {
+    position: static;
+    animation: none;
+    padding: max(3rem, var(--safe-area-inset-top)) 1.5rem max(3rem, var(--safe-area-inset-bottom));
+  }
+}

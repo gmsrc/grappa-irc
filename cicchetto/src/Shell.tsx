@@ -17,6 +17,7 @@ import BanlistModal from "./BanlistModal";
 import BottomBar from "./BottomBar";
 import ComposeBox from "./ComposeBox";
 import ConfirmModal from "./ConfirmModal";
+import CreditsModal from "./CreditsModal";
 import CrtSplash from "./CrtSplash";
 import DiagFloat from "./DiagFloat";
 import DirectoryPane from "./DirectoryPane";
@@ -633,6 +634,12 @@ const Shell: Component = () => {
           <RegistrationWizardModal />
           <RecoverModal />
           <ShareSessionModal />
+          {/* #1773 — the credits easter egg. Mounted here, not in the settings
+              drawer that opens it: `.settings-drawer` animates on `transform`,
+              which makes it the containing block for any `position: fixed`
+              descendant, so a full-screen modal rendered from inside would be
+              clipped to the drawer. Self-gated on `creditsModalOpen()`. */}
+          <CreditsModal />
           <ConfirmModal />
           {/* #473 — ArchiveModal is the single archive surface on BOTH form
               factors. Mounted here on desktop (was mobile-only); the desktop
@@ -923,6 +930,8 @@ const Shell: Component = () => {
         <RegistrationWizardModal />
         <RecoverModal />
         <ShareSessionModal />
+        {/* #1773 — see the desktop branch above for why it is mounted here. */}
+        <CreditsModal />
         <ConfirmModal />
         <Show when={membersOpen()}>
           <div

@@ -22,6 +22,7 @@ import {
   withConversationMute,
   withoutConversationMute,
 } from "./lib/conversationMute";
+import { CREDITS_LABEL, openCreditsModal } from "./lib/creditsModal";
 import {
   syncedSetColoredNicklist,
   syncedSetShowBottomBar,
@@ -1223,6 +1224,33 @@ const SettingsDrawer: Component<Props> = (props) => {
               </p>
             </div>
           </Show>
+
+          {/* #1773 — credits. LAST of the drawer's own entries, and outside
+            every sub-page on purpose: it is not a setting.
+
+            Deliberately NOT a `.settings-nav-row`, and that is the #460
+            contract rather than a styling whim: an index nav row PUSHES a
+            sub-page and wears a chevron saying so. This opens a modal, so it
+            follows the share entry — the drawer's other modal door — and
+            wears its shape instead. Making it a nav row would have put a
+            non-page in the index the `renders the index nav rows in order`
+            case enumerates.
+
+            The modal itself is mounted in Shell, like the share one:
+            `.settings-drawer` animates on `transform`, which makes it the
+            containing block for any `position: fixed` descendant, so a
+            full-screen modal rendered from here would be clipped to it. */}
+          <button
+            type="button"
+            class="settings-share-button settings-credits-entry"
+            data-testid="credits-entry"
+            onClick={() => openCreditsModal()}
+          >
+            <span class="settings-share-button-label">{CREDITS_LABEL}</span>
+            <span class="settings-share-button-subtitle muted">
+              who built this, and out of what
+            </span>
+          </button>
 
           {/* UX-4 bucket L — bottom "done" button. Same close verb as
             the top × — mobile thumb-reach surface. Sits below logout
