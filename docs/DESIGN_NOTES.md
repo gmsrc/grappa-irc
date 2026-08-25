@@ -63122,3 +63122,96 @@ Where that is impossible because one arm has no body at all (`GET …/members`'s
 No production log was read for either axis, so nothing here carries a field
 frequency. And the sweep is a sweep: three greps over the shapes they can see,
 with their blind spot stated above rather than argued away.
+<!-- entry #1592 -->
+
+---
+
+## 2026-08-25 — #1592: a safety net credited to a lint that accepts the character
+
+`infra/packaging/aur/PKGBUILD` commits `pkgver=@GRAPPA_VERSION@` unfilled, and
+`regen.sh` derives the real number before any build. Since #538 the tree has
+explained WHY that is safe: makepkg's pkgver lint *refuses* `@`, so an
+underived recipe dies loudly instead of publishing `grappa-@GRAPPA_VERSION@`.
+
+It does not refuse it. `check_pkgver`'s entire rejecting surface is two
+bracket expressions — `*[[:space:]/:-]*` (colons, forward slashes, hyphens,
+whitespace) and `*[![:ascii:]]*` — and `@` is ASCII and in neither. Measured
+on `menci/archlinuxarm:base-devel` with a minimal recipe: `pkgver=1.3.0`
+rc=0 (positive control), `pkgver=1.3.0-rc1` rc=12 with the lint's own message
+(negative control — the lint does fire), `pkgver=@GRAPPA_VERSION@` **rc=0**,
+and the same through `--printsrcinfo`.
+
+The tree already held its own refutation. `aur/pkgver.sh`'s header transcribes
+that first bracket expression, cited to `lint_pkgbuild/pkgver.sh` and measured
+under #1591 — two files away from the comment asserting a class it does not
+contain. One claim measured, one asserted, neither reconciled, for four
+issues.
+
+### Eight sites, and why that number changed the fix
+
+The issue named two: the recipe comment and the Elixir test's NAME. A census
+found **eight**, because one sentence was pasted forward across #538, #1447
+and #1591: both recipes (`aur/PKGBUILD`, `aur/shottino/PKGBUILD`), both
+`aur/README.md` passages, the carrier test's moduledoc AND its test name, a
+comment in `packaging_shottino_pkg_test.bats`, and `docs/OPERATIONS.md`'s Arch
+section.
+
+Fixing the two named would have left six asserting a mechanism the other two
+deny. A reader consults whichever copy is nearest, so a half-corrected tree is
+worse than an uncorrected one — it makes the false reading *survivable* by
+looking like the majority. All eight moved.
+
+### What replaced it is LESS, deliberately
+
+The bouncer recipe's `pkgver` comment is the single site carrying the full
+account; every other site states the correction in a line and points there,
+so there is no second copy to drift. And that account names **no mechanism**:
+which stage would actually stop an underived build is NOT MEASURED, and this
+entry does not close it.
+
+The minimal recipe that produced the rc=0 had **no `source=()`**. The real one
+does, and it interpolates the sentinel into a tag URL
+(`v${_grappaver}.tar.gz`), so the download is a plausible stage — plausible,
+not established, and `sha256sums=('SKIP')` rules out a checksum mismatch as a
+candidate. Closing it needs the REAL recipe, sentinel unfilled, through
+`makepkg -sf` in the same container, with the derived `pkgver=1.3.0` run
+alongside so a green harness cannot be mistaken for a green build. Until
+someone runs it, the operative rule is procedural: `regen.sh` is mandatory,
+not something a tool will remind you of.
+
+That distinction is the whole point. The old text promised a guard at a stage
+that does not guard, so a change removing the *real* guard — pinning `source`
+to a branch instead of the tag — would have read as safe.
+
+### The guard, and what it cannot do
+
+`test/infra/packaging_aur_sentinel_test.bats` makes the refuted predicate
+executable (host-side: the class is a shell bracket expression) with the
+hyphen as a known-answer control on every case, and adds a copy-paste guard
+over the sites: **a refusal claimed within two lines of the sentinel must name
+the HYPHEN**, the only refusal measured. It reads whole files, because all
+eight wrapped their claim across a line break and a line-wise grep sees half
+a sentence.
+
+Three things it says out loud rather than hiding. It is a copy-paste guard,
+not a semantic one — it catches the sentence reaching a ninth file, which is
+how eight copies happened, and not a freshly-worded mechanism claim. It
+excludes this log (the #538 entry legitimately records what was believed then,
+and this one quotes the claim to retract it) and its own file (a detector
+forbidden to name its target cannot be tested), and it is pointed at that
+target in a positive control so a broken regex, an absent perl or an empty
+file list cannot pass it vacuously. And it caught its author: the first draft
+of the corrected test comment quoted the retracted phrase verbatim, and the
+guard flagged it — correctly, since a reader scanning sees the phrase either
+way.
+
+Two mistakes worth recording because both were near-misses that read as
+correct. `pkgver.sh` does **not** clear `@` through its closing guard: that
+guard sits on the hyphen branch, and a value with no hyphen takes the `*)` arm
+and exits first — the mapper never inspects the sentinel, which is a different
+and weaker fact than the one first written down. And `[:ascii:]` is a
+GNU/perl extension POSIX never defined; BSD grep answers rc=2, which
+`refute` reports as proving nothing rather than as a satisfied negation
+(#745's helper doing exactly its job). The stand-in is the printable-ASCII
+byte range under `LC_ALL=C` — strictly tighter, which is the safe direction:
+a value it accepts is certainly ASCII.
