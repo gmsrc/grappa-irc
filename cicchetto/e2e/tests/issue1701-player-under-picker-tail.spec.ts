@@ -76,10 +76,11 @@ test("#1701 — tuning a station under the open picker leaves the reader ON the 
   await page.route("https://ice.somafm.com/**", async (route) => {
     await route.fulfill({ status: 200, contentType: "audio/mpeg", body: silentMp3(8) });
   });
-  await page.route("https://api.somafm.com/logos/**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "image/png", body: Buffer.alloc(0) });
-  });
-
+  // #1739 — no logo stub: the station artwork is vendored into
+  // `public/radio-logos/` and served from our own origin, so there is nothing
+  // third-party left for this spec to shield itself from. A route that can
+  // never fire would fulfil a regression with empty bytes instead of letting
+  // it fail; `issue682-rail-radio-picker.spec.ts` owns that watch.
   await loginAs(page, specUser());
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 

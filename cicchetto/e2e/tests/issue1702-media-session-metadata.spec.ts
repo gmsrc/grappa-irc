@@ -74,7 +74,17 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const STATION_ID = "groovesalad";
 const STATION_TITLE = "Groove Salad";
 const STATION_STREAM = "https://ice.somafm.com/groovesalad-128-mp3";
-const STATION_LOGO = "https://api.somafm.com/logos/120/groovesalad120.png";
+// #1739 — the artwork is our OWN path now: the logos are vendored into
+// `public/radio-logos/`, so the platform fetches the lock-screen image from us
+// instead of from api.somafm.com on the user's behalf. That was the point of
+// the change on this surface — a lock screen holds its artwork for as long as
+// the audio plays, which is far longer than the drawer is open.
+//
+// Kept as a PATH literal for #682's reason (a table edit that renames this
+// station must fail HERE), with the origin resolved from the live page: the
+// Media Session API normalises `src` to an absolute URL, and hard-coding the
+// e2e stack's host would pin the assertion to one deployment.
+const STATION_LOGO_PATH = "/radio-logos/groovesalad.png";
 const STATION_SONGS = "https://api.somafm.com/songs/groovesalad.json";
 const SONGS_PREFIX = "https://api.somafm.com/songs/";
 
@@ -195,15 +205,19 @@ test("@webkit #1702 — the lock screen is told the track, the station and the a
     { prefix: SONGS_PREFIX, title: TRACK_TITLE, artist: TRACK_ARTIST, id: STATION_ID },
   );
 
-  // The stream and the logos DO reach `page.route` (a media load and an <img>,
-  // neither of which the worker mediates in a way that defeats interception),
-  // so they stay here — same posture as #682.
+  // The stream DOES reach `page.route` (a media load the worker does not
+  // mediate in a way that defeats interception), so it stays here — same
+  // posture as #682.
   await page.route("https://ice.somafm.com/**", async (route) => {
     await route.fulfill({ status: 200, contentType: "audio/mpeg", body: silentMp3(8) });
   });
-  await page.route("https://api.somafm.com/logos/**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "image/png", body: Buffer.alloc(0) });
-  });
+  // #1739 — the logo stub is GONE rather than retargeted. Nothing requests
+  // api.somafm.com for artwork any more (the picker and this lock screen both
+  // read `RADIO_LOGO_PATHS`), so the route could never fire — and a stub that
+  // cannot fire is worse than absent: it fulfils with empty bytes, so a
+  // regression that DID reach out again would be silently absorbed here
+  // instead of failing. The one place that still watches for such a request is
+  // `issue682-rail-radio-picker.spec.ts`, which aborts and counts it.
 
   await loginAs(page, specUser());
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -238,7 +252,7 @@ test("@webkit #1702 — the lock screen is told the track, the station and the a
       title: TRACK_TITLE,
       artist: TRACK_ARTIST,
       album: STATION_TITLE,
-      artwork: [{ src: STATION_LOGO, type: "image/png" }],
+      artwork: [{ src: new URL(STATION_LOGO_PATH, page.url()).href, type: "image/png" }],
     });
 
   // Asserted AFTER the metadata, deliberately: the metadata is the outcome and

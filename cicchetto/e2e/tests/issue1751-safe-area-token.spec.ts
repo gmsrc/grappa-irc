@@ -77,13 +77,15 @@ for (const factor of FORM_FACTORS) {
   test(`#1751 — the top inset reaches the radio picker's band exactly once (${factor.name})`, async ({
     page,
   }) => {
-    // Station logos are third-party <img> requests off the picker's rows. The
-    // #682 spec routes them for the same reason: a somafm outage must not be
-    // able to turn a layout assertion red.
-    await page.route("https://api.somafm.com/logos/**", async (route) => {
-      await route.fulfill({ status: 200, contentType: "image/png", body: Buffer.alloc(0) });
-    });
-
+    // #1739 — the station-logo stub that used to sit here is GONE, not
+    // retargeted. It existed because the picker's rows were third-party <img>
+    // requests and a somafm outage could turn a layout assertion red; the
+    // logos are vendored into `public/radio-logos/` now, so they are ordinary
+    // same-origin assets and there is no outage left to guard against. Keeping
+    // a route that can never fire would be worse than none: it fulfils with
+    // empty bytes, so a regression that DID reach out again would be absorbed
+    // here in silence. `issue682-rail-radio-picker.spec.ts` is the one spec
+    // that still watches for such a request, and it aborts and counts it.
     await loginAs(page, specUser());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 

@@ -108,12 +108,24 @@ test("#1704 — a Kohina stream the browser cannot decode says so on every surfa
   await expect(page.getByTestId("rail-radio-now-title")).toHaveText(STATION_TITLE);
 
   // (2) And the station Kohina publishes no logo for draws SOMETHING — our own
-  // placeholder, never a broken-image glyph. Asserted as the SHAPE (a data URI)
-  // rather than the exact bytes, which `radioLogoPlaceholder.test.ts` pins.
-  await expect(page.locator(".rail-radio-now-logo")).toHaveAttribute(
-    "src",
-    /^data:image\/svg\+xml,/,
-  );
+  // placeholder, never a broken-image glyph.
+  //
+  // #1739 — the placeholder used to be a `data:image/svg+xml,` URI built in the
+  // render path, and this asserted that shape. It is a FILE now
+  // (`public/radio-logos/kohina.svg`, written by `bun run sync:radio-logos`
+  // from the same generator), so the src changed — and, more to the point, so
+  // did what a src is WORTH here. A data URI cannot 404; a file can, and #1739
+  // removed the `onError` that used to hide it. So the src alone is now a
+  // strictly weaker claim than the one this assertion used to make, and the
+  // decoded width is what carries it: a missing mirror, a `radio-logos/`
+  // absent from the endpoint's `@cic_static_only` (which serves `index.html`
+  // for it — measured), or an id missing from the generated map all leave the
+  // src intact and `naturalWidth` at 0.
+  const logo = page.locator(".rail-radio-now-logo");
+  await expect(logo).toHaveAttribute("src", "/radio-logos/kohina.svg");
+  await expect
+    .poll(() => logo.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 10_000 })
+    .toBeGreaterThan(0);
 
   // On the iPhone profile the rail is a DRAWER whose backdrop is a full-viewport
   // scrim over the docked transport; on desktop there is no drawer and no
