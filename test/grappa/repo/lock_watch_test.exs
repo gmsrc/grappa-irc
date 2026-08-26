@@ -527,11 +527,11 @@ defmodule Grappa.Repo.LockWatchTest do
     end
 
     test "a test under the threshold films silently" do
-      assert film_verdict(:under, samples(20, 1_000), true, @film_threshold_ms - 1) == :silent
+      assert film_verdict(:under, samples(20, 1_000), 20, true, @film_threshold_ms - 1) == :silent
     end
 
     test "a test over the threshold reports the trajectory, and names the test" do
-      assert {:report, text} = film_verdict(:over, samples(20, 1_000), true, @film_threshold_ms)
+      assert {:report, text} = film_verdict(:over, samples(20, 1_000), 20, true, @film_threshold_ms)
 
       assert text =~ "#1767 FILM"
       assert text =~ "test=:over"
@@ -548,7 +548,7 @@ defmodule Grappa.Repo.LockWatchTest do
     test "an over-threshold test with no samples says so instead of printing an empty film" do
       # Noisy blindness: a film with nothing in it reads as "the test was
       # idle", which is the one conclusion the filmer must never invite.
-      assert {:report, text} = film_verdict(:empty, [], true, @film_threshold_ms)
+      assert {:report, text} = film_verdict(:empty, [], 12, true, @film_threshold_ms)
 
       assert text =~ "NO SAMPLES"
     end
@@ -556,31 +556,59 @@ defmodule Grappa.Repo.LockWatchTest do
     test "a broken sampler is reported even under the threshold, and produces no film" do
       # A plausible film from a sampler that cannot read a stack is worse
       # than no film: it would be believed.
-      assert {:report, text} = film_verdict(:broken, samples(20, 1_000), false, 0)
+      assert {:report, text} = film_verdict(:broken, samples(20, 1_000), 20, false, 0)
 
       assert text =~ "SAMPLER BROKEN"
       refute text =~ "reductions:"
     end
 
-    test "a filmer that missed its own ticks names its own starvation" do
+    test "starvation is read off the filmer's OWN turns, not off what it collected" do
+      # 🔴 This case USED to assert the defect. It fed one sample and demanded
+      # "SAMPLER STARVED", which is exactly the false line a quiet host printed
+      # during a PASSING run of this file: 1 collected / 218 expected over
+      # 54718ms, while the body cost 132.8ms. Collected-vs-elapsed compares a
+      # numerator bounded by the target's LIFETIME against a denominator
+      # spanning setup and teardown too.
       expected = div(@film_threshold_ms, @film_interval_ms)
 
-      assert {:report, starved} = film_verdict(:starved, samples(1, 1_000), true, @film_threshold_ms)
+      # Starved: the filmer itself barely ran. That IS a VM reading.
+      assert {:report, starved} = film_verdict(:starved, samples(1, 1_000), 1, true, @film_threshold_ms)
       assert starved =~ "SAMPLER STARVED"
       assert starved =~ "1 of #{expected}"
 
-      assert {:report, full} = film_verdict(:full, samples(expected, 1_000), true, @film_threshold_ms)
+      # NOT starved: the filmer took every turn it was due and found the target
+      # gone for almost all of them. Same single sample, opposite verdict —
+      # which is the whole point of splitting the two counters.
+      assert {:report, gone} = film_verdict(:gone, samples(1, 1_000), expected, true, @film_threshold_ms)
+      refute gone =~ "SAMPLER STARVED"
+      assert gone =~ "TARGET GONE"
+
+      assert {:report, full} =
+               film_verdict(:full, samples(expected, 1_000), expected, true, @film_threshold_ms)
+
       refute full =~ "SAMPLER STARVED"
+      refute full =~ "TARGET GONE"
+    end
+
+    test "a single sample prints no delta, because a derivative needs two points" do
+      # The vacuous statistic behind #1767's registered diagnosis: with one
+      # sample `hd` and `List.last` are the same element, so the old line read
+      # `X -> X (+0)` — indistinguishable from a genuinely frozen process.
+      assert {:report, one} = film_verdict(:one, samples(1, 1_000), 1, true, @film_threshold_ms)
+
+      refute one =~ "(+0)"
+      refute one =~ "REDUCTIONS DID NOT ADVANCE"
+      assert one =~ "one sample — no delta"
     end
 
     test "reductions that never advance are named, and reductions that do are not" do
       # The discriminator #1767 lacked: a stack sample cannot separate a
       # process blocked inside a call from one that was never scheduled.
       # Reductions can — they are monotonic and local to the process.
-      assert {:report, frozen} = film_verdict(:frozen, samples(20, 0), true, @film_threshold_ms)
+      assert {:report, frozen} = film_verdict(:frozen, samples(20, 0), 20, true, @film_threshold_ms)
       assert frozen =~ "REDUCTIONS DID NOT ADVANCE"
 
-      assert {:report, moving} = film_verdict(:moving, samples(20, 1_000), true, @film_threshold_ms)
+      assert {:report, moving} = film_verdict(:moving, samples(20, 1_000), 20, true, @film_threshold_ms)
       refute moving =~ "REDUCTIONS DID NOT ADVANCE"
     end
 
@@ -593,12 +621,46 @@ defmodule Grappa.Repo.LockWatchTest do
 
       Process.sleep(@film_interval_ms * 3)
 
-      assert {:film, true, samples} = ask_filmer(filmer)
+      assert {:film, true, samples, ticks} = ask_filmer(filmer)
       assert length(samples) >= 2
+      assert ticks >= length(samples)
 
       assert Enum.all?(samples, &(&1.reductions > 0))
       assert List.last(samples).reductions > hd(samples).reductions
       assert Enum.any?(samples, fn s -> Enum.any?(s.stack, &match?({__MODULE__, _, _, _}, &1)) end)
+
+      Process.exit(filmer, :kill)
+    end
+
+    test "ticks keep advancing after the target dies, and samples do not" do
+      # The other half of the tick/sample split, bought against the REAL loop
+      # rather than the pure verdict: the pure tests could all pass over a loop
+      # that still counted a dead target's ticks as collections.
+      #
+      # This is the shape every timed-out test in this file takes — ExUnit kills
+      # the test process and then runs `on_exit` in another one — so what the
+      # filmer sees here is what it saw on the 54718ms green run that started
+      # this pass.
+      target = spawn(fn -> Process.sleep(:infinity) end)
+      filmer = spawn_filmer_at(target)
+
+      Process.sleep(@film_interval_ms * 3)
+      assert {:film, true, alive_samples, alive_ticks} = ask_filmer(filmer)
+      assert alive_samples != []
+
+      # Monitor BEFORE the kill: established afterwards it fires `:noproc`
+      # against an already-dead pid, which asserts the wrong fact.
+      ref = Process.monitor(target)
+      Process.exit(target, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^target, :killed}, 5_000
+
+      Process.sleep(@film_interval_ms * 4)
+      assert {:film, true, dead_samples, dead_ticks} = ask_filmer(filmer)
+
+      # The filmer kept taking its turns…
+      assert dead_ticks > alive_ticks
+      # …and collected nothing more, because there was nothing alive to sample.
+      assert length(dead_samples) == length(alive_samples)
 
       Process.exit(filmer, :kill)
     end
@@ -633,7 +695,14 @@ defmodule Grappa.Repo.LockWatchTest do
     test "a film longer than the printable window declares what it dropped" do
       # No silent caps: a window that quietly discards the middle of the
       # trajectory reads as a complete film of a shorter run.
-      assert {:report, text} = film_verdict(:long, samples(@film_max_samples, 1_000), true, @film_threshold_ms)
+      assert {:report, text} =
+               film_verdict(
+                 :long,
+                 samples(@film_max_samples, 1_000),
+                 @film_max_samples,
+                 true,
+                 @film_threshold_ms
+               )
 
       assert text =~ "sample(s) omitted"
     end
@@ -667,14 +736,19 @@ defmodule Grappa.Repo.LockWatchTest do
   # printing hook, so a test can drive the reel and assert on it directly.
   defp spawn_filmer do
     test_pid = self()
-    spawn(fn -> film_loop(test_pid, true, []) end)
+    spawn(fn -> film_loop(test_pid, true, [], 0) end)
   end
+
+  # Aimed at a pid the caller chooses, so a test can point the reel at a
+  # process it is about to KILL — the only way to buy the tick/sample split
+  # against the real loop instead of against the pure verdict function.
+  defp spawn_filmer_at(pid), do: spawn(fn -> film_loop(pid, true, [], 0) end)
 
   defp ask_filmer(filmer) do
     send(filmer, {:film, self()})
 
     receive do
-      {:film, _, _} = answer -> answer
+      {:film, _, _, _} = answer -> answer
     after
       @film_answer_budget_ms -> flunk("the filmer never answered")
     end
@@ -690,7 +764,7 @@ defmodule Grappa.Repo.LockWatchTest do
   defp start_filmer(test_name) do
     test_pid = self()
     started_at = System.monotonic_time(:millisecond)
-    filmer = spawn(fn -> film_loop(test_pid, film_sampler_ok?(), []) end)
+    filmer = spawn(fn -> film_loop(test_pid, film_sampler_ok?(), [], 0) end)
 
     on_exit(fn ->
       print_film(filmer, test_name, System.monotonic_time(:millisecond) - started_at)
@@ -736,13 +810,27 @@ defmodule Grappa.Repo.LockWatchTest do
   # would turn any second read into `FILM UNAVAILABLE` — an honest message
   # about the wrong thing, and the exact shape of report this issue is
   # trying to stop producing.
-  defp film_loop(test_pid, sampler_ok?, samples) do
+  # 🔴 `ticks` and `samples` COUNT DIFFERENT THINGS, and conflating them is
+  # what made this filmer lie (#1767, second pass). A tick is the filmer being
+  # SCHEDULED; a sample is the tick finding the target ALIVE. They diverge for
+  # a reason that has nothing to do with the VM: ExUnit runs `on_exit` in a
+  # SEPARATE process, so from the moment the test body ends the target pid is
+  # dead, `Process.info/2` answers nil and `film_collect/2` can only return the
+  # accumulator unchanged. Every tick of the teardown is therefore uncollectable
+  # BY CONSTRUCTION.
+  #
+  # Measured on a QUIET host with a GREEN suite: a test whose body costs 132.8ms
+  # (`--trace`) reported `1 collected / 218 expected` over 54718ms and printed
+  # "the VM was not scheduling the FILMER either", which was false. Counting the
+  # filmer's own turns is the only way to say anything true about the filmer.
+  defp film_loop(test_pid, sampler_ok?, samples, ticks) do
     receive do
       {:film, from} ->
-        send(from, {:film, sampler_ok?, Enum.reverse(samples)})
-        film_loop(test_pid, sampler_ok?, samples)
+        send(from, {:film, sampler_ok?, Enum.reverse(samples), ticks})
+        film_loop(test_pid, sampler_ok?, samples, ticks)
     after
-      @film_interval_ms -> film_loop(test_pid, sampler_ok?, film_collect(test_pid, samples))
+      @film_interval_ms ->
+        film_loop(test_pid, sampler_ok?, film_collect(test_pid, samples), ticks + 1)
     end
   end
 
@@ -778,7 +866,8 @@ defmodule Grappa.Repo.LockWatchTest do
     send(filmer, {:film, self()})
 
     receive do
-      {:film, sampler_ok?, samples} -> emit_film(film_verdict(test_name, samples, sampler_ok?, elapsed_ms))
+      {:film, sampler_ok?, samples, ticks} ->
+        emit_film(film_verdict(test_name, samples, ticks, sampler_ok?, elapsed_ms))
     after
       @film_answer_budget_ms ->
         IO.puts(
@@ -793,57 +882,96 @@ defmodule Grappa.Repo.LockWatchTest do
 
   # Pure, so every branch below is a test above rather than something only a
   # real 60s red could exercise.
-  defp film_verdict(test_name, _, false, elapsed_ms) do
+  defp film_verdict(test_name, _, _, false, elapsed_ms) do
     {:report,
      "#1767 FILM SAMPLER BROKEN: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms — the canary's own " <>
        "frame was absent from the stack the sampler read, so NO film is produced: a plausible " <>
        "trajectory from a sampler that cannot read a stack would be believed"}
   end
 
-  defp film_verdict(_, _, true, elapsed_ms) when elapsed_ms < @film_threshold_ms do
+  defp film_verdict(_, _, _, true, elapsed_ms) when elapsed_ms < @film_threshold_ms do
     :silent
   end
 
-  defp film_verdict(test_name, [], true, elapsed_ms) do
+  defp film_verdict(test_name, [], _, true, elapsed_ms) do
     {:report,
      "#1767 FILM NO SAMPLES: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms over a #{@film_interval_ms}ms " <>
        "tick — the filmer was alive and collected nothing, which is a reading about the VM, not an idle test"}
   end
 
-  defp film_verdict(test_name, samples, true, elapsed_ms) do
+  defp film_verdict(test_name, samples, ticks, true, elapsed_ms) do
     collected = length(samples)
     expected = div(elapsed_ms, @film_interval_ms)
-    advanced = List.last(samples).reductions - hd(samples).reductions
 
     lines =
       [
         "#1767 FILM test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms threshold=#{@film_threshold_ms}ms",
-        "  samples: #{collected} collected / #{expected} expected at #{@film_interval_ms}ms",
-        "  reductions: #{hd(samples).reductions} -> #{List.last(samples).reductions} (+#{advanced})",
-        starved_line(collected, expected),
-        frozen_line(advanced, collected, elapsed_ms),
+        "  ticks: #{ticks} taken / #{expected} due at #{@film_interval_ms}ms  (filmer scheduling)",
+        "  samples: #{collected} collected of those #{ticks} ticks  (target alive)",
+        reductions_line(samples),
+        starved_line(ticks, expected),
+        target_gone_line(collected, ticks),
+        frozen_line(samples, elapsed_ms),
         truncated_line(collected)
       ] ++ film_frames(samples, hd(samples).at_ms)
 
     {:report, lines |> Enum.reject(&(&1 == "")) |> Enum.join("\n")}
   end
 
-  # The filmer missing its OWN ticks is a reading in its own right: it says
-  # the VM was not scheduling the observer either, which no sample of the
-  # test process can show.
-  defp starved_line(collected, expected) when collected * 2 < expected do
-    "  ⚠ SAMPLER STARVED: the filmer collected #{collected} of #{expected} ticks it was due — " <>
+  # 🔴 A DERIVATIVE NEEDS TWO POINTS. With one sample `hd` and `List.last` are
+  # the SAME element, so the old unconditional line printed `X -> X (+0)` — a
+  # value differenced against itself, rendered in the exact notation a reader
+  # uses for "this process ran no code". The registered diagnosis of #1767
+  # rested on one of those, and a green quiet-host run of this very file
+  # produced `reductions: 9255 -> 9255 (+0)` from a single sample.
+  defp reductions_line([_only]), do: "  reductions: one sample — no delta (a derivative needs two)"
+
+  defp reductions_line(samples) do
+    advanced = List.last(samples).reductions - hd(samples).reductions
+
+    "  reductions: #{hd(samples).reductions} -> #{List.last(samples).reductions} (+#{advanced})"
+  end
+
+  # The filmer missing its OWN TURNS is a reading about the VM. Counted from
+  # the ticks the loop actually took, never from the samples it managed to
+  # collect: a tick that finds the target dead is not a missed tick, and
+  # measuring the second while claiming the first is what made this line fire
+  # on a quiet host during a passing test.
+  defp starved_line(ticks, expected) when ticks * 2 < expected do
+    "  ⚠ SAMPLER STARVED: the filmer took #{ticks} of #{expected} turns it was due — " <>
       "the VM was not scheduling the FILMER either, so this is not only the test"
   end
 
   defp starved_line(_, _), do: ""
 
-  defp frozen_line(0, collected, elapsed_ms) when collected > 1 do
-    "  ⚠ REDUCTIONS DID NOT ADVANCE across #{collected} samples spanning #{elapsed_ms}ms — the test " <>
-      "process ran no code at all, so any frame below is where it STOPPED, not where it is working"
+  # The other half of the split, and the common case: the filmer was scheduled
+  # fine and found nothing to sample because the test process was already gone.
+  # That is a statement about WHERE the wall-clock went — setup and teardown
+  # rather than the body — and it is the opposite of a VM reading.
+  defp target_gone_line(collected, ticks) when collected * 2 < ticks do
+    "  ⚠ TARGET GONE for #{ticks - collected} of #{ticks} ticks — the test process was not alive " <>
+      "to be sampled, so that time is OUTSIDE the test body (ExUnit runs on_exit in another process)"
   end
 
-  defp frozen_line(_, _, _), do: ""
+  defp target_gone_line(_, _), do: ""
+
+  # Takes the SAMPLES, not a precomputed delta: the guard that keeps this
+  # honest (two points or nothing) then cannot be satisfied by a caller that
+  # computed the delta wrongly, which is exactly how the `(+0)` above survived.
+  defp frozen_line([_ | _] = samples, elapsed_ms) when length(samples) > 1 do
+    collected = length(samples)
+
+    case List.last(samples).reductions - hd(samples).reductions do
+      0 ->
+        "  ⚠ REDUCTIONS DID NOT ADVANCE across #{collected} samples spanning #{elapsed_ms}ms — the test " <>
+          "process ran no code at all, so any frame below is where it STOPPED, not where it is working"
+
+      _ ->
+        ""
+    end
+  end
+
+  defp frozen_line(_, _), do: ""
 
   defp truncated_line(collected) when collected >= @film_max_samples do
     "  ⚠ FILM TRUNCATED: the filmer stopped collecting at #{@film_max_samples} samples"
