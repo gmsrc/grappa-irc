@@ -53,7 +53,7 @@
 // gets the row back to its baseline live state.
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { settleNetworkAutojoin } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -69,70 +69,13 @@ const PARK_REASON = "testing parked state cp19";
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
-  // If the spec failed mid-run the network may still be parked. The
-  // testnet doesn't reset between specs — leaving a parked credential
-  // would break every subsequent spec that expects autojoin to be
-  // live. Best-effort reconnect via the same fixture; ignore failure
-  // (already-connected returns :not_parked, that's fine).
-  //
-  // CRITICAL: also poll the REST surface until #spec-wN is not merely
-  // joined but fully MEMBERS-SEEDED. /connect spawns a fresh
-  // Session.Server but autojoin is async — without settling, the next
-  // spec starts before #spec-wN is back and its loginAs sees a sidebar
-  // without the autojoin row. Observed during full integration suite
-  // run: skipping this poll cascaded 18 failures across m1-m9 +
-  // downstream cp15-b6-* specs because every following spec inherits a
-  // half-spawned Session.
-  //
-  // #522: `joined` is NOT a sufficient settle signal. The channels
-  // endpoint reports `joined: true` the instant #spec-wN enters
-  // `state.members` — the self-JOIN echo (event_router.ex:457) — which
-  // lands BEFORE the 353/366 NAMES burst seeds the member list. Return
-  // at that point and we leak a mid-stabilization session (autojoin
-  // NAMES still in flight) into the immediately-following
-  // cp15-b6-part-archive-rejoin spec (#53): it PARTs #spec-wN, and the
-  // still-arriving 353/366 races its re-JOIN's members-seeding, flaking
-  // the "members pane populates" assert ~60% of the time. Settle
-  // deterministically instead — only return once GET /members returns
-  // 200 (channel in `seeded_channels` → 366 RPL_ENDOFNAMES landed, no
-  // NAMES in flight) AND the own nick is present, the exact signal #53
-  // asserts on. HTTP 204 (`:uninitialized`) = joined-but-pre-NAMES →
-  // keep polling. This hardens the settle for EVERY downstream spec,
-  // not just #53.
-  //
-  // 60 × 500ms = 30s budget for SpawnOrchestrator → IRC connect →
-  // SASL → autojoin → JOIN echo → 353/366 NAMES → members seeded.
-  // Empirically ~3-5s on a healthy testnet; the 30s ceiling absorbs
-  // upstream rate-limit penalties accumulated by prior specs' churn.
+  // If the spec failed mid-run the network may still be parked, and the
+  // testnet does not reset between specs. `settleNetworkAutojoin` is the
+  // reconnect + poll-until-NAMES-seeded ritual this spec originated; it moved
+  // to the fixtures in #1796 when a second network-parking spec needed it, and
+  // the whole argument (why `joined` is not enough, why 30s) lives on it.
   const vjt = specUser();
-  const { patchNetworkConnectionState } = await import("../fixtures/grappaApi");
-  await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
-    connection_state: "connected",
-  }).catch(() => {});
-
-  const headers = { authorization: `Bearer ${vjt.token}` };
-  const channelsUrl = `${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels`;
-  const membersUrl = `${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels/${encodeURIComponent(
-    SEED_CHANNEL,
-  )}/members`;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const res = await fetch(channelsUrl, { headers }).catch(() => null);
-    if (res?.ok) {
-      const channels = (await res.json()) as Array<{ name: string; joined: boolean }>;
-      const bofh = channels.find((c) => c.name === SEED_CHANNEL);
-      if (bofh?.joined) {
-        // 200 = members seeded (366 landed); 204 = joined-but-pre-NAMES.
-        const membersRes = await fetch(membersUrl, { headers }).catch(() => null);
-        if (membersRes?.status === 200) {
-          const { members } = (await membersRes.json()) as {
-            members: Array<{ nick: string }>;
-          };
-          if (members.some((m) => m.nick === specNick())) return;
-        }
-      }
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  await settleNetworkAutojoin(vjt.token, NETWORK_SLUG, SEED_CHANNEL, specNick());
 });
 
 test("CP19 T32 — /disconnect parks network + redirects to Home; Reconnect ungreys + autojoin restores channel", async ({

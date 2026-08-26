@@ -938,6 +938,66 @@ export async function patchNetworkConnectionState(
   }
 }
 
+// Settle a network back to "fully autojoined and NAMES-seeded" after a spec
+// parked it. Returns as soon as that holds; gives up silently after the
+// budget, because the caller is a best-effort `afterEach` and throwing there
+// would replace one spec's failure with a confusing second one.
+//
+// #1796 — extracted from `cp15-b6-parked-disconnect-reconnect.spec.ts`, which
+// is where the argument was made and paid for; a second network-parking spec
+// re-typing it is how the subtle half of it (the 200-vs-204 distinction) would
+// get dropped. Its reasoning, unchanged:
+//
+//   The testnet does NOT reset between specs, so leaving a parked credential
+//   breaks every following spec that expects autojoin to be live. Observed:
+//   skipping this poll cascaded 18 failures across m1-m9 and the downstream
+//   cp15-b6-* specs, because every following spec inherits a half-spawned
+//   Session.
+//
+//   #522 — `joined` is NOT a sufficient settle signal. The channels endpoint
+//   reports `joined: true` the instant the channel enters `state.members` (the
+//   self-JOIN echo), which lands BEFORE the 353/366 NAMES burst seeds the
+//   member list; returning there leaks a mid-stabilization session into the
+//   next spec and flakes its members assertion ~60% of the time. Only a 200
+//   from GET /members (channel in `seeded_channels` → 366 landed, no NAMES in
+//   flight) WITH the own nick present is the deterministic signal. HTTP 204
+//   (`:uninitialized`) is joined-but-pre-NAMES → keep polling.
+//
+//   60 × 500ms = 30s: SpawnOrchestrator → IRC connect → SASL → autojoin →
+//   JOIN echo → 353/366 → members seeded is empirically ~3-5s on a healthy
+//   testnet; the ceiling absorbs upstream rate-limit penalties accumulated by
+//   prior specs' churn. Budget the CALLER's `test.setTimeout` for it.
+export async function settleNetworkAutojoin(
+  token: string,
+  networkSlug: string,
+  channel: string,
+  ownNick: string,
+): Promise<void> {
+  await patchNetworkConnectionState(token, networkSlug, {
+    connection_state: "connected",
+  }).catch(() => {});
+
+  const headers = { authorization: `Bearer ${token}` };
+  const channelsUrl = `${GRAPPA_BASE_URL}/networks/${networkSlug}/channels`;
+  const membersUrl = `${GRAPPA_BASE_URL}/networks/${networkSlug}/channels/${encodeURIComponent(
+    channel,
+  )}/members`;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const res = await fetch(channelsUrl, { headers }).catch(() => null);
+    if (res?.ok) {
+      const channels = (await res.json()) as Array<{ name: string; joined: boolean }>;
+      if (channels.find((c) => c.name === channel)?.joined) {
+        const membersRes = await fetch(membersUrl, { headers }).catch(() => null);
+        if (membersRes?.status === 200) {
+          const { members } = (await membersRes.json()) as { members: Array<{ nick: string }> };
+          if (members.some((m) => m.nick === ownNick)) return;
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 // #498 — self-serve accretion (`POST /session/networks`). Binds + spawns
 // the visitor_enabled `slug` for the authenticated subject, anon
 // (`auth_method: :none`), with the account name as the default nick. `204`
