@@ -227,9 +227,7 @@ describe("ArchiveModal (#473 grouped)", () => {
   it("clicking a channel entry selects it (from its group's slug) + closes", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
-      slug === "freenode"
-        ? [{ target: "#bofh", kind: "channel", last_activity: 200 }]
-        : [],
+      slug === "freenode" ? [{ target: "#bofh", kind: "channel", last_activity: 200 }] : [],
     );
     render(() => <ArchiveModal />);
     fireEvent.click(screen.getByText("#bofh"));
@@ -244,9 +242,7 @@ describe("ArchiveModal (#473 grouped)", () => {
   it("clicking a query entry selects it (from its group's slug) + closes", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
-      slug === "libera"
-        ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }]
-        : [],
+      slug === "libera" ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }] : [],
     );
     render(() => <ArchiveModal />);
     fireEvent.click(screen.getByText("vjt-peer"));
@@ -268,9 +264,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     // casing need not match the window the peer is already open under.
     mockOpenQueryNicks.mockReturnValue(["VJT-Peer"]);
     mockEntries.mockImplementation((slug) =>
-      slug === "libera"
-        ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }]
-        : [],
+      slug === "libera" ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }] : [],
     );
     render(() => <ArchiveModal />);
     fireEvent.click(screen.getByText("vjt-peer"));
@@ -287,9 +281,7 @@ describe("ArchiveModal (#473 grouped)", () => {
   it("renders the unread msg badge for an archived DM holding unread (#532 B)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
-      slug === "libera"
-        ? [{ target: "DebugServ", kind: "query", last_activity: 100 }]
-        : [],
+      slug === "libera" ? [{ target: "DebugServ", kind: "query", last_activity: 100 }] : [],
     );
     // Seed is keyed by the server's CANONICAL nick (DM keys fold, #532 D);
     // the row must fold the DISPLAY-cased "DebugServ" to hit "libera debugserv".
@@ -304,9 +296,7 @@ describe("ArchiveModal (#473 grouped)", () => {
   it("renders the event badge for an archived channel holding unread (#532 B)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
-      slug === "freenode"
-        ? [{ target: "#bofh", kind: "channel", last_activity: 200 }]
-        : [],
+      slug === "freenode" ? [{ target: "#bofh", kind: "channel", last_activity: 200 }] : [],
     );
     mockEventsUnread.mockReturnValue({ "freenode #bofh": 2 });
 
@@ -319,9 +309,7 @@ describe("ArchiveModal (#473 grouped)", () => {
   it("renders NO unread cluster for an archived window read to the tail (#532 B)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
-      slug === "libera"
-        ? [{ target: "quietpeer", kind: "query", last_activity: 100 }]
-        : [],
+      slug === "libera" ? [{ target: "quietpeer", kind: "query", last_activity: 100 }] : [],
     );
     // No seed entry for this window → nothing pending.
     render(() => <ArchiveModal />);
@@ -332,9 +320,7 @@ describe("ArchiveModal (#473 grouped)", () => {
   it("first click on × delete arms; second calls deleteArchiveEntry with token + slug + target", async () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
-      slug === "freenode"
-        ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }]
-        : [],
+      slug === "freenode" ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }] : [],
     );
     render(() => <ArchiveModal />);
     const deleteBtn = screen.getByTestId("archive-modal-delete-freenode-vjt-peer");
