@@ -15,13 +15,13 @@ defmodule GrappaWeb.JoinSeedCostTest do
   because a path read in the code says only that it EXISTS — never what it
   costs nor how many times it fires.
 
-  What the measurement finds is NOT what reading it suggested. The badge
-  arithmetic is five of the eleven queries a live join costs; SIX are one
-  `(subject, network)` pair resolved three times over in the same join, by
-  `canonicalize_topic/1`, `join_reply/1` and the after-join
-  `push_channel_snapshot/4` independently. Half the door is identity, not
-  counting. The tally below pins WHICH reads those are, so a later change
-  can be told apart from a change to the arithmetic itself.
+  What the measurement found was NOT what reading it suggested. The badge
+  arithmetic was five of the eleven queries a live join cost; SIX were one
+  `(subject, network)` pair resolved three times over in the same join.
+  #1759 resolves it once (`channel_context/1`) and threads it, taking a join
+  from 11 to 7. The tally below pins WHICH reads moved, so the win cannot be
+  confused with a change to the arithmetic itself — and the law is unchanged:
+  `11·W + 1` became `7·W + 1`, and W full snapshots are still W.
 
   ## Why the storm is the unit, not one join
 
@@ -139,10 +139,11 @@ defmodule GrappaWeb.JoinSeedCostTest do
       # deterministic; the sequence is not, and pinning the sequence would
       # have shipped a flake.
       #
-      #   users/networks ×3  — ONE (subject, network) pair, resolved from
-      #                        scratch by `canonicalize_topic/1`, by
-      #                        `join_reply/1`, and by the after-join
-      #                        `push_channel_snapshot/4`. Half the door.
+      #   users/networks ×1  — the (subject, network) pair, resolved ONCE by
+      #                        `channel_context/1` and threaded. Measured at
+      #                        ×3 before #1759, when `canonicalize_topic`,
+      #                        `join_reply` and `push_channel_snapshot` each
+      #                        resolved it — half the door.
       #   read_cursors       — the cursor the snapshot counts from
       #   user_settings ×2   — highlight patterns, then the #505 presence
       #                        prefs. The lever #1768 named and left alone,
@@ -152,15 +153,15 @@ defmodule GrappaWeb.JoinSeedCostTest do
       #                        NOT part of the door: it does not scale with W
       #                        and drops out of `per_join_tally/3`.
       assert Enum.frequencies(sources) == %{
-               "users" => 3,
-               "networks" => 3,
+               "users" => 1,
+               "networks" => 1,
                "read_cursors" => 1,
                "user_settings" => 2,
                "messages" => 2,
                "network_credentials" => 1
              }
 
-      assert length(sources) == 12
+      assert length(sources) == 8
     end
 
     test "the LIVE storm is linear in W — measured at three W, never extrapolated" do
@@ -185,18 +186,28 @@ defmodule GrappaWeb.JoinSeedCostTest do
         totals: #{one}, #{four}, #{eight}
       """
 
-      # WHICH reads scale, named — not a bare total. Six of the eleven are
-      # the identity pair, resolved three times over; five are the badge
-      # arithmetic this door exists to serve.
+      # WHICH reads scale, named — not a bare total.
+      #
+      # THE DISPLACEMENT. Measured on this same harness at the same three W:
+      #
+      #   before: users 3, networks 3, read_cursors 1, user_settings 2,
+      #           messages 2  =  11 a join   (totals 12, 45, 89)
+      #   after:  users 1, networks 1, read_cursors 1, user_settings 2,
+      #           messages 2  =   7 a join   (totals  8, 29, 57)
+      #
+      # Only the two reads the de-duplication touches moved, and by exactly
+      # the two redundant resolutions removed. The arithmetic did not move,
+      # which is the control: had the total dropped while `messages` changed
+      # too, something other than the cause under test would have acted.
       assert high == %{
-               "users" => 3,
-               "networks" => 3,
+               "users" => 1,
+               "networks" => 1,
                "read_cursors" => 1,
                "user_settings" => 2,
                "messages" => 2
              }
 
-      assert Enum.sum(Map.values(high)) == 11
+      assert Enum.sum(Map.values(high)) == 7
     end
 
     test "routing the join door through bulk_snapshot/4 does NOT fit — the 20% named" do
