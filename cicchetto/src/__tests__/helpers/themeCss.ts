@@ -32,14 +32,35 @@ export const themeCss = readFileSync("src/themes/default.css", "utf8");
  * over five selectors on purpose.
  */
 export function focusRules(): { selectors: string; body: string }[] {
+  return allRules().filter((rule) => rule.selectors.includes(":focus"));
+}
+
+/**
+ * Every rule in the sheet as `{ selectors, body }`, comments stripped.
+ * INNERMOST blocks only, the same way `focusRules` reads them: the `[^{}]`
+ * classes cannot span a brace, so an `@media` prelude is never returned as a
+ * selector and a rule nested inside one still is.
+ *
+ * Selector lists come back WHOLE (`a,\n b`) rather than split, because a
+ * caller asking "is this rule allowed to declare X?" has to reason about the
+ * list — a rule is only as scoped as its LOOSEST selector. Split with
+ * `selectorList` when the per-entry answer is what matters (#1802).
+ */
+export function allRules(): { selectors: string; body: string }[] {
   const stripped = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: { selectors: string; body: string }[] = [];
   for (const match of stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const selectors = match[1] ?? "";
-    const body = match[2] ?? "";
-    if (selectors.includes(":focus")) out.push({ selectors: selectors.trim(), body });
+    out.push({ selectors: (match[1] ?? "").trim(), body: match[2] ?? "" });
   }
   return out;
+}
+
+/** The entries of a comma-separated selector list, whitespace-collapsed. */
+export function selectorList(selectors: string): string[] {
+  return selectors
+    .split(",")
+    .map((one) => one.trim().replace(/\s+/g, " "))
+    .filter((one) => one.length > 0);
 }
 
 /**

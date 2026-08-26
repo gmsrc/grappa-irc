@@ -1568,9 +1568,42 @@ html.overlay-open #root > div {
      THE RULE FOR A NEW ABSPOS CHILD OF THIS ASIDE: it is NOT inset by
      `--rail-inset` and it does NOT clear the safe area on its own. Give it its
      own offsets deliberately, or make the ancestor's BOX carry what it needs.
-     `.resize-handle-right` was already compensated at its own rule — for a
-     stated different reason (it is chrome ON the edge, not a content surface),
-     but it is the only one of the three that was ever actually correct. */
+     #1802 corrects the last sentence this paragraph used to carry, which
+     absolved `.resize-handle-right`: measured, it was the one that was WRONG.
+     See its own rule below.
+
+     #1802 — WHY THE PADDING STAYS ON THIS BOX, against the issue's own sketch.
+     That sketch dropped it and put a `padding-inline` on a `.shell-members`
+     direct-child selector instead, so that the scroller could be excluded
+     generically rather than escape with a margin. (No braces in this comment
+     on purpose: `ruleBody` in the test helpers captures with a `[^}]` class
+     and a brace written here would truncate the body it reads, hiding the two
+     declarations below it.) Measured in chromium
+     at 1280px, `--font-size: 14px` (so 0.5rem = 7px), against this aside's
+     inner edge:
+
+       surface                    padding here   padding on children
+       .rail-radio-now  border box       +7px                  +0px
+       .rail-actions    border box       +7px                  +0px
+       .rail-server-info border box      +7px                  +0px
+       .rail-server-info own padding   10.5px                   7px
+       .resize-handle-right  width        6px                  14px
+
+     The first three are #1737's whole result — the rail's surfaces sharing one
+     border-box inset — and insetting the children loses it, because a padding
+     on a child insets its CONTENT and leaves its BORDER box on the rail edge.
+     A box cannot hold an outer gap and an inner one in the same property, and
+     `.rail-server-info` needs both: it draws a border, so its outer gap has to
+     come from an ancestor's padding or its own margin, and there is no third
+     option in the box model. The last row is the generic selector reaching a
+     6px `box-sizing: border-box` grip and floating it to 14px.
+
+     So the inset stays HERE, one owner, one number, and the ONE child that
+     must span the full width takes it back in a rule this container owns —
+     see the pair next to `.members-pane`. That is the half of the ruling that
+     survives measurement: "questa logica deve stare nel container non negli
+     elementi child". The half that does not is "no margins anywhere"; the
+     margin is still there, moved from the child's rule to the container's. */
   --rail-inset: 0.5rem;
   padding-inline: var(--rail-inset);
 }
@@ -1603,13 +1636,28 @@ html.overlay-open #root > div {
 
 .resize-handle-right {
   /* Inner (left) edge of the members aside.
-     #1737 — the aside now carries `padding-inline: var(--rail-inset)`, and an
-     abspos box resolves `left` against its ancestor's PADDING box, so a plain
-     `left: 0` would park this strip one inset INSIDE the edge it exists to
-     grip. Cancelled rather than inherited: every other rail child is a
-     content surface the inset is FOR, and this one is chrome ON the boundary,
-     definitionally outside it. Renders where it did before the move. */
-  left: calc(-1 * var(--rail-inset, 0px));
+
+     #1802 — back to `left: 0`, and the cancellation it replaces was never
+     a compensation: it was a defect, shipped by #1737 on a premise #1751
+     had already measured false. The premise was that a plain `left: 0`
+     would land one inset inside the edge. It does not. An abspos box
+     resolves its offsets against the ancestor's PADDING box, whose OUTER
+     boundary is the inner edge of the border — a boundary that does not
+     move when the padding changes. Measured in chromium, aside padding
+     toggled between 8px and 0 with everything else held: `left: 0` gave
+     x=101 in BOTH arms, and `inset: 0` gave x=101, width 199 in both.
+     Padding is invisible to an absolutely positioned descendant, which is
+     exactly what the long note on `.shell-members` says.
+
+     So the cancellation was not buying anything back, it was subtracting
+     an inset that had never been added. Measured on the rail itself, at
+     1280px: this grip rendered at x 1078–1084 while the aside's border box
+     started at 1084 — the whole 6px strip sat OUTSIDE the rail, over the
+     centre pane, which is also what the `.resize-handle` base rule forbids
+     in as many words. `left: 0` puts it at 1085–1091: inside the aside,
+     flush against the border it exists to grip, and symmetric with
+     `.resize-handle-left`'s `right: 0` on the other sidebar. */
+  left: 0;
 }
 
 .resize-handle:hover,
@@ -2562,12 +2610,21 @@ html.resize-dragging * {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  /* #1737 — horizontal padding GONE. The panel above is abspos at `inset: 0`
-     against `.shell-members`, which resolves to its PADDING box, so the panel
-     is already inset by `--rail-inset`; keeping 0.5rem here would land the
-     station rows at a full rem while the band and the launcher sit at half —
-     new drift, from the edit meant to remove it. Rows land exactly where they
-     did before the move. */
+  /* #1737 — horizontal padding GONE, and the reason it gave was WRONG.
+     #1802 measured it: the panel above is abspos at `inset: 0` against
+     `.shell-members`, and that resolves against the padding box's OUTER
+     boundary — the inner edge of the border — so the panel is FULL-BLEED, not
+     "already inset by `--rail-inset`". The long note on `.shell-members` says
+     the same thing and was already in the file when #1737 wrote this.
+
+     What follows is that these station rows sit at 0, not at 0.5rem like every
+     other rail surface. LEFT AS IS, deliberately and knowingly: this panel is
+     an OVERLAY over the whole rail with its own `border-left` and a `.topic-
+     bar` head that spans it edge to edge on purpose, not one of the surfaces
+     the rail insets, and #1802's ruling enumerates the four that are. Moving
+     it would move a surface nobody reported — #1737's own lesson. Restoring
+     0.5rem here is a one-line change if that is ever what is wanted; what is
+     fixed here is the claim, which said the opposite of the measurement. */
   padding: 0.5rem 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -4544,16 +4601,12 @@ button.topic-bar-windows-opener::before,
 /* MembersPane */
 
 .members-pane {
-  padding: 0.5rem 0;
-  /* #1737 — the ONE rail child that opts OUT of `--rail-inset`, and the two
-     reasons are both measured. Its rows carry their own `padding-inline: 1rem`
-     (here and on the `h3`), so inheriting would push every nick to 1.5rem —
-     moving a surface nobody reported. And this pane is the SCROLLER (#500):
-     inside the inset its scrollbar would float half a rem off the rail edge
-     it belongs on. The inset exists to line up SURFACES, and a nick row has
-     none — transparent background, no border, hover is an underline. Cancels
-     to zero where the var is undefined, i.e. anywhere but the rail. */
-  margin-inline: calc(-1 * var(--rail-inset, 0px));
+  /* #1802 — `padding-block`, not the `0.5rem 0` shorthand this shipped with.
+     The horizontal half is the container's to give now (the pair below), and
+     a shorthand here would keep re-declaring it as zero at a specificity the
+     container rule merely happens to beat — a silent fight for the next
+     reader to lose rather than a rule they can read. */
+  padding-block: 0.5rem;
   /* #500 — the members list owns the scroll on BOTH form factors. `flex: 1 1
      auto` + `min-height: 0` lets it take the remaining rail height and scroll
      internally (min-height:0 defeats the flex-item min-content floor that would
@@ -4567,23 +4620,65 @@ button.topic-bar-windows-opener::before,
   overflow-y: auto;
 }
 
+/* #1802 — THE CONTAINER'S PAIR FOR ITS ONE FULL-WIDTH CHILD, and the whole
+   point of the issue: the logic that lets the members scrollbar keep running
+   on the rail's own edge belongs to the rail, not to the pane. Both selectors
+   are rooted at `.shell-members`, so this reads as one container decision even
+   though it sits next to the child it acts on — it has to, or the (0,2,0) pair
+   would precede the (0,1,0) rule above and trip `noDescendingSpecificity`.
+
+   #1737 put the first of these on `.members-pane` itself, where it read as a
+   child opting OUT of a rule it did not like. Same pixels, different owner:
+   nothing outside the rail can now cancel the rail's inset, and the pane's own
+   rule declares nothing horizontal at all. The `, 0px` fallback #1737 needed
+   goes with the move — the selector guarantees the variable is in scope.
+
+   The second rule is where the inset the pane just gave up comes back, one
+   level down, still from the container. `.members-pane`'s children are `h3`,
+   `ul` and the `<p class="muted">` placeholders (the context menu portals to
+   <body>, so it is not one of them), and each of those is a CONTENT row with
+   no surface of its own — transparent, unbordered, hover is an underline — so
+   insetting their content rather than their border box loses nothing here,
+   which is exactly what it would have lost on `.rail-actions` or the
+   server-info card. Measured: nick rows and the members heading move from
+   1rem to 0.5rem, landing on the same 7px as the radio band and the actions
+   launcher. That 2:1 was the reported defect. */
+.shell-members > .members-pane {
+  margin-inline: calc(-1 * var(--rail-inset));
+}
+
+.shell-members > .members-pane > * {
+  padding-inline: var(--rail-inset);
+}
+
 .members-pane h3 {
   font-size: 0.85rem;
   font-weight: normal;
   color: var(--muted);
   margin: 0;
-  padding: 0.25rem 1rem;
+  /* #1802 — block only; the inline half comes from the container pair above.
+     Was `0.25rem 1rem`, and that 1rem was the second half of the defect: the
+     pane cancelled the rail's 0.5rem and its rows then re-declared twice it. */
+  padding-block: 0.25rem;
   text-transform: uppercase;
 }
 
 .members-pane ul {
   list-style: none;
   margin: 0;
+  /* KEPT as a shorthand, unlike the `h3` and `li` beside it: this zero is the
+     user-agent's `padding-inline-start: 40px` list indent being killed, not an
+     inset being declared, and it has to hold wherever the pane is mounted. The
+     container pair above wins over it inside the rail at (0,2,0) and adds the
+     0.5rem there. This list IS the rows' inset carrier — `li` is a GRANDCHILD
+     of the pane and so is not matched by that pair; it takes its position from
+     this box (#1802). */
   padding: 0;
 }
 
 .members-pane li {
-  padding: 0.1rem 1rem;
+  /* #1802 — block only; see the `h3` note. Was `0.1rem 1rem`. */
+  padding-block: 0.1rem;
   font-family: var(--font-mono);
   font-size: var(--font-size);
   white-space: nowrap;
@@ -11133,7 +11228,14 @@ button.topic-bar-windows-opener::before,
   font-weight: normal;
   color: var(--muted);
   margin: 0;
-  padding: 0.25rem 1rem;
+  /* #1802 — block only, the twin of the `.members-pane h3` edit. This slot was
+     the WORST of the three, not the same as the members one: `.rail-query-
+     context` is an ordinary flow child that sits inside the rail's padding, so
+     this heading's own 1rem stacked ON that 0.5rem and the label rendered at
+     1.5rem — measured 21px against the members list's 14px and the band's 7px.
+     Nothing here replaces it: the container's padding already put the parent
+     at 0.5rem, which is where the label now starts. */
+  padding-block: 0.25rem;
   text-transform: uppercase;
   word-break: break-word;
 }
