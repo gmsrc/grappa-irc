@@ -65253,3 +65253,113 @@ the 200-vs-204 distinction from #522 — gets dropped.
 (`CYCLE [<channel>] [<message>]`) and inventing one would make cic's verb
 something other than the verb it is named after. `/part` followed by
 `/join #chan <key>` is the two-command form that still works.
+<!-- entry #1802 -->
+
+---
+
+## 2026-08-26 — #1802: the rail's inset stays on the container, because a bordered child cannot buy its own outer gap
+
+#1737 moved the rail's horizontal inset onto `.shell-members` and granted one
+exception: `.members-pane` cancelled it with a negative `margin-inline` on its
+own rule, and its rows re-declared 1rem of their own. #1802's ruling removes the
+exception — the rail carries the inset, the children carry zero margin, the
+members scrollbar keeps riding the rail edge, and the rule that buys that last
+one lives in the CONTAINER's rules.
+
+### What was actually rendered
+
+Measured in headless chromium at 1280px against the aside's inner edge, with
+`--font-size: 14px` so `0.5rem` is 7px. Production class chain, one arm per
+window kind:
+
+| surface | before | after |
+| --- | --- | --- |
+| `.rail-radio-now` border box | +7 | +7 |
+| `.rail-actions` border box | +7 | +7 |
+| `.rail-server-info` border box | +7 | +7 |
+| `.rail-server-info` own padding | 10.5px | 10.5px |
+| members heading / nick row, ink | **+14** | **+7** |
+| `.rail-query-heading`, ink | **+21** | **+7** |
+| `.resize-handle-right` | **1078–1084, entirely OUTSIDE the rail** | 1085–1091 |
+
+The report described a 2:1. It is a 2:1 on the members list and a 3:1 on the
+query rail, which nobody had measured: `.rail-query-context` is an ordinary flow
+child sitting INSIDE the container's padding, so its heading's own 1rem stacked
+on the container's 0.5rem rather than replacing it. The issue called that slot
+"the same problem" as the members heading; it is a different one with a worse
+number.
+
+### Why the container keeps its own padding
+
+The issue's shape dropped `padding-inline` from the aside and insetted the
+children generically instead, so the scroller could be excluded by selector
+rather than escape by margin. Measured, that cannot hold what #1737
+established:
+
+| under the issue's shape | |
+| --- | --- |
+| `.rail-actions` border box | +7 → **+0** (border-top back to full width) |
+| `.rail-server-info` border box | +7 → **+0** (bordered card on the rail edge) |
+| `.rail-server-info` own padding | 10.5px → **7px**, clobbered by the container rule |
+| `.resize-handle-right` width | 6px → **14px** (`box-sizing: border-box`, padding exceeds width) |
+
+The general fact underneath: **a padding on a child insets its CONTENT and
+leaves its BORDER box where it was**, so only an ancestor's padding or the
+child's own margin can inset a border. `.rail-server-info` draws a border AND
+needs an internal inset, and one property cannot be both. There is no third
+mechanism in the box model short of a wrapper element or converting the rail to
+grid, and the rail's flex contract (#500's `flex: 1 1 auto` + `min-height: 0`
+scroller, `.rail-actions`'s `margin-top: auto` floor) is measured and load-
+bearing enough that neither is worth it for a naming preference.
+
+So the padding stays on the aside and the escape moves: `.shell-members >
+.members-pane` hands the scroller back the strips, and
+`.shell-members > .members-pane > *` insets that scroller's own rows. Same
+pixels, different owner. **The negative margin is MOVED, not deleted, and the
+issue asked for it deleted** — the one constraint measurement refused. What the
+move buys is real and is the ruling's third constraint: nothing outside the rail
+can cancel the rail's inset any more, and the pane's own rule declares nothing
+horizontal at all.
+
+### Absolute positioning does not see padding — twice
+
+`.resize-handle-right` carried `left: calc(-1 * var(--rail-inset))` on the
+premise that a plain `left: 0` would land one inset inside the rail. It would
+not: an abspos box resolves against the padding box's OUTER boundary, which is
+the inner edge of the border and does not move when the padding changes.
+Measured both ways on a controlled box — padding toggled 8px ↔ 0, everything
+else held — `left: 0` gave x=101 in both arms and `inset: 0` gave x=101 / width
+199 in both. #1751 had already measured this on the real rail and written it in
+the note directly above; #1737's cancellation contradicted it and shipped, so
+the grip rendered wholly outside the aside, over the centre pane, against what
+its own base rule requires in as many words.
+
+The same false premise had a second victim. `.rail-radio-picker-list` justified
+dropping its horizontal padding by claiming the picker "is already inset by
+`--rail-inset`" because it is abspos against the container's padding box. It is
+full-bleed, so those station rows sit at 0 while every other rail surface sits
+at 0.5rem. **Left alone deliberately**: the picker is an overlay over the whole
+rail with its own `border-left` and an edge-to-edge `.topic-bar` head, not one of
+the four surfaces the ruling enumerates, and moving it would move a surface
+nobody reported — #1737's own lesson. Only the false claim was corrected.
+
+### Two guards, disjoint on purpose
+
+Geometry cannot see WHERE a value was declared. A child that re-declares the
+same 0.5rem by hand lands on the identical pixel and reads green forever, right
+up until the token moves and the two drift — which is the failure mode #1737
+shipped. So the guard is split: `e2e/tests/issue1802-rail-inset-container.spec.
+ts` measures five subjects against one expected gap READ from the container's
+resolved `padding-left` (never spelled as a literal, and with a non-zero
+assertion in front of it so a uniformly full-bleed rail cannot satisfy the
+equality), and `src/__tests__/railInset.test.ts` reads the source for ownership:
+the token is defined once in the container, every reference is inside a
+container-scoped selector, and no rail child declares a horizontal inset of its
+own. That last check derives the set of rail children FROM the container's own
+selectors, so a future carve-out extends the guard in the same edit instead of
+drifting away from it.
+
+Surface for a child that paints one, ink for a child that does not: a nick row
+is transparent and unbordered, so its border box is the full-bleed scroller it
+lives in, and measuring that sees nothing at all. That is how a 2:1 survived a
+year of specs which only ever compared the band with the launcher.
