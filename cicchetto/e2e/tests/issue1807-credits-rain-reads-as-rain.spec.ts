@@ -134,9 +134,18 @@ test("#1807 — the Debug tab's phosphor rain stays as dim as it always was", as
   await page.getByTestId("admin-tab-debug").click();
   await expect(page.getByTestId("admin-debug-tab")).toBeVisible({ timeout: 10_000 });
 
-  // Five taps on the panel heading is the gate the rain has always sat
-  // behind — the real gesture, not a signal poked from the outside.
-  const panel = page.locator(".adm-matrix");
+  // Five taps on the panel is the gate the rain has always sat behind — the
+  // real gesture, not a signal poked from the outside.
+  //
+  // Scoped by the PROMPT line, because the tab carries THREE `.adm-matrix`
+  // panels ("Viewport diagnostics", "Element chain", "Event log") and only
+  // the first one wears `onClick={tapHeading}`. A bare `.adm-matrix` is a
+  // strict-mode violation, and picking `.first()` instead would be a guess
+  // that goes stale the day a panel is added above it. `.adm-matrix-prompt`
+  // is that panel's own affordance line and exists nowhere else; the
+  // assertion below then re-checks the choice for free, since tapping the
+  // wrong panel mounts no rain at all.
+  const panel = page.locator(".adm-matrix:has(.adm-matrix-prompt)");
   for (let i = 0; i < 5; i++) await panel.click();
   await expect(page.getByTestId("admin-matrix-rain")).toBeVisible({ timeout: 5_000 });
 
