@@ -14085,8 +14085,16 @@ audio.media-viewer-media {
   left: 0;
   right: 0;
   /* Starts fully below the fold and ends fully above it, so the loop has no
-     visible seam. 28s: the issue asked for "under ~30s, then it loops". */
-  animation: credits-roll 28s linear infinite;
+     visible seam. #1773 ran the whole 28s cycle as travel; #1807 keeps the
+     travel at 27.88s (0.82 x 34s — the titles roll at exactly the speed they
+     did) and spends the remaining 6.12s with the roll PARKED off the top.
+     That tail is the interlude of pure rain the issue asked for.
+
+     Lengthening the cycle rather than adding a JS pause is what keeps the
+     frame budget at zero AND keeps one clock: `creditsRain.rollIsParked`
+     reads the phase of THIS animation, and takes the 0.82 off its own
+     keyframes, so retiming the roll needs no edit anywhere else. */
+  animation: credits-roll 34s linear infinite;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -14096,11 +14104,18 @@ audio.media-viewer-media {
   text-shadow: 0 0 0.5rem var(--accent);
 }
 
+/* The last two stops carry the SAME transform on purpose: that hold is the
+   interlude, and its start (82%) is the only place the number lives. The roll
+   re-enters from the bottom afterwards, which is the same entrance as the
+   first pass rather than a resume mid-list. */
 @keyframes credits-roll {
-  from {
+  0% {
     transform: translateY(100%);
   }
-  to {
+  82% {
+    transform: translateY(-100%);
+  }
+  100% {
     transform: translateY(-100%);
   }
 }

@@ -8,7 +8,7 @@ import {
   creditsMuted,
   toggleCreditsMuted,
 } from "./lib/creditsModal";
-import { CREDITS_RAIN_LOOK } from "./lib/creditsRain";
+import { creditsRainLook } from "./lib/creditsRain";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import MatrixRain from "./MatrixRain";
 
@@ -84,6 +84,14 @@ const CreditsModal: Component = () => {
   const versionLabel = (): string => bootBundleVersionAccessor() ?? "version unknown";
   const dateLabel = (): string | null => creditsDateLabel(credits.date);
 
+  // #1807 — the roll's own animation is the ONLY clock. `MatrixRain` calls
+  // `look` once per drawn frame from inside the loop it already runs, and
+  // `creditsRainLook` answers by reading this element's animation phase, so
+  // the burst can never drift away from the interlude it belongs to. Assigned
+  // during element creation, which is before any `onMount` — including the
+  // one that starts the rain — so the loop never sees it unset.
+  let roll: HTMLDivElement | undefined;
+
   return (
     <Show when={creditsModalOpen()}>
       {/* One fixed full-viewport box, not a backdrop plus a centred dialog:
@@ -99,7 +107,7 @@ const CreditsModal: Component = () => {
         <MatrixRain
           class="credits-rain"
           testId="credits-matrix-rain"
-          look={() => CREDITS_RAIN_LOOK}
+          look={() => creditsRainLook(roll)}
         />
 
         <div class="credits-chrome">
@@ -126,9 +134,18 @@ const CreditsModal: Component = () => {
 
         {/* The roll scrolls by CSS animation, so the loop costs no frame
             budget of ours and `prefers-reduced-motion` can turn it into a
-            plain scrollable column with one media query — see default.css. */}
+            plain scrollable column with one media query — see default.css.
+            #1807 lengthened the cycle and parked the translate before its
+            end; that tail IS the interlude, and it is read back off this
+            element rather than counted a second time in JS. */}
         <div class="credits-viewport">
-          <div class="credits-roll" data-testid="credits-roll">
+          <div
+            class="credits-roll"
+            data-testid="credits-roll"
+            ref={(node) => {
+              roll = node;
+            }}
+          >
             <h2 class="credits-title" data-testid="credits-title">
               GRAPPA IRC
             </h2>
