@@ -1,0 +1,86 @@
+# .mailmap — one person, one identity, WITHOUT rewriting history (#1808).
+#
+# git resolves author identity through this file before it reports one, so
+# `git log --format='%aN <%aE>'`, `git shortlog` and everything downstream of
+# them see the collapsed set. `infra/packaging/credits.sh` is downstream: it
+# derives the credit roll (#1773) from `git shortlog -sn --no-merges`, and
+# before this file existed the roll listed the same people two and three
+# times. No hash moves and nothing is force-pushed — the commits keep the
+# identity they were authored with; only the REPORT is canonical.
+#
+# ── Why every line carries all four fields ─────────────────────────────────
+#
+#     Proper Name <proper@addr> Commit Name <commit@addr>
+#
+# and never the shorter `Proper Name <proper@addr> <commit@addr>`. The short
+# spelling keys on the commit ADDRESS ALONE, and one address here is shared by
+# two identities: `marcello.barnaba@gmail.com` carries both Marcello's own
+# commits and `vjt-claude`'s. Measured in a sandbox before this file was
+# written — with the short spelling, `git check-mailmap 'vjt-claude
+# <marcello.barnaba@gmail.com>'` answers `Marcello Barnaba <vjt@openssl.it>`;
+# with the four-field spelling it answers itself.
+#
+# So the short form would silently overrule the decision recorded below: the
+# Claude session identities were ruled a SEPARATE credit under `vjt-claude`,
+# and an address-keyed mapping folds them into Marcello anyway, with nothing
+# to read. One spelling throughout, and it is the one that cannot do that:
+# every line names both sides in full, and a new alias needs its own line
+# rather than being absorbed by an address someone else also uses.
+# `test/infra/credits_payload_test.bats` pins both halves.
+
+Marcello Barnaba <vjt@openssl.it> vjt <vjt@openssl.it>
+Marcello Barnaba <vjt@openssl.it> Marcello Barnaba <mbarnaba@meta.com>
+Marcello Barnaba <vjt@openssl.it> Marcello Barnaba <marcello.barnaba@gmail.com>
+
+Alessio Bonforti <info@alessiobonforti.com> Alessio Bonforti <38355294+abonforti@users.noreply.github.com>
+
+Gabriele Marrone <gabriele.marrone@gmail.com> gabrielemarrone <131861953+gabrielemarrone@users.noreply.github.com>
+
+# The two Claude session identities collapse under `vjt-claude`, which is a
+# ruling and not a dedup: #1808 says outright that whether they merge, and
+# under which name, is vjt's call. Relayed from #grappa on 2026-08-26 — see
+# the DESIGN_NOTES entry for the provenance, which is worth reading before
+# trusting this line.
+#
+# The canonical identity deliberately sits on `marcello.barnaba@gmail.com`,
+# the address `vjt-claude` actually commits from and the one Marcello's own
+# gmail commits are mapped AWAY from three lines above. That is safe, and
+# measured rather than assumed: a mailmap lookup is NOT transitive, so
+# `claude` resolves to `vjt-claude <marcello.barnaba@gmail.com>` and stops
+# there instead of chaining on into `Marcello Barnaba <vjt@openssl.it>`.
+# Verified in both rule orders; the file's order carries no meaning.
+vjt-claude <marcello.barnaba@gmail.com> claude <claude@sonic88.org>
+
+# `Your Name <you@example.com>` is the git default nobody configured, and the
+# repository cannot name its author on its own — but it points hard at one
+# person. 83 of those 89 commits are `frontends/shottino`; the last one under
+# this identity is 2026-08-01T02:05:02+02:00 and the first under
+# `Stefy Lanza <stefy@nexlab.net>` is 2026-08-01T02:11:58+02:00, six minutes
+# and fifty-six seconds later, on the same tree, with no overlap in either
+# direction and 146 of Stefy's 147 commits in that same directory. That is
+# the shape of a `git config user.name` run at two in the morning.
+#
+# Evidence is not testimony, so it was asked rather than assumed. Confirmed by
+# vjt and relayed from #grappa on 2026-08-26 — same provenance caveat as the
+# line above, and the DESIGN_NOTES entry carries both in full.
+Stefy Lanza <stefy@nexlab.net> Your Name <you@example.com>
+
+# ── NOTHING IS LEFT UNMAPPED ───────────────────────────────────────────────
+#
+# As of the census below, every author identity in this history either appears
+# above or is the only identity its owner has. That is a claim worth stating
+# rather than leaving as the absence of a list: a contributor who starts
+# committing from a second address should add a line here, and knowing the
+# file is meant to be COMPLETE is what makes that obvious.
+#
+# `dependabot[bot]` is in the roll on purpose and is not an oversight — it was
+# raised and ruled in. Nothing here can exclude an author anyway: a mailmap
+# renames, it never drops. The two identity rulings, and the provenance they
+# arrived with, are in the #1808 DESIGN_NOTES entry — read it before trusting
+# either.
+#
+# Census taken on 8ce0c836. `%an <%ae>` and not the issue's `%aN <%aE>`: the
+# capitals are the RESOLVED identity, so once this file exists they report the
+# collapse back to you instead of the history it was derived from.
+#
+#     git log --format='%an <%ae>' | sort | uniq -c | sort -rn

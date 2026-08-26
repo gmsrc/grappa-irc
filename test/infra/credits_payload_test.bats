@@ -26,7 +26,10 @@
 #      bare base on its no-git path. Failing loud here would break precisely
 #      the two builds that ship;
 #   5. ONE LINE of output — every wrapper captures it with `$(...)` into an
-#      env var, and a multi-line payload would arrive mangled.
+#      env var, and a multi-line payload would arrive mangled;
+#   6. one person gets ONE credit — `.mailmap` collapses the identities a
+#      contributor has committed under, and the roll must show the collapsed
+#      list rather than the same person two or three times (#1808).
 #
 # The sandbox repos are built here rather than measured against this checkout:
 # the real history changes every commit, so a case reading it could only
@@ -37,6 +40,12 @@ load ../bats_helpers
 
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../../infra/packaging/credits.sh"
+
+    # The checkout this suite runs in. The #1808 cases below read the REAL
+    # `.mailmap` through it: unlike the history, that file is a committed
+    # artefact this repo owns, so an exact assertion against it is stable and
+    # dies on the one edit that matters — a removed or reshaped mapping.
+    REAL_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
 
     REPO="$BATS_TEST_TMPDIR/repo"
     # `credits.sh` derives the repo root as SCRIPT_DIR/../.. (the layout
@@ -66,8 +75,9 @@ init_repo() {
     git -C "$REPO" init -q -b main
     git -C "$REPO" config user.name "sandbox"
     git -C "$REPO" config user.email "sandbox@example.invalid"
-    # No mailmap: `git shortlog` therefore groups by the author name verbatim
-    # and the expected counts below are the literal ones.
+    # No mailmap unless a case writes one: `git shortlog` therefore groups by
+    # the author name verbatim and the expected counts below are the literal
+    # ones. The #1808 case that needs a mailmap adds it after this.
 }
 
 @test "the payload names every contributor with the count of their non-merge commits" {
@@ -158,4 +168,111 @@ init_repo() {
 
     [ "$status" -eq 0 ]
     [ "${#lines[@]}" -eq 1 ]
+}
+
+# ── #1808 — one person, one credit ──────────────────────────────────────────
+#
+# The roll used to split people across the identities they had committed
+# under, because nothing had ever de-duplicated them. The cure is a root
+# `.mailmap`: `git shortlog` resolves author identity through it before
+# grouping, so the collapse costs no history rewrite and no change to
+# credits.sh.
+#
+# Three cases, dying of three different causes:
+#
+#   * the first is a SANDBOX case and pins the CHANNEL — that credits.sh
+#     still reaches the mailmap-resolved name. It goes red on `--no-mailmap`,
+#     or on a reimplementation over `%an` (raw) instead of `%aN` (resolved);
+#   * the second reads THIS checkout and pins the MAPPINGS — it goes red when
+#     a line is removed from `.mailmap`;
+#   * the third reads THIS checkout and pins the one NON-collapse: an identity
+#     that merely shares an address with a mapped one must stay its own. That
+#     is what a mechanical dedup gets wrong, and it is invisible once done.
+
+@test "#1808 — a .mailmap collapses one person's identities into a single credit" {
+    init_repo
+    # Ada under two addresses AND two names, with a namesake-free second
+    # person to prove the collapse is not "everything became one row".
+    commit_as "Ada Lovelace" "ada@example.invalid" "one"
+    commit_as "Ada Lovelace" "ada@work.invalid" "two"
+    commit_as "ada" "ada@example.invalid" "three"
+    commit_as "Grace Hopper" "grace@example.invalid" "four"
+
+    printf '%s\n' \
+        'Ada Lovelace <ada@example.invalid> Ada Lovelace <ada@work.invalid>' \
+        'Ada Lovelace <ada@example.invalid> ada <ada@example.invalid>' \
+        > "$REPO/.mailmap"
+
+    run "$SANDBOX_SCRIPT"
+
+    [ "$status" -eq 0 ]
+    # Three commits on ONE row. The exact string, like the case at the top of
+    # this file: a partial collapse (two rows for Ada) is as wrong as none.
+    [[ "$output" == *'"contributors":[{"name":"Ada Lovelace","commits":3},{"name":"Grace Hopper","commits":1}]'* ]]
+}
+
+@test "#1808 — every alias this repo's .mailmap collapses resolves to one identity" {
+    # `check-mailmap` reads the FILE, not the log, so this asserts exact
+    # strings without depending on a history that grows every commit.
+    run git -C "$REAL_ROOT" check-mailmap \
+        'vjt <vjt@openssl.it>' \
+        'Marcello Barnaba <mbarnaba@meta.com>' \
+        'Marcello Barnaba <marcello.barnaba@gmail.com>' \
+        'Alessio Bonforti <38355294+abonforti@users.noreply.github.com>' \
+        'gabrielemarrone <131861953+gabrielemarrone@users.noreply.github.com>' \
+        'claude <claude@sonic88.org>' \
+        'Your Name <you@example.com>'
+
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = 'Marcello Barnaba <vjt@openssl.it>' ]
+    [ "${lines[1]}" = 'Marcello Barnaba <vjt@openssl.it>' ]
+    [ "${lines[2]}" = 'Marcello Barnaba <vjt@openssl.it>' ]
+    [ "${lines[3]}" = 'Alessio Bonforti <info@alessiobonforti.com>' ]
+    [ "${lines[4]}" = 'Gabriele Marrone <gabriele.marrone@gmail.com>' ]
+    # The Claude session identities are ONE credit under `vjt-claude` — a
+    # ruling, not a dedup (#1808). Its canonical address is the one shared
+    # with Marcello, and it does NOT chain on into him: a mailmap lookup is
+    # a single resolution, not a transitive one.
+    [ "${lines[5]}" = 'vjt-claude <marcello.barnaba@gmail.com>' ]
+    # The git default nobody configured, attributed on a human's word rather
+    # than on the (strong) inference the history supports — also a ruling.
+    [ "${lines[6]}" = 'Stefy Lanza <stefy@nexlab.net>' ]
+
+    # And the PAYLOAD this checkout actually produces carries the collapse:
+    # an alias is only ever VISIBLE in the roll when it differs by NAME
+    # (`shortlog -sn` groups by name, so the same-name address splits above
+    # never reached it), and none of the four is there now.
+    run "$SCRIPT"
+    [ "$status" -eq 0 ]
+
+    # Anti-hollow-green: a checkout with no readable git yields the honest
+    # empty payload, against which every `refute` below holds vacuously. The
+    # canonical names must be PRESENT before their aliases may be absent.
+    [[ "$output" == *'{"name":"Marcello Barnaba","commits":'* ]]
+    [[ "$output" == *'{"name":"Gabriele Marrone","commits":'* ]]
+    [[ "$output" == *'{"name":"vjt-claude","commits":'* ]]
+    [[ "$output" == *'{"name":"Stefy Lanza","commits":'* ]]
+    refute grep -q '"name":"vjt"' <<< "$output"
+    refute grep -q '"name":"gabrielemarrone"' <<< "$output"
+    refute grep -q '"name":"claude"' <<< "$output"
+    refute grep -q '"name":"Your Name"' <<< "$output"
+}
+
+@test "#1808 — a shared address does not drag one identity into another" {
+    # `vjt-claude` is the canonical name the Claude session identities were
+    # ruled into, and it commits under `marcello.barnaba@gmail.com` — the
+    # SAME address as one of the aliases collapsed in the case above. A
+    # mapping written `Proper <new> <old>` keys on the commit ADDRESS ALONE,
+    # so that spelling folds `vjt-claude` into Marcello and quietly overrules
+    # the ruling. The four-field `Proper <new> Commit Name <old>` spelling
+    # keys on the pair; measured both ways before the file was written.
+    #
+    # So this asserts a NON-collapse, and it is the only case that does. It is
+    # the one line of defence against a future tidy-up shortening the entries:
+    # the wrong spelling breaks nothing loudly, it just silently reassigns
+    # eight commits to somebody who did not write them.
+    run git -C "$REAL_ROOT" check-mailmap 'vjt-claude <marcello.barnaba@gmail.com>'
+
+    [ "$status" -eq 0 ]
+    [ "$output" = 'vjt-claude <marcello.barnaba@gmail.com>' ]
 }
