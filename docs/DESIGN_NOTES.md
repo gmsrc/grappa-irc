@@ -41539,36 +41539,46 @@ OUTSIDE the sandbox, warm median of 5.
 
 | rows | pre-#1626 | `list_archive/3` | ruler `count(*)` |
 |---|---|---|---|
-| 10,000 | 2.61 ms | 0.63 ms | 0.33 ms |
-| 100,000 | 29.87 ms | 0.60 ms | 2.56 ms |
-| 650,000 | 395.93 ms | 0.56 ms | 17.81 ms |
-| 1,300,000 | 1101.76 ms | 0.79 ms | 54.83 ms |
+| 10,000 | 2.52 ms | 0.60 ms | 0.29 ms |
+| 100,000 | 37.18 ms | 0.60 ms | 2.87 ms |
+| 650,000 | 428.93 ms | 0.66 ms | 19.45 ms |
+| 1,300,000 | 1076.59 ms | 0.77 ms | 56.20 ms |
 
-Partition ×130 → pre-#1626 **×422.78**, ruler **×164.65**, `list_archive/3`
-**×1.25**.
+Partition ×130 → pre-#1626 **×427.22**, ruler **×190.51**, `list_archive/3`
+**×1.28**.
 
 **Axis B — targets 20 → 1000, partition HELD at exactly 100,000 rows:**
 
 | targets | pre-#1626 | `list_archive/3` |
 |---|---|---|
-| 20 | 19.48 ms | 0.18 ms |
-| 180 | 32.64 ms | 0.62 ms |
-| 1000 | 38.55 ms | 2.48 ms |
+| 20 | 22.03 ms | 0.16 ms |
+| 180 | 31.13 ms | 0.62 ms |
+| 1000 | 41.59 ms | 2.69 ms |
 
-Targets ×50 → pre-#1626 **×1.98**, `list_archive/3` **×14.09**.
+Targets ×50 → pre-#1626 **×1.89**, `list_archive/3` **×16.64**.
 
 Axis B is not decoration. Flatness on axis A alone is equally consistent with
 "the harness cannot see size", so the claim is a DISPLACEMENT and needs the
 other side: the cost left the partition axis and appeared on the target axis.
 Two independent arms that DO grow on axis A in the same run — a `count(*)`
-ruler and the pre-#1626 shape itself — are what make the flat line a
-measurement rather than a blind instrument, and both are gate controls.
+ruler and the pre-#1626 shape itself — are what make the third arm's near-
+stillness a measurement rather than a blind instrument, and both are gate
+controls.
 
-**The strongest single piece of evidence is the noise.** Across two runs of
-the same harness the new arm read 0.53 / 0.58 / 0.61 / 0.68 and then 0.63 /
-0.60 / 0.56 / 0.79 — non-monotone in the partition, in both directions. Its
-variation across a 130× size range is smaller than its variation between runs.
-A quantity that cannot be ordered by the axis is not a function of it.
+**The residual rise is real, and it is not the old law.** Three runs read the
+new arm on axis A as 0.53 / 0.58 / 0.61 / 0.68, then 0.63 / 0.60 / 0.56 / 0.79,
+then 0.60 / 0.60 / 0.66 / 0.77 — one of the three non-monotone, and the spread
+BETWEEN runs at a single point (0.56–0.66 at 650k) about as wide as the total
+rise ACROSS the axis (~0.17 ms). So "flat" would be an overstatement and is not
+the claim: ×1.28 over a ×130 partition is a rise, next to ×427 for the old
+shape on the same instrument in the same run.
+
+The likely reading, and it is INFERRED rather than measured: B-tree depth grows
+with the table, so 178 constant-count seeks each cost slightly more at 1.3M
+than at 10k. That would make the surviving dependence logarithmic where it used
+to be super-linear — a change of class, which is what was asked for, and NOT
+independence, which was not. Nobody measured the depth; the sentence stands as
+a reading of the shape, not as a result.
 
 ### What the plans say, and one thing nobody expected
 
@@ -41592,18 +41602,18 @@ and the seek becomes a scan without failing. That is why the SQL is a literal
 constant in `scrollback.ex` and not Ecto-generated, and why a control asserts
 the index name appears in the emitted plan.
 
-Second surprise: the old shape was SUPER-linear, ×422 over a ×130 partition,
+Second surprise: the old shape was SUPER-linear, ×427 over a ×130 partition,
 not the ~0.16 ms per 1,000 rows linear model #1626 fitted at smaller sizes —
 the GROUP BY's temp structure, growing faster than the scan feeding it.
 
 ### Honest limits on these numbers
 
 The absolute constants do NOT transfer and are not claimed to. This host reads
-395.93 ms at the 650k anchor where #1626 reported 101–104 ms — roughly 4×, on
+428.93 ms at the 650k anchor where #1626 reported 101–104 ms — roughly 4×, on
 different hardware and against a planner that had a fold covering index #1626
 may not have had. w2 measured the same law on a third host with different
 constants again. What reproduces is the shape: one arm proportional to the
-partition, one arm indifferent to it.
+partition, one arm barely moved by it.
 
 Not measured, and not to be inferred: prod (m42) — every number is one docker
 host; the VISITOR arm's timing — the SQL is the `visitor_id` mirror and the
