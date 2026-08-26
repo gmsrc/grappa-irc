@@ -41506,3 +41506,183 @@ Before cutting a log on a time boundary, measure that the boundary is
 disjoint — order the file claims is not order the file has. A frozen file
 does not inherit the live file's merge driver; state the refusal where the
 attribute would go.
+<!-- entry #1626 -->
+
+---
+
+## 2026-08-26 — #1626: the archive listing seeks per target, and the field that stood in the way
+
+`Scrollback.list_archive/3` answered the per-network Archive section by
+grouping every row of the `(subject, network)` partition. #1626 filed it as a
+complexity problem rather than a slow query: the cost of listing ~180 windows
+was bound to how much the account had ever said, so it grew forever while the
+answer did not. It now answers from a LOOSE INDEX SCAN — a recursive CTE that
+hops group boundary to group boundary, one seek per TARGET — in ONE statement,
+and the cost tracks the target count instead.
+
+The price, ruled on by vjt rather than decided in the slice: `row_count` is
+removed from the archive entry, and the wire is at `protocol_version` 8. An
+exact per-group count has to VISIT the group's rows, and the union of the
+groups is the partition, so while the count was in the shape no amount of
+query work could buy the class back.
+
+### One number cannot tell a law from a factor
+
+That is the trap #1626 was filed about and the one #1759 hit again, so the
+harness (`test/bench_1626.exs`, committed) measures two axes and refuses to
+print anything unless every control passes. Corpus is prod-shaped — 178
+targets, 30 channels on a heavy tail plus DM peers in CP14 B3 form, casing
+variants included — built through the app's own pool on a scratch SQLite file
+OUTSIDE the sandbox, warm median of 5.
+
+**Axis A — partition varies 10k → 1.3M, target count HELD at 178:**
+
+| rows | pre-#1626 | `list_archive/3` | ruler `count(*)` |
+|---|---|---|---|
+| 10,000 | 2.61 ms | 0.63 ms | 0.33 ms |
+| 100,000 | 29.87 ms | 0.60 ms | 2.56 ms |
+| 650,000 | 395.93 ms | 0.56 ms | 17.81 ms |
+| 1,300,000 | 1101.76 ms | 0.79 ms | 54.83 ms |
+
+Partition ×130 → pre-#1626 **×422.78**, ruler **×164.65**, `list_archive/3`
+**×1.25**.
+
+**Axis B — targets 20 → 1000, partition HELD at exactly 100,000 rows:**
+
+| targets | pre-#1626 | `list_archive/3` |
+|---|---|---|
+| 20 | 19.48 ms | 0.18 ms |
+| 180 | 32.64 ms | 0.62 ms |
+| 1000 | 38.55 ms | 2.48 ms |
+
+Targets ×50 → pre-#1626 **×1.98**, `list_archive/3` **×14.09**.
+
+Axis B is not decoration. Flatness on axis A alone is equally consistent with
+"the harness cannot see size", so the claim is a DISPLACEMENT and needs the
+other side: the cost left the partition axis and appeared on the target axis.
+Two independent arms that DO grow on axis A in the same run — a `count(*)`
+ruler and the pre-#1626 shape itself — are what make the flat line a
+measurement rather than a blind instrument, and both are gate controls.
+
+**The strongest single piece of evidence is the noise.** Across two runs of
+the same harness the new arm read 0.53 / 0.58 / 0.61 / 0.68 and then 0.63 /
+0.60 / 0.56 / 0.79 — non-monotone in the partition, in both directions. Its
+variation across a 130× size range is smaller than its variation between runs.
+A quantity that cannot be ordered by the axis is not a function of it.
+
+### What the plans say, and one thing nobody expected
+
+The plan is taken off the SQL the function EMITS, captured from
+`[:grappa, :repo, :query]` telemetry — never a local rebuild, per #1372. All
+three seeks are covering:
+
+    SEARCH messages USING COVERING INDEX messages_archive_user_idx (user_id=? AND network_id=?)
+    SEARCH m USING COVERING INDEX messages_archive_user_idx (user_id=? AND network_id=? AND <expr>>?)
+    SEARCH m USING COVERING INDEX messages_archive_user_idx (user_id=? AND network_id=? AND <expr>=?)
+
+The BEFORE plan does **not** use that index at all — it walks
+`messages_user_id_network_id_dm_coalesce_fold_id_kind_index`, the fold
+covering index added by `20260816013504`. So #1484's reading that
+`messages_archive_{user,visitor}_idx` (`20260522073826`) were dead weight worth
+dropping for INSERT cost was TRUE of the old query, and it is this scan that
+makes them load-bearing. Dropping them now costs a migration to put back, and
+the degradation would be SILENT: SQLite declines an expression index the moment
+the query's spelling of `COALESCE(dm_with, channel)` drifts by one character,
+and the seek becomes a scan without failing. That is why the SQL is a literal
+constant in `scrollback.ex` and not Ecto-generated, and why a control asserts
+the index name appears in the emitted plan.
+
+Second surprise: the old shape was SUPER-linear, ×422 over a ×130 partition,
+not the ~0.16 ms per 1,000 rows linear model #1626 fitted at smaller sizes —
+the GROUP BY's temp structure, growing faster than the scan feeding it.
+
+### Honest limits on these numbers
+
+The absolute constants do NOT transfer and are not claimed to. This host reads
+395.93 ms at the 650k anchor where #1626 reported 101–104 ms — roughly 4×, on
+different hardware and against a planner that had a fold covering index #1626
+may not have had. w2 measured the same law on a third host with different
+constants again. What reproduces is the shape: one arm proportional to the
+partition, one arm indifferent to it.
+
+Not measured, and not to be inferred: prod (m42) — every number is one docker
+host; the VISITOR arm's timing — the SQL is the `visitor_id` mirror and the
+plan test covers it structurally, but no visitor stopwatch was run; cold-cache
+cost — two warm-ups precede every median; the end-to-end HTTP path — this is
+the context function; and whether 1000 targets is a realistic ceiling — 178 is
+the prod-shaped anchor, 1000 is a stress point, and prod's real target
+distribution was not sampled.
+
+### The fork not taken
+
+w2 built the same listing WITH the count retained (`w2-1626` @ `9d2fb782`) and
+measured ~10× on the constant, its own entry recording that "the count still
+visits the partition, so the LAW is unchanged". That branch was NOT rebased or
+cherry-picked: once the ruling chose the property, merging a branch that
+implements the other fork would have been a green with nothing behind it, and
+a vacuous green is worse than a red. Reused from it BY HAND: the loose-scan
+SQL, taken VERBATIM — every `COALESCE(dm_with, channel)` must match the indexed
+expression character for character — and the display-casing rule, rewritten as
+`Enum.max_by/2`. Declined: its `Repo.deferred_transaction/1`, which existed to
+hold two statements under one snapshot. Without the count there is one
+statement, and an API with no caller is a liability.
+
+`Enum.max_by/2` additionally FIXES a tie the old shape left to SQLite: equal
+`server_time` across two spellings of one fold resolved arbitrarily under the
+bare-column rule and now resolves to the lexicographically smallest, because
+the scan yields ascending and `max_by/2` keeps the first maximum. The oracle
+comparison in the bench is only sound because a control proves the corpus
+contains no such tie.
+
+### `protocol_version` 7 → 8; `min_protocol_version` stays at 1
+
+The bump is not discretionary (the #1393d rule). The floor NOT moving is, so
+it is argued from three measurements rather than left implicit.
+
+1. **The break is real and runs old-client → new-server.** cic's generated
+   `wireSchema` declares `row_count` REQUIRED and `wireValidate.walkObject`
+   REJECTs an object missing a required key — `api.test.ts` carried a case
+   named exactly *"listArchive rejects an entry missing row_count"*.
+2. **The blast radius is ONE listing and it is contained.** `loadArchive`
+   catches, leaving already-rendered entries in place, and the renderer reads
+   an absent slug as "not loaded yet". The socket is untouched.
+3. **The floor is not endpoint-scoped.** Raising it to 8 would 426 the WHOLE
+   socket for every client declaring 1..7, including clients that never call
+   `/archive`. Matching a session-wide gate to an endpoint-scoped break is a
+   category error.
+
+cic's `MIN_SERVER_PROTOCOL_VERSION` stays at 2 for a measured reason too:
+`walkObject` DROPS undeclared keys rather than rejecting them (additive-only,
+#447), so a v8 bundle still talks to a v7 server that is still sending the
+field. The `api.test.ts` case above is replaced by one pinning that tolerance,
+because the tolerance is the property holding the floor where it is.
+Observed and deliberately NOT changed: cic's `CLIENT_PROTOCOL_VERSION` is 2
+while the server is at 8 — it has never followed the bumps. Moving it here
+would be inertia, not a decision.
+
+### The doctrine that fell
+
+"Existing fields are NEVER removed" is now false, and pretending otherwise in
+`CLAUDE.md`, `Grappa.Protocol`'s moduledoc and `docs/CLIENT_PROTOCOL.md` would
+have left three documents lying. Removal is not "never", it is "only on a
+ruling", and the bar this case sets is deliberately high: the field must be the
+thing standing between the server and a property it cannot otherwise have; the
+break must be MEASURED on the real client rather than argued; and it takes a
+ruling, not a judgement call inside a slice. Everything short of that is still
+additive-only. The bar is written down because the danger is not this removal
+— it is the next reader taking it as licence to tidy fields away.
+
+The REV-B/H18 plan test was deleted rather than adapted: it built the archive
+SQL by hand and EXPLAINed its own copy, so from the moment production stopped
+emitting that shape it would have pinned a query nobody runs. Its replacement
+reads the plan off `capture_one_query/1` — the singular, not its plural twin,
+because answering in ONE statement is part of the property being pinned.
+
+**Apply:** a claim about a complexity class needs two axes and two arms that
+move — the axis you say the cost left, the axis you say it moved to, and a
+known-linear ruler plus the old shape both growing in the same run. Gate the
+output on the controls so a broken instrument prints nothing rather than a
+plausible table. When a wire field is what blocks a property, the question is
+not "can this be removed" but "who ruled, and what did the real client do when
+it went" — and a version floor answers a session-wide question, so never raise
+it to describe one endpoint.
