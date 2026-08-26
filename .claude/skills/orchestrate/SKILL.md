@@ -844,6 +844,22 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   ~30 s between a force-push and GitHub queueing the new check-runs. **Read the state field on the same
   line**: `OPEN/CLEAN` or `MERGEABLE/UNSTABLE` = checks are merely spinning up, wait one cycle;
   `CONFLICTING` = the real zero-CI trap. Do not reach for a rebase on the first NO-CHECKS event.
+- 🔴🔴 **THERE IS A **THIRD** CAUSE OF ZERO CI, AND IT IS NOT THE PR: GITHUB ACTIONS ITSELF BEING DOWN
+  (orch, 2026-08-26).** PR #1824 sat `OPEN/CLEAN`, mergeable, ref correctly on origin, no `[skip ci]`,
+  all six workflows `active` — and **zero runs for ~13 minutes**. The two documented causes both
+  said "not this", which is exactly when the temptation to rebase-and-see peaks. **One call settles
+  it: `gh api repos/O/R/commits/<sha>/check-suites`.** Zero `github-actions` suites (only the
+  `claude` app, `queued`) ⇒ **GitHub never created the suite, so nothing about the PR can explain
+  it** — confirmed against `githubstatus.com/api/v2/components.json` (`Actions = major_outage`).
+  🥇 **The cure is WAITING.** The events were queued, not lost: 8 check-runs landed on their own.
+  **Never rebase, force-push, or reopen a PR to chase an outage** — you burn the branch's state for
+  a fault that is not yours.
+  ⚠️ **The public banner LAGS the facts, in BOTH directions** — measured the same hour: it still read
+  `major_outage` while our suites were happily `in_progress`. **Key off the head's check-runs, never
+  off the status page.** ⚠️ And do NOT read "the repo's last run was hours ago" as a symptom without
+  checking whether any event existed to run: main had not moved since 10:32Z, so the silence was
+  correct. 🥇 *A third instance of the false-and-plausible zero, wearing a new costume: a count of
+  zero runs that means "nobody asked", not "something broke".*
 - 🔧 **`gh run rerun <run-id> --failed` re-runs just the failed jobs of an EXISTING run, and needs no
   `workflow_dispatch`.** Use it when a settled run went red on a diagnosed-transient cause — it beats pushing an
   empty commit (no history pollution) and beats close/reopen (which does nothing). The "no manual lever" rule above
@@ -1465,6 +1481,22 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   artefatti, gia' letti**. ⇒ **Se un flake ricompare serve il SUO artefatto nuovo, non quello
   vecchio.** 🥇 *Una worker che nomina una scelta irreversibile che ha fatto da sola va lodata, non
   interrogata.*
+  🔴🔴 **MA IL DISCRIMINANTE E' SE L'ARTEFATTO E' STATO **LETTO**, NON SE E' VECCHIO — e il caso
+  opposto si e' misurato il 2026-08-26.** `LockWatchTest` cadeva a intermittenza e il conteggio degli
+  avvistamenti era **3 su 2 test**; era **4 su 3**, e il quarto stava in un log **mai letto** dentro
+  una worktree (`/tmp/w2-1759-check3.log:3131`) che stava per essere smaltita. Non portava solo un
+  numero: portava **`samples: 1 collected / 515 expected`** e **`SAMPLER STARVED … the VM was not
+  scheduling the FILMER either`**, cioe' il dato che ha spostato la diagnosi da *"test lento"* a
+  *"la VM non schedula"*.
+  ⇒ **Letto e diagnosticato ⇒ smaltibile. MAI LETTO ⇒ e' l'unica copia di una misura che non sai di
+  avere.** Le due regole non si contraddicono: **prima di potare una worktree, chiedi se i suoi log
+  di gate sono stati LETTI**, non se sono vecchi.
+  🥇🥇 **E la ragione per cui questo si perde in silenzio: un avvistamento singolo si legge SEMPRE
+  come flake isolato e viene lasciato cadere — e' il CONTEGGIO a separare flake da pattern.** Un
+  `/clear` (o un auto-clear) fra due avvistamenti e' esattamente il meccanismo con cui un conteggio
+  sparisce, perche' nessuno dei due e' sbagliato da solo. ⇒ **il conteggio degli avvistamenti va
+  SCRITTO SU DISCO alla PRIMA occorrenza, non alla seconda**, e ogni avvistamento va registrato con
+  **test + ora + forma**, mai col solo nome del file.
 - ⚠️ **UN WORKER FERMO PER UN MIO ORDINE, IN ATTESA DI vjt, E' UNO STALLO DI vjt — MA NON E'
   LICENZA PER LASCIARLO FERMO IN SILENZIO.** Digli **perche'** e' fermo e cosa stai aspettando: uno
   `STALL state=idle` atteso e uno dimenticato sono lo stesso osservabile. ⚠️ **E non riempirlo di
