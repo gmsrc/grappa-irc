@@ -35,11 +35,13 @@ defmodule Grappa.Release.LiveNodeTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{IRCServer, Networks, Session}
+  alias Grappa.{AdmissionStateHelpers, IRCServer, Networks, Session}
   alias Grappa.Networks.Credentials
   alias Grappa.Release.LiveNode
 
   setup do
+    AdmissionStateHelpers.reset_all()
+
     on_exit(fn ->
       System.delete_env("RELEASE_NODE")
       System.delete_env("RELEASE_DISTRIBUTION")
