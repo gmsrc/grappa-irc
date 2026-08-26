@@ -1,3 +1,5 @@
+import { deflateSync } from "node:zlib";
+
 // Shared tiny-file byte fixtures for upload specs.
 //
 // 1×1 transparent RGBA PNG — VALID bytes (correct IDAT CRC), verified
@@ -36,4 +38,61 @@ export function silentMp3(frames: number): Buffer {
   const frame = Buffer.alloc(MP3_FRAME_BYTES);
   for (const [i, byte] of MP3_FRAME_HEADER.entries()) frame[i] = byte;
   return Buffer.concat(Array.from({ length: frames }, () => frame));
+}
+
+// #1805 — a PNG of a GIVEN SIZE, built rather than pasted, for the same reason
+// silentMp3 is built: a hex constant for anything bigger than a dot is
+// kilobytes of noise, and the size is the parameter that matters.
+//
+// Why it had to exist: TINY_PNG_HEX is 1×1, and the media viewer renders an
+// image at its intrinsic size capped by max-width/max-height — it never scales
+// UP. So on that constant the viewer's image is one pixel, and EVERY geometric
+// assertion about it (does zooming create a scrollable area, did the visible
+// portion move) is satisfied by a one-pixel answer whether or not the feature
+// works. A spec that needs to see the picture move needs a picture.
+//
+// Solid mid-grey RGB, no alpha, no ancillary chunks: the smallest thing the
+// server's fail-closed exiftool strip (#39) will accept, and the CRCs are
+// computed rather than transcribed, which is the failure mode that cost the
+// inline copies TINY_PNG_HEX replaced.
+const CRC_TABLE: number[] = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (const byte of buf) c = (CRC_TABLE[(c ^ byte) & 0xff] as number) ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const typed = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(typed), 0);
+  return Buffer.concat([length, typed, crc]);
+}
+
+export function pngOfSize(width: number, height: number): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // colour type 2 = truecolour RGB
+  // 10..12 = compression 0, filter 0, interlace 0 — already zeroed.
+
+  // One filter byte (0 = None) per scanline, then width RGB triples.
+  const stride = 1 + width * 3;
+  const raw = Buffer.alloc(stride * height, 0x80);
+  for (let y = 0; y < height; y++) raw[y * stride] = 0;
+
+  return Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
 }

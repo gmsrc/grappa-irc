@@ -135,14 +135,29 @@ test("#1438 — mid-drag the modal moves by the finger's travel, centering intac
   expect(after - before).toBeCloseTo(90, 0);
 });
 
-test("@webkit #1438 — the viewer container is touch-action:none (iPhone 15)", async ({ page }) => {
+test("@webkit #1438 — the IMAGE viewer container re-opens the pan, and still dismisses (iPhone 15)", async ({
+  page,
+}) => {
   test.slow();
   const { viewer } = await openImageViewer(page);
 
-  // Declared on the CONTAINER, not the media element: the UA intersects
-  // touch-action down the ancestor chain, which is what makes a <video>
-  // dismissible on the same terms as an <img>. Reverting the rule turns this
-  // red — and nothing else in the suite would.
+  // 🔴 This assertion INVERTED at #1805, and the inversion is deliberate.
+  //
+  // Until then the container declared `touch-action: none` for every kind, and
+  // this spec pinned that on the real engine. #1805 gave the zoomed image a
+  // scroll container and re-opened the stream on the image variant
+  // (`.media-viewer-modal--zoomable`, the `--text` precedent from #1764 one
+  // issue along), because under the reading where the UA intersects
+  // touch-action all the way to the root a `none` up here closes the scroller
+  // underneath.
+  //
+  // What #1438 actually owns is unaffected, and is asserted by the two drag
+  // tests above rather than by this line: at fit there is nothing to scroll, so
+  // the browser starts no pan and the dismiss binder still receives every move
+  // (measured on the #1805 bench — 11 cancelable touchmoves out of 11, exactly
+  // as under `none`). The BASE rule is still `touch-action: none` and is pinned
+  // at source level in mediaViewerTouchAction.test.ts, which is where a
+  // <video>'s posture lives now.
   const touchAction = await viewer.evaluate((el) => getComputedStyle(el).touchAction);
-  expect(touchAction).toBe("none");
+  expect(touchAction).toBe("pan-x pan-y");
 });

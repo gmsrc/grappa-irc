@@ -55,7 +55,7 @@
 // boundary, not a gap: the thing they share is the DOOR, and they use it.
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import { TINY_PNG_HEX } from "./bytes";
+import { pngOfSize, TINY_PNG_HEX } from "./bytes";
 import { mediaScrollbackRow, uploadViaPicker } from "./uploadJourney";
 
 // The accessible name MediaViewerModal renders (role=dialog + aria-label), and
@@ -128,9 +128,34 @@ export async function uploadImageAndGetLink(
   page: Page,
   fileName: string,
 ): Promise<{ slug: string; url: string; row: Locator; link: Locator }> {
+  return uploadPngAndGetLink(page, fileName, Buffer.from(TINY_PNG_HEX, "hex"));
+}
+
+// #1805 — the same journey with a picture that has a SIZE. Its own verb rather
+// than a `bytes` parameter on the one above, the same call the two openers make
+// at the top of this file: eight call sites want the dot and do not care, one
+// wants a measurable box and cares about nothing else, and a parameter at nine
+// sites is a thing a reviewer has to check nine times.
+//
+// Needed because the viewer never scales an image UP past its intrinsic size,
+// so on the 1×1 constant every geometric assertion is answered by one pixel
+// whether the feature works or not.
+export async function uploadSizedImageAndGetLink(
+  page: Page,
+  fileName: string,
+  size: { width: number; height: number },
+): Promise<{ slug: string; url: string; row: Locator; link: Locator }> {
+  return uploadPngAndGetLink(page, fileName, pngOfSize(size.width, size.height));
+}
+
+async function uploadPngAndGetLink(
+  page: Page,
+  fileName: string,
+  buffer: Buffer,
+): Promise<{ slug: string; url: string; row: Locator; link: Locator }> {
   const { slug, url } = await uploadViaPicker(
     page,
-    { name: fileName, mimeType: "image/png", buffer: Buffer.from(TINY_PNG_HEX, "hex") },
+    { name: fileName, mimeType: "image/png", buffer },
     { postTimeout: IMAGE_POST_TIMEOUT_MS },
   );
   const { row, link } = await mediaScrollbackRow(page, "📸", slug);
