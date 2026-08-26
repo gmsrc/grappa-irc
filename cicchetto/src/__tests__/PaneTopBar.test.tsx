@@ -98,6 +98,18 @@ describe("PaneTopBarRailOpener — one button, two hosts", () => {
     fireEvent.click(screen.getByLabelText("open members sidebar"));
     expect(onOpenRail).toHaveBeenCalledTimes(1);
   });
+
+  // #1801, ruling 1: this one STAYS a hamburger. It was the other door that
+  // had to stop being one, and the temptation while splitting them was to give
+  // this one a "people" icon — refused in channel, because it is a catch-all
+  // (home, rooms, mentions, player, radio, themes, archive, settings, admin
+  // AND the member list), and the generic glyph is the honest name for that.
+  // The character is what renders if the stylesheet never loads; the bars are
+  // drawn over it (#1766).
+  it("still carries U+2630, the character the CSS bars are drawn over", () => {
+    render(() => <PaneTopBarRailOpener onOpenRail={vi.fn()} railLabel="open members sidebar" />);
+    expect(screen.getByLabelText("open members sidebar").textContent).toBe("\u{2630}");
+  });
 });
 
 // #1766 — the LEFT door. A separate component from the rail opener, and the
@@ -136,5 +148,23 @@ describe("PaneTopBarWindowsOpener — the other door", () => {
     render(() => <PaneTopBarWindowsOpener onOpenWindows={onOpenWindows} />);
     fireEvent.click(screen.getByLabelText("open windows sidebar"));
     expect(onOpenWindows).toHaveBeenCalledTimes(1);
+  });
+
+  // 🔴 #1801, ruling 2 — and the assertion is on the CODEPOINT, not on the
+  // rendered string, because the spellings that must not ship are INVISIBLE in
+  // a diff: U+0023 followed by U+FE0F (emoji presentation) reads as one `#` in
+  // every editor, and the keycap U+0023 U+FE0F U+20E3 differs from it by one
+  // more zero-width character. `Array.from` splits by codepoint, so a trailing
+  // selector makes the array two long and the test names it. vjt in channel:
+  // "il # non emoji / il # carattere / ascii / roba anni '70". The reason is
+  // not taste — an emoji is painted by the platform,
+  // so it ignores `currentColor` and would sit dead under the `:hover` /
+  // `:focus-visible` lift the rest of the chrome answers, and it renders
+  // differently on iOS and Android.
+  it("paints the ASCII `#` (U+0023) and nothing emoji-adjacent", () => {
+    render(() => <PaneTopBarWindowsOpener onOpenWindows={vi.fn()} />);
+    const text = screen.getByLabelText("open windows sidebar").textContent ?? "";
+    expect(Array.from(text)).toEqual(["#"]);
+    expect(text.codePointAt(0)).toBe(0x23);
   });
 });

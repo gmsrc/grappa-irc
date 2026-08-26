@@ -68,9 +68,11 @@ import type { Component, JSX } from "solid-js";
  * Turning the mobile window bar off (`showBottomBar.ts`) leaves #1041's
  * left-edge swipe as the only way to the window list, and a gesture with zero
  * affordance is the "drawer-only navigation" #71's second ruling refused as a
- * default. So a second ☰ ships with the opt-out — and it has to appear on
+ * default. So a second door ships with the opt-out — and it has to appear on
  * every surface wearing this band, not only the channel one, which is what
- * puts it here rather than in `TopicBar`.
+ * puts it here rather than in `TopicBar`. (It shipped as a second ☰ and is a
+ * `#` since #1801; see that component's note for why sameness became the
+ * defect.)
  *
  * REQUIRED and not optional, by the same argument `trailing` already makes: a
  * host with no left door passes `null` and says so at the call site, instead
@@ -164,15 +166,42 @@ export type WindowsOpenerProps = {
  * every rail-reaching spec depend on the bottom-bar preference.
  *
  * So the two doors are two classes. What they still SHARE is
- * `.shell-chrome-btn` (#305's tap floor + icon token) and the drawn-bars rule,
- * which is the part that genuinely must not drift: with the bar off the two ☰
- * sit in one 48px band and have to look identical.
+ * `.shell-chrome-btn` — #305's tap floor and the `--chrome-icon-size` token
+ * both glyphs are sized off.
+ *
+ * ## #1801 — and what they stopped sharing is the DRAWING
+ *
+ * #1766 also gave this button the drawn-bars rule, on the argument that with
+ * the bar off the two openers sit in one 48px band "and have to look
+ * identical". That was right while both were "a menu". It stopped being right
+ * the moment this one named a specific list: the band then carried TWO doors
+ * drawn with the same three bars, one at each end, promising the same thing
+ * and doing different things.
+ *
+ * vjt's ruling (`#grappa`, 2026-08-26): the trailing ☰ stays a hamburger — "fa
+ * anche molto altro rispetto alla lista membri", it is a catch-all and the
+ * generic glyph is the honest name for that — and this one becomes `#`.
+ *
+ * 🔴 The ASCII character U+0023, never the keycap: "il # non emoji / il #
+ * carattere / ascii / roba anni '70". An emoji was floated and dropped with
+ * the reason stated in channel, and the reason is mechanical rather than
+ * aesthetic — a platform-painted glyph ignores `currentColor`, so it would sit
+ * dead under the `:hover` / `:focus-visible` lift the rest of the chrome
+ * answers, and it renders differently on iOS and Android. A text glyph keeps
+ * both. `PaneTopBar.test.tsx` asserts the CODEPOINT, because `#` + U+FE0F is
+ * invisible in a diff.
+ *
+ * Sizing lives in `themes/default.css` and is not `var(--chrome-icon-size)`:
+ * a character's ink is smaller than its em box, so the `#` is derived from
+ * that token rather than set to it. The measurement and the three font faces
+ * are in the rule's own note.
  *
  * The label is a literal, unlike the sibling's `railLabel` prop. That prop
  * exists because two hosts genuinely word the same door differently; this door
  * has one name on both surfaces it appears on — one door, two handles — and a
  * prop only ever passed one value would state a variability that does not
- * exist.
+ * exist. It is also unchanged by #1801: roughly a dozen specs locate this
+ * button by that name, and the door it opens did not move.
  */
 export const PaneTopBarWindowsOpener: Component<WindowsOpenerProps> = (props) => {
   return (
@@ -182,7 +211,7 @@ export const PaneTopBarWindowsOpener: Component<WindowsOpenerProps> = (props) =>
       aria-label="open windows sidebar"
       onClick={props.onOpenWindows}
     >
-      {"\u{2630}"}
+      {"\u{0023}"}
     </button>
   );
 };

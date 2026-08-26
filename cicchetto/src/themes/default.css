@@ -3205,10 +3205,15 @@ html.resize-dragging * {
    inside the band, and since #1766 the same button also floats in
    `.shell-chrome` on non-channel windows — it would render there as the thin
    character next to a drawn twin. `.shell-chrome-rail-opener` is listed for
-   the same reason from the other side: with the window bar off, the two ☰
-   share one 48px-tall band and must look identical. */
+   the same reason from the other side: it is the SAME door on its other host.
+
+   #1801 removed `.topic-bar-windows-opener` from this list and from the
+   `::before` below. #1766 had put it here because with the bottom bar off the
+   two openers share one 48px band "and must look identical" — true while both
+   were "a menu", and the defect once the left one named a specific list: two
+   doors drawn with the same three bars, one at each end of one band. It is a
+   `#` now; see its own rule further down. */
 button.topic-bar-hamburger,
-button.topic-bar-windows-opener,
 .shell-chrome .shell-chrome-rail-opener {
   /* Suppress the U+2630 text node. It stays in the DOM — it is what renders
      if this sheet never loads, and ~20 specs locate these buttons — but it
@@ -3236,7 +3241,6 @@ button.topic-bar-windows-opener,
    measuring the box and not the glyph. The bars are the first shape here that
    actually clears 18 in both axes. */
 button.topic-bar-hamburger::before,
-button.topic-bar-windows-opener::before,
 .shell-chrome .shell-chrome-rail-opener::before {
   content: "";
   width: var(--chrome-icon-size);
@@ -3249,6 +3253,87 @@ button.topic-bar-windows-opener::before,
   box-shadow:
     0 calc(-1 * (var(--chrome-icon-size) - 2px) / 2) 0 currentColor,
     0 calc((var(--chrome-icon-size) - 2px) / 2) 0 currentColor;
+}
+
+/* #1801 — the LEFT door is a `#`, and it is a CHARACTER.
+
+   With the bottom bar off the mobile top band carried two openers drawn
+   identically — the same three bars, one at each end — and they are two
+   different things: this one opens the window/channel list, the trailing ☰
+   opens the rail. vjt ruled the right one STAYS a hamburger ("fa anche molto
+   altro rispetto alla lista membri" — it is a catch-all and the generic glyph
+   is the honest name for that), and this one becomes `#`: "il # non emoji / il
+   # carattere / ascii / roba anni '70". An emoji was floated and dropped with
+   the trade-off stated in channel — a platform-painted glyph ignores
+   `currentColor`, so it would sit dead under the `:hover` / `:focus-visible`
+   lift the rest of the chrome answers, and it renders differently on iOS and
+   Android. A text `#` keeps both for free, by being text.
+
+   ## Why the size is a division and not plain `var(--chrome-icon-size)`
+
+   "Ma che sia stessa dimensione del glifo dell'hamburger" is a measurement,
+   not a guess. The bars above fill the token EXACTLY — a 19.59px square at
+   root 14px. A character does not: its INK is smaller than its em box, which
+   is precisely how #305's floor came to be missed by an oracle reading
+   `font-size`. Ink height in em, read off the font files, calibrated against
+   the painted pixels:
+
+       Liberation Mono (the e2e runner)    #  0.5415 W x 0.6587 H
+       SF Mono (`ui-monospace` on iOS)     #  0.5366 W x 0.7046 H
+       Menlo (the stack's macOS fallback)  #  0.6060 W x 0.7153 H
+
+   So `font-size: var(--chrome-icon-size)` paints a `#` a third shorter than
+   the bars beside it — exactly what was asked not to happen — and the ratio
+   that corrects it is a property of the FONT, which differs per platform.
+
+   Hence the pair, which cancels. `font-size-adjust: cap-height N` scales the
+   used size so that the resolved face's cap height is N x the SPECIFIED size,
+   whatever face that turns out to be; and `#` is drawn TO cap height (1.000 of
+   it in Liberation Mono AND in SF Mono, 0.981 in Menlo). Specifying `token /
+   N` and adjusting to `N` therefore states "the `#`'s ink is
+   `--chrome-icon-size` tall" on any font — the same square the bars fill.
+   Verified on the e2e image's webkit and chromium, painted pixels, scanned 4px
+   inside the box so the 1px border is out of frame:
+
+       `#`   ink 16.33 W x 19.67 H        bars  ink 19.33 W x 19.33 H
+
+   N = 0.68 is the midpoint of the two faces that matter (0.659 / 0.705) and is
+   load-bearing ONLY where `font-size-adjust` is not honoured: there the
+   specified size stands alone and still lands within 4% of parity on all three
+   faces, clear of #305's 18px floor. Both engines in the e2e image honour it.
+
+   The WIDTH does not match, and cannot. `#` is a narrower shape than a square,
+   so at equal height it paints 16.33 against the bars' 19.33. Matching the
+   width instead would make the `#` 21.9px TALL — 12% taller than the twin it
+   was told to match. Height is the axis a reader compares glyphs on, and the
+   axis #305's floor was missed in.
+
+   One knob stays one knob: the size is DERIVED from `--chrome-icon-size`, so a
+   text-size change still moves both glyphs together. `button.` and placed
+   after `.shell-chrome-btn` for the belt-and-braces reason the rule above
+   states — that base declares `font-size: var(--chrome-icon-size)`, so a bare
+   class ties at (0,1,0), loses on source order, and the `#` falls back to the
+   un-derived size with nothing looking wrong. */
+button.topic-bar-windows-opener {
+  font-size: calc(var(--chrome-icon-size) / 0.68);
+  font-size-adjust: cap-height 0.68;
+}
+
+/* #1801 ruling 4 — "serve un pelo di margin-right sull'hamburger di sx, o in
+   alternativa di spazio nei contenitori". `.topic-bar`'s 0.5rem gap plus the
+   button's 1px border left ~7px between a boxed control and the channel name.
+   One more gap doubles that to ~14px: the band's own value re-used, not a
+   fresh number.
+
+   LEADING side only, and scoped to the band. Widening `.topic-bar`'s `gap`
+   would take the trailing side with it, and #1039 pinned that side to
+   `--pane-chrome-inset-*` precisely so the ☰'s two mobile hosts cannot drift
+   apart again. Scoping also keeps this longhand from competing at all with the
+   float host's `margin` shorthand, whose `margin-right: auto` is what holds a
+   lone trailing opener in its corner (#1766); relying on specificity to settle
+   that would be a race nobody can see. */
+.topic-bar .topic-bar-windows-opener {
+  margin-inline-end: 0.5rem;
 }
 
 /* Scrollback (existing rules — minor additions for mention highlight) */
