@@ -527,11 +527,11 @@ defmodule Grappa.Repo.LockWatchTest do
     end
 
     test "a test under the threshold films silently" do
-      assert film_verdict(:under, samples(20, 1_000), 20, true, @film_threshold_ms - 1) == :silent
+      assert film_verdict(:under, samples(20, 1_000), 20, true, @film_threshold_ms - 1, nil) == :silent
     end
 
     test "a test over the threshold reports the trajectory, and names the test" do
-      assert {:report, text} = film_verdict(:over, samples(20, 1_000), 20, true, @film_threshold_ms)
+      assert {:report, text} = film_verdict(:over, samples(20, 1_000), 20, true, @film_threshold_ms, nil)
 
       assert text =~ "#1767 FILM"
       assert text =~ "test=:over"
@@ -548,7 +548,7 @@ defmodule Grappa.Repo.LockWatchTest do
     test "an over-threshold test with no samples says so instead of printing an empty film" do
       # Noisy blindness: a film with nothing in it reads as "the test was
       # idle", which is the one conclusion the filmer must never invite.
-      assert {:report, text} = film_verdict(:empty, [], 12, true, @film_threshold_ms)
+      assert {:report, text} = film_verdict(:empty, [], 12, true, @film_threshold_ms, nil)
 
       assert text =~ "NO SAMPLES"
     end
@@ -556,7 +556,7 @@ defmodule Grappa.Repo.LockWatchTest do
     test "a broken sampler is reported even under the threshold, and produces no film" do
       # A plausible film from a sampler that cannot read a stack is worse
       # than no film: it would be believed.
-      assert {:report, text} = film_verdict(:broken, samples(20, 1_000), 20, false, 0)
+      assert {:report, text} = film_verdict(:broken, samples(20, 1_000), 20, false, 0, nil)
 
       assert text =~ "SAMPLER BROKEN"
       refute text =~ "reductions:"
@@ -572,19 +572,19 @@ defmodule Grappa.Repo.LockWatchTest do
       expected = div(@film_threshold_ms, @film_interval_ms)
 
       # Starved: the filmer itself barely ran. That IS a VM reading.
-      assert {:report, starved} = film_verdict(:starved, samples(1, 1_000), 1, true, @film_threshold_ms)
+      assert {:report, starved} = film_verdict(:starved, samples(1, 1_000), 1, true, @film_threshold_ms, nil)
       assert starved =~ "SAMPLER STARVED"
       assert starved =~ "1 of #{expected}"
 
       # NOT starved: the filmer took every turn it was due and found the target
       # gone for almost all of them. Same single sample, opposite verdict —
       # which is the whole point of splitting the two counters.
-      assert {:report, gone} = film_verdict(:gone, samples(1, 1_000), expected, true, @film_threshold_ms)
+      assert {:report, gone} = film_verdict(:gone, samples(1, 1_000), expected, true, @film_threshold_ms, nil)
       refute gone =~ "SAMPLER STARVED"
       assert gone =~ "TARGET GONE"
 
       assert {:report, full} =
-               film_verdict(:full, samples(expected, 1_000), expected, true, @film_threshold_ms)
+               film_verdict(:full, samples(expected, 1_000), expected, true, @film_threshold_ms, nil)
 
       refute full =~ "SAMPLER STARVED"
       refute full =~ "TARGET GONE"
@@ -594,7 +594,7 @@ defmodule Grappa.Repo.LockWatchTest do
       # The vacuous statistic behind #1767's registered diagnosis: with one
       # sample `hd` and `List.last` are the same element, so the old line read
       # `X -> X (+0)` — indistinguishable from a genuinely frozen process.
-      assert {:report, one} = film_verdict(:one, samples(1, 1_000), 1, true, @film_threshold_ms)
+      assert {:report, one} = film_verdict(:one, samples(1, 1_000), 1, true, @film_threshold_ms, nil)
 
       refute one =~ "(+0)"
       refute one =~ "REDUCTIONS DID NOT ADVANCE"
@@ -605,10 +605,10 @@ defmodule Grappa.Repo.LockWatchTest do
       # The discriminator #1767 lacked: a stack sample cannot separate a
       # process blocked inside a call from one that was never scheduled.
       # Reductions can — they are monotonic and local to the process.
-      assert {:report, frozen} = film_verdict(:frozen, samples(20, 0), 20, true, @film_threshold_ms)
+      assert {:report, frozen} = film_verdict(:frozen, samples(20, 0), 20, true, @film_threshold_ms, nil)
       assert frozen =~ "REDUCTIONS DID NOT ADVANCE"
 
-      assert {:report, moving} = film_verdict(:moving, samples(20, 1_000), 20, true, @film_threshold_ms)
+      assert {:report, moving} = film_verdict(:moving, samples(20, 1_000), 20, true, @film_threshold_ms, nil)
       refute moving =~ "REDUCTIONS DID NOT ADVANCE"
     end
 
@@ -621,7 +621,7 @@ defmodule Grappa.Repo.LockWatchTest do
 
       Process.sleep(@film_interval_ms * 3)
 
-      assert {:film, true, samples, ticks} = ask_filmer(filmer)
+      assert {:film, true, samples, ticks, nil} = ask_filmer(filmer)
       assert length(samples) >= 2
       assert ticks >= length(samples)
 
@@ -645,7 +645,7 @@ defmodule Grappa.Repo.LockWatchTest do
       filmer = spawn_filmer_at(target)
 
       Process.sleep(@film_interval_ms * 3)
-      assert {:film, true, alive_samples, alive_ticks} = ask_filmer(filmer)
+      assert {:film, true, alive_samples, alive_ticks, nil} = ask_filmer(filmer)
       assert alive_samples != []
 
       # Monitor BEFORE the kill: established afterwards it fires `:noproc`
@@ -655,7 +655,7 @@ defmodule Grappa.Repo.LockWatchTest do
       assert_receive {:DOWN, ^ref, :process, ^target, :killed}, 5_000
 
       Process.sleep(@film_interval_ms * 4)
-      assert {:film, true, dead_samples, dead_ticks} = ask_filmer(filmer)
+      assert {:film, true, dead_samples, dead_ticks, _} = ask_filmer(filmer)
 
       # The filmer kept taking its turns…
       assert dead_ticks > alive_ticks
@@ -665,12 +665,65 @@ defmodule Grappa.Repo.LockWatchTest do
       Process.exit(filmer, :kill)
     end
 
+    test "the filmer stamps the instant its target died, and carries nil until then" do
+      # The clock the 54718ms reading was missing. `elapsed_ms` runs from
+      # `start_filmer/1` in `setup` to the printing hook in `on_exit`, so it
+      # spans setup, body AND teardown in one number — and the body of every
+      # test in this file costs 15-378ms, which means the interesting part is
+      # whichever of the other two it is. `TARGET GONE` already says the time
+      # is outside the body, but it says it from a RATIO of ticks to samples;
+      # a ratio cannot be subtracted from a wall clock. Monitoring the target
+      # turns that heuristic into a measurement.
+      target = spawn(fn -> Process.sleep(:infinity) end)
+      filmer = spawn_filmer_at(target)
+
+      Process.sleep(@film_interval_ms * 2)
+      assert {:film, true, _, _, nil} = ask_filmer(filmer)
+
+      # Monitor BEFORE the kill, for the reason the sibling test above states.
+      ref = Process.monitor(target)
+      Process.exit(target, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^target, :killed}, 5_000
+
+      Process.sleep(@film_interval_ms)
+      assert {:film, true, _, _, down_at} = ask_filmer(filmer)
+      assert is_integer(down_at)
+
+      Process.exit(filmer, :kill)
+    end
+
+    test "the report splits the wall clock into setup+body and teardown" do
+      assert {:report, text} =
+               film_verdict(
+                 :split,
+                 samples(3, 1_000),
+                 40,
+                 true,
+                 @film_threshold_ms * 3,
+                 @film_threshold_ms
+               )
+
+      assert text =~ "setup+body #{@film_threshold_ms}ms"
+      assert text =~ "teardown #{@film_threshold_ms * 2}ms"
+    end
+
+    test "a target still alive when the film prints is said to be, not given a zero teardown" do
+      # A missing stamp and a zero teardown are different facts, and printing
+      # the second for the first is the same class of lie as the `(+0)`
+      # derivative: a reader would place the whole wall clock in the body.
+      assert {:report, text} =
+               film_verdict(:alive, samples(3, 1_000), 40, true, @film_threshold_ms, nil)
+
+      assert text =~ "STILL ALIVE"
+      refute text =~ "teardown"
+    end
+
     test "the printing door emits over the threshold and stays quiet under it" do
       filmer = spawn_filmer()
       Process.sleep(@film_interval_ms * 2)
 
-      over = capture_io(fn -> print_film(filmer, :over, @film_threshold_ms) end)
-      under = capture_io(fn -> print_film(filmer, :under, @film_threshold_ms - 1) end)
+      over = capture_io(fn -> print_film(filmer, :over, started_ms_ago(@film_threshold_ms)) end)
+      under = capture_io(fn -> print_film(filmer, :under, started_ms_ago(0)) end)
 
       assert over =~ "#1767 FILM test=:over"
       assert under == ""
@@ -686,7 +739,7 @@ defmodule Grappa.Repo.LockWatchTest do
       ref = Process.monitor(dead)
       assert_receive {:DOWN, ^ref, :process, ^dead, :normal}, 5_000
 
-      output = capture_io(fn -> print_film(dead, :gone, @film_threshold_ms) end)
+      output = capture_io(fn -> print_film(dead, :gone, started_ms_ago(@film_threshold_ms)) end)
 
       assert output =~ "#1767 FILM UNAVAILABLE"
       assert output =~ "test=:gone"
@@ -701,7 +754,8 @@ defmodule Grappa.Repo.LockWatchTest do
                  samples(@film_max_samples, 1_000),
                  @film_max_samples,
                  true,
-                 @film_threshold_ms
+                 @film_threshold_ms,
+                 nil
                )
 
       assert text =~ "sample(s) omitted"
@@ -736,23 +790,38 @@ defmodule Grappa.Repo.LockWatchTest do
   # printing hook, so a test can drive the reel and assert on it directly.
   defp spawn_filmer do
     test_pid = self()
-    spawn(fn -> film_loop(test_pid, true, [], 0) end)
+    spawn_filmer_at(test_pid)
   end
 
   # Aimed at a pid the caller chooses, so a test can point the reel at a
   # process it is about to KILL — the only way to buy the tick/sample split
   # against the real loop instead of against the pure verdict function.
-  defp spawn_filmer_at(pid), do: spawn(fn -> film_loop(pid, true, [], 0) end)
+  defp spawn_filmer_at(pid), do: spawn_film_loop(pid, true)
+
+  # The monitor is established INSIDE the filmer, so the stamp belongs to the
+  # process that reports it. An already-dead target answers `:noproc`
+  # immediately, which stamps at once — the honest reading, not an error.
+  defp spawn_film_loop(pid, sampler_ok?) do
+    spawn(fn ->
+      Process.monitor(pid)
+      film_loop(pid, sampler_ok?, [], 0, nil)
+    end)
+  end
 
   defp ask_filmer(filmer) do
     send(filmer, {:film, self()})
 
     receive do
-      {:film, _, _, _} = answer -> answer
+      {:film, _, _, _, _} = answer -> answer
     after
       @film_answer_budget_ms -> flunk("the filmer never answered")
     end
   end
+
+  # `print_film/3` takes the START of the window rather than its length, so
+  # that one clock reads both the whole span and the split inside it. A test
+  # that wants a span of N therefore has to name a start, not a duration.
+  defp started_ms_ago(ms), do: System.monotonic_time(:millisecond) - ms
 
   ## ----- the filmer (#1767) ---------------------------------------------
 
@@ -764,10 +833,10 @@ defmodule Grappa.Repo.LockWatchTest do
   defp start_filmer(test_name) do
     test_pid = self()
     started_at = System.monotonic_time(:millisecond)
-    filmer = spawn(fn -> film_loop(test_pid, film_sampler_ok?(), [], 0) end)
+    filmer = spawn_film_loop(test_pid, film_sampler_ok?())
 
     on_exit(fn ->
-      print_film(filmer, test_name, System.monotonic_time(:millisecond) - started_at)
+      print_film(filmer, test_name, started_at)
       Process.exit(filmer, :kill)
     end)
   end
@@ -823,14 +892,25 @@ defmodule Grappa.Repo.LockWatchTest do
   # (`--trace`) reported `1 collected / 218 expected` over 54718ms and printed
   # "the VM was not scheduling the FILMER either", which was false. Counting the
   # filmer's own turns is the only way to say anything true about the filmer.
-  defp film_loop(test_pid, sampler_ok?, samples, ticks) do
+  #
+  # 🔴 THE STAMP IS A THIRD THING AGAIN, AND IT IS A CLOCK RATHER THAN A COUNT.
+  # `TARGET GONE` can say the time was spent outside the body, because a tick
+  # that finds nothing alive proves the target was gone. It cannot say HOW
+  # MUCH, because a ratio of ticks to samples is not a duration. The DOWN
+  # stamp is: subtracted from the window's start it gives setup+body, and the
+  # remainder is teardown. That is the split the 54718ms reading needed and
+  # did not have — a number nobody could place is a number nobody can act on.
+  defp film_loop(test_pid, sampler_ok?, samples, ticks, down_at) do
     receive do
       {:film, from} ->
-        send(from, {:film, sampler_ok?, Enum.reverse(samples), ticks})
-        film_loop(test_pid, sampler_ok?, samples, ticks)
+        send(from, {:film, sampler_ok?, Enum.reverse(samples), ticks, down_at})
+        film_loop(test_pid, sampler_ok?, samples, ticks, down_at)
+
+      {:DOWN, _ref, :process, ^test_pid, _reason} ->
+        film_loop(test_pid, sampler_ok?, samples, ticks, System.monotonic_time(:millisecond))
     after
       @film_interval_ms ->
-        film_loop(test_pid, sampler_ok?, film_collect(test_pid, samples), ticks + 1)
+        film_loop(test_pid, sampler_ok?, film_collect(test_pid, samples), ticks + 1, down_at)
     end
   end
 
@@ -862,16 +942,22 @@ defmodule Grappa.Repo.LockWatchTest do
     end
   end
 
-  defp print_film(filmer, test_name, elapsed_ms) do
+  # Takes the START of the window, never a precomputed length: the split below
+  # and the total have to come off ONE clock, or they can disagree.
+  defp print_film(filmer, test_name, started_at) do
     send(filmer, {:film, self()})
 
     receive do
-      {:film, sampler_ok?, samples, ticks} ->
-        emit_film(film_verdict(test_name, samples, ticks, sampler_ok?, elapsed_ms))
+      {:film, sampler_ok?, samples, ticks, down_at} ->
+        elapsed_ms = System.monotonic_time(:millisecond) - started_at
+        body_ms = down_at && down_at - started_at
+
+        emit_film(film_verdict(test_name, samples, ticks, sampler_ok?, elapsed_ms, body_ms))
     after
       @film_answer_budget_ms ->
         IO.puts(
-          "#1767 FILM UNAVAILABLE: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms — the filmer " <>
+          "#1767 FILM UNAVAILABLE: test=#{inspect(test_name)} " <>
+            "elapsed=#{System.monotonic_time(:millisecond) - started_at}ms — the filmer " <>
             "did not answer within #{@film_answer_budget_ms}ms, so this run has NO trajectory"
         )
     end
@@ -882,30 +968,32 @@ defmodule Grappa.Repo.LockWatchTest do
 
   # Pure, so every branch below is a test above rather than something only a
   # real 60s red could exercise.
-  defp film_verdict(test_name, _, _, false, elapsed_ms) do
+  defp film_verdict(test_name, _, _, false, elapsed_ms, _) do
     {:report,
      "#1767 FILM SAMPLER BROKEN: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms — the canary's own " <>
        "frame was absent from the stack the sampler read, so NO film is produced: a plausible " <>
        "trajectory from a sampler that cannot read a stack would be believed"}
   end
 
-  defp film_verdict(_, _, _, true, elapsed_ms) when elapsed_ms < @film_threshold_ms do
+  defp film_verdict(_, _, _, true, elapsed_ms, _) when elapsed_ms < @film_threshold_ms do
     :silent
   end
 
-  defp film_verdict(test_name, [], _, true, elapsed_ms) do
+  defp film_verdict(test_name, [], _, true, elapsed_ms, body_ms) do
     {:report,
      "#1767 FILM NO SAMPLES: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms over a #{@film_interval_ms}ms " <>
-       "tick — the filmer was alive and collected nothing, which is a reading about the VM, not an idle test"}
+       "tick — the filmer was alive and collected nothing, which is a reading about the VM, not an idle test" <>
+       "\n" <> clock_split_line(elapsed_ms, body_ms)}
   end
 
-  defp film_verdict(test_name, samples, ticks, true, elapsed_ms) do
+  defp film_verdict(test_name, samples, ticks, true, elapsed_ms, body_ms) do
     collected = length(samples)
     expected = div(elapsed_ms, @film_interval_ms)
 
     lines =
       [
         "#1767 FILM test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms threshold=#{@film_threshold_ms}ms",
+        clock_split_line(elapsed_ms, body_ms),
         "  ticks: #{ticks} taken / #{expected} due at #{@film_interval_ms}ms  (filmer scheduling)",
         "  samples: #{collected} collected of those #{ticks} ticks  (target alive)",
         reductions_line(samples),
@@ -916,6 +1004,19 @@ defmodule Grappa.Repo.LockWatchTest do
       ] ++ film_frames(samples, hd(samples).at_ms)
 
     {:report, lines |> Enum.reject(&(&1 == "")) |> Enum.join("\n")}
+  end
+
+  # The whole point of the DOWN stamp, rendered. Without a stamp the target
+  # outlived the film, so there IS no teardown to name and saying `teardown
+  # 0ms` would put the entire wall clock in the body — a reader would go
+  # looking for a slow assertion that does not exist.
+  defp clock_split_line(_elapsed_ms, nil) do
+    "  clock: the target was STILL ALIVE when the film printed — no split available"
+  end
+
+  defp clock_split_line(elapsed_ms, body_ms) do
+    "  clock: setup+body #{body_ms}ms | teardown #{elapsed_ms - body_ms}ms  " <>
+      "(ExUnit runs on_exit in another process, so only the first half is the test)"
   end
 
   # 🔴 A DERIVATIVE NEEDS TWO POINTS. With one sample `hd` and `List.last` are
