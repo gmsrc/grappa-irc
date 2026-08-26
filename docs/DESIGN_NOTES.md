@@ -65480,3 +65480,109 @@ Device dogfood, unverifiable from any harness here: momentum, rubber-band at the
 edges, and whether iOS begins a rubber-band before the dismiss binder's claim
 lands — the same open question #1764 wrote down for the text pane, now on a
 second surface.
+<!-- entry #1807 -->
+
+---
+
+## 2026-08-26 — #1807: the credits rain reads as rain, and the second surface is the constraint that shaped it
+
+The credits easter egg (#1773) shipped with the falling-character effect the
+Debug tab's phosphor panel already had, at that panel's settings. On a real
+iPhone it read as a faint texture rather than as rain: the glyph sat at alpha
+`0.18`, the per-frame black wash at `0.10` killed a trail in about seven frames
+(`0.9^7` of `0.18`), every glyph in a column was painted identically, and the
+column stepped a whole row per drawn frame. vjt asked for four changes —
+brighter glyph, longer trail, a bright leader, `0.7x` speed — plus an interlude
+of pure rain between rolls.
+
+### The knobs are per-surface, and they are props
+
+`MatrixRain` has two consumers since #1773, and the second one is why none of
+those four values could simply be raised in place. The Debug panel rains BEHIND
+viewport readouts an operator is trying to read; its moduledoc named low alpha
+as a constraint rather than a taste. Louder values hardcoded in the component
+would have changed a surface nobody asked to change.
+
+So the four became one non-defaulted prop, `look: () => MatrixRainLook`,
+alongside the `class` / `testId` pair #1773 left non-defaulted for the same
+reason. **Props and not CSS custom properties**, which the issue offered as the
+alternative: reading them means `getComputedStyle` inside the frame loop (a
+style recalc per frame), jsdom resolves a custom property to the empty string
+so every knob would need a fallback — which IS the silent default this
+component has refused since #1773 — and the burst below is a function of time
+that no custom property can express. `AdminDebugTab` exports `ADM_RAIN_LOOK`
+holding the literals measured on `4c9270c5`; the credits looks live in
+`lib/creditsRain.ts`.
+
+### A leader without a demotion is a lie
+
+Raising `leader` alone does not produce a bright head. The wash only DECAYS
+what it finds, so a near-opaque head leaves a near-opaque streak and
+`glyphAlpha` and `leader` end up naming the same pixel at two ages instead of
+two things. Each frame therefore repaints the PREVIOUS head in the trail colour
+before painting the new one — over an opaque black punch, because painting
+`0.30` amber over a `0.95` white cell tints it rather than replacing it. The
+punch costs nothing visible: both surfaces composite with `mix-blend-mode:
+screen`, under which black is the identity. `leader: null` skips the whole
+branch, which is how the Debug panel gets a drawing that is not merely
+equivalent to the old one but the same code path.
+
+### One clock, and the stylesheet keeps the number
+
+The interlude is a stretch of the roll's own cycle rather than a pause bolted
+onto it: `credits-roll` went from `28s` of pure travel to `34s` with the
+translate finishing at `82%` and the last two keyframes holding. Travel is
+`27.88s`, so the titles roll at the speed they always did and the remaining
+`6.12s` is the hold — and because the cycle restarts from `translateY(100%)`,
+the next pass is an entrance from the bottom rather than a resume mid-list.
+
+The burst reads the phase of THAT animation from inside the rAF loop that
+already exists (`MatrixRain` calls `look` once per drawn frame). A `setTimeout`
+would be a second clock that has to agree with the first, and it would disagree
+exactly where it matters: in a backgrounded tab rAF stops and timers do not, so
+the burst would come back mid-roll. The start of the hold is not a constant in
+TS either — `parkOffset` finds the first keyframe already carrying the final
+transform and reads its `computedOffset`, so retiming the roll retimes the
+burst with it and the `82%` lives in exactly one place.
+
+### What was refused rather than faked
+
+Two things, and both are named in the code where someone will hit them.
+
+vjt's third burst ingredient, *"more columns lighting at once"*, **has no
+referent in this implementation**: every column already paints on every frame —
+they differ only in where their head is, so there is no unlit column to light.
+It is rendered as more of each column being lit (brighter glyph, longer streak)
+and `CREDITS_RAIN_BURST_LOOK`'s doc says so. Lighting more COLUMNS would mean a
+per-column activity gate, which is a different effect and was not asked for.
+
+And whether it READS as rain is a judgement about legibility over a dark theme
+on a device, which no gate here can make. It is on the PR as a dogfood
+checklist naming BOTH surfaces, because the issue asks for both.
+
+### What the gates can say, and where each one lives
+
+The assertion that mattered most was the second surface's non-regression, and
+it is in the Debug tab's own file rather than the component's:
+`AdminDebugTab.test.tsx` drives the real five-tap gate and asserts the ops that
+reach a recording 2D context — one wash at `0.10`, one glyph per column at
+`0.18`, no punch, one whole row per frame. `MatrixRain.test.tsx` keeps only the
+contract between a look and the canvas, on synthetic looks. The shared rig is
+`__tests__/helpers/canvasOps.ts`, which also closes the jsdom gap that would
+otherwise hollow all of it: with no layout, `parentElement.clientWidth` reads 0
+and the component paints ZERO columns.
+
+Falsified rather than assumed: four defects injected one at a time — the
+credits values wired into `ADM_RAIN_LOOK`, the demotion disabled,
+`rowsPerFrame` ignored, the seamless two-stop roll restored — and each one is
+caught by the assertion written for it (3 / 1 / 1 / 2 reds).
+
+The e2e (`issue1807-credits-rain-reads-as-rain.spec.ts`, chromium) makes the
+two claims jsdom cannot. It rasterises: `getImageData` over each canvas, on
+PREMULTIPLIED channel value (`channel * alpha`), because the accumulating black
+wash makes the raw value depend on how opaque the backing has become while the
+premultiplied one is what the compositor puts on screen. One Debug glyph is red
+`46`, the credits leader is red `242`, the burst leader is white at `255` blue
+against the steady leader's `167` — three wide gaps. And it proves the one
+clock by moving the ROLL's `currentTime` into the hold and requiring the RAIN
+to go white; a burst on a timer of its own sails straight through that.
