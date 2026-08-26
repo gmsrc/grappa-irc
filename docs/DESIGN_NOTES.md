@@ -65586,3 +65586,152 @@ premultiplied one is what the compositor puts on screen. One Debug glyph is red
 against the steady leader's `167` — three wide gaps. And it proves the one
 clock by moving the ROLL's `currentTime` into the hold and requiring the RAIN
 to go white; a burst on a timer of its own sails straight through that.
+<!-- entry #1808 -->
+
+---
+
+## 2026-08-26 — #1808: a `.mailmap`, two rulings, and the provenance written next to them
+
+The credit roll (#1773) bakes its contributor list from `git shortlog -sn
+--no-merges`, and the history had never been de-duplicated, so the modal
+listed the same people two and three times. The cure is a root `.mailmap`:
+git resolves author identity through it before reporting one, so `git log`,
+`git shortlog` and everything downstream of them — `infra/packaging/credits.sh`
+included — see the collapsed set with no hash moved and nothing force-pushed.
+
+### What it changed, and the part of the issue it corrects
+
+Measured on `8ce0c836`. Distinct author names `13 → 9`; distinct identities
+(`%an <%ae>` raw versus `%aN <%aE>` resolved) `16 → 9`; the `credits.sh`
+payload `13 → 9` rows — `vjt`'s one commit folding into Marcello Barnaba
+(5140 → 5141), `gabrielemarrone`'s one into Gabriele Marrone (24 → 25),
+`claude`'s six into `vjt-claude` (2 → 8), and `Your Name`'s 89 into Stefy
+Lanza (147 → 236).
+
+**Nothing else moved in the roll, and that corrects the issue's own framing.**
+`shortlog -sn` groups by NAME, so the same-name address splits #1808 tabulates
+— Marcello across three addresses, Alessio across two — were ALREADY a single
+row in the modal before this file existed. Only an alias differing by NAME was
+ever visible there. The mailmap still collapses the address axis, because
+`%aN <%aE>` is the oracle the issue names and a `shortlog -sne` would split on
+it; but the two same-name collapses buy the modal nothing, and saying so is
+the difference between five fixes and the four rows that actually vanish.
+
+The A/B has one trap worth recording: `git -c mailmap.file=/dev/null` does NOT
+disable the root `.mailmap` — that setting ADDS a file to the ones consulted,
+so the "before" it produces is the after. The honest before/after is
+`%an`/`%ae` (raw, what git recorded) against `%aN`/`%aE` (resolved), which
+needs no configuration at all.
+
+### Every line carries all four fields, because one address is shared
+
+A mapping may be written `Proper Name <proper@addr> <commit@addr>`, which keys
+on the commit ADDRESS ALONE, or `Proper Name <proper@addr> Commit Name
+<commit@addr>`, which keys on the PAIR. This file uses the four-field spelling
+throughout, and not for tidiness: `marcello.barnaba@gmail.com` carries both
+Marcello's own commits and `vjt-claude`'s. Measured in a sandbox before the
+file was written — under the short spelling `git check-mailmap 'vjt-claude
+<marcello.barnaba@gmail.com>'` answers `Marcello Barnaba <vjt@openssl.it>`;
+under the four-field spelling it answers itself.
+
+So the short form would silently overrule the first ruling below, folding into
+Marcello an identity that was decided to stand on its own, with nothing left
+to read. One spelling throughout, and it is the one that cannot: every line
+names both sides in full, and a new alias needs its own line rather than being
+absorbed by an address someone else also uses.
+
+The second measurement the Claude line rests on: **a mailmap lookup is not
+transitive, and rule order carries no meaning.** With Marcello's gmail address
+mapped away on one line and `claude` mapped ONTO that same address on another,
+`claude` resolves to `vjt-claude <marcello.barnaba@gmail.com>` and stops
+there. Verified in both rule orders, because a transitive resolver would have
+turned the ruling into its opposite.
+
+### The two rulings, and where they came from
+
+Neither was derivable from the repository, and #1808 says so about the first
+in its own body: *"is vjt's call — not a mechanical dedup"*.
+
+1. **`claude <claude@sonic88.org>` and `vjt-claude
+   <marcello.barnaba@gmail.com>` are one credit, under `vjt-claude`** — a
+   decision about how this project credits assisted work.
+2. **`Your Name <you@example.com>` is Stefy Lanza** — 89 commits attributed on
+   a human's word.
+
+**Both arrived by relay, and that is recorded next to them because the channel
+is not first-hand.** They were passed on from `#grappa` on 2026-08-26 via
+ircbot, textually *"1) vjt-claude 2) dentro"* at 08:38 and *"si your name ==
+stefy lanza"* at 08:47, and neither was seen directly by the orchestrator who
+relayed them. The same relay had already fabricated a ruling on the first
+question at 06:23 that morning — it claimed the issue body already carried the
+answer, when the body says the opposite — and that was retracted in channel.
+So the lines are applied and their origin sits beside them: if a relay was
+wrong, the correction is one line of `.mailmap` and one assertion, not a slice
+to redo. **The general rule this is an instance of: when a decision reaches
+the code through a channel nobody in the loop can verify, the provenance is
+part of the change, not context that evaporates with the conversation.**
+
+The evidence behind the second ruling was measured before it was asked for,
+and is worth keeping because it is what made the question answerable: 83 of
+the 89 commits are `frontends/shottino`; the last one under `Your Name` is
+`2026-08-01T02:05:02+02:00` and the first under `Stefy Lanza
+<stefy@nexlab.net>` is `2026-08-01T02:11:58+02:00` — six minutes and
+fifty-six seconds later, on the same tree, with no overlap in either
+direction, and 146 of Stefy's 147 commits in that same directory. That is the
+shape of a `git config user.name` run at two in the morning. It was still put
+as a question rather than written as a fact: evidence is not testimony, and
+putting a person's name on 89 commits deserves that person's word. (12 of the
+89 were COMMITTED by `Marcello Barnaba <vjt@openssl.it>`, which is a rebase or
+an apply and says nothing about who authored them.)
+
+**`2) dentro` answered a question this work never asked.** It was read as
+"dependabot goes INSIDE the credits", which is measurably already true and
+always was: `dependabot[bot]` carries 42 commits in the payload before this
+file and 42 after. Nothing excluded it; `credits.sh` filters only
+`--no-merges`, and a mailmap renames rather than drops, so it could not
+exclude anybody even if asked to. No change was made rather than writing inert
+code to satisfy the shape of an instruction — the fact is recorded in the
+file's closing comment instead, so the next reader does not take the bot for
+an oversight.
+
+With both rulings in, **no author identity in this history is left unmapped**,
+and `.mailmap` says that out loud rather than leaving it as the absence of a
+list: a contributor who starts committing from a second address should add a
+line, and knowing the file is meant to be COMPLETE is what makes that obvious.
+
+### How it is pinned
+
+`test/infra/credits_payload_test.bats` grew three cases, dying of three causes,
+because a dedup test that passes without the dedup has measured nothing. Every
+one was falsified on a bench, with `.mailmap` and `credits.sh` re-checksummed
+after each mutation:
+
+- a SANDBOX case pins the CHANNEL — that `credits.sh` still reaches the
+  mailmap-resolved name. Falsified by rewriting the deriver over `%an` (raw)
+  instead of `shortlog` (resolved), a plausible "portable" rewrite: it and the
+  next case go red, the rest stay green;
+- a case reading THIS checkout pins the MAPPINGS via `git check-mailmap` —
+  exact strings, and stable because it reads the committed file rather than a
+  history that grows every commit. Falsified three times, once per removed
+  line (`gabrielemarrone`, and each of the two rulings): each time only that
+  case dies, on the assertion for the line that went, so no mapping rests on
+  nothing. Its second half re-derives the real payload and refutes the
+  collapsed alias names, guarded against hollow green by first requiring the
+  canonical names to be PRESENT — a checkout with no readable git yields the
+  honest empty payload, against which every refutation would hold vacuously;
+- a third case pins the one NON-collapse, `vjt-claude` against the address it
+  shares. Falsified by rewriting that line short — only that case dies, which
+  is the first ruling being overruled in silence.
+
+The e2e roll spec (`issue1773-credits-roll-bakes-git-facts.spec.ts`) is
+unaffected by construction, and it is worth saying why rather than discovering
+it: it compares what the modal PAINTS against the `GRAPPA_CREDITS` payload
+derived from the SAME repository at run time, so a mailmap moves both ends of
+the channel together.
+
+Not fixed here, and noted so it is not rediscovered: `credits.sh` closes with
+*"Why: docs/OPERATIONS.md § Packaging (infra/packaging/)"*, and that section
+does not mention the credits payload at all — the word does not appear in
+`OPERATIONS.md`. That is #1773's documentation debt, not this slice's, and
+inventing a credits subsection to hang one `.mailmap` sentence on would put
+the note somewhere no reader would look for it.
