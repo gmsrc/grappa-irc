@@ -36,6 +36,31 @@ defmodule Grappa.Version.GitProbe do
   normal checkout, a packed ref, a detached HEAD, and a `git worktree`
   (where `.git` is a FILE and refs live in a shared common dir) — no
   hand-parsing of `.git` internals.
+
+  ## Why existence is not a filter (#1797)
+
+  Naming the right three files is only half of it: the set used to be
+  `File.exists?`-filtered, and **git's ref layout is mutable at runtime**.
+  `git gc --auto` (which `git pull` runs) packs refs and DELETES the loose
+  one; the next `update-ref` writes it back. So a build taken while the
+  branch is packed registers `HEAD` + `packed-refs` only — and the next
+  `git pull --ff-only` rewrites nothing but the loose ref it never
+  registered. Measured (#1797): two identical clones, one `pack-refs --all`
+  apart, both pulled a fast-forward and recompiled — the loose-ref clone
+  re-snapshotted (`Compiling 1 file`, sha followed HEAD), the packed clone
+  emitted nothing and kept the previous sha, with `HEAD` and `packed-refs`
+  byte-identical across the pull. That is the whole defect: the previous
+  fix (#533/#542) named the file, but only when git happened to be storing
+  it that way at compile time.
+
+  Registering a path that does not exist is not a hack, it is exactly what
+  `Mix.Compilers.Elixir` is built for: `process_external_resources/2`
+  records `{path, Mix.Utils.last_modified_and_size(path), digest}`, which
+  is `{path, {0, 0}, nil}` for a missing file, and `stale_external?/2`
+  answers `digest != nil` (false → not stale, so no recompile loop) while
+  the file is absent, and `size != last_size` (true → stale) the instant it
+  appears with 41 bytes of ref in it. Deletion is caught by the same rule
+  in reverse. So the honest watch set is DECLARED, never DISCOVERED.
   """
 
   # No `use Boundary` — this module belongs to the `Grappa.Version` boundary
@@ -70,9 +95,10 @@ defmodule Grappa.Version.GitProbe do
     * `HEAD` — moves on a branch switch or a checkout to a detached HEAD;
     * `packed-refs` — moves when the ref is stored packed.
 
-  Only paths that exist on disk are returned (callers register each as an
-  `@external_resource`). `[]` when there is no git at build (a release
-  tarball / package) — nothing to watch and nothing to keep fresh.
+  Paths are returned WHETHER OR NOT they exist right now (#1797) — see
+  "Why existence is not a filter" in the moduledoc. `[]` when there is no
+  git at build (a release tarball / package) — nothing to watch and nothing
+  to keep fresh. Callers register each as an `@external_resource`.
   """
   @spec resource_paths(String.t()) :: [String.t()]
   def resource_paths(root) do
@@ -82,7 +108,6 @@ defmodule Grappa.Version.GitProbe do
       |> Enum.map(&git_path(root, &1))
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
-      |> Enum.filter(&File.exists?/1)
     else
       []
     end

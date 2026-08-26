@@ -79,7 +79,10 @@ defmodule Grappa.Version do
   mix release --overwrite`; the jail does NOT wipe `_build`, so the old
   "cold deploy recompiles from scratch" belief was false). The corrected
   watch set — the loose branch ref, plus `HEAD` and `packed-refs` — is
-  resolved by `Grappa.Version.GitProbe.resource_paths/1` (#533 / #542).
+  resolved by `Grappa.Version.GitProbe.resource_paths/1` (#533 / #542) —
+  and registered UNCONDITIONALLY, because naming the loose ref only when
+  git happens to be storing it loosely at compile time re-opened the very
+  same staleness the moment a `git gc` packed it (#1797).
 
   When there was **no `.git` at build** — a package built from a release
   tarball (Arch) — `@git_facts` is `nil` and the reported version is the
@@ -120,9 +123,11 @@ defmodule Grappa.Version do
   # Re-run compilation whenever the build's git ref moves so an incremental
   # build re-snapshots the sha. The watch set is the corrected #533/#542 one
   # (the LOOSE branch ref a same-branch fast-forward rewrites, plus HEAD and
-  # packed-refs) — see `GitProbe.resource_paths/1`. Registering each existing
-  # path as an `@external_resource` is what dirties this module on the next
-  # `mix compile`.
+  # packed-refs) — see `GitProbe.resource_paths/1`. Registering each path as
+  # an `@external_resource` is what dirties this module on the next
+  # `mix compile`, and each is registered whether or not it exists TODAY:
+  # git packs and unpacks refs behind us, so a set filtered by existence
+  # goes blind to the very fast-forward it was written to catch (#1797).
   for path <- GitProbe.resource_paths(@repo_root) do
     @external_resource path
   end
