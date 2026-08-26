@@ -1360,7 +1360,16 @@ html.overlay-open #root > div {
    or a long unbreakable token WITHOUT break-word would floor `fit-content`
    at that min-content and re-starve the centre. */
 .shell.shell-no-members {
-  grid-template-columns: var(--sidebar-width, 16rem) 1fr fit-content(14rem);
+  /* issue 1827 — `256px`, matching the sibling `.shell` rule above, for the
+     same reason and by the same measurement: the fallback arm never rendered
+     while sidebarWidths.ts wrote the var for everybody, and `16rem` is 224px
+     at the default --font-size, 32px short of the 256px the JS default was
+     really producing. Now that a never-dragged side leaves the var unset,
+     this arm renders — so it has to carry the shipping number or the
+     no-members shell alone would narrow while the members-bearing one did
+     not. The `fit-content(14rem)` cap is untouched: there is no members rail
+     to drag in this arm. */
+  grid-template-columns: var(--sidebar-width, 256px) 1fr fit-content(14rem);
 }
 
 /* #319 — landscape-compact tier. A small phone (~5") rotated to landscape
