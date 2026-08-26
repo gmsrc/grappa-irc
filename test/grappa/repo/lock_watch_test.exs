@@ -707,6 +707,51 @@ defmodule Grappa.Repo.LockWatchTest do
       assert text =~ "teardown #{@film_threshold_ms * 2}ms"
     end
 
+    test "a truncated film does not report its own cap as a dead target" do
+      # 🔴 Measured on a real 129406ms run: `TARGET GONE for 257 of 507 ticks`
+      # printed alongside `teardown 15ms` in the SAME report. Past
+      # `@film_max_samples` every further tick collects nothing however alive
+      # the target is, so the collected-vs-ticks ratio fires unconditionally
+      # once ticks exceed twice the cap. The clock is the one that was right.
+      ticks = @film_max_samples * 3
+
+      assert {:report, text} =
+               film_verdict(
+                 :capped,
+                 samples(@film_max_samples, 1_000),
+                 ticks,
+                 true,
+                 @film_threshold_ms,
+                 0
+               )
+
+      assert text =~ "FILM TRUNCATED"
+      refute text =~ "TARGET GONE"
+    end
+
+    test "a starved filmer declares that its own split was read late" do
+      # The stamp is taken when the filmer HANDLES the DOWN. A filmer that was
+      # not scheduled reads the boundary late, so teardown is understated —
+      # and a number that is quietly a lower bound is the same kind of lie the
+      # rest of this pass removed.
+      assert {:report, starved} =
+               film_verdict(:starved, samples(1, 1_000), 1, true, @film_threshold_ms, 10)
+
+      assert starved =~ "LOWER bound"
+
+      assert {:report, fed} =
+               film_verdict(
+                 :fed,
+                 samples(12, 1_000),
+                 div(@film_threshold_ms, @film_interval_ms),
+                 true,
+                 @film_threshold_ms,
+                 10
+               )
+
+      refute fed =~ "LOWER bound"
+    end
+
     test "a target still alive when the film prints is said to be, not given a zero teardown" do
       # A missing stamp and a zero teardown are different facts, and printing
       # the second for the first is the same class of lie as the `(+0)`
@@ -979,11 +1024,11 @@ defmodule Grappa.Repo.LockWatchTest do
     :silent
   end
 
-  defp film_verdict(test_name, [], _, true, elapsed_ms, body_ms) do
+  defp film_verdict(test_name, [], ticks, true, elapsed_ms, body_ms) do
     {:report,
      "#1767 FILM NO SAMPLES: test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms over a #{@film_interval_ms}ms " <>
        "tick — the filmer was alive and collected nothing, which is a reading about the VM, not an idle test" <>
-       "\n" <> clock_split_line(elapsed_ms, body_ms)}
+       "\n" <> clock_split_line(elapsed_ms, body_ms, starved?(ticks, div(elapsed_ms, @film_interval_ms)))}
   end
 
   defp film_verdict(test_name, samples, ticks, true, elapsed_ms, body_ms) do
@@ -993,7 +1038,7 @@ defmodule Grappa.Repo.LockWatchTest do
     lines =
       [
         "#1767 FILM test=#{inspect(test_name)} elapsed=#{elapsed_ms}ms threshold=#{@film_threshold_ms}ms",
-        clock_split_line(elapsed_ms, body_ms),
+        clock_split_line(elapsed_ms, body_ms, starved?(ticks, expected)),
         "  ticks: #{ticks} taken / #{expected} due at #{@film_interval_ms}ms  (filmer scheduling)",
         "  samples: #{collected} collected of those #{ticks} ticks  (target alive)",
         reductions_line(samples),
@@ -1010,14 +1055,31 @@ defmodule Grappa.Repo.LockWatchTest do
   # outlived the film, so there IS no teardown to name and saying `teardown
   # 0ms` would put the entire wall clock in the body — a reader would go
   # looking for a slow assertion that does not exist.
-  defp clock_split_line(_elapsed_ms, nil) do
+  defp clock_split_line(_elapsed_ms, nil, _starved?) do
     "  clock: the target was STILL ALIVE when the film printed — no split available"
   end
 
-  defp clock_split_line(elapsed_ms, body_ms) do
+  # 🔴 THE STAMP IS TAKEN WHEN THE FILMER HANDLES THE DOWN, NOT WHEN IT
+  # ARRIVES, so a starved filmer reads the boundary LATE: setup+body comes out
+  # too big and teardown too small, by however long the filmer sat unscheduled
+  # with the message already in its mailbox. There is no in-VM clock that
+  # escapes this — a stall wide enough to starve the filmer starves whatever
+  # would time it — so the bias is DECLARED rather than engineered away. Under
+  # starvation the split is a lower bound on teardown, and saying so is the
+  # difference between a measurement and a number.
+  defp clock_split_line(elapsed_ms, body_ms, starved?) do
+    caveat =
+      if starved?,
+        do: " — the filmer was starved, so this boundary was read LATE: teardown is a LOWER bound",
+        else: ""
+
     "  clock: setup+body #{body_ms}ms | teardown #{elapsed_ms - body_ms}ms  " <>
-      "(ExUnit runs on_exit in another process, so only the first half is the test)"
+      "(ExUnit runs on_exit in another process, so only the first half is the test)" <> caveat
   end
+
+  # One predicate, so the caveat above and the STARVED line below can never
+  # disagree about whether the filmer got its turns.
+  defp starved?(ticks, expected), do: ticks * 2 < expected
 
   # 🔴 A DERIVATIVE NEEDS TWO POINTS. With one sample `hd` and `List.last` are
   # the SAME element, so the old unconditional line printed `X -> X (+0)` — a
@@ -1038,17 +1100,29 @@ defmodule Grappa.Repo.LockWatchTest do
   # collect: a tick that finds the target dead is not a missed tick, and
   # measuring the second while claiming the first is what made this line fire
   # on a quiet host during a passing test.
-  defp starved_line(ticks, expected) when ticks * 2 < expected do
-    "  ⚠ SAMPLER STARVED: the filmer took #{ticks} of #{expected} turns it was due — " <>
-      "the VM was not scheduling the FILMER either, so this is not only the test"
+  defp starved_line(ticks, expected) do
+    if starved?(ticks, expected) do
+      "  ⚠ SAMPLER STARVED: the filmer took #{ticks} of #{expected} turns it was due — " <>
+        "the VM was not scheduling the FILMER either, so this is not only the test"
+    else
+      ""
+    end
   end
-
-  defp starved_line(_, _), do: ""
 
   # The other half of the split, and the common case: the filmer was scheduled
   # fine and found nothing to sample because the test process was already gone.
   # That is a statement about WHERE the wall-clock went — setup and teardown
   # rather than the body — and it is the opposite of a VM reading.
+  # 🔴 TRUNCATION IS NOT ABSENCE, and it took the clock above to notice.
+  # `film_collect/2` stops appending at `@film_max_samples`, so past the cap
+  # every further tick collects nothing — for a target that is alive and
+  # working. The ratio below cannot tell that apart from a dead one, and past
+  # `2 * @film_max_samples` ticks it fires unconditionally. Measured: a real
+  # 129406ms run reported `TARGET GONE for 257 of 507 ticks` while the same
+  # report's split read `teardown 15ms`. The two lines contradicted each other
+  # and the ratio was the one that was wrong.
+  defp target_gone_line(collected, _ticks) when collected >= @film_max_samples, do: ""
+
   defp target_gone_line(collected, ticks) when collected * 2 < ticks do
     "  ⚠ TARGET GONE for #{ticks - collected} of #{ticks} ticks — the test process was not alive " <>
       "to be sampled, so that time is OUTSIDE the test body (ExUnit runs on_exit in another process)"
