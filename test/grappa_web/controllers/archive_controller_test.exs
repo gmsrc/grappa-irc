@@ -121,9 +121,9 @@ defmodule GrappaWeb.ArchiveControllerTest do
 
       assert json_response(conn, 200) == %{
                "archive" => [
-                 %{"target" => "vjt-peer", "kind" => "query", "last_activity" => 300, "row_count" => 1},
-                 %{"target" => "#b", "kind" => "channel", "last_activity" => 200, "row_count" => 1},
-                 %{"target" => "#a", "kind" => "channel", "last_activity" => 100, "row_count" => 1}
+                 %{"target" => "vjt-peer", "kind" => "query", "last_activity" => 300},
+                 %{"target" => "#b", "kind" => "channel", "last_activity" => 200},
+                 %{"target" => "#a", "kind" => "channel", "last_activity" => 100}
                ]
              }
     end

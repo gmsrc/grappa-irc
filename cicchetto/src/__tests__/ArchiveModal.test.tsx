@@ -83,7 +83,6 @@ const {
       target: string;
       kind: "channel" | "query";
       last_activity: number;
-      row_count: number;
     }>
   >(() => []),
   mockArchivedBySlug: vi.fn<() => Record<string, unknown[]>>(() => ({})),
@@ -169,8 +168,8 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockEntries.mockImplementation((slug) =>
       slug === "freenode"
         ? [
-            { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
-            { target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 },
+            { target: "vjt-peer", kind: "query", last_activity: 100 },
+            { target: "#bofh", kind: "channel", last_activity: 200 },
           ]
         : [],
     );
@@ -229,7 +228,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
       slug === "freenode"
-        ? [{ target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 }]
+        ? [{ target: "#bofh", kind: "channel", last_activity: 200 }]
         : [],
     );
     render(() => <ArchiveModal />);
@@ -246,7 +245,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
       slug === "libera"
-        ? [{ target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 }]
+        ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }]
         : [],
     );
     render(() => <ArchiveModal />);
@@ -270,7 +269,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpenQueryNicks.mockReturnValue(["VJT-Peer"]);
     mockEntries.mockImplementation((slug) =>
       slug === "libera"
-        ? [{ target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 }]
+        ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }]
         : [],
     );
     render(() => <ArchiveModal />);
@@ -289,7 +288,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
       slug === "libera"
-        ? [{ target: "DebugServ", kind: "query", last_activity: 100, row_count: 4 }]
+        ? [{ target: "DebugServ", kind: "query", last_activity: 100 }]
         : [],
     );
     // Seed is keyed by the server's CANONICAL nick (DM keys fold, #532 D);
@@ -306,7 +305,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
       slug === "freenode"
-        ? [{ target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 }]
+        ? [{ target: "#bofh", kind: "channel", last_activity: 200 }]
         : [],
     );
     mockEventsUnread.mockReturnValue({ "freenode #bofh": 2 });
@@ -321,7 +320,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
       slug === "libera"
-        ? [{ target: "quietpeer", kind: "query", last_activity: 100, row_count: 4 }]
+        ? [{ target: "quietpeer", kind: "query", last_activity: 100 }]
         : [],
     );
     // No seed entry for this window → nothing pending.
@@ -334,7 +333,7 @@ describe("ArchiveModal (#473 grouped)", () => {
     mockOpen.mockReturnValue(true);
     mockEntries.mockImplementation((slug) =>
       slug === "freenode"
-        ? [{ target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 }]
+        ? [{ target: "vjt-peer", kind: "query", last_activity: 100 }]
         : [],
     );
     render(() => <ArchiveModal />);

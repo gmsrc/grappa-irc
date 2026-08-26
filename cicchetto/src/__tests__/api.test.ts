@@ -1348,7 +1348,6 @@ const ARCHIVE_ROW = {
   target: "#italia",
   kind: "channel",
   last_activity: 1_700_000_000,
-  row_count: 942,
 };
 
 const USER_ROW = {
@@ -1422,9 +1421,27 @@ describe("#1400 slice 1 — the nine class-A doors reject an incomplete row", ()
     );
   });
 
-  it("listArchive rejects an entry missing `row_count`", async () => {
-    stubFetch(200, { archive: [without(ARCHIVE_ROW, "row_count")] });
+  it("listArchive rejects an entry missing `last_activity`", async () => {
+    stubFetch(200, { archive: [without(ARCHIVE_ROW, "last_activity")] });
     await expect(api.listArchive("t", "azzurra")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  // #1626 — this case used to be `rejects an entry missing row_count`, and
+  // that requirement is exactly what broke: cic never rendered the value, it
+  // only insisted on it, so a v8 server dropping the field would have had
+  // every archive response thrown away wholesale. Its replacement asserts
+  // the OTHER direction, which is the one that has to keep holding: a v7
+  // server still sends `row_count`, and an undeclared key is dropped rather
+  // than rejected (additive-only, #447). This is what lets this bundle keep
+  // talking to a server predating the removal, and it is why
+  // `MIN_SERVER_PROTOCOL_VERSION` did not have to move.
+  it("listArchive accepts an entry that still carries `row_count` and drops it", async () => {
+    stubFetch(200, { archive: [{ ...ARCHIVE_ROW, row_count: 942 }] });
+
+    const entries = await api.listArchive("t", "azzurra");
+
+    expect(entries).toEqual([ARCHIVE_ROW]);
+    expect(entries[0]).not.toHaveProperty("row_count");
   });
 
   it("adminListUsers rejects a user missing `is_admin`", async () => {

@@ -2606,7 +2606,11 @@ export async function deleteInvite(
 }
 
 // Mirror of `GrappaWeb.ArchiveJSON.index/1` (CP15 B4) — wire shape:
-//   { "archive": [{"target", "kind", "last_activity", "row_count"}] }
+//   { "archive": [{"target", "kind", "last_activity"}] }
+// `row_count` was removed by #1626 (protocol v8): an exact per-target count
+// had to visit the whole partition, which is what kept the listing's cost
+// bound to the size of the account. cic never rendered it — only its schema
+// insisted on it, which is what would have broken.
 // Server-side `Scrollback.list_archive/3` already sorts by
 // `last_activity` DESC and excludes the active keyset (joined channels +
 // open query windows) + the `$server` pseudo-channel. The unwrap below

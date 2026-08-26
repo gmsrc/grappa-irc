@@ -106,7 +106,7 @@ async function mobileSurfacesFor(state: string): Promise<{
   localStorage.setItem("grappa-token", "tok");
   const api = await import("../lib/api");
   vi.mocked(api.listArchive).mockResolvedValue([
-    { target: "#gated", kind: "channel", last_activity: 300, row_count: 42 },
+    { target: "#gated", kind: "channel", last_activity: 300 },
   ]);
 
   const archive = await import("../lib/archive");

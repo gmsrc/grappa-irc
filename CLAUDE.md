@@ -220,7 +220,20 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
   client MUST ignore verbs/fields it does not recognise
   (unknown-is-never-fatal, BOTH directions — an unknown client verb
   earns a non-fatal error frame and the socket stays open); existing
-  fields are NEVER repurposed or removed. **🔴 But `protocol_version`
+  fields are NEVER repurposed. **🔴 "…or removed" fell on 2026-08-26
+  (vjt's ruling, #1626): removal is no longer NEVER, it is ONLY ON A
+  RULING.** One field has been taken back — `row_count` on the archive
+  entry (protocol v8) — because emitting it forced
+  `Scrollback.list_archive/3` to visit the whole `(subject, network)`
+  partition, and no amount of query work buys the complexity class back
+  while an exact per-group count is in the shape. The bar that case
+  sets, and it is deliberately high: the field must be the thing
+  standing between the server and a property it cannot otherwise have;
+  the break must be MEASURED on the real client (cic's generated
+  `wireSchema` rejects an object missing a required key, so an old
+  bundle throws every archive response away) rather than argued; and it
+  takes a ruling, not a judgement call inside the slice. Everything
+  short of that is still additive-only. **`protocol_version`
   BUMPS ON EVERY WIRE-SHAPE CHANGE, ADDITIVE INCLUDED (vjt's ruling,
   2026-08-21, #1393d — reversing this file's own former "may appear at
   ANY time WITHOUT a version bump").** Two reasons, and the second is

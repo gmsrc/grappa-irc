@@ -98,11 +98,13 @@ There are **two** numbers, and they mean different things:
   client MUST ignore fields and events it does not recognise. The server,
   symmetrically, replies to an unknown client verb with a non-fatal error
   frame and keeps the socket open.
-- **Existing fields are never repurposed or removed.** A field means the
-  same thing forever.
+- **Existing fields are never repurposed.** A field means the same thing
+  forever.
+- **Removal is not "never" — it is "only on a ruling" (2026-08-26).**
+  See §2b. Design your client as if a field could go, i.e. do not make a
+  hard requirement of one you do not actually read.
 
-That half is unchanged, and it is what keeps an OLD client working
-against a NEW server.
+That half is what keeps an OLD client working against a NEW server.
 
 ### 2a. `protocol_version` moves on EVERY wire-shape change (2026-08-21)
 
@@ -142,6 +144,39 @@ is: `protocol_version` has moved several times under this rule while
 `min_protocol_version` has never left `1`. (The current pair is not
 written here on purpose — see the note under `GET /api/config`; the
 moving number is stale the moment it is typed, and it has been, twice.)
+
+### 2b. One field has been REMOVED, and what that costs you
+
+⚠️ `row_count` is gone from the archive entry
+(`GET /networks/:slug/archive`) as of protocol **v8**. It is the first
+and so far only field this wire has taken back.
+
+**Why it was allowed.** An exact per-target row count has to visit that
+target's rows, which is the whole `(subject, network)` partition, so
+while the field was emitted the listing's cost was bound to the size of
+the account rather than to its number of targets. The field was the only
+thing standing between the server and a listing that seeks once per
+target. Nothing else about the entry changed: `target`, `kind` and
+`last_activity` mean what they always meant.
+
+**The bar for a future removal**, so you can judge how likely another is:
+the field must be what blocks a property the server cannot otherwise
+have; the break must be measured against a real client rather than
+argued; and it takes an explicit ruling. Ordinary tidying does not
+qualify — nothing has ever been removed for being unused.
+
+**What it means for your client, concretely.** Validate *permissively*:
+tolerate an absent field you do not read, and never make a hard
+requirement of one you only pass through. The reference client got this
+wrong in exactly the way to learn from — it rendered `target` and `kind`
+only, never `row_count`, yet its generated schema listed the field as
+required, so a v8 server's response failed validation wholesale and its
+archive pane went blank. It never used the value it insisted on.
+
+`min_protocol_version` did **not** move for this, deliberately: it gates
+the whole socket, and this break is one listing. A pre-v8 client is
+still served everything else. The signal you get is `protocol_version`,
+in `GET /api/config` and in the user-topic join reply.
 
 ### 2b. What this means for you, as a client author
 

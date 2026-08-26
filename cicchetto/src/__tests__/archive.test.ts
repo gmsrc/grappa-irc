@@ -44,16 +44,16 @@ describe("archive.loadArchive", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "vjt-peer", kind: "query", last_activity: 300, row_count: 8 },
-      { target: "#sniffo", kind: "channel", last_activity: 200, row_count: 576 },
+      { target: "vjt-peer", kind: "query", last_activity: 300 },
+      { target: "#sniffo", kind: "channel", last_activity: 200 },
     ]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
 
     expect(archive.archivedBySlug().freenode).toEqual([
-      { target: "vjt-peer", kind: "query", last_activity: 300, row_count: 8 },
-      { target: "#sniffo", kind: "channel", last_activity: 200, row_count: 576 },
+      { target: "vjt-peer", kind: "query", last_activity: 300 },
+      { target: "#sniffo", kind: "channel", last_activity: 200 },
     ]);
   });
 
@@ -68,18 +68,18 @@ describe("archive.loadArchive", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive)
-      .mockResolvedValueOnce([{ target: "#a", kind: "channel", last_activity: 100, row_count: 1 }])
-      .mockResolvedValueOnce([{ target: "#b", kind: "channel", last_activity: 200, row_count: 2 }]);
+      .mockResolvedValueOnce([{ target: "#a", kind: "channel", last_activity: 100 }])
+      .mockResolvedValueOnce([{ target: "#b", kind: "channel", last_activity: 200 }]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
     await archive.loadArchive("libera");
 
     expect(archive.archivedBySlug().freenode).toEqual([
-      { target: "#a", kind: "channel", last_activity: 100, row_count: 1 },
+      { target: "#a", kind: "channel", last_activity: 100 },
     ]);
     expect(archive.archivedBySlug().libera).toEqual([
-      { target: "#b", kind: "channel", last_activity: 200, row_count: 2 },
+      { target: "#b", kind: "channel", last_activity: 200 },
     ]);
   });
 
@@ -87,15 +87,15 @@ describe("archive.loadArchive", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive)
-      .mockResolvedValueOnce([{ target: "#a", kind: "channel", last_activity: 100, row_count: 1 }])
-      .mockResolvedValueOnce([{ target: "#a", kind: "channel", last_activity: 999, row_count: 5 }]);
+      .mockResolvedValueOnce([{ target: "#a", kind: "channel", last_activity: 100 }])
+      .mockResolvedValueOnce([{ target: "#a", kind: "channel", last_activity: 999 }]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
     await archive.loadArchive("freenode");
 
     expect(archive.archivedBySlug().freenode).toEqual([
-      { target: "#a", kind: "channel", last_activity: 999, row_count: 5 },
+      { target: "#a", kind: "channel", last_activity: 999 },
     ]);
   });
 
@@ -125,17 +125,17 @@ describe("archive.loadArchive", () => {
     const fresh = archive.loadArchive("freenode"); // seq 2
 
     // Fresh (call #2) resolves first → store reflects the post-PART set.
-    resolveFresh([{ target: "#bofh", kind: "channel", last_activity: 999, row_count: 5 }]);
+    resolveFresh([{ target: "#bofh", kind: "channel", last_activity: 999 }]);
     await fresh;
     expect(archive.archivedBySlug().freenode).toEqual([
-      { target: "#bofh", kind: "channel", last_activity: 999, row_count: 5 },
+      { target: "#bofh", kind: "channel", last_activity: 999 },
     ]);
 
     // Stale (call #1) resolves LAST → its result is dropped, store unchanged.
-    resolveStale([{ target: "#old", kind: "channel", last_activity: 100, row_count: 1 }]);
+    resolveStale([{ target: "#old", kind: "channel", last_activity: 100 }]);
     await stale;
     expect(archive.archivedBySlug().freenode).toEqual([
-      { target: "#bofh", kind: "channel", last_activity: 999, row_count: 5 },
+      { target: "#bofh", kind: "channel", last_activity: 999 },
     ]);
   });
 });
@@ -145,7 +145,7 @@ describe("archive.clearArchive — identity-scoped cleanup", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "#a", kind: "channel", last_activity: 100, row_count: 1 },
+      { target: "#a", kind: "channel", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
@@ -170,16 +170,16 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 },
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
+      { target: "#bofh", kind: "channel", last_activity: 200 },
+      { target: "vjt-peer", kind: "query", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
 
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 8 },
-      { target: "vjt-peer", kind: "query", last_activity: 100, row_count: 4 },
+      { target: "#bofh", kind: "channel", last_activity: 200 },
+      { target: "vjt-peer", kind: "query", last_activity: 100 },
     ]);
   });
 
@@ -198,15 +198,15 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "#sniffo", kind: "channel", last_activity: 200, row_count: 576 },
-      { target: "#bofh", kind: "channel", last_activity: 100, row_count: 8 },
+      { target: "#sniffo", kind: "channel", last_activity: 200 },
+      { target: "#bofh", kind: "channel", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
 
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "#bofh", kind: "channel", last_activity: 100, row_count: 8 },
+      { target: "#bofh", kind: "channel", last_activity: 100 },
     ]);
   });
 
@@ -225,15 +225,15 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "vjt-peer", kind: "query", last_activity: 200, row_count: 8 },
-      { target: "alice-peer", kind: "query", last_activity: 100, row_count: 4 },
+      { target: "vjt-peer", kind: "query", last_activity: 200 },
+      { target: "alice-peer", kind: "query", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
 
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "alice-peer", kind: "query", last_activity: 100, row_count: 4 },
+      { target: "alice-peer", kind: "query", last_activity: 100 },
     ]);
   });
 
@@ -257,8 +257,8 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "DebugServ", kind: "query", last_activity: 200, row_count: 3 },
-      { target: "alice-peer", kind: "query", last_activity: 100, row_count: 4 },
+      { target: "DebugServ", kind: "query", last_activity: 200 },
+      { target: "alice-peer", kind: "query", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
@@ -267,7 +267,7 @@ describe("archive.visibleArchiveForNetwork", () => {
     // `DebugServ` folds to the active `debugserv` → suppressed; the
     // unrelated peer survives.
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "alice-peer", kind: "query", last_activity: 100, row_count: 4 },
+      { target: "alice-peer", kind: "query", last_activity: 100 },
     ]);
   });
 
@@ -293,16 +293,16 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "#it-opers", kind: "channel", last_activity: 300, row_count: 1 },
-      { target: "#kicked-from", kind: "channel", last_activity: 200, row_count: 5 },
-      { target: "#old-chan", kind: "channel", last_activity: 100, row_count: 12 },
+      { target: "#it-opers", kind: "channel", last_activity: 300 },
+      { target: "#kicked-from", kind: "channel", last_activity: 200 },
+      { target: "#old-chan", kind: "channel", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
 
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "#old-chan", kind: "channel", last_activity: 100, row_count: 12 },
+      { target: "#old-chan", kind: "channel", last_activity: 100 },
     ]);
   });
 
@@ -335,7 +335,7 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 203 },
+      { target: "#bofh", kind: "channel", last_activity: 200 },
     ]);
 
     const archive = await import("../lib/archive");
@@ -344,7 +344,7 @@ describe("archive.visibleArchiveForNetwork", () => {
     // The server placed #bofh in the archive (it IS parted) and it is not
     // in channelsBySlug — the stale `:joined` must NOT suppress it.
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "#bofh", kind: "channel", last_activity: 200, row_count: 203 },
+      { target: "#bofh", kind: "channel", last_activity: 200 },
     ]);
   });
 
@@ -364,14 +364,14 @@ describe("archive.visibleArchiveForNetwork", () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.listArchive).mockResolvedValue([
-      { target: "#it-opers", kind: "channel", last_activity: 100, row_count: 1 },
+      { target: "#it-opers", kind: "channel", last_activity: 100 },
     ]);
 
     const archive = await import("../lib/archive");
     await archive.loadArchive("freenode");
 
     expect(archive.visibleArchiveForNetwork("freenode", 1)).toEqual([
-      { target: "#it-opers", kind: "channel", last_activity: 100, row_count: 1 },
+      { target: "#it-opers", kind: "channel", last_activity: 100 },
     ]);
   });
 

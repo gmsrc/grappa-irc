@@ -862,7 +862,7 @@ export const S_ScrollbackWireArchivePurgedPayload = {
 
 // Grappa.Scrollback.Wire.archive_wire_entry/0
 export const S_ScrollbackWireArchiveWireEntry = {
-  o: { target: "s", kind: { e: ["channel", "query"] }, last_activity: "i", row_count: "i" },
+  o: { target: "s", kind: { e: ["channel", "query"] }, last_activity: "i" },
 } as const;
 
 // Grappa.Scrollback.Wire.archive_wire_index/0

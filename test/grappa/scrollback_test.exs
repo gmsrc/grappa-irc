@@ -2562,7 +2562,7 @@ defmodule Grappa.ScrollbackTest do
   # `:query` otherwise. Mirrors `dm_eligible?/1`'s sigil predicate so
   # the two stay in lockstep.
   describe "list_archive/3" do
-    test "excludes $server and active_keyset; returns archived DM target with kind/last_activity/row_count",
+    test "excludes $server and active_keyset; returns archived DM target with kind/last_activity",
          %{user: user, network: net} do
       # Seed: 3 channel rows for #a (active), 2 DM rows for "vjt-peer"
       # (archived), 1 $server row (always-active per intent doc).
@@ -2572,8 +2572,7 @@ defmodule Grappa.ScrollbackTest do
                %{
                  target: "vjt-peer",
                  kind: :query,
-                 last_activity: 200,
-                 row_count: 2
+                 last_activity: 200
                }
              ] =
                Scrollback.list_archive({:user, user.id}, net.id, MapSet.new(["#a"]))
@@ -2588,8 +2587,8 @@ defmodule Grappa.ScrollbackTest do
       # #a (max ts 30) and vjt-peer (max ts 200) both archived; $server
       # excluded; sorted last_activity desc.
       assert [
-               %{target: "vjt-peer", kind: :query, last_activity: 200, row_count: 2},
-               %{target: "#a", kind: :channel, last_activity: 30, row_count: 3}
+               %{target: "vjt-peer", kind: :query, last_activity: 200},
+               %{target: "#a", kind: :channel, last_activity: 30}
              ] = result
     end
 
@@ -2650,7 +2649,7 @@ defmodule Grappa.ScrollbackTest do
         })
 
       assert [
-               %{target: "#visitor-only", kind: :channel, last_activity: 200, row_count: 1}
+               %{target: "#visitor-only", kind: :channel, last_activity: 200}
              ] =
                Scrollback.list_archive({:visitor, visitor.id}, net.id, MapSet.new())
     end
@@ -3443,57 +3442,106 @@ defmodule Grappa.ScrollbackTest do
     end
   end
 
-  # REV-B / H18 (2026-05-22 codebase review). Covering expression index
-  # on `(<subject>, network_id, COALESCE(dm_with, channel))` for
-  # `list_archive/3`'s GROUP BY shape. The migration is purely
-  # additive — the planner picks it up automatically once present. We
-  # assert via `EXPLAIN QUERY PLAN` that the planner consults
-  # `messages_archive_user_idx` (or `messages_archive_visitor_idx`)
-  # for the archive query shape.
+  # #1626 — the archive listing must answer from a LOOSE INDEX SCAN: one
+  # seek per TARGET, group boundary to group boundary, instead of one visit
+  # per ROW of the `(subject, network)` partition. That is a complexity
+  # class, and this is where it is pinned.
   #
-  # SQLite is permitted to fall through to `SCAN messages` on very
-  # small tables (zero or one row) — the test seeds enough rows to
-  # nudge the planner past that heuristic.
-  describe "REV-B H18 — list_archive/3 covering index" do
-    test "EXPLAIN QUERY PLAN consults messages_archive_user_idx", %{user: user, network: net} do
-      # Seed a handful of rows so the planner has cardinality to
-      # reason about; bias toward heterogeneous COALESCE values so
-      # the index is materially useful.
-      for {ch, dm, st} <- [
-            {"#a", nil, 10},
-            {"#b", nil, 20},
-            {"peer", "peer", 30},
-            {"other", "other", 40}
-          ] do
-        {:ok, _} = Scrollback.persist_event(sample(user, net, st, %{channel: ch, dm_with: dm}))
+  # It is a PLAN test and not a timing test on purpose: a wall-clock
+  # assertion on a shared host measures the host. The law was measured on a
+  # bench (`test/bench_1626.exs`) at two partition sizes; what has to hold
+  # forever is the SHAPE that produced it.
+  #
+  # It also settles, in the opposite direction, what #1484 recorded about
+  # the two `messages_archive_*_idx` (`20260522073826`): it read them as
+  # dead weight worth dropping for INSERT cost, having measured that no
+  # plan used them. They are the index this scan RUNS on — COVERING, in
+  # every one of its seeks — so dropping them would cost a migration to put
+  # back. This test fails if the index goes AND if the query stops seeking.
+  #
+  # It REPLACES the REV-B/H18 test that used to sit here. That one built the
+  # archive SQL by hand and EXPLAINed its own copy, so from the moment
+  # production stopped emitting that shape it pinned a query nobody ran —
+  # the exact blindness #1372 documented. The plan below comes off the SQL
+  # the production function EMITS.
+  #
+  # `capture_one_query/1` and not its plural twin: answering in ONE
+  # statement is itself part of the property. While `row_count` was in the
+  # shape the listing needed a second, partition-visiting pass, and that
+  # pass is what kept the cost bound to the account. If a second statement
+  # ever comes back, this raises instead of pinning whichever came last.
+  describe "#1626 — list_archive/3 seeks per target, not per row" do
+    test "the target read is a boundary-to-boundary seek on messages_archive_user_idx",
+         %{user: user, network: net} do
+      # Enough rows across enough targets that the planner has cardinality
+      # to reason about — SQLite may fall through to SCAN on a table of one
+      # or two rows.
+      for i <- 1..30 do
+        {:ok, _} =
+          Scrollback.persist_event(sample(user, net, i * 10, %{channel: "#chan#{rem(i, 6)}"}))
       end
 
-      sql = """
-      EXPLAIN QUERY PLAN
-        SELECT COALESCE(dm_with, channel) AS target,
-               MAX(server_time) AS last_activity,
-               COUNT(*) AS row_count
-          FROM messages
-         WHERE user_id = ? AND network_id = ?
-         GROUP BY COALESCE(dm_with, channel)
-      """
+      {sql, params} =
+        capture_one_query(fn ->
+          Scrollback.list_archive({:user, user.id}, net.id, MapSet.new())
+        end)
 
-      %Exqlite.Result{rows: rows} = Repo.query!(sql, [user.id, net.id])
+      {:ok, %{rows: rows}} = Repo.query("EXPLAIN QUERY PLAN " <> sql, params)
+      plan = rows |> List.flatten() |> Enum.map_join("\n", &to_string/1)
 
-      plan = Enum.map_join(rows, "\n", fn [_, _, _, detail] -> detail end)
-
-      # The planner output for SQLite uses "SEARCH messages USING INDEX
-      # <name>" when the index is actually applied. We accept either
-      # the user-scoped index by name OR the broader assertion that
-      # SOME index is used (defensive against minor SQLite planner
-      # wording variance across versions); the index name is the
-      # canonical signal and what the migration guarantees exists.
       assert plan =~ "messages_archive_user_idx",
              """
-             Expected EXPLAIN QUERY PLAN to reference messages_archive_user_idx,
-             got:
+             Expected the plan to run on messages_archive_user_idx, got:
              #{plan}
              """
+
+      assert plan =~ "<expr>>?",
+             """
+             Expected a boundary-to-boundary seek (`<expr>>?`) — the loose
+             index scan hopping to the next target — rather than a visit of
+             the whole partition. Plan:
+             #{plan}
+             """
+    end
+
+    test "the visitor arm seeks on its own index", %{network: net} do
+      visitor = visitor_fixture()
+
+      for i <- 1..30 do
+        {:ok, _} =
+          ScrollbackHelpers.insert(%{
+            visitor_id: visitor.id,
+            network_id: net.id,
+            channel: "#vchan#{rem(i, 6)}",
+            server_time: i * 10,
+            kind: :privmsg,
+            sender: "anon",
+            body: "m",
+            meta: %{},
+            dm_with: nil
+          })
+      end
+
+      {sql, params} =
+        capture_one_query(fn ->
+          Scrollback.list_archive({:visitor, visitor.id}, net.id, MapSet.new())
+        end)
+
+      {:ok, %{rows: rows}} = Repo.query("EXPLAIN QUERY PLAN " <> sql, params)
+      plan = rows |> List.flatten() |> Enum.map_join("\n", &to_string/1)
+
+      assert plan =~ "messages_archive_visitor_idx" and plan =~ "<expr>>?",
+             """
+             Expected the visitor arm to seek on messages_archive_visitor_idx.
+             Plan:
+             #{plan}
+             """
+    end
+
+    test "an unknown subject shape raises instead of failing a clause silently" do
+      assert_raise ArgumentError, ~r/unknown subject/, fn ->
+        Scrollback.list_archive({:nobody, "x"}, 1, MapSet.new())
+      end
     end
   end
 
@@ -3826,7 +3874,6 @@ defmodule Grappa.ScrollbackTest do
 
       assert [entry] = Scrollback.list_archive({:user, user.id}, net.id, MapSet.new())
       assert entry.kind == :query
-      assert entry.row_count == 2
       assert entry.last_activity == 200
       # Representative display casing is incidental; the fold is the identity.
       assert Identifier.canonical_target(entry.target) == "debugserv"

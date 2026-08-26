@@ -1,6 +1,6 @@
 defmodule GrappaWeb.ArchiveJSON do
   @moduledoc """
-  Wire shape: `%{archive: [%{target, kind, last_activity, row_count}]}`,
+  Wire shape: `%{archive: [%{target, kind, last_activity}]}`,
   with `kind` (`:channel | :query`) atom-stringified at the wire
   boundary so cic doesn't see Elixir-specific values.
 

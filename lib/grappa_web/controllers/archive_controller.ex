@@ -96,7 +96,8 @@ defmodule GrappaWeb.ArchiveController do
   `GET /networks/:network_id/archive` — returns the archived target
   list as `%{"archive" => [...]}` sorted by `last_activity` DESC.
 
-  Wire shape per entry: `%{target, kind, last_activity, row_count}`
+  Wire shape per entry: `%{target, kind, last_activity}` — `row_count`
+  was removed by #1626 (protocol v8); see `Grappa.Protocol`.
   where `kind` is the wire string `"channel" | "query"`.
 
   Metered: one token per call from the per-`(subject, network)`

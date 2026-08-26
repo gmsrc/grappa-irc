@@ -27,8 +27,18 @@ defmodule Grappa.Protocol do
   time — a client MUST ignore verbs and fields it does not recognise
   (unknown-is-never-fatal, in BOTH directions: an unknown client verb earns
   a non-fatal error frame and the socket stays open), and existing fields
-  are NEVER repurposed or removed. That half of #447 is unchanged and is
-  what keeps an OLD client working against a NEW server.
+  are NEVER repurposed. That half of #447 is what keeps an OLD client
+  working against a NEW server.
+
+  **Removal is no longer "never", it is "only on a ruling" (v8, #1626).**
+  One field has been taken back: `row_count` on the archive entry, because
+  emitting it forced the listing to visit the whole partition and no
+  amount of query work could buy the complexity class back while it
+  stayed. The bar that removal has to clear, set by that case: the field
+  must be the thing standing between the server and a property it cannot
+  otherwise have, the break has to be measured on the real client rather
+  than argued, and it takes a ruling — not a judgement call inside the
+  slice. Everything short of that is still additive-only.
 
   What changed on 2026-08-21 is the other half. This moduledoc used to say
   such a change lands *"WITHOUT a version bump"*, and it was true right up
@@ -144,10 +154,55 @@ defmodule Grappa.Protocol do
   # is INBOUND — which no widening of the outbound codegen digest would ever
   # reach. Filed as #1787. The bump here is the RULE, not the gate.
   #
-  # @min_protocol_version is NOT the same axis and stays at 1: it rises only
-  # when old clients can no longer be SERVED, and every client that spoke v1
-  # is still served — v1 clients tolerate what v7 clients require.
-  @protocol_version 7
+  # v8 (#1626) is the FIRST version that takes a field BACK:
+  # `row_count` is gone from `Grappa.Scrollback.Wire.archive_wire_entry`.
+  # Every bump before this one was additive, and the moduledoc's promise
+  # that "existing fields are NEVER repurposed or removed" is what makes
+  # this one different in kind rather than in degree. It is taken on a
+  # ruling (vjt, 2026-08-26) with the price named up front: an exact
+  # per-group count has to VISIT the group's rows, so while the field was
+  # emitted the archive listing stayed bound to the size of the account
+  # rather than to its number of targets. Keeping it meant keeping a
+  # complexity class; the field is what was paid.
+  #
+  # @min_protocol_version STILL stays at 1, and here that is an argument
+  # rather than the usual "additive strands nobody". Three measurements,
+  # in the order that decides it:
+  #
+  #   1. The break is REAL and runs old-client → new-server, which is
+  #      exactly this floor's axis: cic's generated schema declares
+  #      `row_count` REQUIRED (`wireSchema.ts`), and `wireValidate`'s
+  #      `walkObject` REJECTs an object missing a required key. An old
+  #      bundle therefore throws away every archive response a v8 server
+  #      sends. Measured, not inferred — `api.test.ts` carries a case
+  #      named "listArchive rejects an entry missing `row_count`".
+  #   2. Its blast radius is ONE listing, and it is contained: cic's
+  #      `loadArchive` catches and leaves the previously rendered entries
+  #      in place, and the renderer reads an absent slug key as "not
+  #      loaded yet". Nothing else in the client degrades, the socket is
+  #      untouched, no other endpoint changes shape.
+  #   3. This floor is not endpoint-scoped. Raising it to 8 refuses the
+  #      WHOLE SOCKET with 426 to every client declaring 1..7, including
+  #      the ones that never call `/archive` at all — converting a quiet
+  #      one-modal failure into a total refusal for clients the change
+  #      does not touch. Matching a session-wide gate to an
+  #      endpoint-scoped break is a category error, and it is the reason
+  #      this stays put.
+  #
+  # So: "can no longer be SERVED" is read as the client, not as one of its
+  # calls. A v1..v7 client is still served; one of its listings is not.
+  # The honest signal for that is `version/0` moving, which a client can
+  # see in `GET /api/config` and in the user-topic join reply, and which
+  # cic already compares against its own floor.
+  #
+  # The mirror obligation on the cic side does NOT fire either, and that
+  # was measured too: cic's `MIN_SERVER_PROTOCOL_VERSION` rises when the
+  # bundle starts REQUIRING a newer field, and this change makes it
+  # require one FEWER. A v8 bundle still talks to a v7 server, because
+  # `walkObject` drops undeclared keys rather than rejecting them
+  # (additive-only, #447) — so the `row_count` an old server still sends
+  # is simply ignored. It stays at 2.
+  @protocol_version 8
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -158,7 +213,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 7
+  @spec version() :: 8
   def version, do: @protocol_version
 
   @doc """

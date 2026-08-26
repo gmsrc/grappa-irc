@@ -113,22 +113,43 @@ defmodule Grappa.Scrollback.WireTest do
       assert Wire.archive_entry(%{
                target: "#sniffo",
                kind: :channel,
-               last_activity: 12_345,
-               row_count: 7
+               last_activity: 12_345
              }) == %{
                target: "#sniffo",
                kind: :channel,
-               last_activity: 12_345,
-               row_count: 7
+               last_activity: 12_345
              }
+    end
+
+    # #1626 (protocol v8) — `row_count` is GONE, and the equality above is
+    # what pins that: an extra key in the output would fail it. This case
+    # states the removal from the other side, so a reader of the test file
+    # sees the field named rather than absent.
+    test "does not emit row_count — removed in protocol v8" do
+      wire = Wire.archive_entry(%{target: "#sniffo", kind: :channel, last_activity: 1})
+
+      refute Map.has_key?(wire, :row_count)
+      assert Map.keys(wire) |> Enum.sort() == [:kind, :last_activity, :target]
+    end
+
+    # An Elixir map pattern matches a SUBSET, so a caller still holding the
+    # pre-#1626 shape does NOT hit a clause error — measured, after asserting
+    # the opposite and being wrong. What actually protects the wire is that
+    # this function BUILDS its result rather than passing the input through:
+    # the stale key is dropped, never re-emitted. That is the assertion worth
+    # having, and it is the same tolerance the client side relies on.
+    test "an entry still carrying row_count has it dropped, not re-emitted" do
+      wire = Wire.archive_entry(%{target: "#s", kind: :channel, last_activity: 1, row_count: 7})
+
+      refute Map.has_key?(wire, :row_count)
+      assert wire == %{target: "#s", kind: :channel, last_activity: 1}
     end
 
     test "passes the :query kind atom through for nick-targeted DM windows" do
       assert Wire.archive_entry(%{
                target: "vjt-peer",
                kind: :query,
-               last_activity: 999,
-               row_count: 1
+               last_activity: 999
              }).kind == :query
     end
 
@@ -140,8 +161,7 @@ defmodule Grappa.Scrollback.WireTest do
         Wire.archive_entry(%{
           target: "vjt-peer",
           kind: :query,
-          last_activity: 999,
-          row_count: 1
+          last_activity: 999
         })
 
       assert Jason.decode!(Jason.encode!(wire))["kind"] == "query"
@@ -151,14 +171,14 @@ defmodule Grappa.Scrollback.WireTest do
   describe "archive_index/1" do
     test "wraps a list of entries in the %{archive: [...]} envelope" do
       entries = [
-        %{target: "vjt-peer", kind: :query, last_activity: 300, row_count: 1},
-        %{target: "#a", kind: :channel, last_activity: 100, row_count: 1}
+        %{target: "vjt-peer", kind: :query, last_activity: 300},
+        %{target: "#a", kind: :channel, last_activity: 100}
       ]
 
       assert Wire.archive_index(entries) == %{
                archive: [
-                 %{target: "vjt-peer", kind: :query, last_activity: 300, row_count: 1},
-                 %{target: "#a", kind: :channel, last_activity: 100, row_count: 1}
+                 %{target: "vjt-peer", kind: :query, last_activity: 300},
+                 %{target: "#a", kind: :channel, last_activity: 100}
                ]
              }
     end

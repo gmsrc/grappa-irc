@@ -79,12 +79,18 @@ defmodule Grappa.Scrollback.Wire do
   `mix grappa.gen_wire_types` pins the literal TS union
   (`"channel" | "query"`) — same S14 convention as the message
   `:kind` in `t/0`. See `archive_entry/1`.
+
+  Carried `row_count` until #1626 (protocol v8), which removed it. It is
+  the first field this wire has ever taken back, and the removal is the
+  cure rather than a tidy-up: an exact per-group count has to visit the
+  group's rows, so while it was emitted the archive listing stayed bound
+  to the size of the account instead of to its number of targets. See
+  `Grappa.Scrollback.list_archive/3` and `Grappa.Protocol`.
   """
   @type archive_wire_entry :: %{
           target: String.t(),
           kind: :channel | :query,
-          last_activity: integer(),
-          row_count: non_neg_integer()
+          last_activity: integer()
         }
 
   @typedoc """
@@ -183,13 +189,12 @@ defmodule Grappa.Scrollback.Wire do
   natively.
   """
   @spec archive_entry(Scrollback.archive_entry()) :: archive_wire_entry()
-  def archive_entry(%{target: target, kind: kind, last_activity: last_activity, row_count: row_count})
+  def archive_entry(%{target: target, kind: kind, last_activity: last_activity})
       when kind in [:channel, :query] do
     %{
       target: target,
       kind: kind,
-      last_activity: last_activity,
-      row_count: row_count
+      last_activity: last_activity
     }
   end
 

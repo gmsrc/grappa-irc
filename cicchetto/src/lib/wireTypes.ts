@@ -905,7 +905,6 @@ export type ScrollbackWireArchiveWireEntry = {
   target: string;
   kind: "channel" | "query";
   last_activity: number;
-  row_count: number;
 };
 
 export type ScrollbackWireArchiveWireIndex = {
