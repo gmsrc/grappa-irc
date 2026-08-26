@@ -951,7 +951,7 @@ defmodule Grappa.Repo.LockWatchTest do
         send(from, {:film, sampler_ok?, Enum.reverse(samples), ticks, down_at})
         film_loop(test_pid, sampler_ok?, samples, ticks, down_at)
 
-      {:DOWN, _ref, :process, ^test_pid, _reason} ->
+      {:DOWN, _, :process, ^test_pid, _} ->
         film_loop(test_pid, sampler_ok?, samples, ticks, System.monotonic_time(:millisecond))
     after
       @film_interval_ms ->
@@ -1055,7 +1055,7 @@ defmodule Grappa.Repo.LockWatchTest do
   # outlived the film, so there IS no teardown to name and saying `teardown
   # 0ms` would put the entire wall clock in the body — a reader would go
   # looking for a slow assertion that does not exist.
-  defp clock_split_line(_elapsed_ms, nil, _starved?) do
+  defp clock_split_line(_, nil, _) do
     "  clock: the target was STILL ALIVE when the film printed — no split available"
   end
 
@@ -1087,7 +1087,7 @@ defmodule Grappa.Repo.LockWatchTest do
   # uses for "this process ran no code". The registered diagnosis of #1767
   # rested on one of those, and a green quiet-host run of this very file
   # produced `reductions: 9255 -> 9255 (+0)` from a single sample.
-  defp reductions_line([_only]), do: "  reductions: one sample — no delta (a derivative needs two)"
+  defp reductions_line([_]), do: "  reductions: one sample — no delta (a derivative needs two)"
 
   defp reductions_line(samples) do
     advanced = List.last(samples).reductions - hd(samples).reductions
@@ -1121,7 +1121,7 @@ defmodule Grappa.Repo.LockWatchTest do
   # 129406ms run reported `TARGET GONE for 257 of 507 ticks` while the same
   # report's split read `teardown 15ms`. The two lines contradicted each other
   # and the ratio was the one that was wrong.
-  defp target_gone_line(collected, _ticks) when collected >= @film_max_samples, do: ""
+  defp target_gone_line(collected, _) when collected >= @film_max_samples, do: ""
 
   defp target_gone_line(collected, ticks) when collected * 2 < ticks do
     "  ⚠ TARGET GONE for #{ticks - collected} of #{ticks} ticks — the test process was not alive " <>

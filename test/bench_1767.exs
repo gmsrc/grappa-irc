@@ -95,7 +95,7 @@ time_puts = fn label, n ->
       t
     end
 
-  %{label: label, max_us: Enum.max(us), median_us: Enum.sort(us) |> Enum.at(div(n, 2))}
+  %{label: label, max_us: Enum.max(us), median_us: Enum.at(Enum.sort(us), div(n, 2))}
 end
 
 {:ok, ledger} = Agent.start_link(fn -> [] end)
