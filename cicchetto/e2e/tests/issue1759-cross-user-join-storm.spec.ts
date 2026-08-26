@@ -279,14 +279,32 @@ test("#1759c — cross-user join storm vs the connection pool", async ({ page })
     "C1: POST /admin/db_latency/reset did not zero the contention counters — every number below would be an aggregate of somebody else's load",
   ).toBe(0);
 
+  // Provision the whole cohort ONCE, SEQUENTIALLY, and slice it per rung.
+  //
+  // Both properties were bought with a failed run, and neither is tidiness.
+  //
+  // SEQUENTIALLY: minting in parallel is itself a write storm — each mint
+  // logs a visitor in AND spawns a live IRC session — and at `pool_size=5`
+  // the FOURTH concurrent mint came back `503 {"error":"db_unavailable"}`
+  // before the join burst had started. That is a real observation about
+  // cross-user concurrency, but it belongs to the PROVISIONING door, not the
+  // join door this file is measuring, and leaving it in would have let a
+  // setup confound masquerade as the result. It is reported as its own
+  // finding rather than engineered out of sight.
+  //
+  // ONCE: the ladder would otherwise mint 1+2+4+8+16 = 31 visitors and open
+  // 31 IRC sessions to bring 16 subjects to the bench. Reusing one cohort
+  // also holds the SUBJECTS fixed across rungs, so N is the only thing that
+  // moves — which is what makes the response attributable to N.
+  const cohort = [];
+  for (let i = 0; i < Math.max(...N_LADDER); i++) {
+    cohort.push(await mintVisitor(`s1759-${poolSize}-${i}-${Date.now() % 100000}`));
+  }
+
   const rows: string[] = [];
 
   for (const n of N_LADDER) {
-    const visitors = await Promise.all(
-      Array.from({ length: n }, (_, i) =>
-        mintVisitor(`s1759-${poolSize}-${n}-${i}-${Date.now() % 100000}`),
-      ),
-    );
+    const visitors = cohort.slice(0, n);
 
     const sockets = visitors.map((v) => ({
       token: v.token,
