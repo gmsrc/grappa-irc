@@ -1,5 +1,5 @@
 import { render } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import ResizeHandle from "../ResizeHandle";
 
 // Helpers to fire PointerEvent-shaped events. jsdom's PointerEvent has
@@ -136,5 +136,69 @@ describe("ResizeHandle component", () => {
     const handle = aside.querySelector(".resize-handle") as HTMLElement;
     handle.dispatchEvent(makePointerEvent("pointerdown", { clientX: 256, button: 2 }));
     expect(document.documentElement.classList.contains("resize-dragging")).toBe(false);
+  });
+
+  // issue 1827 — mounting used to write the CSS var unconditionally, which
+  // defeated the per-tier CSS default exactly the way main.tsx's boot call
+  // did. A handle that has never been dragged must leave the var alone.
+  it("writes NO CSS var on mount when nothing is stored", () => {
+    mountInAside("left", { left: 0, right: 256 });
+    expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("");
+  });
+
+  describe("in the short-landscape tier", () => {
+    beforeEach(() => {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 844 });
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (q: string) => ({
+          matches: q.includes("max-height: 500px"),
+          media: q,
+          addEventListener() {},
+          removeEventListener() {},
+        }),
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(window, "matchMedia");
+    });
+
+    // The whole point of the issue: in this tier the drag used to write a var
+    // the grid did not reference, so the column never moved. It moves now.
+    it("moves the column on drag, within the tier's own bounds", () => {
+      const { aside } = mountInAside("left", { left: 0, right: 112 });
+      const handle = aside.querySelector(".resize-handle") as HTMLElement;
+      handle.dispatchEvent(makePointerEvent("pointerdown", { clientX: 112 }));
+      window.dispatchEvent(makePointerEvent("pointermove", { clientX: 180 }));
+      expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("180px");
+      window.dispatchEvent(makePointerEvent("pointerup", { clientX: 180 }));
+      expect(localStorage.getItem("cicchetto.sidebarWidth")).toBe("180");
+    });
+
+    it("floors at the tier constant, below the 160px desktop floor", async () => {
+      const { COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
+      const { aside } = mountInAside("left", { left: 0, right: 112 });
+      const handle = aside.querySelector(".resize-handle") as HTMLElement;
+      handle.dispatchEvent(makePointerEvent("pointerdown", { clientX: 112 }));
+      window.dispatchEvent(makePointerEvent("pointermove", { clientX: 10 }));
+      expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe(
+        `${COMPACT_MIN_WIDTH_PX}px`,
+      );
+    });
+
+    // The live drag, the persisted value and aria-valuemax all read the same
+    // bound. Before this they were three separate copies of `innerWidth / 2`
+    // and only one of them could be made tier-aware.
+    it("announces the tier cap as aria-valuemax, matching the drag clamp", () => {
+      const { aside } = mountInAside("left", { left: 0, right: 112 });
+      const handle = aside.querySelector(".resize-handle") as HTMLElement;
+      expect(handle.getAttribute("aria-valuemax")).toBe("211");
+
+      handle.dispatchEvent(makePointerEvent("pointerdown", { clientX: 112 }));
+      window.dispatchEvent(makePointerEvent("pointermove", { clientX: 9999 }));
+      expect(document.documentElement.style.getPropertyValue("--sidebar-width")).toBe("211px");
+    });
   });
 });

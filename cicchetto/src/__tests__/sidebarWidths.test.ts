@@ -8,6 +8,24 @@ const STORAGE_KEY_RIGHT = "cicchetto.membersWidth";
 const CSS_VAR_LEFT = "--sidebar-width";
 const CSS_VAR_RIGHT = "--members-width";
 
+// issue 1827 — the short-landscape tier predicate, mirrored from
+// themes/default.css. jsdom implements no matchMedia at all, so the desktop
+// cases below leave it UNDEFINED on purpose: that is the "not in the tier"
+// arm, and it also pins the module's absent-matchMedia guard.
+function enterShortLandscape(innerWidth: number): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: innerWidth });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (q: string) => ({
+      matches: q.includes("max-height: 500px"),
+      media: q,
+      addEventListener() {},
+      removeEventListener() {},
+    }),
+  });
+}
+
 describe("sidebarWidths module", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -20,6 +38,8 @@ describe("sidebarWidths module", () => {
       writable: true,
       value: 1024,
     });
+    // Undo any tier stub a previous test installed.
+    Reflect.deleteProperty(window, "matchMedia");
   });
 
   describe("getSidebarWidth()", () => {
@@ -125,11 +145,27 @@ describe("sidebarWidths module", () => {
   });
 
   describe("applySidebarWidthsFromStorage()", () => {
-    it("writes both CSS vars from defaults on cold load", async () => {
+    // issue 1827 — this replaces a test that asserted the OPPOSITE ("writes
+    // both CSS vars from defaults on cold load", pinning 256px/224px with
+    // localStorage empty). That behaviour is the defect: the var was written
+    // for EVERY user, so `var(--sidebar-width, 8rem)` in the short-landscape
+    // tier could never reach its 8rem fallback and a never-dragged operator
+    // got the 256px desktop rail in a tier built to prevent exactly that.
+    // Leaving the var unset is what lets each tier's own CSS default win,
+    // and it keeps those defaults in `rem` so they track --font-size.
+    it("writes NO CSS var on cold load, so the CSS default wins", async () => {
       const { applySidebarWidthsFromStorage } = await import("../lib/sidebarWidths");
       applySidebarWidthsFromStorage();
-      expect(document.documentElement.style.getPropertyValue(CSS_VAR_LEFT)).toBe("256px");
-      expect(document.documentElement.style.getPropertyValue(CSS_VAR_RIGHT)).toBe("224px");
+      expect(document.documentElement.style.getPropertyValue(CSS_VAR_LEFT)).toBe("");
+      expect(document.documentElement.style.getPropertyValue(CSS_VAR_RIGHT)).toBe("");
+    });
+
+    it("writes only the side that has a stored value", async () => {
+      localStorage.setItem(STORAGE_KEY_LEFT, "300");
+      const { applySidebarWidthsFromStorage } = await import("../lib/sidebarWidths");
+      applySidebarWidthsFromStorage();
+      expect(document.documentElement.style.getPropertyValue(CSS_VAR_LEFT)).toBe("300px");
+      expect(document.documentElement.style.getPropertyValue(CSS_VAR_RIGHT)).toBe("");
     });
 
     it("writes both CSS vars from stored values", async () => {
@@ -147,6 +183,57 @@ describe("sidebarWidths module", () => {
       const { applySidebarWidthsFromStorage } = await import("../lib/sidebarWidths");
       applySidebarWidthsFromStorage();
       expect(document.documentElement.style.getPropertyValue(CSS_VAR_LEFT)).toBe("400px");
+    });
+  });
+
+  // issue 1827 — the short-landscape tier (#319) used to pin its rails to
+  // fixed 8rem/7rem and ignore these vars outright, so the drag handle moved
+  // nothing. The rails are draggable in EVERY tier now; what the tier keeps
+  // is its own, TIGHTER pair of bounds, so a width chosen on a tall window
+  // cannot leak in and starve the centre.
+  describe("short-landscape tier bounds", () => {
+    it("keeps MIN_WIDTH_PX at 160 — the tier floor is a separate constant", async () => {
+      const { MIN_WIDTH_PX, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
+      expect(MIN_WIDTH_PX).toBe(160);
+      expect(COMPACT_MIN_WIDTH_PX).toBeLessThan(MIN_WIDTH_PX);
+    });
+
+    it("floors at the tier constant, not at the 160px desktop floor", async () => {
+      enterShortLandscape(844);
+      const { clampWidth, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
+      expect(clampWidth(10)).toBe(COMPACT_MIN_WIDTH_PX);
+    });
+
+    it("caps at a quarter of the viewport, so the centre keeps the bulk", async () => {
+      enterShortLandscape(844);
+      const { clampWidth, maxWidthPx } = await import("../lib/sidebarWidths");
+      expect(maxWidthPx()).toBe(211);
+      expect(clampWidth(9999)).toBe(211);
+      // Both rails at the cap still leave the centre at least half the width.
+      expect(844 - 2 * 211).toBeGreaterThanOrEqual(844 / 2);
+    });
+
+    it("clamps an already-stored wide value DOWN on entering the tier", async () => {
+      // Widened to 400px on a tall window, then the window goes short.
+      localStorage.setItem(STORAGE_KEY_LEFT, "400");
+      enterShortLandscape(844);
+      const { getSidebarWidth } = await import("../lib/sidebarWidths");
+      expect(getSidebarWidth("left")).toBe(211);
+    });
+
+    it("does not rewrite storage when it clamps a read down", async () => {
+      localStorage.setItem(STORAGE_KEY_LEFT, "400");
+      enterShortLandscape(844);
+      const { getSidebarWidth } = await import("../lib/sidebarWidths");
+      getSidebarWidth("left");
+      // Leaving the tier must restore the operator's desktop width.
+      expect(localStorage.getItem(STORAGE_KEY_LEFT)).toBe("400");
+    });
+
+    it("leaves a usable travel range between the tier floor and cap", async () => {
+      enterShortLandscape(844);
+      const { maxWidthPx, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
+      expect(maxWidthPx() - COMPACT_MIN_WIDTH_PX).toBeGreaterThan(100);
     });
   });
 });

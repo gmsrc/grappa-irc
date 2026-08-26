@@ -1,7 +1,10 @@
 import { type Component, onCleanup } from "solid-js";
 import {
+  clampWidth,
   getSidebarWidth,
-  MIN_WIDTH_PX,
+  getStoredSidebarWidth,
+  maxWidthPx,
+  minWidthPx,
   type SidebarSide,
   setSidebarWidth,
 } from "./lib/sidebarWidths";
@@ -67,11 +70,12 @@ const ResizeHandle: Component<Props> = (props) => {
       if (!aside) return;
       const r = aside.getBoundingClientRect();
       const raw = props.side === "left" ? clientX - r.left : r.right - clientX;
-      const clamped = Math.min(
-        Math.floor(window.innerWidth / 2),
-        Math.max(MIN_WIDTH_PX, Math.round(raw)),
-      );
-      document.documentElement.style.setProperty(CSS_VAR[props.side], `${clamped}px`);
+      // issue 1827 — `clampWidth`, not a second inlined copy of the bound.
+      // It is the SAME function `setSidebarWidth` applies on pointerup, which
+      // is what lets the comment below still promise that the persisted value
+      // equals the one the operator watched; and it is the only reason the
+      // short-landscape tier's tighter bounds reach the live drag at all.
+      document.documentElement.style.setProperty(CSS_VAR[props.side], `${clampWidth(raw)}px`);
     }
 
     function onMove(ev: PointerEvent) {
@@ -117,16 +121,32 @@ const ResizeHandle: Component<Props> = (props) => {
   // width even before the user drags. (main.tsx's
   // applySidebarWidthsFromStorage handles this on cold load; this is a
   // safety net for hot-reload paths that don't re-run main.tsx.)
-  const initial = getSidebarWidth(props.side);
-  document.documentElement.style.setProperty(CSS_VAR[props.side], `${initial}px`);
+  //
+  // issue 1827 — ONLY when there is a stored value. This used to write the
+  // var unconditionally, which defeated every per-tier CSS default exactly
+  // the way the boot call did; a handle that has never been dragged must
+  // leave the stylesheet's own fallback standing.
+  const stored = getStoredSidebarWidth(props.side);
+  if (stored !== null) {
+    document.documentElement.style.setProperty(CSS_VAR[props.side], `${stored}px`);
+  }
 
   // aria-valuenow tracks the current width so screen readers announce
   // the size change as the operator drags. role="separator" with
   // aria-orientation="vertical" requires valuenow/min/max for the
   // resizable-separator pattern (ARIA 1.2 §6.6.16).
-  const ariaValueNow = () => getSidebarWidth(props.side);
-  const ariaValueMax = () =>
-    typeof window === "undefined" ? 1000 : Math.floor(window.innerWidth / 2);
+  //
+  // issue 1827 — measure the owning aside rather than re-deriving from
+  // storage. With the per-tier default now living in CSS, storage does not
+  // know what a never-dragged rail renders at (8rem in the short-landscape
+  // tier, 16rem on the desktop shell), so deriving would announce a width
+  // the operator is not looking at. The rect is the resolved grid track,
+  // whichever arm produced it; the storage read stays as the fallback for
+  // pre-layout mounts, where the rect is 0.
+  const ariaValueNow = () => {
+    const measured = handleEl?.parentElement?.getBoundingClientRect().width ?? 0;
+    return measured > 0 ? Math.round(measured) : getSidebarWidth(props.side);
+  };
 
   return (
     // <hr> can't host pointer-drag interaction or custom CSS sizing;
@@ -145,8 +165,8 @@ const ResizeHandle: Component<Props> = (props) => {
       aria-orientation="vertical"
       aria-label={props.side === "left" ? "Resize sidebar" : "Resize members pane"}
       aria-valuenow={ariaValueNow()}
-      aria-valuemin={MIN_WIDTH_PX}
-      aria-valuemax={ariaValueMax()}
+      aria-valuemin={minWidthPx()}
+      aria-valuemax={maxWidthPx()}
       onPointerDown={onPointerDown}
     />
   );

@@ -1257,12 +1257,26 @@ html.overlay-open #root > div {
 /* Three-pane shell (P4-1) */
 
 /* UX-5 bucket BS — sidebar widths driven by CSS custom properties on
-   <html>, set by lib/sidebarWidths.ts at boot AND on drag. The fallbacks
-   (16rem / 14rem) match the pre-bucket literal values, so a fresh
-   visitor without localStorage gets the original layout. */
+   <html>, set by lib/sidebarWidths.ts on drag, and at boot for a side the
+   operator has already sized. A side never dragged has NO var, and this
+   fallback is what renders — see the no-var rule at the top of
+   sidebarWidths.ts (issue 1827).
+
+   issue 1827 — the fallbacks are `256px / 224px` and used to read
+   `16rem / 14rem`. That is a rewrite to PRESERVE what ships today, not a
+   change of it. Measured: sidebarWidths.ts wrote DEFAULT_PX (256 / 224) to
+   these vars on every cold load, so this arm never rendered and a fresh
+   visitor got 256 / 224 — while the literals here say 16rem / 14rem, which
+   at the default --font-size of 14px are 224 / 196. The two disagreed by
+   32 / 28px and the JS won every time. Now that the var is absent for a
+   fresh visitor this arm finally renders, so it has to carry the number
+   that was actually shipping, or the desktop shell would silently narrow.
+   The px also states the truth that these have not tracked --font-size
+   since UX-5 BS; the short-landscape tier below keeps `rem`, because there
+   the fallback is the tier's real default and it is meant to scale. */
 .shell {
   display: grid;
-  grid-template-columns: var(--sidebar-width, 16rem) 1fr var(--members-width, 14rem);
+  grid-template-columns: var(--sidebar-width, 256px) 1fr var(--members-width, 224px);
   grid-template-rows: 1fr;
   /* #205 — iPad standalone-PWA safe area. An iPad is WIDER than the
      768px mobile breakpoint in BOTH orientations, so `isMobile()` is
@@ -1385,10 +1399,31 @@ html.overlay-open #root > div {
    matchMedia signal to wire up (the #319 fix-direction's simpler arm). */
 @media (orientation: landscape) and (max-height: 500px) and (min-width: 769px) {
   .shell {
-    /* Slim rails; center (1fr) takes the rest. Overrides the drag-persisted
-       --sidebar-width / --members-width vars (not referenced here) so a
-       previously-widened desktop rail can't leak into the compact tier. */
-    grid-template-columns: 8rem 1fr 7rem;
+    /* Slim rails; center (1fr) takes the rest.
+
+       issue 1827 — this REFERENCES the drag vars now, where it used to
+       ignore them outright. The old comment here read "Overrides the
+       drag-persisted --sidebar-width / --members-width vars (not referenced
+       here) so a previously-widened desktop rail can't leak into the compact
+       tier", and the leak it named is real — but not referencing the vars
+       also meant the handles stayed mounted, kept painting `col-resize` and
+       kept accepting the drag while the column could not move. The ruling is
+       that a visible rail must be resizable, in every tier, with the shell's
+       height no longer a condition.
+
+       The leak is stopped where it is actually caused instead: the vars
+       carry a value already clamped to this tier's own tighter bounds
+       (COMPACT_MIN_WIDTH_PX, and a quarter of the viewport rather than a
+       half — see the clamp policy in lib/sidebarWidths.ts), so a rail
+       widened on a tall window clamps DOWN on the way in rather than
+       flooding the centre.
+
+       The `8rem` / `7rem` fallbacks are this tier's real defaults and are
+       what a never-dragged operator still gets, unchanged: the var is absent
+       until the first drag. They stay in `rem` on purpose — unlike the
+       desktop fallbacks above, these do track --font-size, which is the
+       behaviour this tier already had when the widths were literals. */
+    grid-template-columns: var(--sidebar-width, 8rem) 1fr var(--members-width, 7rem);
   }
 
   .shell.shell-no-members {
@@ -1398,8 +1433,14 @@ html.overlay-open #root > div {
        floors at the RailActions launcher's min-content, a few px over 7rem):
        a server window's `max-content` card would otherwise blow straight
        past the slim rails this compact tier exists to enforce, re-creating
-       the centre-starve inside the tier meant to prevent it. */
-    grid-template-columns: 8rem 1fr fit-content(7rem);
+       the centre-starve inside the tier meant to prevent it.
+
+       issue 1827 — the sidebar column takes the var for the same reason the
+       members-bearing arm above does: the left rail is visible here, so it
+       must be draggable. The `fit-content(7rem)` members cap is #605's and
+       is deliberately left alone — there is no members rail to drag in this
+       arm, so no dead affordance to cure. */
+    grid-template-columns: var(--sidebar-width, 8rem) 1fr fit-content(7rem);
   }
 }
 
