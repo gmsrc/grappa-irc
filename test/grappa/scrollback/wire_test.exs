@@ -129,7 +129,7 @@ defmodule Grappa.Scrollback.WireTest do
       wire = Wire.archive_entry(%{target: "#sniffo", kind: :channel, last_activity: 1})
 
       refute Map.has_key?(wire, :row_count)
-      assert Map.keys(wire) |> Enum.sort() == [:kind, :last_activity, :target]
+      assert Enum.sort(Map.keys(wire)) == [:kind, :last_activity, :target]
     end
 
     # An Elixir map pattern matches a SUBSET, so a caller still holding the

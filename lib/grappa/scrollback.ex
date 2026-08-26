@@ -1104,7 +1104,7 @@ defmodule Grappa.Scrollback do
     |> archive_target_spellings(network_id)
     |> Enum.group_by(fn {target, _} -> Identifier.canonical_target(target) end)
     |> Enum.reject(fn {key, _} -> key == "$server" or MapSet.member?(folded_active, key) end)
-    |> Enum.map(fn {_key, group} -> archive_entry(group) end)
+    |> Enum.map(fn {_, group} -> archive_entry(group) end)
     |> Enum.sort_by(& &1.last_activity, :desc)
   end
 

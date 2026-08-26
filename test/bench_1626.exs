@@ -101,12 +101,9 @@ defmodule Bench do
 
   import Ecto.Query
 
-  require Grappa.IRC.Identifier
+  alias Grappa.{IRC.Identifier, Repo, Scrollback.Message, Subject}
 
-  alias Grappa.IRC.Identifier
-  alias Grappa.Repo
-  alias Grappa.Scrollback.Message
-  alias Grappa.Subject
+  require Identifier
 
   @own_nick "vjt"
 
@@ -627,9 +624,7 @@ drain = fn drain, acc ->
   end
 end
 
-emitted =
-  drain.(drain, [])
-  |> Enum.filter(fn {q, _} -> String.starts_with?(q, ["SELECT", "WITH"]) end)
+emitted = Enum.filter(drain.(drain, []), fn {q, _} -> String.starts_with?(q, ["SELECT", "WITH"]) end)
 
 # CONTROL (known answer): answering in ONE statement is part of the
 # property, not a detail. Two statements under one snapshot would need a
