@@ -1035,8 +1035,17 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   the ADJACENCY to `#NNN`, not the sentence's meaning** — no `not`, `never`, `does not` or quotation
   disarms it. **Spell the number WITHOUT the `#`** (`issue 1767`) whenever the sentence must name it and
   must not close it.
-  🔍 **How to tell an auto-close from a human one:** a body-keyword close has **`commit_id: null`** and
-  lands **~2 s after `mergedAt`**; a commit-trailer close carries the commit id.
+  🔴🔴 **AND IT IS NOT ONLY THE PR BODY — A *COMMIT MESSAGE* PUSHED TO `main` FIRES THE SAME PARSER.
+  Measured the hard way: the commit that added THIS VERY RULE re-closed the issue**, because its own
+  message QUOTED the offending phrase to explain it (`19:28:38Z closed commit_id=8e7dfc40`, vs the
+  body-keyword close at `19:24:32Z commit_id=null`). **Quoting the trap sets it off.** So the rule
+  binds **PR bodies, commit messages, and any text that lands on the default branch** — and when you
+  must QUOTE the pattern, break it: write the keyword and the number **without an adjacent `#`**.
+  🔍 **How to tell the three closes apart:** body keyword ⇒ **`commit_id: null`**, ~2 s after
+  `mergedAt`; **commit message ⇒ `commit_id` IS the offending SHA** (that is how the second one was
+  caught); a human ⇒ neither, and you cannot prove it from the actor field at all.
+  ⚠️ **Do NOT force-push `main` to scrub a message that already landed** — rewriting the default
+  branch costs far more than the stale keyword. Reopen, and leave the message as the evidence.
   🔴 **`actor` says `vjt` either way — the Pi holds his token — so the actor field CANNOT tell you a
   human decided it.** Check the body for the pattern before concluding anyone ruled anything.
   ⚠️ **`gh pr edit --body-file` DIES on the classic-projects deprecation**; patch with
