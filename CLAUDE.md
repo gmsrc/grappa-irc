@@ -1029,7 +1029,13 @@ is due. Don't just look at todo.md.
   scripts, deploy, runtime data, monitoring).
 - **`docs/TESTING.md`**: how-to-run-tests runbook (every gate, e2e
   triage, gotchas).
-- **`docs/DESIGN_NOTES.md`**: chronological decision log.
+- **`docs/DESIGN_NOTES.md`**: chronological decision log — the CURRENT
+  month plus the undated preamble. Closed months are archived verbatim
+  in **`docs/design_notes/YYYY-MM.md`** (#1537) and indexed from the
+  top of the live file; new entries still append to the tail of
+  `DESIGN_NOTES.md`, never to an archive. A grep for an old ruling
+  needs both paths:
+  `grep -rn '<pattern>' docs/DESIGN_NOTES.md docs/design_notes/`.
 - **`docs/plans/*.md`, `docs/superpowers/plans/*.md`** — EPHEMERAL
   scratch plans. **Gitignored; never commit them.** A plan is working
   memory for ONE feature: write it, execute it, then DELETE it as part

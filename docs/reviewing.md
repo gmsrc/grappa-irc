@@ -3,7 +3,9 @@
 Three review dimensions in one document. Run together, produce one
 review file. Actionable findings only — not style nits. Check
 `CLAUDE.md` and `docs/DESIGN_NOTES.md` before flagging — some
-patterns are deliberate and the rationale is documented.
+patterns are deliberate and the rationale is documented. A rationale
+older than the current month lives in `docs/design_notes/YYYY-MM.md`
+(#1537), so grep both paths before calling something undocumented.
 
 **Trigger:** Enforced by `/start`. Codebase review due when ≥ 12
 sessions since last review OR > 2 weeks. Must run before new feature

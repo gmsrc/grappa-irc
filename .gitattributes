@@ -37,3 +37,20 @@
 # append-mostly. A PR that edits or reorders existing entries can interleave
 # oddly and must be checked by hand.
 docs/DESIGN_NOTES.md merge=union
+
+# The archived months (#1537) deliberately do NOT inherit that driver, and
+# the tempting move is to copy it here by inertia.
+#
+# Union buys conflict-free concurrent APPENDS by taking the additions from
+# both sides and never the deletions. Nothing appends to a closed month, so
+# on `docs/design_notes/*.md` the driver has no work it could do correctly
+# and exactly one it could do wrongly: a branch that predates a correction
+# to an archive would silently resurrect the corrected text — #1432's
+# failure mode, on files where nobody is pinning a numstat.
+#
+# `merge=text` and not a bare omission: unspecified is the built-in 3-way
+# only until someone's `merge.default` says otherwise (gitattributes(5)),
+# and `-merge` is the opposite of what is wanted — it means "take our side
+# and declare a conflict", the binary-file semantics. Two people editing
+# frozen history at once SHOULD get ordinary conflict markers.
+docs/design_notes/*.md merge=text

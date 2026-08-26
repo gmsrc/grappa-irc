@@ -119,10 +119,16 @@ sentinel_refusal_claims() {
 @test "#1592 nothing near the sentinel claims a refusal except the measured hyphen" {
     # TWO exclusions, both deliberate.
     #
-    # docs/DESIGN_NOTES.md: the chronological log. Its #538 entry legitimately
-    # records what was believed then, and the #1592 entry quotes the false
-    # claim in order to retract it. Rewriting either would be falsifying the
-    # record, not fixing a doc.
+    # The chronological log. Its #538 entry legitimately records what was
+    # believed then, and the #1592 entry quotes the false claim in order to
+    # retract it. Rewriting either would be falsifying the record, not fixing
+    # a doc.
+    #
+    # Since #1537 that log is TWO paths, not one: the closed months live in
+    # docs/design_notes/YYYY-MM.md, moved verbatim, and the July archive
+    # carries one of the sentences this detector hunts. Excluding only the
+    # basename turned an archived history entry into a finding the moment it
+    # moved — the exclusion follows the log, not the filename.
     #
     # This file: it quotes the retracted sentence in its header and feeds it
     # verbatim to the positive control below. A detector that may not name
@@ -137,7 +143,8 @@ sentinel_refusal_claims() {
             --include='*.md' --include='*.exs' --include='*.sh' --include='*.yml' \
             --include='*.bats' --include='PKGBUILD' --include='.SRCINFO' --include='*.ts' \
             . --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=_build \
-            --exclude-dir=deps --exclude='DESIGN_NOTES.md' \
+            --exclude-dir=deps --exclude-dir=design_notes \
+            --exclude='DESIGN_NOTES.md' \
             --exclude="$(basename "$BATS_TEST_FILENAME")"
     )
     # Not a formality: an empty list would make the assertion below hold

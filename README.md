@@ -85,7 +85,7 @@ flowchart LR
 - REST is a thin read/write layer: writes (send, join, part) translate to upstream IRC commands; reads return typed JSON.
 - New events push over Phoenix Channels — one socket per browser tab, many topic subscriptions per socket. `phoenix.js` handles reconnect + replay; clients catch up via paginated scrollback.
 
-Supervision-tree ordering and the load-bearing invariants live in `CLAUDE.md`; the chronological decision log is `docs/DESIGN_NOTES.md`.
+Supervision-tree ordering and the load-bearing invariants live in `CLAUDE.md`; the chronological decision log is `docs/DESIGN_NOTES.md`, with the closed months archived verbatim under `docs/design_notes/`.
 
 ## Design principles
 
