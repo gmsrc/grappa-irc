@@ -65824,3 +65824,123 @@ that both its engines honour `font-size-adjust: cap-height`; that Safari on a
 phone does too is inference from the same WebKit lineage, not a measurement.
 Should it turn out otherwise there, the fallback path is the one already
 described and its worst case is 4%.
+<!-- entry #1759a -->
+
+---
+
+## 2026-08-26 — #1759a: the join door was half identity, and the fix is a constant
+
+The pool-saturation half of #1759 asks who FILLS the queue. The issue's own
+frame census answers it for the per-row push — 412 of 413 dropped queries were
+badge arithmetic — and #1768 already bounded that path with
+`WindowCounts.Pusher.Coalescer`. Two facts reframe what was left.
+
+**The coalescer has never run in production.** `git cat-file -e
+v1.3.1:lib/grappa/window_counts/pusher/coalescer.ex` answers *exists on disk,
+but not in `v1.3.1`* — and 1.3.1 is the release the jail was running in BOTH
+incidents. #1768 landed 2026-08-25, the same day as the 00:15 recurrence and in
+response to its measurement. So the principal cure for this half exists, is
+merged, and is a DEPLOY decision, exactly like #1715 on the other half.
+
+**The badge math has three doors, and only two were bounded.** `/me` costs a
+constant 2 queries for any window count (`bulk_snapshot/4`, #396); the per-row
+push is O(distinct windows) per window (#1768); the per-channel JOIN reply ran
+a full `WindowCounts.snapshot/7` per join, behind neither. It is the door that
+fires at RECONNECT — `cicchetto/src/lib/socket.ts` records that phoenix.js
+re-joins every held topic after a socket drop — which is the instant after a
+saturation, when the pool has least to give.
+
+### What the measurement said, against what reading it suggested
+
+`GrappaWeb.JoinSeedCostTest` counts `[:grappa, :repo, :query]` around real
+channel joins. A live join cost **11 queries**, and only five of them were
+arithmetic. **Six were one `(subject, network)` pair resolved three times** in
+the same join: `canonicalize_topic/1`, `join_reply/1`, and the after-join
+`push_channel_snapshot/4` each resolved it from scratch. Half the door was
+identity, not counting — which reading the code had not shown, and is why the
+number came first.
+
+`channel_context/1` now resolves the pair ONCE in `join/3` and threads it to
+all four legs (the fourth is `assign_presence_suppression/4`'s own-nick
+carve-out). It is carried as `{:ok, {subject, network}} | :error` rather than
+unwrapped, so every leg keeps the fall-through it already had — `:ascii`, a
+zero snapshot, `nil`, `:ok` — instead of a shared one invented here.
+
+### 🔴 This moves the CONSTANT, not the LAW
+
+Measured on the live fixture at three W, before and after:
+
+| W | before | after |
+|---|---|---|
+| 1 | 12 | 8 |
+| 4 | 45 | 29 |
+| 8 | 89 | 57 |
+
+`11·W + 1` becomes `7·W + 1`. The `+1` is the fixture's own
+`Networks.mark_registered/1` on the 001, which does not scale and drops out of
+the per-join delta. The exponent does not move: **W full snapshots remain W
+full snapshots**, and the reconnect loop that re-feeds itself is still O(W),
+1.57× slower to arrive. Shipped as a declared MITIGATION. #1759 is NOT closed
+by it.
+
+### Why `bulk_snapshot/4` cannot be the fix — the mechanism, not the analogy
+
+The obvious move is to route the join door through the primitive that makes
+`/me` flat. It does not fit, and the reason is not ergonomic. `/me`'s O(1)
+comes from `ReadCursor.bulk_unread_split/3` asking every window in ONE grouped
+statement; the GROUP BY is what buys the property. A join reply is a
+single-window question arriving in its own WS frame, in its own channel
+process — **there is no second window in scope to group with**. The input that
+makes the primitive O(1) does not exist at that door. Measured: at W=8 it
+answers for all eight at a cost of 2, and no arity asks it for one. Routing
+each join there would cut badge reads 4 → 2 while making every call compute
+the whole account and discard all but one window — O(W²) of row work across
+the storm.
+
+Nor does the socket rescue it, though the locality is real. phoenix.js issues
+all W rejoins in one synchronous loop (`onConnOpen` → `stateChangeCallbacks.
+open.forEach`), and every frame of one connection does enter
+`Phoenix.Socket.__in__/2` in the same transport process. But `handle_in/4`
+takes ONE frame and must return THAT frame's reply: two joins are sequential
+calls, never a shared scope. What exists is a burst in a mailbox. Turning it
+into a GROUP BY input means holding the first W−1 replies until the last
+arrives, and W is unknowable — the client never announces how many topics it
+will re-join — so it would be a timeout batch, adding latency to every join
+ACK including the single-join case. This is a property of the API contract,
+not a magnitude, which is why it is settled by reading and not by measuring.
+
+### What was NOT established
+
+The distribution of the incident's frames across windows is still unmeasured
+(#1768's own caveat), and this entry adds no per-channel data. The join storm
+is not shown to have HAPPENED in either incident: at `00:15:24.941` the logger
+was in `:drop` mode, so the verdict that closed the reporter's socket may never
+have reached disk, and no inference is built on its absence. A second plausible
+amplifier is READ and NOT measured: `Grappa.TaskSupervisor` is started with no
+`max_children`, so the coalescer's flush fan-out is bounded by O(windows) — a
+bound unrelated to `pool_size: 10`. And the `user_settings` row read twice per
+join is the lever #1768 named and deliberately left; it is still here, still
+deliberately.
+
+One race is accepted rather than removed: the after-join leg now uses the pair
+resolved at join time, so a user deleted in the microseconds between the two
+legs is served from the pre-deletion struct instead of degrading to `:error`.
+The loser of that race is a snapshot pushed onto a socket already being torn
+down.
+
+### Two instrument faults caught, both of which would have shipped a lie
+
+`GrappaWeb.BootCostTest`'s telemetry handler filters on `self()`, which is
+exact for a controller. Copied here it reports ZERO, because
+`Phoenix.ChannelTest` runs `join/3` in the spawned channel process — a filtered
+count is indistinguishable from "this door is already free". And the arrival
+ORDER of sources is not deterministic: the session process emits into the same
+window, and `network_credentials` moved from position 9 to position 2 between
+two runs of one test, so the pin is a TALLY and the per-join figure is a DELTA
+between two W, which cancels fixture-constant noise without a sleep or a retry.
+
+The same class killed a third measurement before it was taken. Asking a
+ChannelTest whether the W joins of a reconnect share a transport process
+answers TRUE by construction: `Phoenix.Test.ChannelTest` assigns
+`transport_pid: self()`. An instrument that cannot fail earns no green, so that
+question is recorded as unmeasured rather than answered.
