@@ -102,6 +102,37 @@ async function cdpTap(cdp: CDPSession, x: number, y: number): Promise<void> {
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 
+// Double-tap to the 2× toggle, retried up to four times.
+//
+// A bounded retry rather than one attempt, and it is not a timeout in disguise:
+// the pairing window is 300ms of WALL CLOCK, and a loaded CI box can miss it
+// between two round trips. A missed attempt leaves the scale AT 1 — the toggle
+// only fires when the pair lands — so the loop cannot overshoot into a zoom-out,
+// and the wait between attempts is the window itself, which is what makes two
+// attempts unable to pair with each other. The caller asserts the scale
+// afterwards, so a loop that never lands is a red and not a silent skip.
+//
+// `tap` is the engine's own tap verb in both projects: CDP on chromium,
+// `page.touchscreen.tap` (`Input.dispatchTapEvent`) on webkit, which is the ONE
+// touch verb Playwright's WebKit backend exposes.
+async function zoomByDoubleTap(
+  page: Page,
+  cdp: CDPSession | null,
+  x: number,
+  y: number,
+): Promise<void> {
+  const tap = async (): Promise<void> => {
+    if (cdp === null) await page.touchscreen.tap(x, y);
+    else await cdpTap(cdp, x, y);
+  };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if ((await zoomState(page)).scale > 1) return;
+    await tap();
+    await tap();
+    await page.waitForTimeout(DOUBLE_TAP_MS + 100);
+  }
+}
+
 // Drag one finger from (x, y) upward by `dy`, in steps, through the browser's
 // own gesture recogniser.
 async function cdpDragUp(
@@ -194,44 +225,73 @@ test("#213 — a synthesized two-finger pinch scales the modal image (chromium)"
   expect(scaledUp).toBeGreaterThan(1.5);
 });
 
-test("#1805 — a ONE-finger touchmove on the modal image is NOT claimed (chromium)", async ({
+test("#1805 — a ONE-finger touchmove is claimed at fit and released once zoomed (chromium)", async ({
   page,
 }) => {
   test.slow();
-  const { img } = await openImageViewer(page);
+  const { img, scroller } = await openImageViewer(page);
+  const cdp = await touchPipeline(page);
 
-  // Until #1805 EVERY cancelable touchmove was preventDefault'd, which is what
-  // kept the browser from scrolling. `dispatchEvent` returns false iff a
-  // listener called preventDefault — a JS-level fact independent of
-  // `touch-action`, so it is deterministic in chromium even though a synthetic
-  // event cannot drive a real pixel scroll.
+  // `dispatchEvent` returns false iff a listener called preventDefault — a
+  // JS-level fact independent of `touch-action`, deterministic in chromium even
+  // though a synthetic event cannot drive a real pixel scroll.
   //
-  // Both branches in one evaluate, because the interesting assertion is the
-  // CONTRAST: two fingers still ours, one finger the browser's. A spec that
-  // only checked the one-finger case would go green on a component that had
-  // stopped claiming anything at all, pinch included.
-  const claims = await img.evaluate((el) => {
-    const touch = (x: number, id: number) =>
-      new Touch({ identifier: id, target: el, clientX: x, clientY: 200 });
-    const fire = (type: "touchstart" | "touchmove", touches: Touch[]): boolean =>
-      el.dispatchEvent(
-        new TouchEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          touches,
-          targetTouches: touches,
-          changedTouches: touches,
-        }),
-      );
-    fire("touchstart", [touch(200, 1)]);
-    const oneFinger = !fire("touchmove", [touch(260, 1)]);
-    fire("touchstart", [touch(150, 1), touch(250, 2)]);
-    const twoFingers = !fire("touchmove", [touch(100, 1), touch(300, 2)]);
-    return { oneFinger, twoFingers };
-  });
+  // 🔴 The one-finger answer is DIFFERENT at fit and when zoomed, and the first
+  // draft of this spec asserted "never claimed" and went red on the real stack.
+  // It was the spec that was wrong. At fit the drag IS still claimed, by
+  // `overlayScrollLock`'s document-level touchmove handler (#219): it walks the
+  // gesture target's ancestors and lets the gesture through only when it finds
+  // an ancestor that is genuinely scrollable — `overflow: auto` AND
+  // `scrollHeight > clientHeight`. At fit the sizer is zero, so nothing
+  // overflows, so nothing is scrollable, so the page is held still. That is the
+  // behaviour #219 exists for and #1805 must not break.
+  //
+  // Which makes the pair below the real contract, and neither half alone says
+  // it: the pan is released EXACTLY when there is something to pan, and the two
+  // mechanisms compose through the lock's overflow test rather than by anyone
+  // knowing about anyone.
+  const probe = () =>
+    img.evaluate((el) => {
+      const touch = (x: number, id: number) =>
+        new Touch({ identifier: id, target: el, clientX: x, clientY: 200 });
+      const fire = (type: "touchstart" | "touchmove", touches: Touch[]): boolean =>
+        el.dispatchEvent(
+          new TouchEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            touches,
+            targetTouches: touches,
+            changedTouches: touches,
+          }),
+        );
+      fire("touchstart", [touch(200, 1)]);
+      const oneFinger = !fire("touchmove", [touch(260, 1)]);
+      fire("touchstart", [touch(150, 1), touch(250, 2)]);
+      const twoFingers = !fire("touchmove", [touch(100, 1), touch(300, 2)]);
+      return { oneFinger, twoFingers };
+    });
 
-  expect(claims.oneFinger).toBe(false);
-  expect(claims.twoFingers).toBe(true);
+  const atFit = await probe();
+  expect(atFit.oneFinger).toBe(true);
+  expect(atFit.twoFingers).toBe(true);
+
+  // Longer than the pairing window, so the taps below cannot pair with the
+  // synthetic touchstart above — the protocol's own 300ms, not a guess.
+  await page.waitForTimeout(DOUBLE_TAP_MS + 100);
+  const box = await scroller.boundingBox();
+  if (box === null) throw new Error("scroller has no box");
+  await zoomByDoubleTap(page, cdp, box.x + box.width / 2, box.y + box.height / 2);
+
+  // PRECONDITION: without real overflow the lock would still (correctly) claim
+  // the drag, and the assertion below would be measuring the absence of a zoom.
+  const zoomed = await zoomState(page);
+  expect(zoomed.scale).toBeGreaterThan(1.5);
+  expect(zoomed.scrollHeight).toBeGreaterThan(zoomed.clientHeight + 50);
+
+  await page.waitForTimeout(DOUBLE_TAP_MS + 100);
+  const whenZoomed = await probe();
+  expect(whenZoomed.oneFinger).toBe(false);
+  expect(whenZoomed.twoFingers).toBe(true);
 });
 
 test("#1805 — a real one-finger drag moves the visible portion of the zoomed image (chromium)", async ({
@@ -246,17 +306,7 @@ test("#1805 — a real one-finger drag moves the visible portion of the zoomed i
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
 
-  // Double-tap to 2×. Bounded retry rather than one attempt: the pairing window
-  // is 300ms of wall clock and a loaded CI box can miss it. A missed attempt
-  // leaves the scale AT 1, so the loop cannot overshoot, and the wait between
-  // attempts is the window itself so two attempts can never pair with each
-  // other.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if ((await zoomState(page)).scale > 1) break;
-    await cdpTap(cdp, cx, cy);
-    await cdpTap(cdp, cx, cy);
-    await page.waitForTimeout(DOUBLE_TAP_MS + 100);
-  }
+  await zoomByDoubleTap(page, cdp, cx, cy);
 
   // PRECONDITION, and the load-bearing half of #1805: a CSS transform does not
   // change layout, so without the sizer the scaled image would create no
@@ -317,15 +367,8 @@ test("@webkit #1805 — zooming creates a real scrollable area, and scrolling mo
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
 
-  // Real taps: `page.touchscreen.tap` is `Input.dispatchTapEvent`, which is the
-  // ONE touch verb Playwright's WebKit backend exposes. Same bounded-retry
-  // reasoning as the chromium leg.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if ((await zoomState(page)).scale > 1) break;
-    await page.touchscreen.tap(cx, cy);
-    await page.touchscreen.tap(cx, cy);
-    await page.waitForTimeout(DOUBLE_TAP_MS + 100);
-  }
+  // Real taps, via the ONE touch verb Playwright's WebKit backend exposes.
+  await zoomByDoubleTap(page, null, cx, cy);
 
   const zoomed = await zoomState(page);
   expect(zoomed.scale).toBeGreaterThan(1.5);
@@ -333,15 +376,28 @@ test("@webkit #1805 — zooming creates a real scrollable area, and scrolling mo
   // alone leaves scrollHeight === clientHeight and there is nothing to pan.
   expect(zoomed.scrollHeight).toBeGreaterThan(zoomed.clientHeight + 50);
 
+  // PRE-STATE, asserted rather than assumed: `dy === -scrollTop` is the whole
+  // geometric invariant (a 0 0 transform-origin puts the painted top at minus
+  // the scroll offset), and the double-tap has ALREADY scrolled — it anchors to
+  // the tapped point, which was the centre. The first draft of this spec
+  // assumed the pre-state was zero and asserted a 60px displacement against it;
+  // it went red by 128px, which is exactly the half-box the anchoring had
+  // correctly applied. The spec was wrong and the anchoring was right, so the
+  // fix is to measure the DELTA and to pin the invariant at both ends.
+  const before = await paintedOffset(page);
+  expect(Math.abs(before.dy + before.scrollTop)).toBeLessThan(2);
+
   // The DRAG cannot be driven here (see the header), so what is asserted is the
   // consequence a drag would produce: the scroller is real, and moving it moves
   // the painted picture rather than leaving it pinned under a clipped box.
-  const before = await paintedOffset(page);
-  await page.evaluate(() => {
+  const target = before.scrollTop + 60;
+  await page.evaluate((to) => {
     const el = document.querySelector(".media-viewer-zoom-scroller");
-    if (el !== null) el.scrollTop = 60;
-  });
+    if (el !== null) el.scrollTop = to;
+  }, target);
+
   const after = await paintedOffset(page);
-  expect(after.scrollTop).toBe(60);
-  expect(Math.abs(after.dy - (before.dy - 60))).toBeLessThan(2);
+  expect(after.scrollTop).toBe(target);
+  expect(Math.abs(after.dy + after.scrollTop)).toBeLessThan(2);
+  expect(after.dy).toBeLessThan(before.dy - 50);
 });
