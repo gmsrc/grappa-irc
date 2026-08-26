@@ -1,6 +1,7 @@
 import { postJoin, postPart } from "../api";
 import { setQuery } from "../channelDirectory";
 import { canonicalChannel } from "../channelKey";
+import { isChannelName } from "../chantypes";
 import { networkIdBySlug } from "../networks";
 import { canonicalQueryNick, openQueryWindowState } from "../queryWindows";
 import { selectedChannel, setSelectedChannel } from "../selection";
@@ -75,6 +76,48 @@ export const joinCommand: CommandHandler<"join"> = async (cmd, ctx) => {
     kind: "channel",
   });
   return { ok: true };
+};
+
+/**
+ * #1796 — `/cycle [#chan] [message]`: part then join, and nothing else.
+ * irssi's CYCLE, and channel-scoped like irssi's (the NETWORK bounce is
+ * `/reconnect`, in `commands/network.ts`).
+ *
+ * Composed from the two handlers above rather than from two `post*` calls, so
+ * a step either verb grows later is inherited here instead of being forgotten
+ * here. The target is resolved ONCE and passed to both legs explicitly, which
+ * is also what stops `part`'s own `?? ctx.submittedFrom` fallback from
+ * answering a second time for the JOIN.
+ *
+ * SEQUENTIAL: the JOIN runs only if the PART resolved. A part that failed
+ * leaves the operator in the channel, so rejoining would be a JOIN to a
+ * channel they never left. Same rule, same reason, as `/reconnect`'s two legs.
+ *
+ * The guard has no `/part` twin and needs one here: `/part` in a non-channel
+ * window merely posts a DELETE the server refuses, whereas `/cycle`'s second
+ * leg would JOIN whatever the window is called — manufacturing a channel out
+ * of a peer nick or `$server`. Same family as the #1208 phantom, one layer
+ * down, so it is refused before either leg rather than after the first.
+ *
+ * FOCUS follows the join, inherited from `joinCommand` and wanted twice over:
+ * for `/cycle #other` it is what `/join #other` already does, and for the bare
+ * form it is the repair for a yank — parting the focused window drops it from
+ * `channelsBySlug`, and selection.ts's close-window picker (UX-4 bucket E)
+ * moves focus off it before the JOIN puts it back.
+ *
+ * NO key: irssi's grammar has no slot for one (`CYCLE [<channel>]
+ * [<message>]`), so a `+k` channel cannot be cycled from here. Named rather
+ * than papered over — `/part` + `/join #chan <key>` is the two-command form
+ * that still works.
+ */
+export const cycleCommand: CommandHandler<"cycle"> = async (cmd, ctx) => {
+  const target = cmd.channel ?? ctx.submittedFrom;
+  if (!isChannelName(target, ctx.sigils())) {
+    return { error: `/cycle: ${target} is not a channel — use /cycle <#channel> [message]` };
+  }
+  const parted = await partCommand({ kind: "part", channel: target, reason: cmd.reason }, ctx);
+  if ("error" in parted) return parted;
+  return await joinCommand({ kind: "join", channels: [target], key: null }, ctx);
 };
 
 /**

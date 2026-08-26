@@ -18,15 +18,18 @@ import { DEFAULT_CHANTYPES, isChannelName } from "./chantypes";
 // verb, message}` so the UI can render an inline error like
 // "unknown command: /whois" without losing what the user typed.
 //
-// T32 verbs — /quit /disconnect /connect:
+// T32 verbs — /quit /disconnect /connect, and #1796's /reconnect:
 //
-// `/disconnect [network] [reason]` heuristic: the first whitespace-
-// delimited token is ALWAYS treated as the network slug (no state
-// lookup, no ambiguity). Bare `/disconnect` (no args) returns
-// `network: null` so the handler resolves the active-window's network.
-// If the user wants a reason without specifying a network they must use
-// `/disconnect <activenet> reason` explicitly. This keeps the parser
-// pure (zero state dependency).
+// `/disconnect [network] [reason]` and `/reconnect [network] [reason]` share
+// ONE arm (`parseNetworkReason`) — see the comment there for the
+// first-token-is-always-the-slug heuristic and why it is not the sigil one.
+//
+// #1796 — the two BOUNCE verbs are scoped to different things, deliberately:
+// `/reconnect` bounces a NETWORK (park then unpark), `/cycle` bounces a
+// CHANNEL (part then join). That is irssi's own split — `RECONNECT <tag>` vs
+// `CYCLE [<channel>] [<message>]` — and cic, being irssi-shaped, must not
+// invert an irssi verb. `/cycle` shares `/part`'s arm (`parseChannelReason`),
+// which is what keeps the #1208 sigil rule from having to be remembered twice.
 //
 // S3.4 — /away verb:
 //
@@ -110,6 +113,13 @@ export type SlashCommand =
   | { kind: "amsg"; body: string }
   | { kind: "join"; channels: string[]; key: string | null }
   | { kind: "part"; channel: string | null; reason: string | null }
+  // #1796 — /cycle [<channel>] [<message>]: part then join, and nothing else.
+  // irssi's CYCLE, spelled the same way and scoped the same way (a CHANNEL,
+  // never a network — the network bounce is `reconnect` below). It carries
+  // `part`'s field names because the message IS the PART message and the two
+  // verbs share one parser arm; the operator-facing grammar keeps irssi's
+  // `[<message>]` spelling.
+  | { kind: "cycle"; channel: string | null; reason: string | null }
   | { kind: "topic-show"; channel: string | null }
   | { kind: "topic-set"; channel: string | null; text: string }
   | { kind: "topic-clear"; channel: string | null }
@@ -132,6 +142,12 @@ export type SlashCommand =
   | { kind: "quit"; reason: string | null }
   | { kind: "disconnect"; network: string | null; reason: string | null }
   | { kind: "connect"; network: string }
+  // #1796 — /reconnect [<network>] [<reason>]: park then unpark ONE network,
+  // the round trip `/disconnect` + `/connect` used to cost two commands (the
+  // second of which made the operator type a slug the client already knows).
+  // irssi's RECONNECT is network-scoped, so ours is too; the grammar is
+  // `disconnect`'s, verbatim, via the same parser arm.
+  | { kind: "reconnect"; network: string | null; reason: string | null }
   | { kind: "away"; action: "set"; reason: string }
   | { kind: "away"; action: "unset" }
   | { kind: "op"; nicks: string[] }
@@ -356,6 +372,66 @@ function parsePing(rest: string): SlashCommand {
   return { kind: "ping", target };
 }
 
+// #1208/#1796 — the `[<channel>] [<reason>]` grammar, shared by /part and its
+// round trip /cycle.
+//
+// #1208 — `/part <reason>` is the common form and it MUST NOT eat its first
+// word as a target. Pre-fix the first token was the channel unconditionally, so
+// `/part non trovo utili le bestemmie` issued a DELETE against a channel named
+// "non" and the operator was told "The request was malformed." about a name
+// they never typed.
+//
+// The sigil resolves the ambiguity, as it does in every other IRC client: a
+// first token carrying one of the network's advertised sigils (#1255) is the
+// target, anything else is the start of the reason and the target falls back to
+// the current window (in the handler).
+//
+// Deliberately NOT symmetric with `join`: /join auto-prepends `#` to a bare
+// name because a JOIN has no second meaning for its first token. /part does,
+// and so does /cycle, so the same sugar here is precisely what manufactures the
+// phantom channel.
+//
+// #1796 — ONE function rather than a second copy for /cycle, and that is the
+// point: the rule above is a rule about a grammar, not about a verb, and a
+// copy is how `/cycle brb` would have grown its own phantom `brb` channel while
+// every /part test stayed green.
+type ChannelReasonKind = "part" | "cycle";
+
+function parseChannelReason(
+  kind: ChannelReasonKind,
+  rest: string,
+  chantypes: readonly string[],
+): SlashCommand {
+  if (rest === "") return { kind, channel: null, reason: null };
+  const sp = rest.search(/\s/);
+  const first = sp === -1 ? rest : rest.slice(0, sp);
+  if (!isChannelName(first, chantypes)) return { kind, channel: null, reason: rest };
+  if (sp === -1) return { kind, channel: first, reason: null };
+  return { kind, channel: first, reason: rest.slice(sp + 1).trim() };
+}
+
+// T32/#1796 — the `[<network>] [<reason>]` grammar, shared by /disconnect and
+// /reconnect.
+//
+// The first whitespace-delimited token is ALWAYS the network slug (no state
+// lookup, no ambiguity). A bare form returns `network: null` so the handler
+// resolves the active window's network. A user who wants a reason without
+// naming a network must spell the network out (`/disconnect <activenet> ...`).
+// This keeps the parser pure (zero state dependency).
+//
+// NOT the sigil heuristic above, and the asymmetry is deliberate: a network
+// slug wears no sigil, so there is nothing to disambiguate it with. Sharing one
+// arm between the two network verbs is what keeps an operator from getting two
+// different answers to the same first word.
+type NetworkReasonKind = "disconnect" | "reconnect";
+
+function parseNetworkReason(kind: NetworkReasonKind, rest: string): SlashCommand {
+  if (rest === "") return { kind, network: null, reason: null };
+  const sp = rest.search(/\s/);
+  if (sp === -1) return { kind, network: rest, reason: null };
+  return { kind, network: rest.slice(0, sp), reason: rest.slice(sp + 1).trim() };
+}
+
 // Dispatch table: verb (lowercased) → handler(verb, rest) → SlashCommand.
 // Every registered verb must appear here; unknown verbs produce {kind: "error"}.
 // #1255 — handlers receive the network's advertised channel sigils as DATA,
@@ -432,29 +508,13 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     return { kind: "join", channels, key };
   },
 
-  part: (_verb, rest, chantypes) => {
-    // #1208 — `/part <reason>` is the common form and it MUST NOT eat its
-    // first word as a target. Pre-fix the first token was the channel
-    // unconditionally, so `/part non trovo utili le bestemmie` issued a
-    // DELETE against a channel named "non" and the operator was told "The
-    // request was malformed." about a name they never typed.
-    //
-    // The sigil resolves the ambiguity, as it does in every other IRC
-    // client: a first token carrying one of the network's advertised sigils
-    // (#1255) is the target, anything else is the start of the reason and
-    // the target falls back to the current window (in compose.ts).
-    //
-    // Deliberately NOT symmetric with `join` above: /join auto-prepends `#`
-    // to a bare name because a JOIN has no second meaning for its first
-    // token. /part does, so the same sugar here is precisely what
-    // manufactures the phantom channel.
-    if (rest === "") return { kind: "part", channel: null, reason: null };
-    const sp = rest.search(/\s/);
-    const first = sp === -1 ? rest : rest.slice(0, sp);
-    if (!isChannelName(first, chantypes)) return { kind: "part", channel: null, reason: rest };
-    if (sp === -1) return { kind: "part", channel: first, reason: null };
-    return { kind: "part", channel: first, reason: rest.slice(sp + 1).trim() };
-  },
+  // The #1208 sigil rule lives on `parseChannelReason` — read it there, not
+  // here, and add nothing to this arm that /cycle should not inherit.
+  part: (_verb, rest, chantypes) => parseChannelReason("part", rest, chantypes),
+
+  // #1796 — /cycle is /part's round trip, so it is /part's grammar. The
+  // handler runs the second leg (the JOIN); the parser knows nothing about it.
+  cycle: (_verb, rest, chantypes) => parseChannelReason("cycle", rest, chantypes),
 
   topic: (_verb, rest, chantypes) => {
     // Context-aware /topic (issue #23):
@@ -563,16 +623,13 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
 
   quit: (_verb, rest) => ({ kind: "quit", reason: rest === "" ? null : rest }),
 
-  disconnect: (_verb, rest) => {
-    if (rest === "") return { kind: "disconnect", network: null, reason: null };
-    const sp = rest.search(/\s/);
-    if (sp === -1) return { kind: "disconnect", network: rest, reason: null };
-    return {
-      kind: "disconnect",
-      network: rest.slice(0, sp),
-      reason: rest.slice(sp + 1).trim(),
-    };
-  },
+  disconnect: (_verb, rest) => parseNetworkReason("disconnect", rest),
+
+  // #1796 — the round trip of `disconnect` + `connect`, as ONE verb. It takes
+  // `disconnect`'s grammar and not `connect`'s: the bare form must work, and
+  // the reason must have somewhere to go. `connect` keeps its slug requirement
+  // untouched.
+  reconnect: (_verb, rest) => parseNetworkReason("reconnect", rest),
 
   connect: (verb, rest) => {
     const [network] = tokens(rest);

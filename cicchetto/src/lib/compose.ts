@@ -22,7 +22,7 @@ import {
   umodeTargetViewCommand,
   umodeViewCommand,
 } from "./commands/mode";
-import { connectCommand } from "./commands/network";
+import { connectCommand, reconnectCommand } from "./commands/network";
 import {
   banCommand,
   deopCommand,
@@ -63,7 +63,13 @@ import {
   recoverCommand,
 } from "./commands/session";
 import { topicClearCommand, topicSetCommand, topicShowCommand } from "./commands/topic";
-import { joinCommand, listCommand, partCommand, queryCommand } from "./commands/window";
+import {
+  cycleCommand,
+  joinCommand,
+  listCommand,
+  partCommand,
+  queryCommand,
+} from "./commands/window";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
@@ -815,6 +821,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = await partCommand(cmd, ctx);
           break;
         }
+        // #1796 — the CHANNEL bounce. Its network sibling is `reconnect`.
+        case "cycle": {
+          result = await cycleCommand(cmd, ctx);
+          break;
+        }
         case "topic-show":
           return await topicShowCommand(cmd, ctx);
         case "topic-set": {
@@ -929,6 +940,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         }
         case "connect": {
           result = await connectCommand(cmd, ctx);
+          break;
+        }
+        // #1796 — the NETWORK bounce: the two arms above, as one verb.
+        case "reconnect": {
+          result = await reconnectCommand(cmd, ctx);
           break;
         }
         case "away": {
