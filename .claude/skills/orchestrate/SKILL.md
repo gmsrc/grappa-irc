@@ -1024,8 +1024,26 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   allocate them. Ask ME, never vjt, never self-serve.** Cic-only gates (`bun.sh run check|test`) need NEITHER.
 - **The worker MERGES + pushes ONLY on my word; the DEPLOY is always held.** No `gh issue close` at merge.
   **CLOSE THE PR at merge** (see PR/MERGE MECHANICS). **Remove the worktree + delete the branch at merge.**
-- **No `Closes #NNN` in a PR body** — it auto-closed #540 while prod lacked the code. `board-check.sh` after
-  EVERY merge. **No CI polling — the ORCHESTRATOR watches CI.**
+- 🔴🔴 **NO CLOSING KEYWORD NEXT TO AN ISSUE REF IN A PR BODY — AND *"does not fix #NNN"* IS ONE
+  (orch, 2026-08-26, #1826/#1767).** The old rule named one spelling (`Closes #NNN`) and one polarity,
+  and that is exactly how it was walked past: the PR body's FIRST LINE read
+  **`**This does not fix #1767.**`** — a sentence written to say *this is not a cure* — and **GitHub's
+  parser does not read negation.** It matched `fix #1767`, fired at merge, and closed the issue the
+  orchestrator had just decided to keep open, **two seconds before the orchestrator announced it was
+  staying open.** 🥇 *The sentence written to prevent the close IS the close.*
+  **The keyword set is `close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved`, and the trap is
+  the ADJACENCY to `#NNN`, not the sentence's meaning** — no `not`, `never`, `does not` or quotation
+  disarms it. **Spell the number WITHOUT the `#`** (`issue 1767`) whenever the sentence must name it and
+  must not close it.
+  🔍 **How to tell an auto-close from a human one:** a body-keyword close has **`commit_id: null`** and
+  lands **~2 s after `mergedAt`**; a commit-trailer close carries the commit id.
+  🔴 **`actor` says `vjt` either way — the Pi holds his token — so the actor field CANNOT tell you a
+  human decided it.** Check the body for the pattern before concluding anyone ruled anything.
+  ⚠️ **`gh pr edit --body-file` DIES on the classic-projects deprecation**; patch with
+  `gh api -X PATCH repos/O/R/pulls/N -f body="$(cat file)"`.
+  🧾 Prior instance, same family: it auto-closed #540 while prod lacked the code.
+  ⇒ **`board-check.sh` after EVERY merge, and read the issue's STATE, not your intention for it.**
+- **No CI polling by the worker — the ORCHESTRATOR watches CI.**
 - **A flake is fixed by making the SETUP deterministic, never by weakening an assert or bumping a timeout.**
 - **ALWAYS push with an explicit refspec** (`git push origin refs/heads/X:refs/heads/X`) — the bare-refspec trap
   landed a branch on **main** twice in one day.
