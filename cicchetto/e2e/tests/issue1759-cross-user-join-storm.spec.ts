@@ -70,7 +70,13 @@ test.describe.configure({ mode: "serial" });
 // The ladder. Powers of two so a linear and a knee-shaped response are
 // distinguishable with few points, and three points minimum because two can
 // be joined by any line.
-const N_LADDER = [1, 2, 4, 8, 16] as const;
+//
+// It runs to 32 because the question is "at what N", and a ladder that stops
+// before the answer produces "not at any N we tried" — true, but weaker than
+// it needs to be. 24 is in there for resolution: the first reading knee'd
+// between 8 and 16, so a doubling-only ladder would place any second knee
+// only to within a factor of two.
+const N_LADDER = [1, 2, 4, 8, 16, 24, 32] as const;
 
 // Windows per subject. Held CONSTANT across the ladder on purpose: N is the
 // lever under test here, and moving both at once would make the response
