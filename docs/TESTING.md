@@ -114,19 +114,37 @@ than restating them.
 **A docs-only branch needs none of this.** Every step below is a
 precondition for RUNNING a gate, not for having a worktree.
 
-**1. Submodules do not come with a worktree.** `vendor/bats-core` and
-`cicchetto/e2e/infra` are empty until initialised, and the init REQUIRES
+**1. Submodules do not come with a worktree.** `.gitmodules` lists
+**three** — `vendor/bats-core`, `cicchetto/e2e/infra` and
+`frontends/shottino/vendor/libdatachannel` — and all three are empty
+until initialised. In a worktree the init REQUIRES
 `-c protocol.file.allow=always`: the clone comes from the superproject's
 own local module store over `file://`, which the CVE-2022-39253
-mitigation blocks by default (#592). You are walked through it —
-`scripts/bats.sh` auto-inits the first, `scripts/testnet.sh` the second —
-so the by-hand form is a fallback. Commands, the `git submodule status`
-reading, and the ⛔ never-`rsync` rule: **trap 5** in "Five e2e gate traps
-that fake a green (or a red)"; the one-liners also sit under "When the
-test stack itself is broken". Note the exit cost before you opt in: once
-ANY submodule has been initialised here, `git worktree remove` needs
-`--force` for the life of the worktree — `docs/OPERATIONS.md`,
-"Fresh-worktree e2e submodule gotcha".
+mitigation blocks by default (#592).
+
+**You are walked through TWO of the three.** `scripts/bats.sh` auto-inits
+`vendor/bats-core`, `scripts/testnet.sh` auto-inits `cicchetto/e2e/infra`,
+so for those the by-hand form is a fallback: the commands, the `git
+submodule status` reading, and the ⛔ never-`rsync` rule are in **trap 5**
+of "Five e2e gate traps that fake a green (or a red)", with the one-liners
+repeated under "When the test stack itself is broken".
+
+**`frontends/shottino/vendor/libdatachannel` has no auto-init, and no
+gate in this file needs it.** It is a precondition of the opt-in
+`make -C frontends/shottino call` helper only — never `make all`, and
+`make check` deliberately links a hand-written `<rtc/rtc.h>` stub so it
+runs without the submodule (#880). Skipping it is the normal case; it is
+named here because a bootstrap list that counts two leaves whoever builds
+`call` with neither a step nor a warning. The command and why the helper
+is opt-in: `frontends/shottino/docs/CALLS.md` → "The helper, as it
+stands"; `make call` also fails with that exact command rather than a
+bare cmake error. Note that CALLS.md's form carries no
+`protocol.file.allow` — it is not written for a worktree.
+
+Note the exit cost before you init anything: once ANY submodule has been
+initialised here, `git worktree remove` needs `--force` for the life of
+the worktree — `docs/OPERATIONS.md`, "Fresh-worktree e2e submodule
+gotcha".
 
 **2. TWO `node_modules` trees, both per-worktree.**
 `cicchetto/node_modules` (vitest, tsc, vite, biome) and
