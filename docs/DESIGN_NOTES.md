@@ -65028,3 +65028,98 @@ appearance) is measured by the bench and NOT pinned by a committed test: doing s
 costs a scratch project and a real compile inside the suite. The committed
 regression tests pin the grappa-owned half — that the loose ref is in the watch
 set while packed away, and that a commit on a packed branch moves nothing else.
+<!-- entry #1800 -->
+
+---
+
+## 2026-08-26 — #1800: the Now Playing card activates the oldest installed web app, and nothing on the web platform can say otherwise
+
+On iOS, tapping the Now Playing card — lock screen or Dynamic Island — while cic
+is streaming a radio station does not open cic. It opens a *different* installed
+web app, and the one it picks follows **home-screen install order**, not
+audio-session ownership. Reported on a real iPhone in #1800: removing the oldest
+web app promoted the second-oldest, and the install actually holding the audio
+was never the one activated.
+
+**The metadata is not the bug.** #1702 put title / artist / album on that card
+and #1704 put the station artwork on it; both still paint correctly. What is
+wrong is the *activation target*, and the target is resolved by the OS.
+
+This entry exists so the next reader who sees the card open the wrong app stops
+here instead of re-deriving it. There is no code change; the issue is closed by
+this paragraph.
+
+### What was measured here, and it is the whole surface
+
+Not the device — see the limits below — but the two APIs the fix would have to
+live in, enumerated rather than recalled.
+
+`MediaSession`, as declared by the DOM typings this codebase compiles against
+(TypeScript 7.0.2 `lib.dom.d.ts`), has six members: `metadata`,
+`playbackState`, `setActionHandler`, `setCameraActive`, `setMicrophoneActive`,
+`setPositionState`. `MediaMetadata` has four: `title`, `artist`, `album`,
+`artwork`. `MediaImage` has three: `src`, `sizes`, `type`. `MediaSessionAction`
+is nine transport verbs (`play`, `pause`, `stop`, `seekto`, `seekbackward`,
+`seekforward`, `previoustrack`, `nexttrack`, `skipad`). **Not one names an
+application, an origin, or a document.** The only URL-shaped member in the whole
+surface is `MediaImage.src`, which is an image to paint. Our two call sites —
+the `MediaMetadata` construction in `applyMediaSession` and the two
+`setActionHandler` calls in `setMediaSessionHandlers`, both in
+`cicchetto/src/lib/mediaSession.ts` — are therefore not missing an argument;
+there is no argument to miss.
+
+The manifest is the sharper half, because it *does* carry an activation-routing
+family and the reason none of it applies is not "there is nothing". It has
+`file_handlers`, `protocol_handlers`, `share_target`, `handle_links` and
+`launch_handler`. Every one of those is keyed on an **incoming artefact** — a
+file of a declared type, a URL scheme, a share payload, a link — and a tap on a
+Now Playing card supplies none of them. `launch_handler.client_mode` looks
+closest and is not close at all: `auto | focus-existing | navigate-existing |
+navigate-new` chooses which *client of this app* absorbs a launch that has
+already been routed to us, never which app gets routed to.
+
+### `id` is out of bounds, and it was already ruled out
+
+The manifest we ship declares `id: "/cic"` while `start_url` is `/`. Changing
+`id` is not on the table and the comment directly above it in
+`cicchetto/vite.config.ts` says why: `id` is the primary key browsers and
+Android's WebAPK minter use to answer "is this the same app?", so mutating it
+after a single user has installed orphans every existing install and mints a
+parallel WebAPK. WebKit has honoured `id` since iOS 16.4 to tell *multiple
+installs of the same web app* apart — badging, Focus sync — and no source ties
+it to Now Playing activation. `/cic` is also more distinctive than `/`, not
+less, so the shape of the value is not a candidate cause either.
+
+### Two things the issue text got slightly wrong
+
+Both are citation-level, neither changes the conclusion, and both are recorded
+because a future reader will otherwise follow them.
+
+`cicchetto/vite.config.ts:143` is stale: `id` sits at :178 today and :143 is
+`filename: "service-worker.ts"`. This is why a doc citation should carry the
+anchor text and not the number.
+
+**`scope` is not a manifest member we declare at all.** It appears nowhere in
+`vite.config.ts`, so what we ship has `id`, `name`, `short_name`,
+`description`, `start_url`, `display`, `background_color`, `theme_color`,
+`icons` and `share_target`, and no `scope`; a UA that needs one derives it from
+`start_url`. The `/` that looks like a declared scope is `vite-plugin-pwa`'s own
+`scope` option, which is the **service-worker registration scope** passed to
+`navigator.serviceWorker.register`, a different thing on a different layer. The
+issue's claim is right in value and wrong in kind.
+
+### What this does NOT establish
+
+The device behaviour is **reported, not reproduced here** — no iPhone was
+available, and nothing in this repository can observe which app iOS activates.
+The install-order rule in particular is one operator's three-step observation,
+not a measurement anybody re-ran.
+
+A `.d.ts` describes the *standard* surface. A WebKit-private member that named
+an activation target would not appear in it, and this entry does not claim to
+have looked for one; the evidence on that side is the Apple Developer Forums
+answer the issue cites — there is no supported way to programmatically open an
+installed web app on iOS/iPadOS — which is a citation, not something measured.
+
+A WebKit bug report is the only road upstream, and filing it is a decision that
+belongs outside this repository. It is not blocked on anything here.
