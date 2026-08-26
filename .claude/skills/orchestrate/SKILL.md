@@ -1419,3 +1419,60 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   commit di **HEAD**, e l'orchestratrice lo gira dal checkout su `main` ⇒ *"nothing to check"*, **verde
   vuoto**. I suoi due controlli vanno verificati **a mano sul contenuto** (`---` prima del `## `,
   marcatore unico).
+
+## 🧭 REGOLE NATE IL 2026-08-26 (permanenti — migrate dall'handoff)
+- 🔴🔴 **UN AGENTE A VALLE PUO' INVENTARE UN'AUTORITA' CHE NON ESISTE, E CITARE UN FILE VERO PER
+  FARLO.** L'ircbot ha risposto che una domanda aperta *"risulta gia' decisa da te il 26/8 — il body
+  della #1808 porta il ruling"*, e ha **riformulato in canale la domanda come conferma**. Il body
+  diceva testualmente il CONTRARIO (*"is vjt's call — not a mechanical dedup"*). 🥇 **La forma
+  pericolosa non e' l'errore evidente: e' il riferimento a un artefatto REALE appiccicato a un
+  contenuto che quell'artefatto non dice — passa per fatto verificato.** ⇒ **Verifica il
+  RIFERIMENTO, non la plausibilita': costa un `gh issue view`.** ⚠️ E quando poi il relay ti gira un
+  ruling **vero**, applicalo **scrivendo la provenienza accanto** (*"relayato, non visto in prima
+  persona"*) nel body della PR: se e' storto salta fuori in review e costa una riga, non un giro.
+- 🔴🔴 **QUANDO ACCORPI UNA TUA DOMANDA A QUELLE DI UN WORKER, ETICHETTA CHI CHIEDE COSA.** Ho
+  passato a vjt "(1) … (2) …" spacciandole per **entrambe** bloccanti di w1; la (2) l'avevo
+  **inventata io**. Lui ha risposto **per posizione** (*"1) vjt-claude 2) dentro"*) e **la risposta
+  si e' incollata alla domanda sbagliata senza sembrare un errore**: la vera (2) del worker e'
+  rimasta senza risposta per un giro. 🥇 *E la worker se n'e' accorta prima di me — quando ti dice
+  "questa non e' una mia domanda", ha ragione lei.*
+- 🕐 **GLI ORARI CHE L'IRCBOT RELAYA SONO `Europe/Rome`, +2 SUI MIEI (il Pi e' UTC).** Un ruling che
+  lui data `08:38` e' `06:38Z`. ⇒ **converti e scrivi la Z**, o un ping "di nove minuti fa" diventa
+  "di due ore fa" e la finestra del re-ping si sballa.
+- 🔴🔴 **UNA GUARDIA A RISPOSTA NOTA VA TARATA *SULLA PR*, NON COPIATA DA UN ALTRO MONITOR.** Il
+  monitor di una PR da 8 check portava `<5 ⇒ non stampare verdetti`; su una PR che ne ha **4
+  legittimi** (diff di soli `.mailmap`/`DESIGN_NOTES.md`/`test/**` ⇒ **nessuno shard
+  `integration`**) quella soglia avrebbe **soppresso il verdetto per sempre, in silenzio, con
+  l'aria di una guardia che protegge.** ⇒ **Derivala dai `paths:` che il diff tocca davvero.**
+- 🔧 **LA `conclusion` DI UNA CHECK-RUN IN CORSO VALE DUE COSE DIVERSE SU DUE API:** `null` su
+  `commits/<sha>/check-runs`, **stringa vuota** su `gh pr checks --json`/`statusCheckRollup`.
+  ⇒ **Ennesima ragione per chiavare su `.status == "completed"`, MAI su `.conclusion`.**
+- 🔴 **`git show --name-only <sha>` GUARDA UN COMMIT, NON UN RANGE.** Usato per misurare la
+  sovrapposizione fra due rami mi ha risposto *"nessun file comune"* su due rami che condividevano
+  `docs/DESIGN_NOTES.md`, cioe' **proprio il file con `merge=union`**. Forma giusta:
+  `git diff --name-only <merge-base>..<sha>`. 🥇 *Un falso "nessuna sovrapposizione" e' il piu'
+  pericoloso dei falsi zero: assolve esattamente il caso che va guardato.*
+- 🥇🥇 **LA COLLISIONE DI PREFISSO DI `merge=union`, OSSERVATA DAL VIVO (w1, e conferma #1271).**
+  Su un rebase, `<!-- entry #1807 -->` sul tip nuovo stava alla riga **65483** — **esattamente dove
+  stava `<!-- entry #1808 -->`** nel ramo: **stesso offset di append per i due rami**, il caso
+  canonico in cui un prefisso identico si collassa. **I marcatori differivano ⇒ sopravvissuti
+  ENTRAMBI i separatori.** ➕ **Controprova ARITMETICA che il numstat da solo non da':** byte del DN
+  di main + byte dell'entry == byte su disco, e righe idem. **Chiedila nei brief: il numstat dice
+  che i numeri non sono cambiati, l'aritmetica dice che il FILE e' quello che deve essere.**
+- 🥇 **UN ARTEFATTO GIA' ESTRATTO NON E' EVIDENZA DA CONSERVARE.** Una worker ha buttato
+  `container-logs` + `playwright-report` di una run rossa smaltendo la worktree, **e l'ha nominato
+  invece di tacerlo**. Nessuna perdita: quel rosso era chiuso *e* diagnosticato **proprio da quegli
+  artefatti, gia' letti**. ⇒ **Se un flake ricompare serve il SUO artefatto nuovo, non quello
+  vecchio.** 🥇 *Una worker che nomina una scelta irreversibile che ha fatto da sola va lodata, non
+  interrogata.*
+- ⚠️ **UN WORKER FERMO PER UN MIO ORDINE, IN ATTESA DI vjt, E' UNO STALLO DI vjt — MA NON E'
+  LICENZA PER LASCIARLO FERMO IN SILENZIO.** Digli **perche'** e' fermo e cosa stai aspettando: uno
+  `STALL state=idle` atteso e uno dimenticato sono lo stesso osservabile. ⚠️ **E non riempirlo di
+  lavoro finto:** ribasare una PR bloccata su un ruling brucia il suo verde e una corsia per una
+  cosa che il ruling puo' ancora cambiare. **Meglio ferma che a sporcare un albero in volo.**
+- 🔴 **POTA L'HANDOFF *MENTRE* LAVORI, NON A FINE SESSIONE.** In una mattina l'ho portato da ~120 a
+  **531 righe / 44 KB** aggiungendo un blocco per ogni evento — cioe' l'ho trasformato nel log che
+  non deve essere. 🥇 **Il segnale e' l'ISTANTE in cui una issue chiude: quel blocco si CANCELLA
+  nello stesso turno, lasciando solo il residuo portante (la SHA nuova, un flake da tracciare).**
+  E **le lezioni permanenti si migrano QUI, subito** — se restano nell'handoff muoiono alla prima
+  potatura seria.
