@@ -2504,11 +2504,42 @@ html.resize-dragging * {
   cursor: pointer;
 }
 
+/* #1828 — the one horizontal inset in this band, and it is OPTICAL.
+   The report is that this logo reads as further left than the nick rows above
+   it. Measured, nothing is misaligned: `.shell-members` puts both left edges on
+   the same `--rail-inset` (7px at this app's 14px root, #1737 for the band and
+   #1802 for the rows). What differs is what sits on that edge. The logo is an
+   image whose pixels start at the box edge; a nick is monospace text whose
+   glyphs carry a left side bearing — measured off the two fonts `--font-mono`
+   actually resolves to on macOS, the median lowercase bearing at a 14px em is
+   1.36px in SF Mono and 1.30px in Menlo, rising to 2.02px and 2.47px for the
+   widest letters. So the glyph ink starts about 1.3px inside a line the image
+   ink sits ON, and a solid mass flush to an edge its neighbour only approaches
+   reads as further out. 0.15rem is 2.1px: between that median and that maximum,
+   which puts the logo's ink just INSIDE the typical nick's rather than level
+   with it — the right direction, because a filled block still reads heavier
+   than sparse strokes at the same x.
+
+   WHY PADDING AND NOT MARGIN, which is the whole shape of this fix. The logo
+   and the title are consecutive flex items, so the 2.1px comes out of one of
+   them and there is no third option in the box model: a margin takes it from
+   the ROW and carries the title and the track line right along with the logo,
+   which the issue forbids; a padding takes it from this box's own content and
+   moves nothing else. Priced before choosing, and the price is real: with the
+   global `border-box`, the content box goes 28px to 25.9px wide against an
+   unchanged 28px height, so `object-fit: cover` starts cropping about 1.05px
+   off each side of artwork that is square in every station file today. Cover
+   crops, never distorts, and that is the policy this rule already declared.
+
+   The picker's `.rail-radio-station-logo` is NOT the same case and is not
+   touched: it sits in a row with its own `padding: 0.25rem 0.375rem`, so its
+   pixels never reach a shared edge. */
 .rail-radio-now-logo {
   flex: none;
   width: 2rem;
   height: 2rem;
   object-fit: cover;
+  padding-inline-start: 0.15rem;
 }
 
 /* `min-width: 0` is what lets the title ellipsise instead of forcing the row
