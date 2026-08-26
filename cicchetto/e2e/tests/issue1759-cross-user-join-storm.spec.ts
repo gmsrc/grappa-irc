@@ -139,9 +139,18 @@ function totalQueries(snap: Snapshot): number {
 // not a staircase. Returns what the client itself observed, which is the only
 // place the concurrency can be witnessed.
 //
-// The Phoenix v2 transport frame is `[join_ref, ref, topic, event, payload]`;
-// the bearer rides the `base64url.bearer.phx.<token>` subprotocol, which is
-// the production shape (`GrappaWeb.Endpoint`, #95) and not one invented here.
+// The Phoenix v2 transport frame is `[join_ref, ref, topic, event, payload]`.
+//
+// The handshake is copied from the library rather than from the prose about
+// it. `phoenix/priv/static/phoenix.mjs:1353` builds
+//
+//     ["phoenix", `base64url.bearer.phx.${btoa(token).replace(/=/g, "")}`]
+//
+// and all three details are load-bearing: TWO protocols with `"phoenix"`
+// FIRST, and the token base64'd with its `=` padding stripped. A first
+// attempt here passed one protocol carrying the RAW token — the shape the
+// #95 comments describe in words — and every handshake was refused, which
+// C3a below now names in one line instead of leaving it as "0 joins".
 const BURST = ({
   sockets,
   timeoutMs,
@@ -207,7 +216,10 @@ const BURST = ({
     };
 
     sockets.forEach((spec, i) => {
-      const ws = new WebSocket(url, [`base64url.bearer.phx.${spec.token}`]);
+      const ws = new WebSocket(url, [
+        "phoenix",
+        `base64url.bearer.phx.${btoa(spec.token).replace(/=/g, "")}`,
+      ]);
       live[i] = ws;
 
       ws.onopen = () => {
@@ -300,6 +312,17 @@ test("#1759c — cross-user join storm vs the connection pool", async ({ page })
       totalQueries(snap),
       `C2 at N=${n}: the burst produced ZERO queries — the joins never reached join_reply/2, so this is an instrument fault and not a free door`,
     ).toBeGreaterThan(0);
+
+    // C3a — the sockets HANDSHOOK. Split out from C3 because the two fail
+    // for completely different reasons and the combined form hid it: the
+    // first run of this file reported "expected 8 acknowledged joins, saw 0"
+    // when the truth was that not one socket had opened, because the bearer
+    // subprotocol was built by hand instead of copied from phoenix.js. A
+    // control that names the wrong layer costs a whole run.
+    expect(
+      burst.socketsOpened,
+      `C3a at N=${n}: ${burst.socketsFailed} of ${n} WebSocket handshake(s) were refused — the bearer subprotocol or the origin is wrong, and nothing about the pool has been measured`,
+    ).toBe(n);
 
     // C3 — every join was acknowledged. A burst whose joins were refused did
     // not happen, and its queue reading would describe nothing.
