@@ -82,14 +82,69 @@ defmodule Grappa.Version.GitProbeTest do
       assert Path.join(dir, ".git/HEAD") in GitProbe.resource_paths(dir)
     end
 
-    test "returns only paths that exist on disk", %{dir: dir} do
+    test "returns a watch-set member that does NOT exist yet — its appearance is the signal (#1797)",
+         %{dir: dir} do
       init_repo!(dir)
-      assert Enum.all?(GitProbe.resource_paths(dir), &File.exists?/1)
+
+      packed_refs = Path.join(dir, ".git/packed-refs")
+      # A fresh `git init` + commit writes no packed-refs file at all; it
+      # appears the first time refs are packed. That is precisely a watch-set
+      # member whose EXISTENCE is the thing that changes.
+      refute File.exists?(packed_refs)
+
+      assert packed_refs in GitProbe.resource_paths(dir),
+             "a not-yet-existing watch path must still be registered: Mix records it as " <>
+               "{0, 0} and reports it stale the moment it appears with a non-zero size"
     end
 
     test "is [] when there is no .git (a release tarball / package)", %{dir: dir} do
       # A fresh dir with no `git init`.
       assert GitProbe.resource_paths(dir) == []
+    end
+  end
+
+  describe "resource_paths/1 — a PACKED branch ref is still watched (#1797)" do
+    test "a commit on a packed branch rewrites ONLY the loose ref — HEAD and packed-refs are byte-identical",
+         %{dir: dir} do
+      init_repo!(dir)
+      git!(dir, ["pack-refs", "--all"])
+
+      head = Path.join(dir, ".git/HEAD")
+      packed_refs = Path.join(dir, ".git/packed-refs")
+      loose_ref = Path.join(dir, ".git/refs/heads/main")
+
+      refute File.exists?(loose_ref), "pack-refs --all removes the loose ref"
+      head_before = File.read!(head)
+      packed_before = File.read!(packed_refs)
+      sha_before = git!(dir, ["rev-parse", "--short", "HEAD"])
+
+      # The production shape: the branch tip advances (a `git pull --ff-only`
+      # of an already-checked-out branch does exactly this write).
+      File.write!(Path.join(dir, "a.txt"), "two\n")
+      git!(dir, ["add", "-A"])
+      git!(dir, ["commit", "-qm", "two"])
+
+      assert git!(dir, ["rev-parse", "--short", "HEAD"]) != sha_before
+      assert File.exists?(loose_ref), "the advanced tip lands in the LOOSE ref"
+
+      assert File.read!(head) == head_before,
+             "HEAD does not move on a same-branch advance — it cannot carry the signal"
+
+      assert File.read!(packed_refs) == packed_before,
+             "packed-refs keeps the STALE tip — it cannot carry the signal either"
+    end
+
+    test "the loose ref is in the watch set even while it is currently packed away", %{dir: dir} do
+      init_repo!(dir)
+      git!(dir, ["pack-refs", "--all"])
+
+      loose_ref = Path.join(dir, ".git/refs/heads/main")
+      refute File.exists?(loose_ref)
+
+      assert loose_ref in GitProbe.resource_paths(dir),
+             "the ref layout is MUTABLE at runtime (`git gc --auto` packs, `update-ref` " <>
+               "unpacks), so a watch set conditioned on the CURRENT layout goes blind: a " <>
+               "build taken while packed never sees the next fast-forward (#1797)"
     end
   end
 
