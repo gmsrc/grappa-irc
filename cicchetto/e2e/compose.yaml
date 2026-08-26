@@ -659,6 +659,11 @@ services:
     working_dir: /work
     environment:
       CI: "1"
+      # #1759c — the SAME value the BEAM booted with, so the measurement
+      # labels its own reading instead of the reader guessing which pool a
+      # number came from. A run that reports a saturation point without
+      # naming the pool it saturated is not a displacement, it is a number.
+      POOL_SIZE: ${POOL_SIZE:-5}
       # The base URL specs hit. `nginx-test` resolves via the docker
       # bridge (alias defined on the nginx-test service above). HTTPS
       # is required for the cic SW + Push API + Notification API to
