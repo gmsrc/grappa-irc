@@ -64911,3 +64911,120 @@ returns what it OBSERVED — `:closed | :gone | :not_incognito | :registered |
 :reconnected | :failed`. Naming the observed STATE rather than the action taken
 is the log-honesty rule applied to a return type: a fast path that reports "did
 nothing" tells an operator nothing about why.
+<!-- entry #1797 -->
+
+---
+
+## 2026-08-26 — #1797: the version watch set was DISCOVERED, and git moved the file it was looking for
+
+`/api/config` on the Pi's docker staging answered `protocol_version: 7` — the
+value #1769 had just bumped, so the new code was demonstrably running — next to
+`version: "1.3.1-ead66d40"`, the sha from BEFORE the deploy. Two fields of one
+response, from two builds. Only the wire bump made the two distinguishable at
+all; without a second field to cross against, the honest reading of a stale
+`version` is "the deploy did not land".
+
+`_build/prod/.../Elixir.Grappa.Protocol.beam` carried Aug 25 21:35, `…Version.beam`
+Aug 25 09:44, and `.git/refs/heads/main` 21:34. So prod HAD compiled and
+`Grappa.Version` had NOT — although #533/#542 exists precisely to make a moved
+branch ref recompile it.
+
+### The mechanism, measured
+
+Two clones of one origin, identical but for a single `git pack-refs --all` in the
+clone BEFORE the first compile. Each then compiles a module that registers
+`Grappa.Version.GitProbe.resource_paths/1` (the real production function) as
+`@external_resource` and snapshots `facts/1`, takes a `git pull --ff-only` of an
+upstream commit, and compiles again:
+
+| arm | watch set registered at compile #1 | compile #2 | compiled sha vs HEAD |
+|---|---|---|---|
+| loose | `HEAD`, `refs/heads/main`, `packed-refs` | `Compiling 1 file` | `21bcaa9` == `21bcaa9` |
+| packed | `HEAD`, `packed-refs` | *(nothing)* | `4d10202` != `bf4107d` |
+
+In the packed arm the pull left `HEAD` and `packed-refs` byte-identical — same
+mtime, same md5 — and wrote 41 bytes into `.git/refs/heads/main`, the one file
+that had been filtered out of the watch set for not existing yet. The `.beam`'s
+mtime and md5 did not move. That is the reported symptom, reproduced.
+
+So of the three candidates the issue listed and declined to rank: the SECOND is
+the mechanism — "the paths registered at the previous build differ from the
+current ones, the ref was packed and is now loose". The FIRST (`@repo_root`
+resolving somewhere else in the container) is refuted by the symptom itself: a
+wrong root makes `facts/1` degrade to `-dev`, not to a real previous sha, and
+`Path.expand("../..", __DIR__)` is `/app`, where the bind-mounted `.git` is. The
+THIRD (the compile manifest) is where the second is RECORDED rather than a
+separate cause.
+
+**Only one direction is a defect.** packed→loose is invisible. loose→packed is
+not: the disappearance of a registered file IS seen, so a `git gc` after a
+loose-ref build merely costs one extra recompile.
+
+### Why the filter was the bug, and why a missing path is the fix
+
+#533/#542 named the right three files but resolved them through
+`Enum.filter(&File.exists?/1)`. Git's ref layout is **mutable at runtime**:
+`git gc --auto` — which `git pull` invokes — packs refs and deletes the loose
+one, and the next `update-ref` writes it back. A set conditioned on the current
+layout is therefore a snapshot of a moving target, and the window between a
+`gc` and the next fast-forward is exactly the window in which the version goes
+stale and stays stale, since nothing afterwards dirties the module either.
+
+Registering a path that does not exist is what `Mix.Compilers.Elixir` is built
+for. `process_external_resources/2` stores
+`{Path.relative_to(file, cwd), Mix.Utils.last_modified_and_size(file), digest}`,
+i.e. `{path, {0, 0}, nil}` for a missing file, and `stale_external?/2` reads
+
+    %{^external => {0, 0}} -> digest != nil
+    %{^external => {last_mtime, last_size}} ->
+      size != last_size or (last_mtime > mtime and digest_changed?(external, digest))
+
+so while the file is absent the answer is `nil != nil` — false, no recompile
+loop — and the instant it appears with 41 bytes in it, `size != last_size` is
+true and the module recompiles. Deletion is caught by the same rule in reverse.
+The cure is one deleted pipeline stage: the watch set is now DECLARED, never
+DISCOVERED. Re-run of the same bench with it applied: the packed arm flips to
+`7dcc1af == 7dcc1af`, `Compiling 1 file`.
+
+### Substrate: docker is where it is invisible, not where it lives
+
+The defect is Mix + git, and every substrate does `git pull` then an incremental
+`mix compile`, so none of them is structurally immune. What differs is whether
+anybody checks. The jail, systemd, the `.deb` and the AUR source package all run
+`mix release --overwrite`, and #542's `assert_version_sha` step compares the sha
+compiled into the beam against `HEAD` and raises `{:stale, compiled, head}`. That
+entry's own words — *"if a future `@external_resource` gap re-opens #542 and
+`mix compile` leaves `Version.beam` stale, the step reads that stale sha, sees it
+≠ HEAD, and FAILS the release"* — describe this incident in advance, and the
+belt held everywhere it is worn. The docker stack wears none: hot compiles with
+`mix compile --warnings-as-errors` (`infra/lib/deploy_docker.sh`) and cold lets
+the recreated container's own `mix phx.server` boot compile write the beams. No
+`mix release`, no guard, so the stale sha reaches `/api/config` unchallenged.
+This is read from the deploy code paths, not measured on m42 or systemd.
+
+`dev` was immune by CHANCE, not by reason. Both environments read the same
+`.git` and the mechanism has no environment term; a `_build` is exposed exactly
+when its last `Grappa.Version` compile happened inside a packed window. On this
+worker host today `main` is itself packed, so a dev build here would register
+the same blind set.
+
+### Two things the manifest will not tell you
+
+The compile manifest is ETF-**compressed** (`131 80 …`), so `grep` for a ref path
+in `_build/<env>/lib/<app>/.mix/compile.elixir` answers 0 even when the path IS
+registered — measured on the arm that watched it. It has to be
+`binary_to_term`-decoded, and the traversal must descend MAPS, not only tuples
+and lists, or it silently finds nothing. And the paths inside are stored
+**relative to the compile cwd** (`.git/refs/heads/main`), not absolute.
+
+### What this does not establish
+
+The Pi's own `_build/prod` manifest was not read — the box is not reachable from
+here — so what is proven is that this mechanism produces exactly this symptom,
+not that this incident was an instance of it; the box-side confirmation is one
+decode of that manifest plus `git reflog show main --date=iso` against the
+`packed-refs` mtime. The Mix half (a missing `@external_resource` detected on
+appearance) is measured by the bench and NOT pinned by a committed test: doing so
+costs a scratch project and a real compile inside the suite. The committed
+regression tests pin the grappa-owned half — that the loose ref is in the watch
+set while packed away, and that a commit on a packed branch moves nothing else.
