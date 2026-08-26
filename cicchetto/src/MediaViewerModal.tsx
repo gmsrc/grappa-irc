@@ -14,8 +14,8 @@ import { createOverlayLock } from "./lib/overlayScrollLock";
 import {
   applyPinch,
   distance,
-  midpoint,
   MIN_SCALE,
+  midpoint,
   type Point,
   rescaleScroll,
   type Size,

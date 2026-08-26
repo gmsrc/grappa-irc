@@ -104,11 +104,20 @@ async function cdpTap(cdp: CDPSession, x: number, y: number): Promise<void> {
 
 // Drag one finger from (x, y) upward by `dy`, in steps, through the browser's
 // own gesture recogniser.
-async function cdpDragUp(cdp: CDPSession, page: Page, x: number, y: number, dy: number) {
+async function cdpDragUp(
+  cdp: CDPSession,
+  page: Page,
+  x: number,
+  y: number,
+  dy: number,
+): Promise<void> {
   const point = (at: number) => [{ x, y: at, radiusX: 8, radiusY: 8, force: 1, id: 1 }];
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point(y) });
   for (let moved = 10; moved <= dy; moved += 10) {
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: point(y - moved) });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: point(y - moved),
+    });
     await page.waitForTimeout(16);
   }
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
@@ -286,7 +295,11 @@ test("@webkit #1805 — the zoomable modal image and its scroller declare the pa
   expect(await img.evaluate((el) => getComputedStyle(el).transformOrigin)).toBe("0px 0px");
   const style = await scroller.evaluate((el) => {
     const s = getComputedStyle(el);
-    return { touchAction: s.touchAction, overflowY: s.overflowY, overscroll: s.overscrollBehaviorY };
+    return {
+      touchAction: s.touchAction,
+      overflowY: s.overflowY,
+      overscroll: s.overscrollBehaviorY,
+    };
   });
   expect(style.touchAction).toBe("pan-x pan-y");
   expect(style.overflowY).toBe("auto");
