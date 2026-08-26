@@ -19,76 +19,10 @@
 // long as the ownership holds.
 
 import { describe, expect, it } from "vitest";
-import { allRules, selectorList } from "./helpers/themeCss";
+import { allRules, horizontalInsets, isZeroInset, selectorList } from "./helpers/themeCss";
 
 const CONTAINER = ".shell-members";
 const TOKEN = "--rail-inset";
-
-/**
- * Split a CSS value on top-level whitespace. `calc(-1 * var(--rail-inset))` is
- * ONE value with two spaces inside it, so a naive `split(/\s+/)` would read it
- * as three and take the wrong one as the horizontal component.
- */
-function splitTopLevel(value: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let current = "";
-  for (const ch of value) {
-    if (ch === "(") depth += 1;
-    else if (ch === ")") depth -= 1;
-    if (depth === 0 && /\s/.test(ch)) {
-      if (current !== "") parts.push(current);
-      current = "";
-    } else current += ch;
-  }
-  if (current !== "") parts.push(current);
-  return parts;
-}
-
-/**
- * The HORIZONTAL components a single declaration contributes, or `[]` when it
- * contributes none. Shorthands are expanded by arity the way the cascade does
- * it (1 → all, 2 → `block inline`, 3 → `top inline bottom`, 4 → clockwise), so
- * a `padding: 0.25rem 1rem` is caught and a `padding-block: 0.25rem` is not.
- */
-function horizontalComponents(property: string, value: string): string[] {
-  const parts = splitTopLevel(value);
-  const [p0, p1, p2, p3] = parts;
-  if (property === "margin" || property === "padding") {
-    if (parts.length === 1) return p0 === undefined ? [] : [p0];
-    if (parts.length === 2 || parts.length === 3) return p1 === undefined ? [] : [p1];
-    if (parts.length === 4) {
-      return p1 !== undefined && p3 !== undefined ? [p1, p3] : [];
-    }
-    return [];
-  }
-  if (property === "margin-inline" || property === "padding-inline") {
-    return parts;
-  }
-  if (/^(margin|padding)-(left|right|inline-start|inline-end)$/.test(property)) {
-    return parts.length === 0 ? [] : [parts.join(" ")];
-  }
-  // `-block`, `-top`, `-bottom`, and everything that is not a box inset.
-  void p2;
-  return [];
-}
-
-/** Every horizontal margin/padding component a rule body declares. */
-function horizontalInsets(body: string): { property: string; component: string }[] {
-  const out: { property: string; component: string }[] = [];
-  for (const raw of body.split(";")) {
-    const colon = raw.indexOf(":");
-    if (colon === -1) continue;
-    const property = raw.slice(0, colon).trim();
-    const value = raw.slice(colon + 1).trim();
-    for (const component of horizontalComponents(property, value)) {
-      out.push({ property, component });
-    }
-  }
-  return out;
-}
-
-const isZero = (component: string): boolean => /^0(px|rem|em|%)?$/.test(component);
 
 describe("#1802 — the rail's horizontal inset is owned by the container", () => {
   it("defines the inset token exactly once, and in the container's own rule", () => {
@@ -143,7 +77,7 @@ describe("#1802 — the rail's horizontal inset is owned by the container", () =
       for (const { property, component } of horizontalInsets(rule.body)) {
         // Zero is a reset (killing the user-agent list indent, resetting a
         // button), not an inset. Anything else is the child deciding.
-        if (isZero(component)) continue;
+        if (isZeroInset(component)) continue;
         offenders.push(`${rule.selectors} → ${property}: ${component}`);
       }
     }
