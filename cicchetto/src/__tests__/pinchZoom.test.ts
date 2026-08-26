@@ -1,29 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyPan,
   applyPinch,
   clamp,
   clampScale,
-  clampTransform,
   DOUBLE_TAP_SCALE,
   distance,
-  IDENTITY,
   MAX_SCALE,
   MIN_SCALE,
-  maxTranslate,
   midpoint,
-  type Size,
-  type Transform,
+  rescaleScroll,
+  type Scroll,
   toggleZoom,
 } from "../lib/pinchZoom";
 
-// The pure pinch/pan geometry (gemello di swipe.ts) is DOM-free so it
-// unit-tests without touch physics. A `Transform` is the CSS state applied to
-// the modal <img>: { scale, tx, ty } → `translate(tx, ty) scale(scale)` with a
-// center transform-origin. `Size` is the viewport (container) the image is
-// confined to. Pan is clamped so a zoomed image can never fly entirely off the
-// viewer.
-const VIEWPORT: Size = { width: 400, height: 300 };
+// The pure pinch geometry (gemello di swipe.ts) is DOM-free so it unit-tests
+// without touch physics. Since #1805 a zoom state is a bare `scale`: the pan
+// belongs to the browser's own scroller, so there is no `tx`/`ty` to confine
+// and no `applyPan`/`maxTranslate`/`clampTransform` to test. What replaced them
+// is `rescaleScroll` — the one thing the scroller CANNOT do for itself, because
+// only we know which image point the fingers were holding.
 
 describe("distance", () => {
   it("is the euclidean distance between two points", () => {
@@ -63,107 +58,93 @@ describe("clampScale", () => {
   });
 });
 
-describe("maxTranslate", () => {
-  it("is zero at scale 1 — an unzoomed image cannot pan", () => {
-    expect(maxTranslate(1, 400)).toBe(0);
-  });
-  it("grows with scale: half the overflow at the given scale", () => {
-    // At 2x over a 400px axis the image is 800px wide → 400px overflow →
-    // 200px pannable each side.
-    expect(maxTranslate(2, 400)).toBe(200);
-  });
-  it("never goes negative below scale 1", () => {
-    expect(maxTranslate(0.5, 400)).toBe(0);
-  });
-});
-
-describe("clampTransform", () => {
-  it("forces translate to 0 when not zoomed", () => {
-    const t: Transform = { scale: 1, tx: 50, ty: 50 };
-    expect(clampTransform(t, VIEWPORT)).toEqual({ scale: 1, tx: 0, ty: 0 });
-  });
-
-  it("keeps a within-bounds pan untouched when zoomed", () => {
-    const t: Transform = { scale: 2, tx: 100, ty: 50 };
-    expect(clampTransform(t, VIEWPORT)).toEqual({ scale: 2, tx: 100, ty: 50 });
-  });
-
-  it("clamps an over-panned image back to the confinement bound", () => {
-    // 2x over 400×300 → max pan 200 (x), 150 (y).
-    const t: Transform = { scale: 2, tx: 9999, ty: -9999 };
-    expect(clampTransform(t, VIEWPORT)).toEqual({ scale: 2, tx: 200, ty: -150 });
-  });
-
-  it("clamps scale AND re-clamps the now-illegal translate together", () => {
-    const t: Transform = { scale: 99, tx: 5000, ty: 5000 };
-    const out = clampTransform(t, VIEWPORT);
-    expect(out.scale).toBe(MAX_SCALE);
-    expect(out.tx).toBe(maxTranslate(MAX_SCALE, VIEWPORT.width));
-    expect(out.ty).toBe(maxTranslate(MAX_SCALE, VIEWPORT.height));
-  });
-});
-
 describe("applyPinch", () => {
   it("scales relative to the gesture-start distance", () => {
-    const start: Transform = { scale: 1, tx: 0, ty: 0 };
     // fingers move twice as far apart → 2x.
-    expect(applyPinch(start, 100, 200, VIEWPORT)).toEqual({ scale: 2, tx: 0, ty: 0 });
+    expect(applyPinch(1, 100, 200)).toBe(2);
   });
 
   it("compounds on the start scale (mid-gesture continuation)", () => {
-    const start: Transform = { scale: 2, tx: 0, ty: 0 };
-    expect(applyPinch(start, 100, 150, VIEWPORT).scale).toBe(3);
+    expect(applyPinch(2, 100, 150)).toBe(3);
   });
 
   it("clamps the resulting scale to MAX_SCALE", () => {
-    const start: Transform = { scale: 1, tx: 0, ty: 0 };
-    expect(applyPinch(start, 100, 9999, VIEWPORT).scale).toBe(MAX_SCALE);
+    expect(applyPinch(1, 100, 9999)).toBe(MAX_SCALE);
   });
 
-  it("re-clamps translate when pinching back down shrinks the pan bound", () => {
-    // start zoomed-and-panned at 3x (pan 400/2*(3-1)=... within bound), pinch
-    // back to ~1x → translate must collapse to 0.
-    const start: Transform = { scale: 3, tx: 200, ty: 100 };
-    const out = applyPinch(start, 300, 100, VIEWPORT); // 3 * (100/300) = 1
-    expect(out.scale).toBe(1);
-    expect(out.tx).toBe(0);
-    expect(out.ty).toBe(0);
+  it("floors at MIN_SCALE when the fingers close past fit", () => {
+    expect(applyPinch(3, 300, 10)).toBe(MIN_SCALE);
   });
 
   it("is a no-op when the start distance is zero (divide guard)", () => {
-    const start: Transform = { scale: 2, tx: 10, ty: 10 };
-    expect(applyPinch(start, 0, 200, VIEWPORT)).toEqual(start);
-  });
-});
-
-describe("applyPan", () => {
-  it("adds the drag delta to the start translate when zoomed", () => {
-    const start: Transform = { scale: 2, tx: 10, ty: 20 };
-    expect(applyPan(start, { x: 30, y: -5 }, VIEWPORT)).toEqual({ scale: 2, tx: 40, ty: 15 });
-  });
-
-  it("clamps a pan that would push the image past the confinement bound", () => {
-    const start: Transform = { scale: 2, tx: 150, ty: 0 };
-    // max x pan at 2x/400 = 200; +100 would be 250 → clamp to 200.
-    expect(applyPan(start, { x: 100, y: 0 }, VIEWPORT).tx).toBe(200);
-  });
-
-  it("cannot pan an unzoomed image (bound is 0)", () => {
-    const start: Transform = { scale: 1, tx: 0, ty: 0 };
-    expect(applyPan(start, { x: 50, y: 50 }, VIEWPORT)).toEqual({ scale: 1, tx: 0, ty: 0 });
+    expect(applyPinch(2, 0, 200)).toBe(2);
   });
 });
 
 describe("toggleZoom", () => {
-  it("zooms an unzoomed image to the double-tap scale, centered", () => {
-    expect(toggleZoom(IDENTITY)).toEqual({ scale: DOUBLE_TAP_SCALE, tx: 0, ty: 0 });
+  it("zooms an unzoomed image to the double-tap scale", () => {
+    expect(toggleZoom(MIN_SCALE)).toBe(DOUBLE_TAP_SCALE);
   });
 
   it("resets a zoomed image back to fit", () => {
-    expect(toggleZoom({ scale: 3, tx: 100, ty: 50 })).toEqual({ scale: 1, tx: 0, ty: 0 });
+    expect(toggleZoom(3)).toBe(MIN_SCALE);
   });
 
   it("resets even a slightly-zoomed image (any scale above MIN)", () => {
-    expect(toggleZoom({ scale: 1.2, tx: 5, ty: 5 }).scale).toBe(MIN_SCALE);
+    expect(toggleZoom(1.2)).toBe(MIN_SCALE);
+  });
+});
+
+describe("rescaleScroll", () => {
+  const AT_TOP: Scroll = { left: 0, top: 0 };
+
+  it("keeps the point under the focus under the focus (the whole contract)", () => {
+    // Container 200 wide, focus at its centre (100). At scale 1 with no scroll
+    // the image point under the focus is image-x 100. At scale 2 that point
+    // paints at 200, so the container must scroll to 200 - 100 = 100 to keep it
+    // under the finger.
+    expect(rescaleScroll(AT_TOP, { x: 100, y: 100 }, 1, 2)).toEqual({ left: 100, top: 100 });
+  });
+
+  it("compounds correctly from an already-scrolled, already-zoomed state", () => {
+    // At scale 2 scrolled to 100, the focus at 100 holds image point
+    // (100 + 100) / 2 = 100. Going to scale 4 puts it at 400 → scroll 300.
+    expect(rescaleScroll({ left: 100, top: 100 }, { x: 100, y: 100 }, 2, 4)).toEqual({
+      left: 300,
+      top: 300,
+    });
+  });
+
+  it("returns to zero scroll when zooming back out to fit", () => {
+    // Whatever was held at 2x, at fit the image is smaller than the container
+    // on both axes, so the arithmetic must not leave a positive offset behind.
+    // (100 + 100)/2 * 1 - 100 = 0.
+    expect(rescaleScroll({ left: 100, top: 100 }, { x: 100, y: 100 }, 2, 1)).toEqual({
+      left: 0,
+      top: 0,
+    });
+  });
+
+  it("holds the top-left corner when the focus IS the top-left corner", () => {
+    expect(rescaleScroll(AT_TOP, { x: 0, y: 0 }, 1, 3)).toEqual({ left: 0, top: 0 });
+  });
+
+  it("treats the two axes independently", () => {
+    // A focus off-centre on x and at the corner on y must move x only.
+    expect(rescaleScroll(AT_TOP, { x: 50, y: 0 }, 1, 2)).toEqual({ left: 50, top: 0 });
+  });
+
+  it("hands back an out-of-range offset rather than clamping it", () => {
+    // The DOM clamps on assignment and is the only thing that knows the real
+    // bounds; re-deriving them here is the duplicated geometry #1805 deleted.
+    // Zooming OUT from a deep scroll legitimately computes a negative.
+    const out = rescaleScroll({ left: 10, top: 10 }, { x: 500, y: 500 }, 4, 1);
+    expect(out.left).toBeLessThan(0);
+    expect(out.top).toBeLessThan(0);
+  });
+
+  it("is a no-op when the previous scale is zero (divide guard)", () => {
+    const scroll: Scroll = { left: 7, top: 9 };
+    expect(rescaleScroll(scroll, { x: 100, y: 100 }, 0, 2)).toEqual(scroll);
   });
 });

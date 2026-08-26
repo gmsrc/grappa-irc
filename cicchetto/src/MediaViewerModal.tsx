@@ -12,14 +12,13 @@ import { closeMediaViewer, type MediaViewerState, mediaViewerState } from "./lib
 import { bindDismissGesture, type DismissDirections } from "./lib/mediaViewerGesture";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import {
-  applyPan,
   applyPinch,
   distance,
-  IDENTITY,
+  midpoint,
   MIN_SCALE,
   type Point,
+  rescaleScroll,
   type Size,
-  type Transform,
   toggleZoom,
 } from "./lib/pinchZoom";
 import { maybeEscapePwaClick } from "./lib/platform";
@@ -75,12 +74,30 @@ const DOUBLE_TAP_MS = 300;
 
 const touchPoint = (t: Touch): Point => ({ x: t.clientX, y: t.clientY });
 
-// Pinch-to-zoom + pan for the modal image (#213). The browser's native pinch is
-// dead app-wide (iOS-1 viewport lock — maximum-scale=1, user-scalable=no; no
-// per-element opt-out), so the gesture is synthesized here and applied as a CSS
-// `transform` to THIS <img> only. Because the transform is element-scoped and
-// every touchmove is preventDefault'd, the zoom/pan is confined to the viewer —
-// no page zoom, no body-scroll bleed.
+// Pinch-to-zoom for the modal image (#213), panned by the browser's own
+// scroller (#1805).
+//
+// The PINCH is still synthesized: the browser's native one is dead app-wide
+// (iOS-1 viewport lock — maximum-scale=1, user-scalable=no; no per-element
+// opt-out), so it is applied as a CSS `transform` to THIS <img> alone.
+//
+// The PAN is not, any more. That lock governs page zoom and says nothing about
+// element scrolling, so an `overflow: auto` box scrolls natively underneath it
+// — measured through chromium's real touch pipeline at iPhone-15 metrics, 112px
+// of scroll with the lock against 128px without. Handing the pan back buys
+// momentum, rubber-band, a scrollbar and exact bounds that no synthesized
+// version had. It costs the blanket `preventDefault` that used to sit on every
+// touchmove: only the TWO-FINGER branch is ours now, because a one-finger drag
+// preventDefault'd is a one-finger drag the browser will not scroll with
+// (measured: claiming it while zoomed pins the scroll at 0).
+//
+// A transform does not change layout, so a scaled image creates no overflow and
+// there would be nothing to scroll. `.media-viewer-zoom-sizer` is what grows —
+// an absolutely-positioned box at `fit × scale`. Absolute so it stays out of
+// the scroller's intrinsic size: the <img> keeps sizing the container at fit,
+// its `max-width: 100%` keeps resolving against a box that does not move, and
+// the CSS remains the owner of the fit — this component only MIRRORS the fit it
+// measures, it never recomputes `object-fit: contain` in JS.
 //
 // Touch listeners are bound element-level via a ref + addEventListener with
 // touchmove `{ passive: false }` (bindSwipe precedent, ComposeBox): Solid
@@ -92,7 +109,7 @@ const touchPoint = (t: Touch): Point => ({ x: t.clientX, y: t.clientY });
 // #1438 — the zoom level is PUBLISHED upward (`onScale`) instead of the
 // transform being lifted into the modal. The dismiss gesture needs one bit
 // ("is this image zoomed?") to stand down, and the transform is deliberately
-// element-scoped: hoisting it would put the image's pan geometry in a
+// element-scoped: hoisting it would put the image's zoom geometry in a
 // component that also owns a <video>. Published synchronously with every
 // mutation rather than through an effect, because the reader is a touchstart
 // handler and a frame of lag there is a dismiss that fires on a pan.
@@ -102,95 +119,134 @@ const ZoomableImage: Component<{
   onError: () => void;
   onScale: (scale: number) => void;
 }> = (props) => {
-  const [transform, setTransform] = createSignal<Transform>(IDENTITY);
+  let scroller: HTMLDivElement | undefined;
+  let sizer: HTMLDivElement | undefined;
+  let image: HTMLImageElement | undefined;
 
-  // The ONE writer: signal + publication cannot drift apart if there is no
-  // other way to move the transform.
-  const apply = (next: Transform): void => {
-    setTransform(next);
-    props.onScale(next.scale);
-  };
+  // Plain mutables, not signals: nothing RENDERS from either. Both are painted
+  // imperatively for an ORDERING reason, not a style one — the sizer has to be
+  // its new size BEFORE a scroll offset is assigned, or the assignment clamps
+  // against the old bounds and the zoom lands somewhere else. Same device as
+  // `paint` in MediaViewerDialog below.
+  let scale = MIN_SCALE;
+  let fit: Size = { width: 0, height: 0 }; // the CSS-computed fit box, mirrored
 
   // Non-reactive gesture state, mutated across the touchstart→move→end span.
-  let gestureStart: Transform = IDENTITY; // transform when the current gesture began
+  let gestureStartScale = MIN_SCALE; // scale when the current pinch began
   let startDistance = 0; // two-finger pinch baseline (0 = not pinching)
-  let startPan: Point | null = null; // one-finger pan baseline (screen coords)
   let lastTapAt = 0; // event-timeStamp of the previous single-finger tap
 
-  // Confinement box = the image's own fit-to-viewer client rect. A CSS
-  // transform doesn't change layout size, so clientWidth/Height stay the fit
-  // dimensions regardless of the current scale.
-  const viewportOf = (el: HTMLElement): Size => ({
-    width: el.clientWidth,
-    height: el.clientHeight,
-  });
+  // At fit there must be NOTHING to scroll. Not an optimisation: at fit the
+  // swipe-to-dismiss owns the single-finger drag, and it only keeps it while
+  // the browser has no pan to start. `fit` is read from `clientWidth`, which is
+  // rounded to an integer, so `fit × 1` can exceed the real box by a sub-pixel
+  // — enough overflow for the browser to claim the drag and take the dismiss
+  // away. Zero is the only value that cannot do that.
+  const sizerSize = (): Size =>
+    scale > MIN_SCALE
+      ? { width: fit.width * scale, height: fit.height * scale }
+      : { width: 0, height: 0 };
+
+  const paint = (): void => {
+    if (image !== undefined) image.style.transform = `scale(${scale})`;
+    if (sizer !== undefined) {
+      const size = sizerSize();
+      sizer.style.width = `${size.width}px`;
+      sizer.style.height = `${size.height}px`;
+    }
+  };
+
+  // Screen coordinates → the scroller's own viewport coordinates, which is the
+  // frame `rescaleScroll` is written in.
+  const focusIn = (p: Point): Point => {
+    const box = scroller?.getBoundingClientRect();
+    if (box === undefined) return { x: 0, y: 0 };
+    return { x: p.x - box.left, y: p.y - box.top };
+  };
+
+  // The ONE writer. Publication, paint and scroll compensation cannot drift
+  // apart if there is no other way to move the scale.
+  const applyScale = (next: number, focus: Point): void => {
+    const previous = scale;
+    if (next === previous) return;
+    scale = next;
+    props.onScale(scale);
+    paint();
+    if (scroller === undefined) return;
+    const to = rescaleScroll(
+      { left: scroller.scrollLeft, top: scroller.scrollTop },
+      focus,
+      previous,
+      scale,
+    );
+    scroller.scrollLeft = to.left;
+    scroller.scrollTop = to.top;
+  };
+
+  // The fit box is whatever the stylesheet's max-width/max-height resolve to.
+  // It changes on load, on rotation, and on a --viewport-height write (the
+  // software keyboard), and a ResizeObserver catches all three where a load
+  // handler catches one. `clientWidth` and not `getBoundingClientRect`: the
+  // rect is the TRANSFORMED box, so it would report `fit × scale` and feed the
+  // sizer its own output.
+  const measureFit = (): void => {
+    if (image === undefined) return;
+    const next: Size = { width: image.clientWidth, height: image.clientHeight };
+    if (next.width === fit.width && next.height === fit.height) return;
+    fit = next;
+    paint();
+  };
 
   const onTouchStart = (e: TouchEvent): void => {
-    gestureStart = transform();
+    gestureStartScale = scale;
     if (e.touches.length >= 2) {
       const a = e.touches[0];
       const b = e.touches[1];
       if (a && b) startDistance = distance(touchPoint(a), touchPoint(b));
-      startPan = null;
       return;
     }
     const t0 = e.touches[0];
     if (!t0) return;
     startDistance = 0;
-    // Double-tap toggles fit⇄2x. Second tap within the window → toggle and
-    // arm nothing (don't treat the toggle tap as a pan start).
+    // Double-tap toggles fit⇄2x, around the tapped point rather than the
+    // centre: the same `rescaleScroll` the pinch uses, so there is one answer
+    // to "where does the picture land" and not two.
     if (e.timeStamp - lastTapAt < DOUBLE_TAP_MS) {
-      apply(toggleZoom(transform()));
+      applyScale(toggleZoom(scale), focusIn(touchPoint(t0)));
       lastTapAt = 0;
-      startPan = null;
       return;
     }
     lastTapAt = e.timeStamp;
-    startPan = touchPoint(t0);
   };
 
   const onTouchMove = (e: TouchEvent): void => {
-    const el = e.currentTarget as HTMLImageElement;
-    // Belt-and-braces confinement: own the gesture, never let it reach the page.
+    // ONE finger is the browser's: no claim, no preventDefault, no JS geometry.
+    // Returning early is the whole of #1805 at this layer.
+    if (e.touches.length < 2 || startDistance <= 0) return;
+    const a = e.touches[0];
+    const b = e.touches[1];
+    if (!a || !b) return;
+    // Two fingers ARE ours — the native pinch this replaces does not exist, and
+    // an unclaimed two-finger move is a page gesture we do not want.
     if (e.cancelable) e.preventDefault();
-    const vp = viewportOf(el);
-    if (e.touches.length >= 2 && startDistance > 0) {
-      const a = e.touches[0];
-      const b = e.touches[1];
-      if (a && b) {
-        apply(applyPinch(gestureStart, startDistance, distance(touchPoint(a), touchPoint(b)), vp));
-      }
-      return;
-    }
-    // Single-finger pan only when zoomed in (an un-zoomed image can't pan).
-    if (startPan && gestureStart.scale > MIN_SCALE) {
-      const t0 = e.touches[0];
-      if (t0) {
-        const delta = { x: t0.clientX - startPan.x, y: t0.clientY - startPan.y };
-        apply(applyPan(gestureStart, delta, vp));
-      }
-    }
+    const pa = touchPoint(a);
+    const pb = touchPoint(b);
+    applyScale(
+      applyPinch(gestureStartScale, startDistance, distance(pa, pb)),
+      focusIn(midpoint(pa, pb)),
+    );
   };
 
   const onTouchEnd = (e: TouchEvent): void => {
-    // Lifting one finger of a pinch leaves one touch: rebase the pan gesture on
-    // the survivor so pan continues seamlessly. All fingers up → clear state.
-    if (e.touches.length === 1) {
-      const t0 = e.touches[0];
-      if (t0) {
-        gestureStart = transform();
-        startPan = touchPoint(t0);
-        startDistance = 0;
-      }
-      return;
-    }
-    if (e.touches.length === 0) {
-      startPan = null;
-      startDistance = 0;
-    }
+    // Below two fingers there is no pinch left to continue; whatever remains on
+    // the glass is a pan, and a pan is the browser's. Re-baselining the scale
+    // here is what makes a second pinch compound on the first.
+    if (e.touches.length < 2) startDistance = 0;
+    gestureStartScale = scale;
   };
 
-  const bindZoom = (el: HTMLImageElement): void => {
+  const bindScroller = (el: HTMLDivElement): void => {
+    scroller = el;
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -198,23 +254,41 @@ const ZoomableImage: Component<{
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
+      scroller = undefined;
     });
   };
 
-  const styleFor = (t: Transform): { transform: string } => ({
-    transform: `translate(${t.tx}px, ${t.ty}px) scale(${t.scale})`,
-  });
+  const bindImage = (el: HTMLImageElement): void => {
+    image = el;
+    // Guarded for jsdom, which ships no ResizeObserver (the #285 precedent in
+    // ScrollbackPane): the load handler still measures once there.
+    const observer =
+      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measureFit);
+    observer?.observe(el);
+    onCleanup(() => {
+      observer?.disconnect();
+      image = undefined;
+    });
+  };
 
   return (
-    <img
-      ref={bindZoom}
-      class="media-viewer-media media-viewer-media--zoomable"
-      src={props.href}
-      alt={props.href}
-      style={styleFor(transform())}
-      onLoad={props.onLoad}
-      onError={props.onError}
-    />
+    <div ref={bindScroller} class="media-viewer-zoom-scroller">
+      {/* Purely geometric: it carries the scrollable area a transform cannot
+          create. aria-hidden + pointer-events:none so it is neither read nor
+          tapped. */}
+      <div ref={sizer} class="media-viewer-zoom-sizer" aria-hidden="true" />
+      <img
+        ref={bindImage}
+        class="media-viewer-media media-viewer-media--zoomable"
+        src={props.href}
+        alt={props.href}
+        onLoad={() => {
+          measureFit();
+          props.onLoad();
+        }}
+        onError={props.onError}
+      />
+    </div>
   );
 };
 
@@ -431,6 +505,18 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
   // reader is a touchstart handler.
   let textPane: HTMLDivElement | undefined;
   const isText = props.state.kind === "text";
+  // #1805 — the image arm now has a scroller under it, and `.media-viewer-modal`
+  // closes the touch stream with `touch-action: none`. Whether that closure
+  // even reaches a descendant scroll container is engine-dependent and only
+  // half-measurable here: chromium intersects touch-action from the hit element
+  // up to the SCROLL CONTAINER and stops, so the modal's `none` is inert (arm C
+  // of the #1805 bench, 105px of scroll through it); Playwright's WebKit
+  // exposes no touch-drag drive at all, so the same question cannot be put to
+  // the engine this issue is about. Re-opening on the modal — the #1764
+  // precedent, one class along — is correct under BOTH readings, and measured
+  // free under the one that can be measured: at fit the dismiss still received
+  // 11 cancelable moves out of 11, exactly as it does under `none`.
+  const isImage = props.state.kind === "image";
 
   const paint = (el: HTMLElement, dy: number): void => {
     el.style.transform = draggedTransform(dy);
@@ -486,7 +572,10 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
         aria-modal="true"
         aria-label="Media viewer"
         class="media-viewer-modal"
-        classList={{ "media-viewer-modal--text": isText }}
+        classList={{
+          "media-viewer-modal--text": isText,
+          "media-viewer-modal--zoomable": isImage,
+        }}
       >
         <div class="media-viewer-header">
           <a

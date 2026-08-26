@@ -18,7 +18,9 @@ describe("media viewer — swipe-to-dismiss stylesheet contract (#1438)", () => 
   it("claims the whole touch stream on the modal container", () => {
     // On the CONTAINER, not per media element: the UA intersects touch-action
     // down the ancestor chain, so this one declaration is what covers the
-    // <video> as well as the <img>.
+    // <video> as well as the <img>. Two variants re-open it on top of this
+    // base — `--text` (#1764) and `--zoomable` (#1805) — because a surface
+    // with a SCROLLER under it needs the browser to keep the pan.
     expect(ruleBody(".media-viewer-modal")).toMatch(/touch-action:\s*none/);
   });
 
@@ -74,5 +76,70 @@ describe("media viewer — text source stylesheet contract (#1764)", () => {
     expect(ruleBody(".media-viewer-text-gutter")).toMatch(/font:\s*inherit/);
     expect(ruleBody(".media-viewer-text-source")).toMatch(/font:\s*inherit/);
     expect(ruleBody(".media-viewer-text")).toMatch(/font-family:\s*var\(--font-mono\)/);
+  });
+});
+
+// #1805 — the zoomed image pans with the browser's own scroller. Same standing
+// as the two blocks above: jsdom applies no stylesheet, and a headless browser
+// cannot feel momentum or a rubber-band, so these are SOURCE-level assertions
+// on declarations whose absence is invisible everywhere except a real phone.
+//
+// The two `touch-action` assertions are the ones that were MEASURED rather than
+// reasoned (chromium/iPhone-15, real touch pipeline). They are not
+// interchangeable, and that is the point of asserting both: the declaration on
+// the <img> and the declaration on the modal answer different questions, and
+// each was wrong in a different direction before the bench said so.
+describe("media viewer — native pan stylesheet contract (#1805)", () => {
+  it("lets the hit target pan — a touch-action:none on the <img> closes the scroller around it", () => {
+    // The <img> is what every touch in the viewer lands on, and the UA
+    // intersects touch-action from the hit target up to the scroll container.
+    // Measured: img `none` inside a `pan-x pan-y` scroller scrolls 0px, img
+    // `pan-x pan-y` scrolls 130px. `none` here is the pre-#1805 value, so the
+    // negative assertion is a guard against a revert, not a tautology.
+    const img = ruleBody(".media-viewer-media--zoomable");
+    expect(img).toMatch(/touch-action:\s*pan-x\s+pan-y/);
+    expect(img).not.toMatch(/touch-action:\s*none/);
+  });
+
+  it("puts the transform origin at 0 0, which is what rescaleScroll's arithmetic assumes", () => {
+    // Not a style preference: with a 0 0 origin an image coordinate is a scroll
+    // coordinate divided by the scale, which is the whole derivation in
+    // lib/pinchZoom.ts. A center origin silently offsets every zoom by half a
+    // box, and the picture still moves, so nothing else would report it.
+    expect(ruleBody(".media-viewer-media--zoomable")).toMatch(/transform-origin:\s*0\s+0/);
+  });
+
+  it("re-opens touch panning on the image variant, which the base modal rule closes", () => {
+    // The #1764 precedent one issue along. Under the reading where the UA
+    // intersects to the ROOT, `.media-viewer-modal { touch-action: none }`
+    // closes the scroller and only a declaration on the modal itself re-opens
+    // it. Chromium does not read it that way; WebKit cannot be asked, because
+    // Playwright's WebKit exposes no touch-drag drive. This declaration is
+    // correct under both readings.
+    expect(ruleBody(".media-viewer-modal--zoomable")).toMatch(/touch-action:\s*pan-x\s+pan-y/);
+  });
+
+  it("makes the wrapper the scroller — the base body is overflow:hidden", () => {
+    const scroller = ruleBody(".media-viewer-zoom-scroller");
+    expect(scroller).toMatch(/overflow:\s*auto/);
+    expect(scroller).toMatch(/touch-action:\s*pan-x\s+pan-y/);
+  });
+
+  it("keeps the scroller's overscroll to itself so a drag past the end is not the page's", () => {
+    expect(ruleBody(".media-viewer-zoom-scroller")).toMatch(/overscroll-behavior:\s*contain/);
+  });
+
+  it("makes the scroller the containing block the sizer is positioned against", () => {
+    expect(ruleBody(".media-viewer-zoom-scroller")).toMatch(/position:\s*relative/);
+  });
+
+  it("keeps the sizer OUT OF FLOW, or the scroller's own size would chase it", () => {
+    // In flow the sizer would contribute to the scroller's intrinsic size, the
+    // scroller would grow with the zoom instead of scrolling, and the <img>'s
+    // max-width: 100% would resolve against a box that moves. Absolute keeps it
+    // contributing to scrollable overflow only.
+    const sizer = ruleBody(".media-viewer-zoom-sizer");
+    expect(sizer).toMatch(/position:\s*absolute/);
+    expect(sizer).toMatch(/pointer-events:\s*none/);
   });
 });

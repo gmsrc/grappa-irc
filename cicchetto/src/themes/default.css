@@ -13214,18 +13214,73 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   object-fit: contain;
 }
 
-/* Pinch-zoomable image (#213). `touch-action: none` hands EVERY touch to our
-   element-level JS handlers instead of letting the browser interpret it as a
-   scroll/zoom pan — mandatory for the synthesized pinch (the shell's native
-   pinch is dead via iOS-1's viewport lock; this reclaims the raw touch stream
-   for the modal image only). transform-origin: center matches the geometry in
-   lib/pinchZoom.ts (translate is measured from center). will-change hints the
-   compositor for smooth pinch. The inline `transform` style is written by the
-   component per gesture frame. */
+/* Pinch-zoomable image (#213, #1805).
+
+   `touch-action: pan-x pan-y` and NOT `none`, which is what it was until #1805.
+   The <img> is the hit target for every touch in the viewer, and the UA
+   intersects touch-action from the hit target up to the scroll container that
+   would handle the gesture — so a `none` HERE closes the scroller that wraps
+   it. Measured, chromium/iPhone-15 through the real touch pipeline: img `none`
+   inside a `pan-x pan-y` scroller scrolls 0px; img `pan-x pan-y` scrolls 130px.
+   The pinch is unaffected — `pan-x pan-y` withholds the `pinch-zoom` token, so
+   two fingers still belong to our JS.
+
+   transform-origin: 0 0 (was center center) is load-bearing arithmetic, not a
+   style: it makes image coordinates and scroll coordinates the same system
+   times the scale, which is what lets rescaleScroll in lib/pinchZoom.ts hold a
+   point under the fingers. will-change hints the compositor for smooth pinch.
+   The inline `transform` style is written by the component per gesture frame. */
 .media-viewer-media--zoomable {
-  touch-action: none;
-  transform-origin: center center;
+  touch-action: pan-x pan-y;
+  transform-origin: 0 0;
   will-change: transform;
+}
+
+/* #1805 — the image arm's re-opening of the touch stream, twin of
+   .media-viewer-modal--text one issue earlier. The base .media-viewer-modal
+   closes it with `touch-action: none`, and a descendant cannot widen what an
+   ancestor narrowed under the read where the intersection walks to the root.
+   Whether it does is engine-dependent: chromium stops at the scroll container,
+   so the base rule is inert there and this one changes nothing; Playwright's
+   WebKit exposes no touch-drag drive, so the same question cannot be put to the
+   engine this issue is about. Declaring it is correct under BOTH readings, and
+   measured free under the one that can be measured — at fit the dismiss binder
+   still received 11 cancelable touchmoves out of 11, exactly as under `none`,
+   because at fit nothing overflows and the browser has no pan to start. */
+.media-viewer-modal--zoomable {
+  touch-action: pan-x pan-y;
+}
+
+/* The scroller that replaced the synthesized pan (#1805). overscroll-behavior
+   keeps a drag past either end off the page behind the modal, the same posture
+   .media-viewer-text takes. position: relative makes it the containing block
+   for the sizer below. max-width so a zoomed image never widens the modal
+   instead of scrolling inside it. */
+.media-viewer-zoom-scroller {
+  position: relative;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  max-width: 100%;
+}
+
+/* A CSS transform does not change layout, so a scaled <img> produces no
+   overflow and there would be nothing to scroll. This box is the scrollable
+   area: the component sizes it to fit x scale, and to ZERO at fit, so that at
+   fit the swipe-to-dismiss keeps the single-finger drag.
+
+   Absolutely positioned on purpose — an out-of-flow child contributes to its
+   container's scrollable overflow but NOT to its intrinsic size, so the <img>
+   goes on sizing the scroller at fit and its own max-width: 100% goes on
+   resolving against a box that does not move. In flow it would be a feedback
+   loop. pointer-events: none so the invisible box never eats a tap. */
+.media-viewer-zoom-sizer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
 }
 
 /* <audio> has no intrinsic size — give the bare controls strip a

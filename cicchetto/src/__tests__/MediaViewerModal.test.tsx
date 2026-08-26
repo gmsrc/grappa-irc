@@ -358,18 +358,186 @@ describe("MediaViewerModal — swipe to dismiss (#1438)", () => {
     expect(backdrop.style.opacity).toBe("");
   });
 
-  it("a zoomed image keeps its pan — the dismiss stands down until it is back at fit", () => {
+  it("a zoomed image keeps the drag — the dismiss stands down until it is back at fit", () => {
     const { container } = render(() => <MediaViewerModal />);
     openMediaViewer(IMAGE_URL, "image");
     const img = container.querySelector<HTMLElement>("img");
     if (img === null) throw new Error("no image rendered");
     // Double-tap zoom (#213), the same two touchstarts the viewer reads: it is
     // the published scale, not a test seam, that stands the dismiss down.
+    // Since #1805 the drag it stands down FOR is the browser's own scroll
+    // rather than a synthesized pan, but the gate and its reason are unchanged.
     fireTouchAt(img, "touchstart", 1_000, { clientX: X, clientY: Y0 });
     fireTouchAt(img, "touchend", 1_020, { clientX: X, clientY: Y0 });
     fireTouchAt(img, "touchstart", 1_100, { clientX: X, clientY: Y0 });
     dragAndLift(dialogIn(container), 400);
     expect(mediaViewerState()).not.toBeNull();
+  });
+});
+
+// #1805 — the pan is the browser's scroller now, not a synthesized transform.
+// The pure arithmetic (rescaleScroll, applyPinch, toggleZoom) is pinned in
+// pinchZoom.test.ts; what is asserted HERE is what only this component can get
+// wrong, and each item is one that a plausible-looking implementation gets
+// wrong silently:
+//
+//   - a single-finger touchmove must NOT be claimed. A blanket preventDefault
+//     is exactly what shipped before, and it leaves every other symptom intact
+//     while the scroll simply never happens (measured on the #1805 bench:
+//     claiming while zoomed pins scrollTop at 0 with the scroller otherwise
+//     correct in every respect).
+//   - the sizer must be ZERO at fit. Non-zero there is a browser pan at fit,
+//     which is the swipe-to-dismiss taken away.
+//   - the zoom must be anchored to the touched point. Anchoring to the corner
+//     also "works": it zooms, it scrolls, and it is wrong.
+//
+// jsdom has no layout, so the fit box the component MIRRORS and the scroll
+// offsets it WRITES are injected below. That is a seam on the DOM, not on the
+// component — nothing in production code knows these tests exist.
+describe("MediaViewerModal — native pan for the zoomed image (#1805)", () => {
+  const FIT = { width: 300, height: 200 };
+
+  const openZoomable = (container: HTMLElement) => {
+    openMediaViewer(IMAGE_URL, "image");
+    const scroller = container.querySelector<HTMLElement>(".media-viewer-zoom-scroller");
+    const sizer = container.querySelector<HTMLElement>(".media-viewer-zoom-sizer");
+    const img = container.querySelector<HTMLImageElement>("img.media-viewer-media--zoomable");
+    if (scroller === null || sizer === null || img === null) {
+      throw new Error("no zoomable image rendered");
+    }
+    Object.defineProperty(img, "clientWidth", { value: FIT.width, configurable: true });
+    Object.defineProperty(img, "clientHeight", { value: FIT.height, configurable: true });
+    scroller.getBoundingClientRect = (): DOMRect =>
+      ({
+        left: 0,
+        top: 0,
+        right: FIT.width,
+        bottom: FIT.height,
+        width: FIT.width,
+        height: FIT.height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    let scrollLeft = 0;
+    let scrollTop = 0;
+    Object.defineProperty(scroller, "scrollLeft", {
+      configurable: true,
+      get: () => scrollLeft,
+      set: (v: number) => {
+        scrollLeft = v;
+      },
+    });
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v;
+      },
+    });
+    // The load handler is where the fit is first measured — no ResizeObserver
+    // in jsdom, which the component tolerates on purpose.
+    fireEvent.load(img);
+    return { scroller, sizer, img };
+  };
+
+  const doubleTapAt = (el: HTMLElement, clientX: number, clientY: number): void => {
+    fireTouchAt(el, "touchstart", 1_000, { clientX, clientY });
+    fireTouchAt(el, "touchend", 1_020, { clientX, clientY });
+    fireTouchAt(el, "touchstart", 1_100, { clientX, clientY });
+  };
+
+  it("leaves a single-finger touchmove unclaimed, so the browser can scroll with it", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { img } = openZoomable(container);
+    doubleTapAt(img, 150, 100);
+    fireTouchAt(img, "touchstart", 2_000, { clientX: 150, clientY: 100 });
+    const move = fireTouchAt(img, "touchmove", 2_050, { clientX: 150, clientY: 40 });
+    expect(move.defaultPrevented).toBe(false);
+  });
+
+  it("still claims a TWO-finger touchmove — the native pinch it replaces does not exist", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { img } = openZoomable(container);
+    fireTouchAt(
+      img,
+      "touchstart",
+      2_000,
+      { clientX: 100, clientY: 100 },
+      { clientX: 200, clientY: 100 },
+    );
+    const move = fireTouchAt(
+      img,
+      "touchmove",
+      2_050,
+      { clientX: 0, clientY: 100 },
+      { clientX: 300, clientY: 100 },
+    );
+    expect(move.defaultPrevented).toBe(true);
+    expect(img.style.transform).toBe("scale(3)");
+  });
+
+  it("carries NO scrollable area at fit, so the dismiss keeps the single-finger drag", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { sizer } = openZoomable(container);
+    expect(sizer.style.width).toBe("0px");
+    expect(sizer.style.height).toBe("0px");
+  });
+
+  it("grows the scrollable area to fit x scale once zoomed — a transform alone would grow nothing", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { sizer, img } = openZoomable(container);
+    doubleTapAt(img, 150, 100);
+    expect(img.style.transform).toBe("scale(2)");
+    expect(sizer.style.width).toBe(`${FIT.width * 2}px`);
+    expect(sizer.style.height).toBe(`${FIT.height * 2}px`);
+  });
+
+  it("anchors a double-tap zoom to the tapped point, not to the corner", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { scroller, img } = openZoomable(container);
+    // Tap dead centre of a 300x200 box: at 2x the point that was at (150,100)
+    // paints at (300,200), so holding it under the finger costs exactly one
+    // half-box of scroll on each axis.
+    doubleTapAt(img, 150, 100);
+    expect(scroller.scrollLeft).toBe(150);
+    expect(scroller.scrollTop).toBe(100);
+  });
+
+  it("holds the top-left corner when THAT is what was tapped", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { scroller, img } = openZoomable(container);
+    doubleTapAt(img, 0, 0);
+    expect(scroller.scrollLeft).toBe(0);
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it("unwinds the scroll when the second double-tap returns the image to fit", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    const { scroller, sizer, img } = openZoomable(container);
+    doubleTapAt(img, 150, 100);
+    doubleTapAt(img, 150, 100);
+    expect(img.style.transform).toBe("scale(1)");
+    expect(sizer.style.width).toBe("0px");
+    expect(scroller.scrollLeft).toBe(0);
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it("marks the modal as the image variant, so the stylesheet can re-open the touch stream", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openZoomable(container);
+    const dialog = container.querySelector<HTMLElement>(".media-viewer-modal");
+    if (dialog === null) throw new Error("no media viewer dialog rendered");
+    expect(dialog.classList.contains("media-viewer-modal--zoomable")).toBe(true);
+  });
+
+  it("does NOT mark a video as the image variant — a <video> has no scroller under it", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(VIDEO_URL, "video");
+    const dialog = container.querySelector<HTMLElement>(".media-viewer-modal");
+    if (dialog === null) throw new Error("no media viewer dialog rendered");
+    expect(dialog.classList.contains("media-viewer-modal--zoomable")).toBe(false);
+    expect(container.querySelector(".media-viewer-zoom-scroller")).toBeNull();
   });
 });
 
