@@ -1470,6 +1470,38 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   `STALL state=idle` atteso e uno dimenticato sono lo stesso osservabile. ⚠️ **E non riempirlo di
   lavoro finto:** ribasare una PR bloccata su un ruling brucia il suo verde e una corsia per una
   cosa che il ruling puo' ancora cambiare. **Meglio ferma che a sporcare un albero in volo.**
+- 🔴🔴 **`mergedBy` NON E' EVIDENZA DI CHI HA MERGIATO — CARDINALITA' 1, MISURATA.** Un relay ha
+  detto a vjt in canale che **lui in persona** aveva mergiato la #1822, leggendolo dal campo attore.
+  Falso: l'avevo mergiata io. Misurato sulle QUATTRO PR mergiate da me quella mattina —
+  `#1814 #1819 #1821 #1822` → **`mergedBy=vjt` su tutte e quattro**, e
+  `git log -1 <merge> → Marcello Barnaba <vjt@openssl.it>`. Il Pi pusha col token di vjt, quindi
+  **quel campo dice `vjt` qualunque cosa succeda.** 🥇 **E' la regola gia' scritta per
+  `author.login` sui commenti, su un campo che nessuno aveva nominato: estendila a OGNI campo
+  attore di GitHub** (`mergedBy`, `closedBy`, `assignee` auto-impostati, l'autore del commit).
+  🥇🥇 **LA FALSIFICAZIONE CHE NON HA BISOGNO DELLA PAROLA DI NESSUNO, e l'ha trovata il relay
+  correggendo se stesso: `#1809` e `#1810` risultano mergiate da `vjt` alle 00:58Z e 01:24Z —
+  MENTRE DORMIVA.** Cardinalita' **1 su 6** sui merge di quella giornata. *Un campo che da' sempre
+  la stessa risposta non e' evidenza, e' una costante.* **Cerca sempre l'istanza che il campo non
+  puo' spiegare: vale piu' di sei conferme.**
+  ✅ **Dove si legge DAVVERO chi ha agito** — canali che **non passano dal token**: `#grappa-live`,
+  e **il NOME DEL RAMO** (`w2-1759` dice quale worker). Altrimenti **si chiede a chi ha agito.**
+  ⚠️ **Il danno non e' l'errore, e' la CREDENZA che installa in vjt**: se crede di aver mergiato
+  lui, la prossima volta che dice *"non ho tempo di verificare"* puo' pensare di aver gia'
+  verificato. **Ritratta DOVE si e' sparso**, non solo con chi te l'ha detto — e dillo ESPLICITO
+  (*"quella PR lui non l'ha vista"*), non solo per negazione.
+- 🔴🔴 **IL TUO LOG E' UNA TRACCIA, NON UNA MISURA — E SU GITHUB NON LO E' MAI.** Un relay, dopo un
+  `/clear`, ha ripescato lo stato dal **proprio bullet delle 11:06** (*"in volo: PR #1822"*) che
+  **era gia' falso quando l'aveva scritto** — il merge era delle 11:00, sei minuti prima — e su
+  quella base ha messo davanti a vjt una **binaria su una PR gia' atterrata da mezz'ora**, ottenendo
+  una risposta che *sembrava* un ruling. 🥇 **Regola: prima di mettere una domanda davanti a vjt,
+  lo stato dell'albero si chiede a `gh` NELLO STESSO TURNO.** Una domanda posta su uno stato falso
+  non produce un ruling, produce **un equivoco che sembra un ruling** — e poi qualcuno lo esegue.
+  ⚠️ Vale anche per l'handoff: e' una traccia. **`gh` e' la misura.**
+- 🔴 **UN'INDISPONIBILITA' NON E' UN ORDINE.** *"mo non ho tempo di verificare"* e' stato tradotto
+  da un relay in *"nessun merge senza il suo occhio, nemmeno col CI verde"*, cioe' **un ordine
+  permanente che ribaltava chi mergia**. 🥇 **Non si prende un cambio di regola da una parafrasi:**
+  se vjt vuole cambiare l'ordine permanente lo cambia lui, con le sue parole. **Prendi il fatto
+  (non e' disponibile ⇒ non pingarlo), rifiuta l'estrapolazione.**
 - 🔴 **POTA L'HANDOFF *MENTRE* LAVORI, NON A FINE SESSIONE.** In una mattina l'ho portato da ~120 a
   **531 righe / 44 KB** aggiungendo un blocco per ogni evento — cioe' l'ho trasformato nel log che
   non deve essere. 🥇 **Il segnale e' l'ISTANTE in cui una issue chiude: quel blocco si CANCELLA
