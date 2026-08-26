@@ -3563,6 +3563,233 @@ describe("compose submit — T32 verbs", () => {
   });
 });
 
+// #1796 — /reconnect: the network bounce. Two PATCH legs on ONE slug, park
+// then connect, in that order and sequentially — the ordering is #282's
+// (`lib/reconnect.ts`: "the park must settle before the reconnect") and this
+// verb shares that file's `bounceNetwork` rather than re-deriving it.
+describe("compose submit — /reconnect (#1796)", () => {
+  const parkedCredential = {
+    network: "freenode",
+    nick: "vjt",
+    ident: null,
+    realname: null,
+    sasl_user: null,
+    auth_method: "sasl" as const,
+    auth_command_template: null,
+    autojoin_channels: [],
+    connection_state: "parked" as const,
+    connection_state_reason: null,
+    connection_state_changed_at: null,
+    inserted_at: "",
+    updated_at: "",
+  };
+
+  // `Once`, twice, rather than a blanket `mockResolvedValue` — and the reason
+  // is not style. `clearAllMocks` in this file's `beforeEach` clears CALLS,
+  // not implementations, so a blanket stub set here outlives the describe and
+  // reaches the #1396 characterization table further down, silently repinning
+  // the `connect` and `disconnect` rows to whatever this block last left
+  // behind. Measured: it did, until this became `Once`. The call count is
+  // known exactly (a bounce is two PATCHes), which is the condition under
+  // which the one-shot form is safe — see the #1255 note above for the case
+  // where it is not.
+  const mockBothLegs = (api: typeof import("../lib/api")): void => {
+    vi.mocked(api.patchNetwork)
+      .mockResolvedValueOnce(parkedCredential)
+      .mockResolvedValueOnce(parkedCredential);
+  };
+
+  it("/reconnect bare parks THEN connects the active window's network", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    mockBothLegs(api);
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/reconnect");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    // Both legs AND their order: a bounce that connects before it parks is
+    // not a bounce, and asserting the two calls as a set would not say so.
+    expect(vi.mocked(api.patchNetwork).mock.calls).toEqual([
+      ["tok", "freenode", { connection_state: "parked" }],
+      ["tok", "freenode", { connection_state: "connected" }],
+    ]);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/reconnect <net> bounces the named slug, not the active one", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    mockBothLegs(api);
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/reconnect libera");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(api.patchNetwork).mock.calls).toEqual([
+      ["tok", "libera", { connection_state: "parked" }],
+      ["tok", "libera", { connection_state: "connected" }],
+    ]);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // The reason is the upstream QUIT message, so it rides the PARK leg — the
+  // leg that closes the socket. Putting it on the connect leg would send the
+  // operator's goodbye to nobody.
+  it("/reconnect <net> <reason> carries the reason into the park leg only", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    mockBothLegs(api);
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/reconnect libera rolling a fresh vhost");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(api.patchNetwork).mock.calls).toEqual([
+      ["tok", "libera", { connection_state: "parked", reason: "rolling a fresh vhost" }],
+      ["tok", "libera", { connection_state: "connected" }],
+    ]);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // A network that could not be parked must NOT be connected: the sequential
+  // await is what makes the half-bounce unreachable, and a `Promise.all` here
+  // would leave the operator's network in a state neither leg intended.
+  it("/reconnect does not run the connect leg when the park leg fails", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.patchNetwork).mockRejectedValueOnce(new api.ApiError(503, "too_many_sessions"));
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/reconnect libera");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(api.patchNetwork).mock.calls).toEqual([
+      ["tok", "libera", { connection_state: "parked" }],
+    ]);
+    expect(result).toMatchObject({
+      error: expect.stringMatching(/already at the session limit/i),
+    });
+  });
+
+  // A parked network has nothing to bounce, and the SHARED copy for
+  // `not_connected` ("isn't in a state to connect or disconnect right now")
+  // is wrong here in a way the operator cannot act on — it IS in a state to
+  // connect. Name the cure instead.
+  it("/reconnect on a network that is not connected names /connect as the cure", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.patchNetwork).mockRejectedValueOnce(new api.ApiError(400, "not_connected"));
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/reconnect libera");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(api.patchNetwork).mock.calls).toEqual([
+      ["tok", "libera", { connection_state: "parked" }],
+    ]);
+    expect(result).toEqual({
+      error: "/reconnect: libera is not connected — use /connect libera",
+    });
+  });
+});
+
+// #1796 — /cycle: the CHANNEL bounce (part then join), irssi's CYCLE. Nothing
+// network-scoped happens here; that is `/reconnect`'s job.
+describe("compose submit — /cycle (#1796)", () => {
+  it("/cycle bare parts THEN rejoins the submitting window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockResolvedValueOnce();
+    vi.mocked(api.postJoin).mockResolvedValueOnce();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/cycle");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#a", null);
+    expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#a", null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/cycle #chan <message> parts the named channel with the message, then rejoins it", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockResolvedValueOnce();
+    vi.mocked(api.postJoin).mockResolvedValueOnce();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/cycle #other brb");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#other", "brb");
+    expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#other", null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // The #1208 trap, end to end: the parser keeps `brb` as the message, and the
+  // JOIN leg is where a regression would SHOW — a phantom `brb` channel would
+  // be created here, not merely parsed. Asserting the part alone would pass
+  // with the join regressed.
+  it("/cycle with a sigil-less message cycles the current channel, not a phantom one", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockResolvedValueOnce();
+    vi.mocked(api.postJoin).mockResolvedValueOnce();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/cycle brb");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#a", "brb");
+    expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#a", null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // A part that failed leaves the operator IN the channel, so rejoining would
+  // be a second JOIN to a channel they never left — and on a +i channel it is
+  // the one that earns a 473. Sequential await, same rule as /reconnect.
+  it("/cycle does not join when the part fails", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockRejectedValueOnce(new api.ApiError(404, "not_found"));
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/cycle");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postJoin).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ error: expect.any(String) });
+  });
+
+  // `/part` tolerates a non-channel submitting window (its DELETE just fails
+  // server-side), but `/cycle` cannot: its second leg would JOIN whatever the
+  // window is named, manufacturing a channel out of `$server` or a peer nick.
+  // Refuse before either leg.
+  it("/cycle refuses a non-channel window instead of joining its name", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "bob");
+    compose.setDraft(k, "/cycle");
+    const result = await compose.submit(k, "freenode", "bob");
+
+    expect(api.postPart).not.toHaveBeenCalled();
+    expect(api.postJoin).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ error: expect.stringContaining("/cycle") });
+  });
+});
+
 // C2.2 / C4.3 — handler wiring for DM verbs.
 // /msg /query /q all open the query window AND switch focus (user-action).
 describe("compose submit — /query and /q DM verbs", () => {
@@ -5173,6 +5400,7 @@ const DISPATCH_CASE_LABELS = [
   "banlist",
   "connect",
   "ctcp",
+  "cycle",
   "deop",
   "devoice",
   "disconnect",
@@ -5206,6 +5434,7 @@ const DISPATCH_CASE_LABELS = [
   "query",
   "quit",
   "quote",
+  "reconnect",
   "recover",
   "rehash",
   "service-modal",
@@ -5304,6 +5533,14 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string
   { kind: "quote", draft: "/quote PING :x" },
   { kind: "connect", draft: "/connect libera" },
   { kind: "disconnect", draft: "/disconnect libera" },
+  // #1796 — the reason is NOT decoration here. Without it this row's effect
+  // signature is byte-identical to `disconnect`'s (the harness's rejecting
+  // `patchNetwork` stops the bounce after its park leg), and the net reported
+  // the two as an indistinguishable pair — a row that buys nothing. The reason
+  // rides the park body, so it is what tells them apart. Measured, not
+  // reasoned: the pair was in the snapshot until this word was added.
+  { kind: "reconnect", draft: "/reconnect libera bouncing" },
+  { kind: "cycle", draft: "/cycle #other brb" },
   { kind: "quit", draft: "/quit bye" },
   { kind: "recover", draft: "/recover libera" },
   { kind: "alias-define", draft: "/alias hi /msg bob $*" },
@@ -5404,12 +5641,12 @@ describe("#1396 — dispatch characterization over every arm", () => {
       misparsed,
     }).toMatchInlineSnapshot(`
       {
-        "arms": 60,
+        "arms": 62,
         "armsWithNoDraft": [],
         "draftsNamingNoArm": [],
         "duplicated": [],
         "misparsed": [],
-        "rows": 60,
+        "rows": 62,
       }
     `);
   });
@@ -5551,6 +5788,19 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "#a", "\\u0001VERSION\\u0001", {"kind":"ctcp","target":"bob"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "cycle": {
+          "effects": [
+            "aliasList.aliases()",
+            "api.postJoin("tok", "freenode", "#other", null)",
+            "api.postPart("tok", "freenode", "#other", "brb")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"#other","kind":"channel"})",
           ],
           "result": {
             "ok": true,
@@ -5927,6 +6177,16 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "ok": true,
           },
         },
+        "reconnect": {
+          "effects": [
+            "aliasList.aliases()",
+            "api.patchNetwork("tok", "libera", {"connection_state":"parked","reason":"bouncing"})",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "You're already at the session limit for this network from this device. Disconnect first or open from a different device.",
+          },
+        },
         "recover": {
           "effects": [
             "aliasList.aliases()",
@@ -6191,7 +6451,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
           "aliasList.aliases()",
           "networks.networkIdBySlug("freenode")",
         ],
-        "arms": 60,
+        "arms": 62,
         "indistinguishablePairs": [
           [
             "ame",

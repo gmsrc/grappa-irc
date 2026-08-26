@@ -512,6 +512,99 @@ describe("parseSlash — T32 verbs (/quit /disconnect /connect)", () => {
   });
 });
 
+// #1796 — the bounce pair, and they are scoped to DIFFERENT things on purpose:
+// `/reconnect` is NETWORK-scoped (park then unpark), `/cycle` is CHANNEL-scoped
+// (part then join). That is irssi's own split (`RECONNECT <tag>` /
+// `CYCLE [<channel>] [<message>]`) and cic, which is irssi-shaped, must not
+// invert it. Each verb therefore inherits the grammar of the verb it is the
+// round trip of — `/reconnect` from `/disconnect`, `/cycle` from `/part`.
+describe("parseSlash — /reconnect + /cycle (#1796)", () => {
+  it("/reconnect bare → network: null, reason: null", () => {
+    expect(parseSlash("/reconnect")).toEqual({
+      kind: "reconnect",
+      network: null,
+      reason: null,
+    });
+  });
+
+  it("/reconnect <netslug> → network: slug, reason: null", () => {
+    expect(parseSlash("/reconnect libera")).toEqual({
+      kind: "reconnect",
+      network: "libera",
+      reason: null,
+    });
+  });
+
+  it("/reconnect <netslug> <reason...> → network: slug, reason: rest of args", () => {
+    expect(parseSlash("/reconnect libera rolling a fresh vhost")).toEqual({
+      kind: "reconnect",
+      network: "libera",
+      reason: "rolling a fresh vhost",
+    });
+  });
+
+  // The first token is ALWAYS the slug, exactly as `/disconnect` reads it. A
+  // network name carries no sigil, so the channel heuristic below cannot apply
+  // here and the two verbs must not be "made consistent" with each other: an
+  // operator alternating between them would otherwise get a different answer
+  // to the same first word.
+  it("/reconnect reads its first token as a slug, never as a reason", () => {
+    expect(parseSlash("/reconnect brb")).toEqual({
+      kind: "reconnect",
+      network: "brb",
+      reason: null,
+    });
+  });
+
+  it("/cycle bare → channel: null, reason: null (the current window)", () => {
+    expect(parseSlash("/cycle")).toEqual({ kind: "cycle", channel: null, reason: null });
+  });
+
+  it("/cycle #chan → channel target, no message", () => {
+    expect(parseSlash("/cycle #grappa")).toEqual({
+      kind: "cycle",
+      channel: "#grappa",
+      reason: null,
+    });
+  });
+
+  it("/cycle #chan <message> → target plus the PART message", () => {
+    expect(parseSlash("/cycle #grappa brb")).toEqual({
+      kind: "cycle",
+      channel: "#grappa",
+      reason: "brb",
+    });
+  });
+
+  // The #1208 sigil rule, inherited: a first token without a channel sigil is
+  // the MESSAGE, not a target. `/cycle brb` must not manufacture a channel
+  // named `brb` — that is the exact defect #1208 fixed for `/part`, and a
+  // second verb with the same grammar is precisely how it would come back.
+  it("/cycle with a sigil-less first token is all message, not a target (#1208)", () => {
+    expect(parseSlash("/cycle brb")).toEqual({
+      kind: "cycle",
+      channel: null,
+      reason: "brb",
+    });
+  });
+
+  it("/cycle with a sigil-less multi-word message keeps the whole text (#1208)", () => {
+    expect(parseSlash("/cycle non trovo utili le bestemmie")).toEqual({
+      kind: "cycle",
+      channel: null,
+      reason: "non trovo utili le bestemmie",
+    });
+  });
+
+  it.each(["&local", "+modeless", "!safe"])("/cycle %s is a target, not a message", (chan) => {
+    expect(parseSlash(`/cycle ${chan} brb`)).toEqual({
+      kind: "cycle",
+      channel: chan,
+      reason: "brb",
+    });
+  });
+});
+
 describe("parseSlash — /away", () => {
   it("/away bare → unset explicit away", () => {
     expect(parseSlash("/away")).toEqual({ kind: "away", action: "unset" });
@@ -1768,6 +1861,26 @@ describe("parseSlash — network-advertised CHANTYPES (#1255)", () => {
   it("/part still recognises an advertised sigil", () => {
     expect(parseSlash("/part #italia bye", {}, HASH_ONLY)).toEqual({
       kind: "part",
+      channel: "#italia",
+      reason: "bye",
+    });
+  });
+
+  // #1796 — `/cycle` answers the per-network question the same way `/part`
+  // does, because it is the same arm. Pinned separately anyway: "they share an
+  // arm" is an implementation detail, and a future split that gave `/cycle` a
+  // hardcoded sigil class would pass every test above this one.
+  it("/cycle treats an unadvertised sigil as the start of the message", () => {
+    expect(parseSlash("/cycle &local bye", {}, HASH_ONLY)).toEqual({
+      kind: "cycle",
+      channel: null,
+      reason: "&local bye",
+    });
+  });
+
+  it("/cycle still recognises an advertised sigil", () => {
+    expect(parseSlash("/cycle #italia bye", {}, HASH_ONLY)).toEqual({
+      kind: "cycle",
       channel: "#italia",
       reason: "bye",
     });
