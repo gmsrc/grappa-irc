@@ -14028,8 +14028,13 @@ audio.media-viewer-media {
 }
 
 /* Brighter than the Debug tab's `.adm-rain` (0.55): there it sits under
-   readouts an operator must read, here it IS the picture. The glyph alpha
-   itself is shared — one implementation, one look. */
+   readouts an operator must read, here it IS the picture.
+
+   #1807 — the DRAWING is louder here too, and that is a prop rather than a
+   rule in this file: `MatrixRain` takes its four knobs (glyph alpha, wash,
+   leader colour, rows per frame) from the caller since the credits modal
+   needed all four past what the phosphor panel can afford. This layer's
+   opacity is the only part of the difference that is CSS. */
 .credits-rain {
   position: absolute;
   inset: 0;

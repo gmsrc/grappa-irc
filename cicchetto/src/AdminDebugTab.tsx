@@ -1,7 +1,7 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import AdminCard from "./admin/AdminCard";
 import { isDiagEnabled, setDiagEnabled } from "./DiagFloat";
-import MatrixRain from "./MatrixRain";
+import MatrixRain, { type MatrixRainLook } from "./MatrixRain";
 
 // UX-6 D12 (2026-05-21) — Admin → Debug tab. Hosts the iOS PWA
 // keyboard / viewport diagnostics. Previously lived inside
@@ -28,6 +28,28 @@ import MatrixRain from "./MatrixRain";
 // Per-class parity matrix (`feedback_e2e_user_class_parity_matrix`):
 // admin-gated, EXEMPT. e2e coverage at m7-admin-gate proves
 // non-admin can't reach AdminPane at all; this tab inherits.
+
+/**
+ * What the phosphor rain looks like here — and it is deliberately EXACTLY
+ * what `MatrixRain` hardcoded before #1807 made the knobs per-surface,
+ * measured on `4c9270c5`.
+ *
+ * #1807 made the credits modal's rain loud, because there the rain IS the
+ * picture. Here it is not: it falls BEHIND viewport readouts an operator is
+ * trying to read, and low alpha plus a short trail is what keeps them
+ * readable-through. `leader: null` is the same statement about shape — no
+ * bright head, one glyph per column per frame, which is the drawing the
+ * panel has always had.
+ *
+ * Exported so `AdminDebugTab.test.tsx` can pin the four values against that
+ * commit without re-typing them.
+ */
+export const ADM_RAIN_LOOK: MatrixRainLook = {
+  glyphAlpha: 0.18,
+  fadeAlpha: 0.1,
+  leader: null,
+  rowsPerFrame: 1,
+};
 
 const AdminDebugTab: Component = () => {
   const [diagWinH, setDiagWinH] = createSignal(0);
@@ -186,7 +208,7 @@ const AdminDebugTab: Component = () => {
           {/* biome-ignore lint/a11y/noStaticElementInteractions: same. */}
           <div class="adm-matrix" onClick={tapHeading}>
             <Show when={rainOn()}>
-              <MatrixRain class="adm-rain" testId="admin-matrix-rain" />
+              <MatrixRain class="adm-rain" testId="admin-matrix-rain" look={() => ADM_RAIN_LOOK} />
             </Show>
             <p class="adm-matrix-prompt" aria-hidden="true">
               grappa@cicchetto:~$ tail -f /dev/viewport

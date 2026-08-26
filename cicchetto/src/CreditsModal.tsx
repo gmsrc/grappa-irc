@@ -8,6 +8,7 @@ import {
   creditsMuted,
   toggleCreditsMuted,
 } from "./lib/creditsModal";
+import { CREDITS_RAIN_LOOK } from "./lib/creditsRain";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import MatrixRain from "./MatrixRain";
 
@@ -95,7 +96,11 @@ const CreditsModal: Component = () => {
         aria-label="credits"
         data-testid="credits-modal"
       >
-        <MatrixRain class="credits-rain" testId="credits-matrix-rain" />
+        <MatrixRain
+          class="credits-rain"
+          testId="credits-matrix-rain"
+          look={() => CREDITS_RAIN_LOOK}
+        />
 
         <div class="credits-chrome">
           <button
