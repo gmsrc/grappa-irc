@@ -16,7 +16,23 @@ config :grappa, :incognito_close_grace_ms, 2_000
 
 config :grappa, Grappa.Repo,
   database: Path.expand("../runtime/grappa_dev.db", __DIR__),
-  pool_size: 5,
+  # #1759c — a MEASUREMENT LEVER, not a behaviour change and not a cure.
+  #
+  # `config/runtime.exs:187` already reads `POOL_SIZE` this way, but that
+  # block is gated on `config_env() == :prod` (`:137`), and the e2e stack
+  # runs `MIX_ENV: dev` (`cicchetto/e2e/compose.yaml:61`). So the pool the
+  # e2e suite exercises was a literal `5` that nothing could move — and a
+  # question of the form "at what N does a `pool_size: 10` pool saturate?"
+  # could only have been answered at HALF the production pool and then
+  # extrapolated, which is the one move the investigation is not allowed.
+  #
+  # The default is `5`, so an unset environment is byte-for-byte the
+  # behaviour that shipped before this line. What it buys is the ability to
+  # take the SAME reading at two pool sizes: if the saturation point tracks
+  # the pool, the mechanism is the pool; if it does not, the hypothesis is
+  # dead and that is a result. A lever that only ever reads one value cannot
+  # tell those two apart.
+  pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5"),
   # CP24 cluster `post-cr-review` bucket B, persistence/S2: mirror prod's
   # 30s busy_timeout so iex sessions + integration scripts hit the same
   # "database is locked" cushion as prod. Default ~2s otherwise.

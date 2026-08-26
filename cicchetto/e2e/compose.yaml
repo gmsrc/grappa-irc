@@ -486,6 +486,12 @@ services:
     environment:
       MIX_ENV: dev
       ELIXIR_ERL_OPTIONS: "+fnu"
+      # #1759c — the measurement lever reaching the BEAM. `config/dev.exs`
+      # reads `POOL_SIZE` with a `5` default (the value that was hardcoded
+      # there before), so an unset variable leaves this stack exactly as it
+      # was. Set it to take the same reading at a second pool size, which is
+      # what turns a saturation number into a displacement.
+      POOL_SIZE: ${POOL_SIZE:-5}
       # #485 — self-serve the built SPA from the mounted dist (see volumes).
       CIC_DIST_ROOT: /app/cicchetto-dist
       # Captcha disabled — the test suite drives signup directly via
