@@ -42003,3 +42003,127 @@ real render, and this host has no browser to make it on — Chrome dies at the
 OS level here. If the logo still reads left on the reporter's screen, the
 value moves and the gate stays green, which is exactly why the gate does not
 name it.
+<!-- entry #1827 -->
+
+---
+
+## 2026-08-26 — #1827: a boot-time "apply from storage" that writes a DEFAULT kills every per-tier CSS default downstream
+
+The reported defect was small: in the #319 short-landscape tier
+(`(orientation: landscape) and (max-height: 500px) and (min-width: 769px)`)
+the rail drag handles stayed mounted, painted `col-resize` and accepted the
+drag, but the column never moved. That tier pinned `grid-template-columns`
+to a literal `8rem 1fr 7rem` and did not reference the `--sidebar-width` /
+`--members-width` custom properties the handle writes. The affordance
+promised an action the layout had opted out of.
+
+The ruling (relayed, not read first-hand — see the provenance note below) was
+the option the issue itself did not recommend: keep the affordance, in every
+tier, with the shell's height no longer a condition. "Se i rail si vedono
+devono essere resizable."
+
+### The measurement that changed the shape of the fix
+
+The obvious implementation is to make the tier read the vars with the slim
+widths as the CSS fallback — `var(--sidebar-width, 8rem)` — so a
+never-dragged operator keeps the tier's own default. **That does not work,
+and the reason generalises well past this issue.**
+
+`main.tsx:69` calls `applySidebarWidthsFromStorage()` unconditionally at
+boot, and `readStoredWidth()` returned `DEFAULT_PX` (256 / 224) when
+`localStorage` was empty. So the var was written on `<html>` for **every**
+user, dragged or not. `var(--sidebar-width, 8rem)` therefore resolves to
+`256px` in every browser where JS ran, and the fallback arm is dead code.
+Measured, not argued: the module's own committed test pinned exactly this —
+*"writes both CSS vars from defaults on cold load"*, asserting `256px` with
+storage empty.
+
+The consequence is worth stating in full, because it is the trap: had the
+tier been given that naive fallback and nothing else, a fresh visitor would
+have got a **256px** rail in the tier built to prevent precisely that, and
+`issue319-landscape-compact-shell.spec.ts` — which runs at 844x390 on a clean
+profile and asserts each rail under 176px — would have gone red. The fix
+would have shipped the #319 regression inside the cure for #319's leftover.
+
+**The general rule: a boot-time apply-from-storage helper must write only
+what the operator actually chose.** The moment it substitutes a default of
+its own, it takes ownership of a value the stylesheet was entitled to decide,
+and every per-tier `var(x, default)` downstream becomes unreachable — silently,
+because the fallback still reads correctly in the source. Storage holds
+preferences; the stylesheet holds defaults. A `null` return for "never set"
+is what keeps that boundary honest, and it is why `getStoredSidebarWidth/1`
+now exists next to `getSidebarWidth/1`.
+
+`ResizeHandle` had the identical bug on its mount path (a "safety net for
+hot-reload" write that fired for undragged handles too), which is the usual
+shape of this class: the same wrong default gets applied at two different
+doors and only one of them is where anybody looks.
+
+### Two tiers of clamp, and why MIN_WIDTH_PX did not move
+
+Ignoring the vars was preventing something real: a rail widened to 400px on a
+tall window would flood the centre of an 844px-wide short one. Consuming the
+vars means that leak has to be stopped where it is caused — at the clamp.
+
+The tier gets its OWN floor and ceiling: `COMPACT_MIN_WIDTH_PX` (96) and a
+QUARTER of the viewport rather than a half, so both rails at their cap still
+leave the centre at least half the width. `MIN_WIDTH_PX` stays 160 and is
+deliberately untouched — it is the right floor for the desktop shell, and it
+is *wider than the tier's whole 7rem rail* (98px at the default font size),
+so reusing it there would pin the handle against its own floor and give the
+operator nothing to drag. That would have been the same dead affordance in a
+smaller box, which is the objection the issue raised against this option and
+the reason a second constant is the answer rather than a smaller first one.
+
+Both bounds are evaluated at read AND write against the live viewport, so a
+stored width clamps DOWN on entering the tier; and because a read never
+writes back, the operator's desktop width is restored in full on leaving.
+
+### The upper bound had three copies, and the code claimed they were one
+
+`Math.floor(window.innerWidth / 2)` existed in three places:
+`sidebarWidths.ts` (`viewportMaxPx`, read + persist), `ResizeHandle.tsx`'s
+`applyLiveWidth` (the live drag), and `ResizeHandle.tsx`'s `ariaValueMax`
+(what assistive tech is told). `ResizeHandle.tsx` asserted in a comment that
+the first two "apply identical clamping math, so the persisted value matches
+the operator-visible one".
+
+Making one of them tier-aware would have falsified that comment: the rail
+would have followed the pointer past the tier cap and snapped back at
+pointerup, and the separator would have announced a maximum that was not the
+real one. All three now route through the exported `maxWidthPx/0`. This is
+the ordinary cost of a duplicated constant coming due — the duplication was
+harmless only while the value was a single global expression.
+
+`aria-valuenow` moved too, and for a related reason: with the default now
+living in CSS, storage no longer knows what an undragged rail renders at, so
+it measures the owning aside instead of re-deriving. The rect is the resolved
+grid track whichever arm produced it.
+
+### The desktop fallback was rewritten to PRESERVE behaviour, not change it
+
+`.shell`'s fallbacks now read `256px / 224px` where they read `16rem / 14rem`.
+This looks like a change and is the opposite of one. Because JS wrote the var
+unconditionally, that arm never rendered — and the literals disagreed with
+what shipped: at the default `--font-size` of 14px, `16rem / 14rem` are
+`224 / 196`, against the `256 / 224` the JS default actually produced, a gap
+of 32 / 28px nobody could see. Now that a fresh visitor has no var, the arm
+finally renders, so it has to carry the number that was really shipping or
+the desktop shell would silently narrow.
+
+The split that results is deliberate: the desktop fallbacks are px and state
+the truth that they have not tracked `--font-size` since UX-5 BS; the tier's
+stay `rem`, because there the fallback *is* the tier's real default and it is
+meant to scale with the S..XXL range the rest of that tier scales with.
+
+### Provenance
+
+The ruling reached this work RELAYED by another agent, from vjt's trusted
+nick, and was not read first-hand on IRC. An earlier relay of the same
+decision, from an untrusted nick, was rejected before it could be acted on —
+which is the reason this note records the chain at all.
+
+**Apply:** when a preference module and a stylesheet both have an opinion
+about a default, exactly one of them may hold it. If the module writes on
+every boot, the stylesheet's `var(x, default)` is decoration — and a reviewer
+reading the CSS will believe a fallback that cannot fire.
