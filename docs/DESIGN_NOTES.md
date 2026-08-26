@@ -65735,3 +65735,92 @@ does not mention the credits payload at all — the word does not appear in
 `OPERATIONS.md`. That is #1773's documentation debt, not this slice's, and
 inventing a credits subsection to hang one `.mailmap` sentence on would put
 the note somewhere no reader would look for it.
+<!-- entry #1801 -->
+
+---
+
+## 2026-08-26 — #1801: two doors drawn alike, and the measurement that decides a glyph's size
+
+With the mobile bottom bar off, #1766's top band carried two openers drawn
+identically — the same three CSS bars, one at each end — and they open
+different things: the leading one the window/channel list, the trailing one the
+rail. #1766 gave them one drawing on purpose, in its own words *"with the bar
+off the two ☰ sit in one 48px band and have to look identical"*. That was right
+while both were "a menu"; it became the defect the moment the left one named a
+specific list. **Sameness is a claim, and a shared drawing makes it.**
+
+vjt ruled on `#grappa`: the trailing hamburger STAYS generic — *"fa anche molto
+altro rispetto alla lista membri"*, it is a catch-all (home, rooms, mentions,
+player, radio, themes, archive, settings, admin AND the member list) and the
+generic glyph is the honest name for that, so no "people" icon there. The
+leading one becomes `#`, at the trailing glyph's size, with clearance from the
+channel name it sat flush against. An emoji was floated and dropped with the
+reason stated in channel and not as taste: a platform-painted glyph ignores
+`currentColor`, so it would sit dead under the `:hover` / `:focus-visible` lift
+the rest of the chrome answers, and it renders differently on iOS and Android.
+
+### The size is a font metric, so the CSS has to be one too
+
+"Stessa dimensione del glifo dell'hamburger" cannot be satisfied by
+`font-size: var(--chrome-icon-size)`, and the reason is #1766's own lesson one
+level down: the bars fill the token EXACTLY (a 19.59px square at root 14px)
+while a character's INK is smaller than its em box. Worse, by how much is a
+property of the FONT, and `--font-mono` resolves to a different face on every
+platform this ships to. Ink height in em, read off the font binaries with a
+hand-written table reader calibrated against painted pixels:
+
+| face | where it is the resolved `--font-mono` | `#` ink W | `#` ink H |
+| --- | --- | --- | --- |
+| Liberation Mono | the e2e image (Linux) | 0.5415 | 0.6587 |
+| SF Mono | `ui-monospace` on iOS/macOS | 0.5366 | 0.7046 |
+| Menlo | the stack's next macOS entry | 0.6060 | 0.7153 |
+
+A single measured divisor would therefore be correct on exactly one platform,
+and the one it would be measured on is the CI runner rather than the phone the
+defect was reported from. What closes that gap is a pair that cancels:
+`font-size: calc(var(--chrome-icon-size) / 0.68)` with `font-size-adjust:
+cap-height 0.68`. The adjust scales the used size so the resolved face's cap
+height is `0.68 ×` the SPECIFIED size, whatever face resolves; `#` is drawn TO
+cap height (measured 1.000 of it in Liberation Mono AND in SF Mono, 0.981 in
+Menlo); so the pair states *"the `#`'s ink is `--chrome-icon-size` tall"* on any
+font, which is the same square the bars fill. Painted pixels on the e2e image,
+scanned 4px inside the box so the 1px border is out of frame: `#` 16.33 W ×
+19.67 H against bars 19.33 × 19.33, on both engines it ships.
+
+`0.68` is not a size and not a second knob — the token stays the one knob, so a
+text-size change still moves both glyphs. It is the aspect target, and it is
+load-bearing only where `font-size-adjust` is unsupported: there the specified
+size stands alone and still lands within 4% of parity on all three faces, clear
+of #305's 18px floor. It is the midpoint of the two faces that matter.
+
+**The width does not match, and no `#` can.** At equal height it paints 16.33
+against the bars' 19.33; buying it 18px of width would make it 21.9px TALL, 12%
+taller than the twin it was told to match. Height is the axis a reader compares
+glyphs on and the axis #305's floor was missed in, so height is the axis that
+matches and the refusal is stated in the rule, the spec and the report rather
+than absorbed silently.
+
+### A correction to #1766's own table, in exactly its own genre
+
+That entry records `U+2630 as text — 19.59 W × 17.00 H`, from canvas
+`actualBoundingBox`, and the W is not ink. Measured here against a pixel scan
+of the same glyph in the same engine at the same size: webkit reports
+`actualBoundingBoxLeft + Right` as the ADVANCE (`200.00` at 200px, painted
+`180.00`; `#` `120.02`, painted `108.67`), while chromium reports the true ink
+(`109` for `#`, painted `109`). Heights are sound in both. So the W column of a
+table whose entire point was *"the box overstates the glyph"* is itself a box
+measurement, on the engine the numbers were taken from. Nothing downstream
+moves — the bars' width is CSS-computed, not canvas-measured, and the row that
+decided #1766 was the height — but the class does: **an ink oracle is per
+engine until a painted-pixel scan says otherwise**, and that is why the guard
+this issue ships measures pixels rather than asking a text-metrics API.
+
+### What was NOT measured
+
+No real iOS device was available, so the SF Mono numbers above are read from
+`/System/Library/Fonts/SFNSMono.ttf` — the same family iOS resolves
+`ui-monospace` to — and not from a rendered iPhone. What the runner proves is
+that both its engines honour `font-size-adjust: cap-height`; that Safari on a
+phone does too is inference from the same WebKit lineage, not a measurement.
+Should it turn out otherwise there, the fallback path is the one already
+described and its worst case is 4%.
