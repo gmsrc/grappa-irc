@@ -452,7 +452,7 @@ defmodule GrappaWeb.GrappaChannel do
     {:channel, user_name, network_slug, Identifier.canonical_target(channel, casemapping)}
   end
 
-  defp canonicalize_topic(other, _context), do: other
+  defp canonicalize_topic(other, _), do: other
 
   # The network's CASEMAPPING for a stateless per-channel topic join.
   # `Session.casemapping/2` reads the live Server (`:ascii` when no pid), and
@@ -512,7 +512,7 @@ defmodule GrappaWeb.GrappaChannel do
         {:error, :no_session} -> nil
       end
 
-      # #267 — the per-channel WS seed is the full server-authoritative
+    # #267 — the per-channel WS seed is the full server-authoritative
     # `WindowCounts.snapshot/7` (messages/mentions/events + severity),
     # NOT the former scalar unread_count. cic renders these directly and
     # stops deriving counts client-side. cursor == nil → snapshot counts
@@ -555,11 +555,11 @@ defmodule GrappaWeb.GrappaChannel do
   # here: a client already past the handshake was, by definition, at or
   # above the floor, so it needs the floor only pre-connect (via /api/config
   # + the 426 refusal), not after.
-  defp join_reply({:user, _}, _context) do
+  defp join_reply({:user, _}, _) do
     %{protocol_version: Grappa.Protocol.version()}
   end
 
-  defp join_reply(_, _context), do: %{}
+  defp join_reply(_, _), do: %{}
 
   @impl Phoenix.Channel
   def handle_info({:after_join, {:user, user_name}}, socket) do

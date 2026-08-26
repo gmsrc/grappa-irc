@@ -395,8 +395,8 @@ defmodule GrappaWeb.JoinSeedCostTest do
   # registration write disappears without being special-cased.
   defp per_join_tally({_, hi_tally}, {_, lo_tally}, joins) do
     hi_tally
-    |> Map.merge(lo_tally, fn _source, hi, lo -> hi - lo end)
-    |> Enum.reject(fn {_source, n} -> n == 0 end)
+    |> Map.merge(lo_tally, fn _, hi, lo -> hi - lo end)
+    |> Enum.reject(fn {_, n} -> n == 0 end)
     |> Map.new(fn {source, n} -> {source, div(n, joins)} end)
   end
 
