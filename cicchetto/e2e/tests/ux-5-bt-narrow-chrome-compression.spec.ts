@@ -199,6 +199,16 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 
   //     bars, first cut (/3)  19.59 W × 15.06 H   ← the regression #1766 shipped
   //     bars, shipped         19.59 W × 19.59 H
   //
+  // ⚠️ #1801 correction, first row only: that 19.59 W is the ADVANCE, not ink.
+  // Re-measured against a pixel scan of the same glyph in the same engine at
+  // the same size, webkit reports `actualBoundingBoxLeft + Right` as the
+  // advance (painted: 17.67 W × 16.00 H) while chromium reports true ink;
+  // heights are sound in both. Nothing here moves — the bars' width is
+  // CSS-computed and the row that decided #1766 was the HEIGHT — but the
+  // column is a box measurement in a table written to say boxes overstate
+  // glyphs, so: an ink oracle is per-engine until painted pixels say
+  // otherwise. #1801's own guard scans pixels for exactly that reason.
+  //
   // So the threshold is unchanged at 18 and is met in BOTH axes for the first
   // time. Read off the computed shadow rather than recomputing the CSS
   // formula, so the test measures what is painted instead of restating it.

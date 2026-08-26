@@ -174,8 +174,20 @@ describe("#1766 — the ☰'s three bars are drawn, not typed", () => {
 // carattere / ascii / roba anni '70". The character itself is pinned in
 // `PaneTopBar.test.tsx`; what lives here is the CSS half.
 describe("#1801 — the windows opener is a typed `#`, not a drawn ☰", () => {
+  const fontSizeOf = (body: string) => /(?:^|[;{\s])font-size:([^;]*)/.exec(body)?.[1]?.trim();
+
+  // `font-size: 0` IS a font-size, so a filter that merely looks for the
+  // property makes the suppression mutant fail BOTH this test and the one
+  // above — measured: one mutant, two reds, neither naming which mechanism
+  // broke. Suppression is that test's business; this one owns the derivation.
+  // Read the VALUE and drop the zero rather than writing a lookahead: `\s*`
+  // backtracks to width zero and lets `(?!0…)` pass on ` 0;`, which is a
+  // silently vacuous filter (measured too, on the same mutant).
   const sizingRules = () =>
-    mentioning(WINDOWS_OPENER).filter((r) => /(^|[;\s])font-size:/.test(r.body));
+    mentioning(WINDOWS_OPENER).filter((r) => {
+      const decl = fontSizeOf(r.body);
+      return decl !== undefined && decl !== "0";
+    });
 
   it("draws no bars: nothing gives it a ::before", () => {
     const drawn = barRules().filter((r) => r.selectors.includes(WINDOWS_OPENER));
@@ -203,7 +215,7 @@ describe("#1801 — the windows opener is a typed `#`, not a drawn ☰", () => {
   it("derives its size from --chrome-icon-size rather than a fresh px", () => {
     expect(sizingRules().length, "nothing sizes the left door's character").toBeGreaterThan(0);
     for (const rule of sizingRules()) {
-      const decl = /font-size:([^;]*)/.exec(rule.body)?.[1] ?? "";
+      const decl = fontSizeOf(rule.body) ?? "";
       expect(decl, `\`${rule.selectors}\` sizes the \`#\` off the shared token`).toMatch(
         /var\(--chrome-icon-size\)/,
       );
