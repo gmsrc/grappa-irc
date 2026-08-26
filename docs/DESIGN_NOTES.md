@@ -41924,3 +41924,82 @@ contradict each other — a ratio against a clock, a derivative against a
 sample count, a cap against a stamp. And a cure that moves a constant should
 be measured in BOTH directions before it is proposed: this one is a pinch
 between two clocks, and each direction restores the other's bug.
+<!-- entry #1828 -->
+
+---
+
+## 2026-08-26 — #1828: the rail radio band's logo, and an inset that is optical rather than metric
+
+**What was reported:** the station logo in the rail's radio band reads as
+further left than the nick rows stacked directly above it. **What was
+measured:** both left edges are on the same 7px. `.shell-members` owns
+`--rail-inset: 0.5rem` and the band's border box takes it directly (#1737);
+the nick rows reach the identical number through the #1802 pair, the pane
+cancelling the inset with a negative margin and the container giving it back
+to the pane's children. There was nothing to align.
+
+**Two candidate extra offsets, both looked for and both absent.** A leading
+space sigil would have put a whole monospace advance of whitespace in front of
+every unprefixed nick — `memberSigil/1` does return `" "` for plain, but
+`sigilToPrefix` in `MembersPane.tsx` maps that to `""` and `NickText` then
+emits no prefix span at all, so a plain nick's first glyph IS its first
+letter. A padding on the row's click button would have done the same —
+`.members-pane li .member-name` resets it to `padding: 0`. Both refuted before
+touching anything, which is what leaves the side bearing as the whole of it.
+
+**So the difference is ink, not geometry.** The logo is an image whose pixels
+start at its box edge; a nick is monospace text whose glyphs carry a left side
+bearing. Read out of the two fonts `--font-mono` actually resolves to on
+macOS, at a 14px em: median lowercase bearing 1.36px in SF Mono and 1.30px in
+Menlo, maximum 2.02px (`k`) and 2.47px (`r`), advance width 8.65px and 8.43px.
+The image ink sits ON a line the glyph ink only approaches by about 1.3px, and
+a filled mass reads heavier than sparse strokes at the same x — so the cure is
+an optical nudge, and `0.15rem` (2.1px) puts the logo's ink between the median
+and the maximum bearing, i.e. just INSIDE a typical nick's rather than level
+with it.
+
+**The mechanism was forced, not preferred, and this is the durable part.** The
+logo and the title are consecutive flex items, so the 2.1px comes out of one
+of them and the box model offers no third option. A `margin-inline-start`
+keeps the artwork pristine and carries the title and the track line right
+along with the logo; a `padding-inline-start` moves nothing but the logo and
+pays for it in the image. The report forbids moving the title, so it is the
+padding — priced first: with the global `border-box` the content box goes 28px
+to 25.9px against an unchanged 28px height, so `object-fit: cover` crops about
+1.05px off each side of artwork that is square in all twenty station files.
+Cover crops and never distorts, which is the policy that rule already
+declared. **The general rule to keep: an optical inset on one flex item is
+never free — it is charged either to the neighbours' position or to the item's
+own content box, and which one is a decision to make out loud.**
+
+**What the gate holds, and what no gate can.** `railRadioBandInset.test.ts`
+asserts that nothing in the band except the logo insets itself horizontally —
+the tempting cure for this report is to put #1737's `padding-inline` back on
+`.rail-radio-now`, which re-bleeds the band and moves everything in it, and
+that regression was previously ungated because `railInset.test.ts` only
+polices the children the container addresses by name (`.members-pane`) — and
+that the logo's inset is a padding rather than a margin, which is the rejected
+mechanism above. Each assertion was falsified by its own mutant: the band
+padding restored kills the first and leaves the second green, the logo's
+padding swapped for a margin kills the second and leaves the first green.
+The VALUE is deliberately unasserted: 2.1px is an optical judgement, and
+re-reading `0.15rem` off the sheet under test would mirror the fix instead of
+constraining it.
+
+**Why there is no e2e for this, which is a claim about the DOM and not a
+shrug.** The pixel this fix moves is the left edge of the image's CONTENT box,
+and no DOM geometry API exposes it: `getBoundingClientRect`, `getClientRects`
+and `offsetLeft` all return the BORDER box, which is unchanged at 7px by
+design, and a replaced element's painted rect under `object-fit` is not
+exposed at all. The only browser-side handle is
+`getComputedStyle().paddingInlineStart` — the stylesheet read back through an
+engine, which is what the vitest source gate already does without a browser or
+a lane. So an e2e here would cost a lane to add nothing the source test does
+not have, and would still not witness the thing that matters.
+
+**Not measured, and not claimed:** whether 2.1px is enough. The nudge is
+grounded in the bearing it corrects, but optical adequacy is a judgement on a
+real render, and this host has no browser to make it on — Chrome dies at the
+OS level here. If the logo still reads left on the reporter's screen, the
+value moves and the gate stays green, which is exactly why the gate does not
+name it.
