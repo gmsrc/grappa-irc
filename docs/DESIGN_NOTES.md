@@ -41696,3 +41696,103 @@ plausible table. When a wire field is what blocks a property, the question is
 not "can this be removed" but "who ruled, and what did the real client do when
 it went" — and a version floor answers a session-wide question, so never raise
 it to describe one endpoint.
+<!-- entry #1759c -->
+
+---
+
+## 2026-08-26 — #1759c: the pool queues under a cross-user storm, and never gives up
+
+**Context.** #1759 was filed on the premise that one account with W windows
+produces W SIMULTANEOUS `join_reply` computations, and that this is what
+saturated the pool. That premise is dead. Phoenix's dispatch blocks the
+transport inside a join until the channel answers — `socket.ex:739` matches
+the RETURN of `Channel.Server.join/4`, which parks in a bare `receive` with
+**zero** `after` clauses (`channel/server.ex:40-52`) until the channel has
+run `join/3` to completion and replied (`:315-319`). Per CONNECTION there is
+at most one join in flight, so a same-account storm is SERIAL.
+
+The refutation is per-connection and nothing more: every connection has its
+own transport process and the pool is a NODE resource. So the surviving form
+of the hypothesis is CROSS-USER — N subjects reconnecting together — and it
+had never been measured. This entry records that measurement.
+
+### The instrument, and why it is not an Elixir test
+
+`Phoenix.Test.ChannelTest` pins `transport_pid: self()` and calls
+`Channel.Server.join/4` from the test process. Any concurrency statistic
+taken there reports "serial" whatever the truth is, because the test
+sequenced the joins. An instrument that cannot fail earns no green, so the
+bench is e2e: `issue1759-cross-user-join-storm.spec.ts` opens N REAL
+WebSockets from a page, waits for all of them to be OPEN, and only then
+fires every join, so the burst is a burst and not a staircase.
+
+No new instrumentation was written. `Grappa.DbLatency` already accumulates
+Ecto's `queue_time` and counts `contention.queue_timeout` — a checkout the
+pool REFUSED, which is saturation itself rather than a proxy — and the admin
+controller already exposes it with a reset.
+
+`pool_size` had to be made movable first: `config/runtime.exs` reads
+`POOL_SIZE`, but that block is `config_env() == :prod` and the e2e stack
+boots `MIX_ENV: dev`, where the value was a literal `5`. `config/dev.exs` now
+mirrors prod with a `5` default, so unset is byte-for-byte the old behaviour.
+A lever that reads one value cannot displace anything.
+
+### What was measured
+
+Four runs, all green, controls held at every rung. W=8 windows per subject;
+`queue_ms` is the SUM over the rung, `mean` is per query.
+
+| N | queries | queue_ms @5 | mean @5 | queue_ms @10 | mean @10 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 61 | 1.1 | 0.018 | 1.1 | 0.019 |
+| 2 | 115 | 1.8 | 0.016 | 1.8 | 0.016 |
+| 4 | 228 | 3.9 | 0.017 | 4.4 | 0.019 |
+| 8 | 454 | 197.5 | 0.435 | 14.7 | 0.032 |
+| 16 | 908 | 1831.8 | 2.017 | 928.5 | 1.022 |
+| 24 | 1356 | 4284.8 | 3.160 | 2826.8 | 2.085 |
+| 32 | 1804 | 7694.4 | 4.265 | 5339.8 | 2.960 |
+
+**The work is identical at both pool sizes** — the query counts match rung by
+rung. Only the WAITING moved, which is what makes the rest a displacement and
+not a coincidence.
+
+**The knee is at N=8 and it tracks the pool**: 0.435 ms → 0.032 ms mean queue
+for a 2x pool, a 13.6x drop for the same work. There the pool IS the
+mechanism.
+
+**Past the knee the pool stops explaining it.** Doubling buys 1.97x at N=16,
+1.52x at N=24 and 1.44x at N=32. Something else co-limits and this
+measurement does not name it; SQLite's single-writer file lock, CPU and host
+noise are candidates, none of them measured.
+
+🔴 **`queue_timeout` is ZERO at every rung, at both pool sizes, in all four
+runs.** At N=32 that is 256 concurrent joins and 1804 queries against a pool
+of five, with 7.7 s of accumulated queue time, and not one checkout refused.
+**No saturation point exists at any N this bench can drive.** That is the
+result, and it is worth the same as a positive: the pool queues, it does not
+give up.
+
+**Unplanned cross-validation.** Queries per subject is 1804/32 = 56.4, i.e.
+`7·W` at W=8. `GrappaWeb.JoinSeedCostTest`'s post-mitigation law `7·W + 1`
+reproduces through a real browser over a real socket, from an instrument
+built independently and never fitted to it.
+
+### What this does NOT establish
+
+The measurement says the pool queues under cross-user load. It does **not**
+say that queueing caused either production incident, and no cure follows from
+it. The windows carry no seeded scrollback or read cursor, so the per-join
+cost here is a **FLOOR** — the absence of a timeout does not clear a seeded
+storm. The readings are the e2e stack's `MIX_ENV=dev` pool at 5 and 10; prod's
+10 is the same number on a different machine and nothing is transferred. The
+host carries permanent unrelated load, which bounds every absolute figure and
+is offered as a limit, never as an explanation. `elapsed_ms` plateaus near
+5.3 s at N=24 and N=32 on both pools and is not interpreted.
+
+**Apply:** when a concurrency premise is refuted, check whether the
+refutation's PERIMETER leaves the hypothesis alive somewhere else before
+declaring the question closed — here it survived one layer out, at a
+different granularity. And before asking "at what N does X saturate", check
+that the environment can express the lever: a number measured at half the
+production pool reads as the production number, and multiplying it is the
+extrapolation the question was asked to avoid.
