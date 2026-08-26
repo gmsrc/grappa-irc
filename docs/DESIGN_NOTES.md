@@ -64662,3 +64662,146 @@ whose citation has rotted is a contract nobody can check.
   anchors. Normalising zero-width characters changes what "the body" means for
   every sink and is a separate decision; nothing here touches it, and a user
   whose watchlist targets that bot may still see nothing.
+<!-- entry #1791 -->
+
+---
+
+## 2026-08-26 — #1791: the instrument could not see the event class the bug happens on
+
+An installed iOS PWA reopened after an app-switch comes back with the keyboard
+up and the message buffer pushed off the visible viewport, and it does not
+recover on its own. This entry ships no cure. It ships the reason there is no
+cure yet, and the change that makes one earnable.
+
+### The 126 px are CALCULATED, and deliberately NOT explained
+
+The report carries a pixel scan of a 1206x2622 screenshot: content 0–390, empty
+390–1443, keyboard+accessory 1443–2622, and the observation that the empty band
+is 126 device px SHORTER than the keyboard area — which rules out "the keyboard
+height applied one frame late".
+
+Those are device pixels on a 3x display, so the CSS numbers are 130 / 351 / 393
+against a 481 px visible viewport inside an 874 px layout viewport, and the
+shortfall is **42.0 CSS px exactly** — a round number, not a rounding artefact.
+
+It is not explained here. There is a candidate decomposition — the displacement
+is an auto-scroll-to-reveal, which has no reason to equal the keyboard height,
+and the remainder is about one accessory bar, 44 CSS px on stock iOS, close to
+42 but not equal — and it stays a candidate: the accessory bar on the reporting
+device was never measured. Naming a near-miss as a cause is how a surface with
+eight prior iterations earns a ninth.
+
+### The screenshot cannot distinguish the two explanations, including the one in the title
+
+The report's own title says the resume "restores the keyboard but not the
+viewport vars". The measurement it carries does not establish that. The
+screenshot pins exactly two facts: the visible viewport is 481 CSS px, and the
+BOTTOM edge of the body sits at screen y=130. It never sees the TOP edge. So:
+
+* model A — body is 874 (vars stale at the full viewport), displacement 744;
+* model B — body is 481 (vars correct), displacement 351.
+
+Both paint the identical picture. The 126 px do not discriminate them either.
+
+### Structurally, a vars-only cure cannot work
+
+`html.is-ios { position: fixed; inset: 0 }` sizes `html` against the initial
+containing block — the layout viewport, 874, which iOS does not shrink for the
+keyboard. `--vh` is written from `vv.height`, which never exceeds the layout
+viewport, so `body { height: calc(var(--vh) * 100) }` is bounded by `html` and
+the body can never overflow it. **A document scroll is therefore impossible on
+this path**, and the 351 px band is not one: it is below the document, at the
+WKWebView UIScrollView layer — exactly what UX-6 D10 already measured on device
+(`window.scrollY=324, vvOT=324` despite `position: fixed`) and why
+`installSmartScrollPin` exists at all.
+
+So more triggers on the var writer — the fix the issue proposes — cannot move
+the content back down, because the content's position is not decided by the
+vars. They may ALSO be stale; that would be a second, independent defect.
+
+Caveat kept rather than buried: `maximum-scale=1, user-scalable=no` should
+exclude page pinch, but iOS ignores those knobs for accessibility zoom, and
+under zoom-out `vv.height` could exceed 874 and the bound above would fail.
+That is not the reported scenario. The same meta also carries
+`interactive-widget=resizes-content`, which WebKit is not believed to support —
+not verified against a current WebKit here.
+
+### The finding: the one instrument aimed at this surface is blind to resumes
+
+`DiagFloat` (UX-6 D6) exists specifically to read this bug's numbers on device.
+It listened to `resize`, `scroll`, `vv.resize`, `vv.scroll`, `focusin`,
+`focusout`, `touchstart`, `touchend` — everything a FOREGROUND app emits, and
+nothing else. An app-switch RETURN reliably emits none of those; that absence is
+the entire premise of #649's three resume triggers on the var writer.
+
+**#1791 is unexplained because nothing was watching, not because nobody looked.**
+And the blindness points the wrong way: an absent line reads as "nothing
+happened" when it means "nothing was watching" — the trap `lib/resumeProbe.ts`
+already declares about itself.
+
+The change is the same shape as #649's, one layer out: the same three triggers
+(`visibilitychange` → visible, `pageshow`, window `focus`), each re-sampling on
+the writer's own `SETTLE_REREAD_DELAYS_MS`, because on this surface the
+corrective geometry arrives with no event to announce it and a single t=0
+snapshot would miss it. The constant is exported and imported rather than
+restated: the panel and the vars must agree on when "settled" is, or a reader
+correlating them gets a confident false story. `writeViewport` remains the sole
+writer of both vars — this is a reader.
+
+Two smaller decisions inside it. The HIDE edge is logged too, unlike the writer
+which gates on visible: the writer must not write a hidden geometry, but an
+instrument that drops the hide edge loses the bracket recording the last
+foreground geometry (the keyboard-open value #649 says gets frozen) and how long
+the app was away; nothing settles while hidden, so that edge gets no timers.
+And `--vh` now renders per LINE, not only in the live headline — it is precisely
+what separates model A from model B when set beside `wy`, it was captured all
+along, and the headline shows only the live value, which by screenshot time has
+moved. Its sibling `--viewport-height` is deliberately not added: one writer
+sets both in one call, so a second reading is a duplicate, not a check.
+
+### What was refused
+
+**No cure.** The structurally-indicated candidate is real and is written down
+here rather than shipped: `installSmartScrollPin` — the only thing in the
+codebase that corrects a UIScrollView-layer shift — has NO resume trigger. Its
+sole trigger is `scroll`, so if an iOS resume auto-scrolls without emitting one,
+the pin cannot fire. That is the exact twin of the missing `resize` that was
+#649's root cause, in the same module, and #654's own apply rule reads "when a
+variable has exactly one writer, a new failure mode on that variable is a
+missing TRIGGER, not a missing writer".
+
+It is still speculative, and #654 declined code for #209 and #79 on this same
+surface for that reason: "writing speculative code for a symptom you cannot
+observe IS the per-symptom patching the epic exists to forbid." It would also
+add a `scrollTo` to a resume path on a surface with a documented `scrollTo`
+quarantine (WebKit #226689, 1–3 s) — and the report's own "after two scrolls
+it's stuck" is that quarantine. The instrument is what earns the right to it.
+
+**No claim that cic provokes the auto-scroll.** Nothing in `cicchetto/src` calls
+`.focus()` on any resume path; the resume-event consumers are the var writer,
+`socket`, `badge`, `pushResubscribe`, `resumeProbe`, `staleResume`,
+`documentTeardown`, `visibilityHeartbeat`, `subscribe` and `ScrollbackPane`, and
+none of them focuses an element (`subscribe.ts`'s `presencePause.focus` is a
+module method taking a channel key, not a DOM call). `keepKeyboard` PRESERVES
+focus across taps and never restores it. So the refocus at resume is iOS's own,
+and `preventScroll` — our lever against `_zoomToFocusRect` — is not available on
+a path where we never call `focus()`. Any cure here is corrective, not
+preventive.
+
+**A neighbouring inaccuracy, recorded without a fix.** #1067's entry says
+`preventScroll: true` "can now only be forgotten in one place". True of the
+append/focus/caret dance it describes, which is one function. Not true of the
+codebase: `lib/globalPaste.ts` and `lib/pasteRoute.ts` both focus the SAME
+compose textarea without it, and `TopicBar` focuses its topic editor without it.
+None is on a resume path, so none is #1791; they are a sibling class, unmeasured
+here, and widening a claim is not the same as widening the fix.
+
+### What the test does not prove
+
+Nothing about iOS. jsdom has no visual viewport, no soft keyboard and no
+WKWebView UIScrollView, and per #654 this class is not reproducible on desktop
+at all — Playwright's `webkit-iphone-15` does not reproduce real iOS physics.
+The spec asserts WIRING: given a resume event a line lands, the settle schedule
+re-samples with no event in play, the hide edge takes none, and the discriminating
+readings share a line. Whether a real iOS resume shifts the content, and by how
+much, is the device leg — which is now, for the first time, capturable.
