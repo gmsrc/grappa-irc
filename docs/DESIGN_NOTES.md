@@ -41796,3 +41796,131 @@ different granularity. And before asking "at what N does X saturate", check
 that the environment can express the lever: a number measured at half the
 production pool reads as the production number, and multiplying it is the
 extrapolation the question was asked to avoid.
+<!-- entry #1767b -->
+
+---
+
+## 2026-08-26 — #1767b: the stall IS the parked waiter's budget, and both cures are measured to fail
+
+`lock_watch_test.exs` turns main red at roughly one run in three to one in
+ten, with a single test consuming 54.7-129.4 s against a body that costs
+15-378 ms. This pass did not fix it. It established what the number IS,
+refuted the two cures that present themselves, and falsified the two
+premises the round was dispatched on. All of that is worth more than a
+guess, and none of it is a cure.
+
+### The instrument first, because the old one could not place the number
+
+Three separate lies had to come out of the filmer before any reading could
+be trusted, and each was found by adding a second way to measure the same
+thing.
+
+`SAMPLER STARVED` divided a numerator bounded by the target's LIFETIME by a
+denominator spanning setup, body AND teardown: `collected` only counts ticks
+that find the target alive, and ExUnit runs `on_exit` in a SEPARATE process,
+so every tick of the teardown is uncollectable by construction. The line
+therefore fired on any long teardown and then made a claim about the VM. A
+quiet host, on a PASSING run, printed `1 collected / 218 expected` over
+54718 ms. The loop now counts its OWN turns; a tick that finds nothing alive
+is a different line.
+
+`reductions: X -> X (+0)` came from ONE sample, where `hd` and `List.last`
+are the same element — a value differenced against itself, rendered in the
+exact notation a reader uses for "this process ran no code". The registered
+diagnosis of #1767 rested on one of those.
+
+`elapsed_ms` ran from `setup` to the printing hook and so conflated setup,
+body and teardown in one number. `TARGET GONE` could say the time was
+outside the body but not HOW MUCH, because a ratio is not a duration. The
+filmer now monitors its target and stamps the instant it dies, which turns
+that heuristic into a clock — and the clock immediately caught its own
+neighbour: `film_collect/2` stops appending at `@film_max_samples`, so past
+the cap `TARGET GONE` fires unconditionally. A real 129406 ms run printed
+`TARGET GONE for 257 of 507 ticks` three lines above `teardown 15ms`.
+
+The split has a bias that cannot be engineered away and is DECLARED instead:
+the stamp is taken when the filmer HANDLES the DOWN, not when it arrives, so
+a starved filmer reads the boundary late and understates teardown. A stall
+wide enough to starve the filmer starves anything that would time it.
+
+### The measurement: the stall is the waiter's `busy_timeout`, 1:1
+
+`@waiter_budget_ms` is `@test_timeout_ms * 2` = 120 000, used as the private
+repo's `busy_timeout`, so the queued writer sits inside exqlite's dirty-IO
+`execute/2` for up to two minutes. Two batches on a quiet host, same tree,
+same command, only that constant moved:
+
+| `@waiter_budget_ms` | hits | stalled test `elapsed_ms` |
+|---|---|---|
+| 120 000 | 3 of 10 runs | 128 501 / 128 960 / 129 406 |
+| 30 000 | 2 of 14 runs | 42 255 / 42 238 |
+
+Removing 90 000 ms of budget removed 86 722 ms of stall — a ratio of
+**0.96**. The stall is the parked NIF's lifetime, which is the same 1:1
+identity #1715's third retraction found for its own harness, arrived at
+independently here.
+
+The split places it differently on different runs and the total does not
+move: `setup+body 60004 | teardown 68497` on one (ExUnit's deadline DID cut,
+and the teardown then ate the rest of the budget), `setup+body 129391 |
+teardown 15` on another. Whichever half blocks, it blocks until the NIF
+returns.
+
+### The victim is a `receive` timeout, and it is not CPU starvation
+
+On the best-filmed hit the reel ran 507 of 517 due turns while the test
+process accrued 249 reductions across 250 samples — one per sample, which is
+the cost of the filmer's own `process_info` signal. So the test process ran
+no code of its own for ~63 s **while the VM scheduled another process in the
+same run normally**. That rules out host-wide CPU starvation, which is the
+reading a single stack sample invites.
+
+Where it sat is the sharp part: `assert_receive {:DOWN, ^holder_ref, ...},
+5_000` and its 10 000 ms sibling, `status: waiting`, for tens of seconds
+past their own timeouts. A `receive after` that overruns by up to 119 s, in
+a VM that is scheduling normally, is not a slow assertion.
+
+### Both cures are refuted, and they are refuted in opposite directions
+
+Lowering the budget is the obvious move and it was measured: at 30 000 the
+waiter's `BEGIN IMMEDIATE` gives up before the test can observe it, the
+writer dies `SQLITE_BUSY` instead of `:normal`, and
+`assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :normal}` fails with
+an empty mailbox — which is exactly the #1687 symptom the `* 2` was written
+to prevent. Raising ExUnit's deadline is the other side and is barred: it
+does not shorten a stall, it only stops it being reported.
+
+So the two clocks pinch, and the pinch is not resolved by choosing a number
+for either. The budget must exceed what the test needs (#1687) and must not
+exceed the deadline (#1767), and under a stall the test's need BECOMES the
+stall, so no value satisfies both. Naming that is the result; inventing a
+third number would not be.
+
+### Two briefed premises, falsified before they were built on
+
+The round was dispatched to bench a parked COMMIT, on a field log showing
+`Exqlite.Connection.handle_transaction/3` under `DBConnection.run_commit/3`.
+Re-read, the same log shows the `commit` at **`db=6.7ms`** and the 31 840 ms
+on the UPDATE statement before it; the frame comes from the pool's
+15 000 ms ownership timeout sampling the client, 12 ms after the commit had
+already returned. A stack sample lands wherever the machine stopped — the
+same correction this file's own moduledoc already records for a different
+frame. There was no parked COMMIT to bench.
+
+The second premise was that the parked-NIF bench was still open. #1715's
+round 4 ran the full 2x2x2 across {word-sized, literal-bearing put} x {dirty
+NIF parked, not} x {concurrent code load, not}, v1 through v8, roughly 38 M
+timed puts, and nothing came within three orders of magnitude of the field.
+A ninth configuration would have been a repeat round. What this pass adds
+instead is a REPRODUCER at 3-in-10 in the tree, which is the thing round 4
+said it could not build — and its victim is a `receive` timeout, not a
+`persistent_term:put`, so it is a different leg of the same family.
+
+**Apply:** when an instrument reports one number for a window containing
+several phases, the first bug is the instrument, not the system. Three
+readings in a row here were artefacts of the measurement, and each was found
+by adding a SECOND way to measure the same quantity and letting the two
+contradict each other — a ratio against a clock, a derivative against a
+sample count, a cap against a stamp. And a cure that moves a constant should
+be measured in BOTH directions before it is proposed: this one is a pinch
+between two clocks, and each direction restores the other's bug.
