@@ -422,6 +422,10 @@ ever recurs: offline-init from the main checkout's already-cloned objects
 — `git -c protocol.file.allow=always -c
 submodule."cicchetto/e2e/infra".url=<main-checkout>/.git/modules/cicchetto/e2e/infra
 submodule update --init cicchetto/e2e/infra`.
+This is ONE item of the fresh-worktree bootstrap; the ordered list —
+submodules, the two per-worktree `node_modules` trees, the `bun.sh`
+self-heal, and the `cp -Rc` clone with the lock check that makes it safe
+— is `docs/TESTING.md` → "Bootstrapping a fresh worktree" (#1820).
 
 **…and the removal side of it: `git worktree remove` needs `--force`
 once a submodule has EVER been initialised in that worktree.** The

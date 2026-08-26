@@ -103,6 +103,74 @@ clean before claiming LANDED — per `feedback_landed_claim_evidence`,
 "LANDED" requires `scripts/check.sh` exit-0 with literal tail evidence,
 not "format ✓ credo ✓ dialyzer ✓" hand-waving.
 
+## Bootstrapping a fresh worktree (#1820)
+
+A new worktree carries the source and nothing else — no submodules, no
+`node_modules`. Every failure that produces is documented in this file
+already; what was missing is the ORDER, and one step that no operational
+doc stated at all (step 4). This section points at the paragraphs rather
+than restating them.
+
+**A docs-only branch needs none of this.** Every step below is a
+precondition for RUNNING a gate, not for having a worktree.
+
+**1. Submodules do not come with a worktree.** `vendor/bats-core` and
+`cicchetto/e2e/infra` are empty until initialised, and the init REQUIRES
+`-c protocol.file.allow=always`: the clone comes from the superproject's
+own local module store over `file://`, which the CVE-2022-39253
+mitigation blocks by default (#592). You are walked through it —
+`scripts/bats.sh` auto-inits the first, `scripts/testnet.sh` the second —
+so the by-hand form is a fallback. Commands, the `git submodule status`
+reading, and the ⛔ never-`rsync` rule: **trap 5** in "Five e2e gate traps
+that fake a green (or a red)"; the one-liners also sit under "When the
+test stack itself is broken". Note the exit cost before you opt in: once
+ANY submodule has been initialised here, `git worktree remove` needs
+`--force` for the life of the worktree — `docs/OPERATIONS.md`,
+"Fresh-worktree e2e submodule gotcha".
+
+**2. TWO `node_modules` trees, both per-worktree.**
+`cicchetto/node_modules` (vitest, tsc, vite, biome) and
+`cicchetto/e2e/node_modules` (`@playwright/test`, `@types/node`,
+`irc-framework`) — unlike the bun download cache at `runtime/bun-cache`,
+which every worktree shares. "A fresh worktree has no `node_modules`"
+below has the two signatures an absent tree produces (`exit 127`, and
+`Cannot find type definition file for 'node'`, which is an ABSENT
+TOOLCHAIN reported as a type error) plus the third state: an
+`e2e/node_modules` that exists and is EMPTY.
+
+**3. `scripts/bun.sh` self-heals both, on demand, for every non-install
+verb.** The wrapper is the answer; a bare `vitest` / `tsc` / `biome` is
+the question. Either signature in step 2 means you invoked something
+other than the wrapper — or that the install failed earlier in the same
+run.
+
+**4. Cloning `node_modules` from another worktree is `cp -Rc`** — a CoW
+clone of `cicchetto/node_modules` from a tree that already has one. This
+is "the documented `cp -Rc` procedure" the lock-drift paragraph below
+names; it was recorded in `docs/DESIGN_NOTES.md` (2026-08-20, #1571) and
+stated in no operational doc until this section. `-c` is macOS `cp(1)`'s
+`clonefile(2)` flag (`man cp`), which falls back to a plain copy when the
+target filesystem cannot clone; nothing in this repo states an equivalent
+for another `cp(1)`, so confirm your own before copying the flag.
+**It copies whatever is there**, so it is safe only when the donor's
+content is what `bun.lock` pins — `scripts/bun.sh run check`'s `lock
+drift` stage is what proves that, and it prints the cure
+(`scripts/bun.sh install --frozen-lockfile`).
+
+**5. Checking the donor by hand: hash `cicchetto/bun.lock`, and nothing
+else.** It is the only lock file in the tree. There is no
+`cicchetto/e2e/bun.lock`, and `cicchetto/e2e/infra` is a SUBMODULE, whose
+checked-out commit the superproject records as a gitlink — `git submodule
+status`, never a lock at that path. Hashing a path that does not exist
+fakes a measurement the moment a pipe is involved:
+`cat cicchetto/e2e/bun.lock 2>/dev/null | md5` prints
+`d41d8cd98f00b204e9800998ecf8427e`, the md5 of the EMPTY STRING, at
+rc 0 — donor and target "agree" because neither was read. Hash the path
+directly instead (`md5 -q <path>`: rc 1 and a loud `No such file`). Same
+class as "`| tail -N` on a gate script eats the verdict AND the exit
+code" below. And equal digests are a precondition, not the proof — the
+`lock drift` stage in step 4 is the proof.
+
 ## Architecture: why the scripts exist
 
 **NEVER run `docker`, `docker run`, `docker exec`, or `docker compose`
