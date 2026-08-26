@@ -65363,3 +65363,120 @@ Surface for a child that paints one, ink for a child that does not: a nick row
 is transparent and unbordered, so its border box is the full-bleed scroller it
 lives in, and measuring that sees nothing at all. That is how a 2:1 survived a
 year of specs which only ever compared the band with the launcher.
+<!-- entry #1805 -->
+
+---
+
+## 2026-08-26 — #1805: the pan goes back to the browser, and the question the bench could not be asked
+
+The media viewer's zoomed image used to pan with a JS-synthesized `translate`.
+It pans with the browser's own scroller now: momentum, rubber-band, a scrollbar
+and exact bounds arrive for free, and `applyPan` / `maxTranslate` / the
+translate half of `clampTransform` are deleted rather than kept as a second
+answer to "where is the picture". The PINCH stays synthesized — the iOS-1
+viewport lock (`maximum-scale=1, user-scalable=no`) kills native pinch app-wide
+and has no per-element opt-out, and that is unchanged and unchallenged.
+
+### The premise was measured before a line was written
+
+The issue asserted that the lock governs page zoom and not element scrolling.
+Measured on a standalone chromium/iPhone-15 bench driven through the browser's
+real input pipeline (CDP `Input.dispatchTouchEvent`, not DOM events — synthetic
+`TouchEvent`s never drive a scroll in any engine, and scored 0 in every arm, as
+labelled):
+
+| arm | lock | ancestor `touch-action` | scrolled |
+|---|---|---|---|
+| A — positive control | no | auto | 128px |
+| B — the premise | yes | auto | 112px |
+| C — production chain | yes | `none` | 105px |
+
+Arm A exists so that B and C mean something: a mechanism that cannot scroll a
+plain box has not measured the other three.
+
+### The issue's step 1 was inert, and the fix is the one that does not need to guess
+
+The issue prescribed `touch-action: pan-x pan-y` on the new wrapper alone. Under
+the reading where the UA intersects `touch-action` up to the ROOT, that is a
+no-op: `.media-viewer-modal` declares `touch-action: none` and a descendant
+cannot widen what an ancestor narrowed. #1764 had already paid exactly this and
+re-opened on the MODAL element (`.media-viewer-modal--text`); #1805 does the
+same one class along (`--zoomable`).
+
+Chromium does not read it that way — arm C above scrolls 105px straight through
+an ancestor `none`, because the intersection stops at the scroll container. So
+on chromium the re-opening changes nothing. It is declared anyway, and the
+reason is not that it is cheap: **a cure that is correct under both readings
+beats one that is correct only if the guess is right**, and the reading that
+applies on WebKit is not measurable here (below). Measured free on the arm that
+can be measured: at fit the dismiss binder still received 11 cancelable
+touchmoves out of 11, exactly as it does under `none`, because at fit nothing
+overflows and the browser has no pan to start.
+
+### What the issue did not say: the `<img>` is the hit target
+
+`.media-viewer-media--zoomable` declared `touch-action: none`. Intersection runs
+from the HIT TARGET up to the scroll container, so that `none` closes the
+scroller that wraps it — a different question from arm C, and it has the
+opposite answer: img `none` inside a `pan-x pan-y` scroller scrolls **0px**; img
+`pan-x pan-y` scrolls 130px. Both declarations are therefore load-bearing and
+neither is redundant with the other.
+
+### The sizer, and why it is out of flow
+
+A CSS transform does not change layout, so a scaled `<img>` produces no overflow
+and there is nothing to scroll. `.media-viewer-zoom-sizer` carries the
+scrollable area at `fit × scale`. It is absolutely positioned on purpose: an
+out-of-flow child contributes to its container's scrollable overflow but NOT to
+its intrinsic size, so the `<img>` goes on sizing the scroller at fit and its
+own `max-width: 100%` goes on resolving against a box that does not move. In
+flow it is a feedback loop. The component MIRRORS the fit box (`clientWidth`,
+via a `ResizeObserver`) rather than recomputing `object-fit: contain` in JS —
+the CSS stays the owner of the fit.
+
+The sizer is **zero at fit**, not `fit × 1`. `clientWidth` is rounded to an
+integer, so `fit × 1` can exceed the real box by a sub-pixel, and a sub-pixel of
+overflow is enough for the browser to claim the single-finger drag and take
+swipe-to-dismiss away. Measured why it matters: with the dismiss binder claiming
+while zoomed, its `preventDefault` pins the scroll at 0 — the `canDismiss` gate
+is load-bearing, and it must be asked at touchstart, because from the second
+move onward the browser has already taken the gesture and `cancelable` collapses
+to 1 in 9.
+
+`transform-origin` moved from `center center` to `0 0`. That is arithmetic, not
+taste: with a 0 0 origin an image coordinate is a scroll coordinate over the
+scale, which is the whole derivation of `rescaleScroll`, the pure function that
+holds the touched point under the fingers across a scale change. Pinch and
+double-tap both go through it, so there is one answer to "where does the picture
+land" instead of two.
+
+### Rejected: CSS `zoom`
+
+`zoom: s` scales LAYOUT, so the scroller would overflow with no sizer, no
+`ResizeObserver` and no mirrored fit — one property against three moving parts.
+Declined because it re-rasters a full-size photo every pinch frame where
+`transform` composites an existing texture, and the pinch smoothness that would
+cost cannot be measured from this host on the device that matters. The sizer
+keeps the compositor path the pinch already had.
+
+### 🔴 What was NOT measured, and must not be read as if it were
+
+**No touch measurement exists on WebKit.** Playwright's WebKit backend exposes
+`Input.dispatchTapEvent` and nothing else for touch (`playwright-core`
+`wkInput.js`: key, mouse, wheel, tap), and `mouse.wheel` is refused outright in
+mobile WebKit. So the positive control for touch on WebKit is EMPTY, and its
+zeros measure the harness rather than the product. From WebKit there is only:
+the box overflows, it scrolls programmatically under the lock, and the computed
+styles are what the stylesheet says. Whether WebKit stops its `touch-action`
+intersection at the scroll container the way chromium does is **unknown**, which
+is precisely why the modal-level re-opening is declared.
+
+Real taps ARE drivable on WebKit, so the e2e's webkit leg double-taps for real
+and asserts that zooming creates genuine overflow (`scrollHeight >
+clientHeight`) and that moving the scroller moves the painted picture. The DRAG
+itself is not drivable and is not faked.
+
+Device dogfood, unverifiable from any harness here: momentum, rubber-band at the
+edges, and whether iOS begins a rubber-band before the dismiss binder's claim
+lands — the same open question #1764 wrote down for the text pane, now on a
+second surface.
