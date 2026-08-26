@@ -65123,3 +65123,133 @@ installed web app on iOS/iPadOS — which is a citation, not something measured.
 
 A WebKit bug report is the only road upstream, and filing it is a decision that
 belongs outside this repository. It is not blocked on anything here.
+<!-- entry #1796 -->
+
+---
+
+## 2026-08-26 — #1796: two bounce verbs, and the one that already existed
+
+`/reconnect [network] [reason]` and `/cycle [channel] [message]` land in cic's
+compose box. No wire change, no server change: `PATCH /networks/:slug` already
+does both legs of the network bounce, and `POST/DELETE` on the channel surface
+already do the channel one. `Grappa.Protocol`'s `protocol_version` is therefore
+untouched — nothing about the shape the server emits changed.
+
+### The names are irssi's, and the split is the load-bearing part
+
+The verb was first asked for as `/cycle`. That name is taken: irssi ships both,
+and they are scoped to different things — `CYCLE [<channel>] [<message>]` is
+part+join, `RECONNECT <tag> [<quit message>]` is the network. cic is
+irssi-shaped, so inverting an irssi verb would cost more than it buys. vjt
+ruled on #sbiffo (2026-08-25, peluche concurring): the network bounce is
+`/reconnect`, `/cycle` keeps its canonical meaning. Both shipped, because
+shipping only one leaves the other name free to be taken wrongly later.
+
+Each verb inherits the grammar of the verb it is the round trip of, and the two
+grammars are deliberately NOT unified: `/reconnect` reads its first token as a
+slug ALWAYS (`parseNetworkReason`, shared with `/disconnect`), because a network
+name wears no sigil and there is nothing to disambiguate it with; `/cycle` reads
+a first token without a channel sigil as the MESSAGE (`parseChannelReason`,
+shared with `/part`). Making them agree with each other would break whichever
+one lost.
+
+### The sigil rule is now a function, not a rule to remember
+
+#1208 fixed `/part non trovo utili le bestemmie` issuing a DELETE against a
+channel named `non`. `/cycle` has the same grammar, so a second copy of that
+arm is how the same defect comes back under a new verb — and worse, because
+`/cycle`'s second leg would JOIN the phantom rather than merely fail to part
+it. The two arms are one function now. That is the whole reason the extraction
+happened; it is not tidying.
+
+`/cycle` also carries a guard `/part` does not need: it refuses a non-channel
+submitting window instead of parting it. `/part` in a `$server` or query window
+merely posts a DELETE the server refuses, which is harmless; `/cycle` would go
+on to JOIN whatever the window is called. Same family as the #1208 phantom, one
+layer down.
+
+### Three things were already called "reconnect", and only one was the nucleus
+
+The interesting half of this issue was not writing the verbs. cic already had:
+
+- `lib/reconnect.ts` → `reconnectConnectedNetworks` (#282), the vhost bounce.
+  Right VERB, wrong SET — it bounces every `:connected` network in one go.
+  Calling it for `/reconnect <slug>` would be a bug wearing the name of a reuse.
+- `lib/networkReconnect.ts` → `createNetworkReconnect` (#1331), per-slug and
+  therefore the tempting one. Wrong LEG (unpark only, no park) and wrong SHAPE:
+  it is a Solid hook with a pending signal and an error sink, built for button
+  surfaces (`HomePane`, the greyed compose seam). A command handler is not a
+  component.
+- The `commands/` handlers the issue proposed writing.
+
+The reusable nucleus was INSIDE the first one: its private per-slug
+`bounce(t, slug)`, park-then-connect. That is now the exported
+`bounceNetwork(t, slug, reason)`, with `reconnectConnectedNetworks` passing
+`null` so its wire behaviour is byte-identical to before. The general rule the
+episode teaches: **when a second use case fits an existing verb but not its
+set, extract the nucleus — do not call the wrapper, and do not reach for the
+sibling module whose NAME matches better than its behaviour.**
+
+### The ordering was already decided; the latency is NOT measured
+
+The issue asked whether an immediate unpark races the upstream QUIT. #282 had
+already answered the shape of it, in `reconnect.ts`'s own comment: *"Each
+network's park→reconnect is sequential (the park must settle before the
+reconnect)"*. That precedent is followed and cited rather than re-derived.
+
+What the server code establishes, read end to end: `Networks.disconnect/2`
+issues the QUIT through `Session.send_quit/3`, which is a GenServer **call**
+into the live session and then into `IRC.Client` — so the bytes are on the
+socket before it returns — then `Session.stop_session/2` terminates the pid,
+and only then writes the DB transition and broadcasts. The PATCH response is
+written after all of that, and the unpark is a SECOND request the client issues
+only once the first resolved. So the two legs cannot overlap, and TCP orders
+the QUIT ahead of the FIN on the same connection.
+
+What is **NOT measured, and is not claimed**: whether the upstream ircd has
+finished PROCESSING that QUIT (releasing the nick) before the fresh
+registration reaches it. That is a property of the peer server under load, no
+number for it was taken here, and none is invented. The existing 433 nick
+ladder is what covers the case if it ever loses.
+
+### `not_connected` gets its own copy, and still fails
+
+`/reconnect` on a parked network surfaces
+`/reconnect: <slug> is not connected — use /connect <slug>` instead of the
+shared `friendlyApiError` line ("isn't in a state to connect or disconnect
+right now"), which is true of the other two verbs and wrong here — a parked
+network IS in a state to connect. It stays an error rather than falling through
+to the unpark leg: "bounce this" and "bring this up" are different intentions
+and only the operator can say which one they meant. Naming the cure costs one
+word of typing; guessing costs a network state they did not ask for.
+
+### The characterization net can be poisoned by a neighbour's mock
+
+Adding the two arms to #1396's dispatch net surfaced a trap worth recording.
+`compose.test.ts`'s `beforeEach` calls `vi.clearAllMocks()`, which clears CALLS
+and not IMPLEMENTATIONS — so a `mockRejectedValue` set by any test in the file
+outlives its describe and reaches the characterization table hundreds of lines
+below, repinning the `connect` and `disconnect` rows to whatever was left
+behind. Measured: the new `/reconnect` tests silently rewrote both rows'
+snapshotted result until they switched to the one-shot `Once` forms. The rule:
+**in this file, a stub whose call count is known exactly uses `Once`; a
+blanket stub must be restored explicitly** (the #1255 note already says the
+inverse case — do not use `Once` when the call count is uncertain).
+
+Two smaller notes. The net's own report caught that `/reconnect libera` and
+`/disconnect libera` produced identical effect signatures — the harness's
+rejecting `patchNetwork` stops the bounce after its park leg — so the fixture
+carries a reason, which rides the park body and is what tells them apart; a row
+that cannot be distinguished from its neighbour buys nothing. And the
+`settleNetworkAutojoin` ritual (reconnect, then poll until GET /members answers
+200 with the own nick present) moved from
+`cp15-b6-parked-disconnect-reconnect.spec.ts` into the e2e fixtures, because a
+second network-parking spec re-typing it is exactly how the subtle half of it —
+the 200-vs-204 distinction from #522 — gets dropped.
+
+### Known limit, named rather than papered over
+
+`/cycle` cannot rejoin a `+k` channel: irssi's grammar has no slot for a key
+(`CYCLE [<channel>] [<message>]`) and inventing one would make cic's verb
+something other than the verb it is named after. `/part` followed by
+`/join #chan <key>` is the two-command form that still works.

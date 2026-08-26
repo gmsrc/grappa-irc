@@ -214,6 +214,7 @@ Typed in cicchetto's compose box, parsed client-side, dispatched to REST or IRC.
 | `/me <text>` | CTCP ACTION in the active channel |
 | `/join <#chan>` | Join a channel |
 | `/part [#chan] [reason]` | Part the active or named channel |
+| `/cycle [#chan] [message]` | Part then re-join the active or named channel (irssi's `CYCLE`). Channel-scoped only — the network bounce is `/reconnect`. A first word without a channel sigil is the message, not a target. No key slot, so a `+k` channel needs `/part` + `/join #chan <key>` |
 | `/topic <text>` · `/topic -delete` | Set / clear the channel topic |
 | `/nick <newnick>` | Change nick (users and visitors) |
 | `/msg <nick> <text>` | Private message — opens a query window (channel-shaped targets are rejected). When the target is a network service (NickServ/ChanServ/SeenServ/…), its replies land in that open query window rather than the server tab (#400); unsolicited service traffic with no open query still lands in the server tab |
@@ -239,6 +240,7 @@ Typed in cicchetto's compose box, parsed client-side, dispatched to REST or IRC.
 | `/alias <name> <expansion>` · `/unalias <name>` | Define / remove your own slash-command alias (`/alias wii whois $1 $1` → `/wii foo` runs `/whois foo foo`). `$1`..`$9` positional, `$N-` the Nth arg and everything after it (`/alias k kick $1 $2-`), `$*` all args; with no placeholder the rest is appended. Server-synced per user; builtins can't be shadowed. Bare `/alias` opens the **aliases** settings section, where existing aliases are also editable in place (rename + change expansion) |
 | `/connect <network>` | Unpark + respawn a network |
 | `/disconnect [network] [reason]` | Park one network (persists across reboots until `/connect`) |
+| `/reconnect [network] [reason]` | Bounce one network — park, then unpark, in that order (irssi's `RECONNECT`). The one-command form of `/disconnect` + `/connect`, and the way to re-roll a vhost (the source address is picked per connect). Bare form targets the active window's network; the reason travels as the upstream QUIT |
 | `/quit [reason]` | Park all networks, QUIT upstream, log out |
 
 Per-window UI behavior — channel header, query/DM focus rule, archive section, the server-owned window-state machine, mobile layout, scrollback polish, the mention-aware scroll-to-bottom badge (jump to the next unseen mention below), mentions-while-away, auto-away, image upload, multi-line paste flood guard (a confirm dialog before pasting >3 lines, since each line sends as its own message) — is documented in `docs/DESIGN_NOTES.md`. cic mirrors server state; it never originates window state client-side.
