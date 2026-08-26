@@ -101,7 +101,14 @@ const VH_VAR = "--vh";
 // re-read reads the LIVE `vv.height`, so overlapping a genuine keyboard-open
 // resize just writes the current correct value (never a stale clobber).
 // Brackets a fast, medium, and slow settle.
-const SETTLE_REREAD_DELAYS_MS = [100, 400, 900];
+//
+// Exported since #1791 for the INSTRUMENT, not for a second writer. `DiagFloat`
+// samples the live geometry on a resume, and it must sample at the instants
+// this writer settles at: sampling on a schedule of its own would make the
+// panel and the vars disagree about when "settled" is, and a reader correlating
+// the two would get a false story. Anything that writes either var still goes
+// through `writeViewport` and nowhere else.
+export const SETTLE_REREAD_DELAYS_MS = [100, 400, 900];
 
 // THE single writer of both CSS vars. Every trigger — boot, resize, and
 // each #649 resume trigger — reaches the vars through here and nowhere
