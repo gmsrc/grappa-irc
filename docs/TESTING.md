@@ -402,9 +402,11 @@ what finally makes the documented "mandatory workflow_dispatch smoke
 before a real tag" smoke something). It is also runnable by hand, see the
 quick reference.
 
-Three probes, and every assertion has a mutant that kills it — measured,
-not asserted. Reproduce any row by deriving a one-line mutant image
-`FROM ghcr.io/vjt/grappa:latest` and pointing `GRAPPA_IMAGE` at it:
+Every assertion has a mutant that kills it — measured, not asserted.
+Reproduce a row by deriving a one-line mutant image
+`FROM ghcr.io/vjt/grappa:latest` and pointing `GRAPPA_IMAGE` at it
+(the count of probes is deliberately not stated here: it has already
+rotted once, and the script is the roster):
 
 | Assertion | Mutation that kills it | Observed |
 |---|---|---|
@@ -413,6 +415,8 @@ not asserted. Reproduce any row by deriving a one-line mutant image
 | the named chunk arrives as JavaScript | `RUN rm -rf /app/cicchetto-dist/assets` | 200 `text/html` |
 | `/api/config` reports the expected version | deploy an older published tag | reports the older version |
 | a restart keeps `/data/grappa.env` | drop the `[ ! -f "$secrets_file" ]` guard from the entrypoint | hash changes |
+| the shipped bundle carries a populated credit roll (#1834) | build the image with no `--build-arg GRAPPA_CREDITS`, i.e. the pre-#1834 recipe | the degraded `{"sha":null,"date":null,"contributors":[]}`, quoted in the failure |
+| …and the probe can still SEE one | rename the payload's `"sha"` key in a shipped chunk | "neither shape present" — it fails blind rather than passing quietly |
 
 Two of those are worth knowing on their own. **A missing hashed chunk is
 served as the SPA shell with 200 and `content-type: text/html`** —
@@ -422,6 +426,22 @@ are blind to it. And **the never-rotate probe needs a second container
 shape**: under `deploy.sh` every secret rides in from the host env file,
 so the entrypoint's first-boot bootstrap (#862) never fires there. Only a
 bare `docker run` with just `PHX_HOST` generates them onto `/data`.
+
+**The two credit-roll rows were measured on the DIST, not on a booted
+mutant** — the two `docker build --target cic` outputs, with and without
+the build arg, run through the probe's own assertion block. The probe
+reads the shipped chunks either way, so what the shortcut skips is the
+container, not the oracle. Stated because the rest of this table was
+measured the long way and the difference should not have to be guessed.
+
+⚠️ **This probe asserts a RELEASE build, and a naked local build fails
+it — deliberately.** `.git` is `.dockerignore`d, so an image from a plain
+`docker build -f Dockerfile.release .` legitimately bakes the degraded
+roll; `release.yml` derives the payload on the runner and passes
+`--build-arg GRAPPA_CREDITS` (#1834). Smoking a hand-built image means
+passing that arg too — see § "The published release image" in
+`docs/OPERATIONS.md`. The asymmetry is the point: the naked build must
+keep degrading honestly, the shipped image must not.
 
 What it deliberately does NOT cover: one architecture (whatever the host
 runs — the arm64 leg of the manifest is proven by the build, not here);

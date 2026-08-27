@@ -10,8 +10,8 @@
 # directory to the left. No script-level assertion can see it; one HTTP GET
 # can.
 #
-# This is that GET, plus the discovery, secret-persistence and account-bootstrap
-# probes, against a container that was
+# This is that GET, plus the discovery, secret-persistence, account-bootstrap
+# and credit-roll probes, against a container that was
 # brought up by the SAME infra/docker/get.sh -> deploy.sh path an operator
 # runs (GRAPPA_RAW_BASE points get.sh at this checkout instead of GitHub raw,
 # so the mirror step is exercised too — a file get.sh forgets to mirror is
@@ -25,6 +25,13 @@
 #   GRAPPA_IMAGE          (required) the image ref under test, already local.
 #   GRAPPA_SMOKE_VERSION  (required) the version the running node must report.
 #   GRAPPA_SMOKE_PUBLISH  host:port to publish on (default 127.0.0.1:14000).
+#
+# ⚠️ Probe 5 asserts a RELEASE build. An image from a plain
+#    `docker build -f Dockerfile.release .` legitimately bakes the degraded
+#    credit roll (`.git` is .dockerignore'd, #1834) and will fail it — pass
+#    `--build-arg GRAPPA_CREDITS="$(infra/packaging/credits.sh)"` to build the
+#    thing release.yml builds. That asymmetry is the point: the naked build
+#    must keep DEGRADING, the shipped image must not.
 #
 # A MISSING IMAGE IS A FAILURE, NEVER A SKIP: a smoke test that quietly passes
 # when it tested nothing is worse than no smoke test. Same for every probe —
@@ -212,5 +219,65 @@ grep -Fq 'created user release-smoke-admin' <<<"$created" \
 grep -Fq '[admin]' <<<"$created" \
     || die "docker exec create-user did not grant the requested admin flag: $created"
 pass "docker exec created release-smoke-admin [admin] without a password argument"
+
+# ---- probe 5: the shipped SPA carries the build's REAL credit roll ---------
+#
+# #1834. `.git` is .dockerignore'd for Dockerfile.release, so the credits.sh
+# call INSIDE the image build can only reach its own no-repo guard and answer
+# `{"sha":null,"date":null,"contributors":[]}` — which is what ghcr was
+# shipping. release.yml now derives the payload on the runner (which HAS the
+# history) and hands it in as a build arg. Nothing else in CI can see whether
+# that arrived: the unit suite runs under a vitest config with no `define` at
+# all, and the #1773 e2e spec builds its own bundle from a full checkout. This
+# probe is the only oracle that reads the artifact that ships.
+#
+# The dist, not the wire: probe 1 already proved the shell and its entry chunk
+# are SERVED. Which chunk the payload lands in is rolldown's business, and
+# pinning it here would make this a code-splitting test — so this asks the
+# container for every chunk it ships, resolving the root from the image's own
+# CIC_DIST_ROOT rather than a second copy of the path.
+#
+# THREE outcomes, not two. "Populated" and "degraded" are the two that name a
+# verdict; the third — neither shape present — means the payload's spelling
+# moved and this probe went blind, and it FAILS rather than passing quietly.
+# That is the anti-hollow-green guard, and it doubles as the positive control:
+# the same greps that must reject the degraded roll must also be able to FIND
+# one.
+say "probe 5: the SPA the image ships carries a populated credit roll"
+shipped_js="$SMOKE_HOME/shipped-chunks.js"
+# `sed` folds the escaped spelling onto the bare one: the minifier picks the
+# cheapest delimiter for the string literal it bakes the payload into —
+# backticks in the build measured for #1834, which leaves the JSON's own
+# quotes bare, but a `"` delimiter would escape every one of them. Neither
+# assertion below should depend on that choice. `set -o pipefail` above is
+# what keeps a failed `docker exec` from being masked by the sed.
+docker exec "$BOX" sh -c 'cat "$CIC_DIST_ROOT"/assets/*.js' | sed 's/\\"/"/g' > "$shipped_js" \
+    || die "could not read the shipped JS chunks out of $BOX"
+
+# The exact payload credits.sh emits with no repo — canonical, because
+# vite.config.ts re-serialises it through JSON.parse/stringify.
+degraded_roll='{"sha":null,"date":null,"contributors":[]}'
+# One contributor row. Absent from a degraded bundle and present once per
+# credited author in a populated one — measured 0 vs 9 on the two dists #1834
+# built to check exactly this.
+contributor_row='\{"name":"[^"]*","commits":[0-9]+\}'
+# The whole populated payload, head-anchored: a real sha, a real date, and at
+# least one contributor. All three, because each degrades on its own — a roll
+# that names the commit and credits nobody is still an empty roll.
+populated_roll='\{"sha":"[0-9a-f]+","date":"[^"]+","contributors":\['"$contributor_row"
+
+if grep -qF "$degraded_roll" "$shipped_js"; then
+    die "the image bakes the DEGRADED credit roll ($degraded_roll) — the build ran credits.sh in a context with no .git and nothing passed GRAPPA_CREDITS in (#1834)"
+fi
+
+if ! grep -qE "$populated_roll" "$shipped_js"; then
+    die "the shipped chunks carry NEITHER a populated credit roll nor the degraded one — the payload's spelling changed and this probe is now blind (#1834); check the vite define in cicchetto/vite.config.ts"
+fi
+
+roll_sha="$(grep -oE '\{"sha":"[0-9a-f]+"' "$shipped_js" | head -n1 | sed 's/.*"sha":"//; s/"$//')"
+# `grep -c` counts LINES and the bundle is minified onto a handful of them, so
+# it would report 1 for any roll of any size. Count MATCHES.
+roll_people="$(grep -oE "$contributor_row" "$shipped_js" | wc -l | tr -d ' ')"
+pass "the shipped bundle credits commit ${roll_sha} and ${roll_people} contributor row(s)"
 
 say "release image $GRAPPA_IMAGE deployed and answered every probe 🎉"
