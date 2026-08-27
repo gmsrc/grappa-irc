@@ -42247,3 +42247,95 @@ The probe that decides it is one keystroke on the device: type an unknown verb
 and see whether its banner appears. `/zzzz` is guaranteed to produce
 `{kind: "error"}` in the pure parser, with no server, no network id and no
 channel involved — a positive control for the surface itself.
+<!-- entry #1832 -->
+
+---
+
+## 2026-08-27 — #1832: connect-time MOTD is signalling, so it counts as one
+
+Connect-time MOTD lines landed in `$server` as `:notice`. `:notice` is a
+CONTENT kind (`Scrollback.Message.content_kinds/0`), so `WindowCounts`
+bucketed every line as an unread MESSAGE and pushed the window severity to
+`:message`: a bare reconnect badged the server tab as if somebody had talked
+to you. vjt's ruling, relayed from IRC on 2026-08-27 — *"dovrebbero esser
+contate come signalling, quindi col numeretto piccolo che usiamo per i
+join/part"* — settles the tier: `events`, i.e. kind `:server_event`.
+
+### Why the cure sits at the fallback, not at the window
+
+The issue asked for the change to be scoped to the numeric fallback rather
+than applied to `persist_server_notice/2` wholesale, on the grounds that a
+genuine server NOTICE (services, opers) must stay content. Measured, the two
+turn out to be the same cut: **every one of the six callers of that function
+is an unprimed-burst clause** — MOTD (375/372/376/422), ADMIN
+(256/257/258/259/423/447), an uncorrelated 402, INFO (371/374) and VERSION
+(351). A real NOTICE never reaches it; it is routed by the CP13 non-channel
+NOTICE chain, which builds its own `:notice` persist. So the whole family
+moved together and the function was renamed `persist_server_event/2` — the
+old name would have been a lie about the row it writes.
+
+### The body is not the casualty
+
+`:server_event` is outside `@body_required_kinds`, which makes the body
+OPTIONAL, not forbidden — the distinction the fix depends on, because the
+only reason to keep these rows at all is that they be readable. cic's
+`case "server_event"` arm falls through to a body render when `meta.raw_verb`
+is absent, which is exactly the shape this path writes. That arm's comment
+used to call a verb-less `:server_event` row "a server bug, rendered
+defensively"; it is now also the ordinary connect-burst shape, and the
+comment says so, because the next reader would otherwise be entitled to
+delete it. The rows do inherit cic's `PRESENCE_KINDS` treatment (muted,
+greyed) — accepted: that is the join/part treatment the ruling named.
+
+### Moving a kind across the tier moves everything keyed off the tier
+
+Worth stating once, because the next kind reclassification will hit the same
+set and it is not obvious from the diff. cic keys several behaviours off
+`isContentKind` (`CONTENT_KINDS`, the mirror of `content_kinds/0`), so a
+`$server` window whose only unread rows are MOTD now: does NOT light the
+Alt+A "worth reading" affordance (`activeWindows.ts` gates on
+`messagesUnread`, not the total); gets NO in-pane unread divider
+(`selection.ts` splits the tail by `isContentKind`); and yields no quotable
+body (`quotableBody.ts` refuses non-content kinds). Server-side the row also
+leaves `@dm_with_eligible_kinds` and the `@content_kinds` sender-prefix
+snapshot — both no-ops here, since `$server` is neither a DM peer nor a
+sigil-shaped channel. All of it is what "count it like join/part" means; none
+of it is a separate decision. The rows keep rendering, and keep their mIRC
+colours, in the muted presence style join/part already use.
+
+### History is not rewritten
+
+Rows already persisted keep `:notice` and keep counting as messages; the
+badge settles on the next connection. A backfill is a data migration, hence
+a COLD deploy, hence every live IRC session dropped — not a price a cosmetic
+count gets to charge. `20260514071049_add_server_event_to_messages_kind_enum`
+did pay it once, for a kind that did not exist yet; this is a reclassification
+of rows that render fine either way.
+
+### Measured, and NOT fixed here: the MOTD is not the only offender
+
+The issue's acceptance criterion is that a fresh connect leaves `$server`
+badged at the `events` tier "or nothing". This change does not achieve that
+on its own, and the gap is in a different mechanism. `NumericRouter` does not
+delegate **002 RPL_YOURHOST, 003 RPL_CREATED or 396 RPL_HOSTHIDDEN** — measured
+by routing real bahamut wire shapes through `NumericRouter.route/2`, all three
+answer `{:server, nil}` — so they fall to the generic scan clause in
+`Session.Server`, which persists EVERY scan-routed numeric as `:notice`. Two
+or three content-tier rows therefore still land on `$server` at every connect.
+(001 and 005 never reach the scan: dedicated `handle_info` clauses consume
+them. The LUSERS block 251–255/265/266 and 221 RPL_UMODEIS are delegated and
+fold into bundles.)
+
+That is the general class this issue is one instance of, and flipping the
+scan path is a much larger behavioural change — it reclassifies every
+unhandled numeric in the product, including the ones a `/stats` or a `/list`
+puts in front of an operator who ASKED for them, where content-tier is
+arguably right. It needs its own ruling, so it is recorded here rather than
+smuggled in.
+
+### Provenance
+
+The ruling reached this work RELAYED by another agent (vjt-claude) from the
+GitHub comment, not read first-hand on IRC. The comment's author field reads
+`vjt`, but every agent in this project comments with the same token, so the
+field is not independent evidence of authorship.
