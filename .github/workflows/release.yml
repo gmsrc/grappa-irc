@@ -1172,13 +1172,17 @@ jobs:
       - name: Derive the credit roll (the build context has no .git)
         id: credits
         run: |
-          # ABSENT is not an error. A repair dispatch checks out the TAG's
-          # tree, and every tag cut before #1773 predates this script — the
-          # same hazard the scaffolding step above documents for
-          # prerelease_flag.sh. The arg then stays empty, the Dockerfile's
-          # fallback answers, and that tag's image ships the roll it always
-          # shipped. Loud, because a silently degraded release image is the
-          # whole defect.
+          # ABSENT is warned about rather than fatal here — and that is a
+          # smaller claim than it looks, so it is spelled out. A repair
+          # dispatch checks out the TAG's tree while taking the Dockerfile
+          # from the dispatched ref, and every tag cut before #1773 predates
+          # this script: the same hazard the scaffolding step above documents
+          # for prerelease_flag.sh, except credits.sh is deliberately NOT on
+          # that list (the image COPYs it, so taking it from elsewhere would
+          # move the artifact). Such a repair therefore dies at
+          # `COPY infra/packaging/credits.sh` regardless — this arm does not
+          # rescue it. What it buys is that the run does not die HERE first,
+          # at exit 127, blaming the credit roll for a tag being too old.
           if [ ! -f infra/packaging/credits.sh ]; then
             echo "::warning::infra/packaging/credits.sh is absent from this tree (pre-#1773 tag) — the image will bake the degraded credit roll"
             {
