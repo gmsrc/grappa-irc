@@ -42695,7 +42695,53 @@ third state (`unreadable`) and reports it rather than coercing it. Collapsing
 green against a server saying something no one can read.
 
 `bitrate: null` draws the codec ALONE in the picker: not "0k", not "unknown".
-Measured: SomaFM and Rock Antenne send `icy-br`, kohina's icecast sends none.
+
+### The bitrate ruling, and the half of it that could not be built
+
+Later the same day vjt ruled on where `bitrate` is VALUED from, prompted by a
+sibling measurement on KNAC (#1837) where a proxy sends no `icy-br` while the
+frames say 128. The ruling leans on this entry's own reggae finding: the stream
+says what it IS, a label wrapped around it does not. Two clauses: value the
+field from the frame header, and reserve `null` for NOT KNOWABLE rather than
+for "the provider was quiet".
+
+**The second clause is right and this branch was wrong.** kohina shipped
+`bitrate: null` because its icecast sends no `icy-br` — and Vorbis states its
+own rate INSIDE the codec stream. Decoded off the bytes that mount serves:
+`bitrate_nominal = 128000`, max 0, min 0, 44100 Hz, 2 channels. The fact was in
+our hands the whole time. A `null` over a knowable fact is the mirror image of
+#1696's invented number and is just as false; the row is now `128`, and the
+vacuity guard that demanded some row stay `null` is deleted rather than kept by
+finding a new victim for it.
+
+**The first clause could not be built as written, and the refusal is decoded
+rather than argued.** FLAC's STREAMINFO carries no bitrate field — off
+radioparadise's own first bytes: blocksize 4096/4096, sample rate 44100,
+2 channels, 16 bits, and `minframesize`/`maxframesize` of 0/0, i.e. unknown —
+because FLAC is inherently variable-rate. Under a frame-header-only rule every
+FLAC row is `null`, so the stations the `[hi-fi]` badge exists FOR would be the
+only ones showing no cost. Deriving one from the PCM rate (44100 × 2 × 16 =
+1411 kbps) would overstate it, FLAC compressing well below PCM, and an
+overstatement dressed as a measurement is the defect the badge is meant to
+prevent.
+
+**The premise also needed a correction.** On reggae the URL said 128, the frame
+said 160 and `icy-br` said 160 — so that measurement convicts the URL and
+ACQUITS `icy-br`, which agreed with the bytes. `icy-br` is not a label somebody
+stuck on the stream; it is the origin server restating its encoder
+configuration on every connection. There was never a measurement against it.
+
+So the shape is a per-codec AUTHORITY, total over the union
+(`CODEC_BITRATE_AUTHORITY`): MPEG frame header for mp3, Vorbis
+`bitrate_nominal` for vorbis, `icy-br` for flac. Version and layer are checked
+before an MPEG frame is decoded, since MPEG2 and Layers I/II index a different
+table and a confident wrong number is worse than none; a Vorbis nominal of 0 is
+legal and reads as `absent`, not zero. Provenance is DERIVED from the codec
+rather than stored per row — the codec is already a field, and a column
+repeating what it implies is the parallel structure that drifts. The reading is
+keyed on the SERVED codec, never the declared one: a row lying about its codec
+is already red on CODEC, and asking the wrong decoder would add a second,
+misleading finding.
 
 ### Totality, twice, and no name lists
 
