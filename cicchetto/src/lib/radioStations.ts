@@ -57,6 +57,9 @@
 // reachability and agreement with the catalogue, and it is out of CI
 // deliberately, for the reason its own header gives.
 //
+// ⚠️ ADDING a row also needs `bun run sync:radio-logos` — since #1739 the picker
+// draws the VENDORED bytes and not `logoUrl`, so an un-mirrored row renders no src.
+//
 // ⚠️ The STREAM half of that claim used to be hand-measured and is not any
 // more (#1836). It stayed out because `HEAD` on `ice.somafm.com` returns an
 // empty reply (curl exit 52) — icecast answers a GET with an endless body, so a
