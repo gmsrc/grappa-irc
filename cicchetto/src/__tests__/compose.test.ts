@@ -260,13 +260,26 @@ vi.mock("../lib/banlistModal", () => ({
 // #1251 — compose decides "list QUERY vs mode change" from the network's 005
 // (`listModesQueryable`, published by the server). Default here is a
 // bahamut-shaped network: `b` and `z` are lists, everything else is a flag.
+//
+// issue 1831 — `chanmodesA` is the SECOND fact that decision needs, and the
+// two sets are not the same. `chanmodes.a` is what the NETWORK advertises as
+// a list; `listModesQueryable` is the subset grappa knows reply numerics for
+// (server-side `ListModes.queryable/1`). A letter in the first and not in the
+// second is a list nobody can read, and it used to be sent to the wire anyway.
 const isupportMock = vi.hoisted(() => ({
   listModesQueryable: ["b", "z"],
+  chanmodesA: ["b", "z"],
   chantypes: ["#", "&", "+", "!"] as readonly string[],
 }));
 vi.mock("../lib/isupport", () => ({
   isupportForNetwork: () => ({
     listModesQueryable: isupportMock.listModesQueryable,
+    chanmodes: {
+      a: isupportMock.chanmodesA,
+      b: ["k"],
+      c: ["l"],
+      d: ["i", "m", "n", "p", "s", "t"],
+    },
     chantypes: isupportMock.chantypes,
   }),
   // #1255 — compose asks the store which sigils open a channel on THIS
@@ -6551,5 +6564,119 @@ describe("compose submit — the active-channel resolver reads the window KIND (
         kind: "channel",
       });
     }
+  });
+});
+
+// issue 1831 — the silent `{ok: true}`. A paramless single letter the NETWORK
+// advertises as type A is a LIST QUERY; when grappa knows no reply numerics
+// for it, the pre-fix code fell through to a raw `MODE #chan <letter>` and
+// returned ok. The ircd streams the list, nothing here collects it, and the
+// operator gets no modal, no error and no rows — indistinguishable from the
+// command never having run. CLAUDE.md forbids exactly that shape at a
+// boundary.
+describe("compose submit — an unreadable list query is reported, not fired (issue 1831)", () => {
+  // `a` is type A on this network AND absent from the queryable set — the one
+  // combination that used to be silent.
+  const advertiseUnreadableList = (): (() => void) => {
+    isupportMock.chanmodesA = ["b", "z", "a"];
+    return () => {
+      isupportMock.chanmodesA = ["b", "z"];
+    };
+  };
+
+  it("/mode #chan <unreadable type-A letter> is reported, not fired at nobody", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const restore = advertiseUnreadableList();
+    try {
+      const socket = await import("../lib/socket");
+      const banlistModal = await import("../lib/banlistModal");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/mode #a a");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(socket.pushChannelMode).not.toHaveBeenCalled();
+      expect(banlistModal.openBanlistModal).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        error: "/mode: grappa can't read this network's +a list (it offers +b +z)",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  // #1251 ruled the two spellings must behave alike; the WORDING is part of
+  // alike, so this pins the same string rather than merely "some error".
+  it("/mode +<unreadable letter> — the current-channel spelling behaves alike", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const restore = advertiseUnreadableList();
+    try {
+      const socket = await import("../lib/socket");
+      const banlistModal = await import("../lib/banlistModal");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/mode +a");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(socket.pushChannelMode).not.toHaveBeenCalled();
+      expect(banlistModal.openBanlistModal).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        error: "/mode: grappa can't read this network's +a list (it offers +b +z)",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  // The third spelling of one question, and the reason the message is built in
+  // one place: /banlist names the same cause, with its own verb.
+  it("/banlist <unreadable letter> names the same cause with its own verb", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const restore = advertiseUnreadableList();
+    try {
+      const banlistModal = await import("../lib/banlistModal");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/banlist a");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(banlistModal.openBanlistModal).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        error: "/banlist: grappa can't read this network's +a list (it offers +b +z)",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  // The distinction the wording exists for: a letter the network never
+  // advertised as a list HAS no list here, and blaming grappa would send the
+  // operator after a cause that is not there.
+  it("a letter the network never advertised keeps the network-side wording", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const banlistModal = await import("../lib/banlistModal");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/banlist e");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(banlistModal.openBanlistModal).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      error: "/banlist: this network has no +e list (it offers +b +z)",
+    });
+  });
+
+  // The mutation guard: a single letter that is NOT type A here is a mode
+  // CHANGE with a visible echo, and it must keep reaching the wire.
+  it("a single flag letter is still a mutation, not an unreadable list", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/mode #a m");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushChannelMode).toHaveBeenCalledWith(1, "#a", "m", []);
+    expect(result).toEqual({ ok: true });
   });
 });

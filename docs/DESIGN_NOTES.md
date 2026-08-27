@@ -42127,3 +42127,123 @@ which is the reason this note records the chain at all.
 about a default, exactly one of them may hold it. If the module writes on
 every boot, the stylesheet's `var(x, default)` is decoration — and a reviewer
 reading the CSS will believe a fallback that cannot fire.
+<!-- entry #1831 -->
+
+---
+
+## 2026-08-27 — #1831: two derivations of one fact, and an `{ok: true}` nobody could see
+
+Investigating "channel-scoped slash commands do nothing in the installed PWA"
+(issue 1831) turned up two defects in cic's command layer. Both are wrong on
+their own terms — one is a duplicated derivation, the other a silent swallow
+at a boundary, and CLAUDE.md forbids each by name. **Neither is established as
+the cause of that report**, and this entry is written so the fixes are not
+later read as a diagnosis. The report's decisive probe — is the ComposeBox
+alert line visible in standalone display-mode at all? — needs the reporter's
+device and had not answered when this landed.
+
+### What the report does and does not narrow to
+
+The issue groups `/banlist`, bare `/mode` and `/mode #chan b` as sharing
+`requireChannel` plus the network-id resolution. Measured, they share nothing:
+`/banlist` uses both guards, `/mode #chan b` uses only the network id, and
+bare `/mode` resolves no network id at all — it is two lines, resolve the
+channel and open the modal. The intersection of the three is empty, so no
+class-wide cure follows from the grouping.
+
+One thing the report settles for free, from its own data: `whoCommand` calls
+`ctx.requireNetworkId`, so `/who <nick>` working in the PWA proves the network
+slug resolves there. The "network does not resolve in standalone" candidate is
+dead. Its channel half is untouched — `/who <nick>` passes an explicit target
+and never reaches `requireChannel`.
+
+Two further readings did NOT survive contact with the code and are recorded so
+they are not re-tried. The ISUPPORT candidate is closed on prod values, not on
+principle: `ListModes.queryable/1` intersects the advertised type-A set with
+grappa's numeric-pair table, bahamut/Azzurra advertises `bz`, so `b` is
+queryable; and the server cannot publish an empty `chantypes` at all
+(`merge_token("CHANTYPES=" <> rest, …)` keeps the prior set on an empty
+token). And "the modal layer is fine because WhoModal renders" is weaker than
+it reads: `/who`'s modal is opened by a SERVER PUSH — the 315 drains into an
+ephemeral `who_reply` on the user topic and the modal renders THAT — so it
+proves the socket and the overlay stack are alive, not that a modal opened
+synchronously from a composer submit is visible.
+
+### 1. The active-channel resolver re-derived a fact the selection carries
+
+`getActiveChannel` answered "am I in a channel window?" by matching the window
+NAME against the network's advertised CHANTYPES. The selection store had
+already answered it: `SelectedChannel.kind` mirrors the server-side
+`WindowKind` atom, and the store commits to it hard enough to MUTATE on it —
+`foldChannelKey` folds the key for `kind: "channel"` and for no other kind.
+
+Two derivations of one fact, from different data, and only the duplicate can
+be wrong. When they disagree, a window the store has accepted as a channel
+becomes invisible to all 17 channel-scoped verb sites at once (13 through
+`requireChannel`, 4 calling `getActiveChannel` directly) — while TopicBar,
+mounted under `<Show when={selKind() === "channel"}>` and handed
+`selectedChannel()?.channelName` as a prop, keeps opening the very same modal
+from its button. That shape — every channel verb silent, the button working —
+is the shape the PWA report describes, which is why it was found; it is not
+evidence that the PWA is in that state.
+
+The resolver now reads `sel?.kind === "channel"`. The sigil class stays where
+the question is genuinely "is this TOKEN a channel?" and there is no window to
+ask: the parser's channel-vs-nick split, `modeCommand`'s explicit target, and
+Tab completion.
+
+Visible consequence, and the reason a pinned snapshot moved: the resolver no
+longer resolves a network id to fetch sigils, so 14 arms in the `#1396`
+dispatch characterization each lose one `networks.networkIdBySlug` effect. The
+results are unchanged. That snapshot is also what caught a second-order slip
+in the fix below — see the laziness note.
+
+### 2. A list query grappa cannot read was a silent `{ok: true}`
+
+`listModeQueryLetter` returned "the letter" or `null`, and `null` meant two
+different things: *this is a mode change* and *this is a list query I cannot
+answer*. Both fell through to a raw `pushChannelMode` returning `{ok: true}`.
+For the second, that puts `MODE #chan <letter>` on the wire, the ircd streams
+the list, and nothing client-side is primed to collect the numerics: no modal,
+no error, no rows. The operator cannot tell it apart from the command never
+having run — which is precisely the silent-swallow-at-a-boundary CLAUDE.md
+forbids, and precisely the pre-#536 behaviour #536 existed to remove.
+
+The classifier is now three-way (`execute` / `query` / `unreadable`), and it
+needs a second 005 fact to be so: `chanmodes.a` says whether the letter is a
+LIST on this network, which is what separates "grappa cannot read it" from
+"`/mode #chan m` sets +m and echoes back". Reading only `listModesQueryable`
+would have turned every single-letter flag mutation into an error.
+
+The wording is shared by all three spellings of the question (`/banlist X`,
+`/mode #chan X`, `/mode +X`), because #1251 ruled they must behave alike and
+the message is part of alike. It distinguishes two truths rather than
+flattening them: a letter the network never advertised as type A HAS no list
+here, while a letter it does advertise and grappa has no numeric pair for is
+grappa's limit. Blaming the network for the second would send the operator
+after a cause that is not there.
+
+**Laziness note.** The first cut evaluated `isChannelName(cmd.target,
+ctx.sigils())` before the intent, which resolved a network id on the ordinary
+mutation path. The `#1396` snapshot went red for the `mode` arm — that
+characterization exists to pin exactly this, and it earned its keep. The
+conjunct order is now intent-first, so `ctx.sigils()` stays unevaluated when
+the line is a plain mode change.
+
+### What this does NOT settle
+
+Every failure arm in `dispatchDraft` — unknown verb, every guard, any throw —
+terminates at one surface: a sticky `role="alert"` `<p class="compose-box-error">`
+rendered as the last child of the ComposeBox fragment, in normal flow, with no
+positioning of its own. Within that code, "no modal AND no error" is not
+producible. So either that line is not visible in the PWA, or the PWA is not
+running this bundle. Neither can be decided from here: standalone display-mode
+is not emulable in Playwright (measured against `playwright-core@1.62.1`'s
+types — `emulateMedia` takes `{colorScheme, contrast, forcedColors, media,
+reducedMotion}` and the string `display-mode` does not appear in them), so an
+e2e on that axis would be a spec that passes without touching the defect.
+
+The probe that decides it is one keystroke on the device: type an unknown verb
+and see whether its banner appears. `/zzzz` is guaranteed to produce
+`{kind: "error"}` in the pure parser, with no server, no network id and no
+channel involved — a positive control for the surface itself.
