@@ -1019,6 +1019,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # #1834 — the credit roll the image was built with, handed DOWN to smoke
+      # rather than re-derived there. Two reasons, and the second is the one
+      # that bites: a build arg is part of buildkit's cache key, so smoke's
+      # dry-run re-export must pass the BYTE-IDENTICAL value or it misses the
+      # cache and silently rebuilds stage 1 in-context — which is exactly the
+      # degraded build this change exists to stop, wearing a green face.
+      # Re-deriving it there would also read a fetch-depth-1 checkout, whose
+      # `git shortlog` sees one commit.
+      credits: ${{ steps.credits.outputs.credits }}
     env:
       # ONE definition of "this is a repair run", referenced by every step that
       # has to behave differently. Re-deriving the condition per step is how the
@@ -1138,6 +1148,74 @@ jobs:
             echo "scaffolding=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
 
+      # ── #1834: the credit roll, derived HERE because the build cannot ─────
+      #
+      # `.git` is .dockerignore'd for this image, deliberately (it is why
+      # Grappa.Version takes its no-git path), so `credits.sh` running inside
+      # stage 1 reaches its own no-repo guard and answers
+      # `{"sha":null,"date":null,"contributors":[]}` — honestly, and uselessly.
+      # Measured on the built dist, not inferred: that is the payload
+      # `ghcr.io/vjt/grappa` was baking into the credits easter egg.
+      #
+      # This runner is a full checkout (fetch-depth 0, for the #391 version
+      # derivation and the `:latest` gate), so the facts exist HERE. Derive
+      # them with the SAME script every other substrate uses and hand the
+      # result to the build as an arg; `Dockerfile.release` keeps its
+      # in-context call as the fallback, so a plain `docker build` from a
+      # source checkout is byte-for-byte unchanged.
+      #
+      # The payload must reach the build VERBATIM — vite.config.ts parses it as
+      # JSON and refuses a malformed one — so the two properties `build-args`
+      # actually needs are ASSERTED here rather than assumed: non-empty, and
+      # exactly one line (a `build-args: |` block is line-delimited, so an
+      # embedded newline would silently become a second, bogus argument).
+      - name: Derive the credit roll (the build context has no .git)
+        id: credits
+        run: |
+          # ABSENT is not an error. A repair dispatch checks out the TAG's
+          # tree, and every tag cut before #1773 predates this script — the
+          # same hazard the scaffolding step above documents for
+          # prerelease_flag.sh. The arg then stays empty, the Dockerfile's
+          # fallback answers, and that tag's image ships the roll it always
+          # shipped. Loud, because a silently degraded release image is the
+          # whole defect.
+          if [ ! -f infra/packaging/credits.sh ]; then
+            echo "::warning::infra/packaging/credits.sh is absent from this tree (pre-#1773 tag) — the image will bake the degraded credit roll"
+            {
+              echo 'credits<<CREDITS_EOF'
+              echo 'CREDITS_EOF'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          credits="$(sh infra/packaging/credits.sh)"
+
+          # Degraded HERE means the deriver failed, not that the build has no
+          # history: this step only runs with the script present and the
+          # checkout intact. Shipping the nulls anyway is precisely the silent
+          # regression #1834 closes, and the job already refuses to publish on
+          # a verdict it could not derive (see the `:latest` gate below).
+          case "$credits" in
+            *'"sha":null'*)
+              echo "::error::credits.sh derived the DEGRADED payload on a full checkout ($credits) — refusing to publish an image whose credit roll is empty"
+              exit 1
+              ;;
+          esac
+
+          # `printf '%s'` appends nothing, so this counts EMBEDDED newlines.
+          embedded="$(printf '%s' "$credits" | wc -l | tr -d ' ')"
+          if [ "$embedded" != "0" ]; then
+            echo "::error::the credits payload spans $((embedded + 1)) lines — a build-args block is line-delimited and would truncate it"
+            exit 1
+          fi
+
+          echo "credit roll: $credits"
+          {
+            echo 'credits<<CREDITS_EOF'
+            echo "$credits"
+            echo 'CREDITS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Compute image names + tag lists
         id: img
         run: |
@@ -1231,6 +1309,14 @@ jobs:
           # arm64 builds under QEMU emulation (slow — the gha cache below keeps
           # re-runs cheap).
           platforms: linux/amd64,linux/arm64
+          # #1834 — the credit roll, derived above from this full checkout. The
+          # cic stage declares the matching `ARG` and prefers it over its own
+          # in-context call; empty (a pre-#1773 tag being repaired) falls back
+          # to that call, which is also the plain-`docker build` behaviour.
+          # smoke's dry-run re-export MUST pass the same value — see the job
+          # output that carries it there.
+          build-args: |
+            GRAPPA_CREDITS=${{ steps.credits.outputs.credits }}
           # ZERO PUBLICATION on a dry-run: push on a tag push and on a repair. A
           # docker_validation dispatch still builds BOTH arches (proving the
           # arm64 QEMU path + the ABI-lockstep assertion + cic + mix release) and
@@ -1367,6 +1453,16 @@ jobs:
           load: true
           push: false
           tags: grappa-release:smoke
+          # #1834 — BYTE-IDENTICAL to what the docker job passed, taken from
+          # its job output rather than re-derived. A build arg participates in
+          # buildkit's cache key: a different value (or none) misses the cic
+          # layer, rebuilds stage 1 inside a context with no `.git`, and the
+          # image smoke then probes carries the degraded roll while the one
+          # that would have shipped does not. Re-deriving here would also read
+          # this job's fetch-depth-1 checkout, whose `git shortlog` sees one
+          # commit.
+          build-args: |
+            GRAPPA_CREDITS=${{ needs.docker.outputs.credits }}
           # MUST name the same scope the docker job's bouncer build writes
           # (#1168). That build is scoped now, because the bridge build shares
           # this job's gha cache backend; an unscoped `cache-from` here would

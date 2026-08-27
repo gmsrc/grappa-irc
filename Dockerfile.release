@@ -36,12 +36,30 @@ COPY cicchetto/ ./
 # why Grappa.Version takes its no-git path here), so credits.sh reports the
 # absence honestly and the roll degrades to the version alone. It must not
 # fail, or the release image stops building over an easter egg.
+#
+# #1834 — so the PUBLISHED image takes them from OUTSIDE instead. The build
+# context cannot have the history, but the machine driving the build does:
+# release.yml runs the same credits.sh in its full checkout and hands the
+# result in as this arg. Measured on the built dist before the change, not
+# inferred — `{"sha":null,"date":null,"contributors":[]}` is what
+# `ghcr.io/vjt/grappa` was shipping.
+#
+# `${GRAPPA_CREDITS:-$(sh …)}` and not an `if`, because the point is that the
+# in-context derive stays the DEFAULT: a plain `docker build` from a source
+# checkout passes no arg, the substitution runs credits.sh exactly as before,
+# and the roll degrades honestly. Turning that path into a failure would be a
+# worse bug than the one being fixed — vite.config.ts throws on an UNSET
+# GRAPPA_CREDITS (a wrapper that forgot to plumb it) and that throw must keep
+# meaning only that. The arg is declared INSIDE this stage on purpose: an
+# `ARG` is stage-scoped, so one declared next to `mix release` would leave
+# `--build-arg` accepted, warned about and silently ignored.
+ARG GRAPPA_CREDITS
 COPY VERSION ./VERSION
 COPY infra/packaging/version.sh ./infra/packaging/version.sh
 COPY infra/packaging/credits.sh ./infra/packaging/credits.sh
 RUN GRAPPA_VERSION="$(sh infra/packaging/version.sh)" \
     && export GRAPPA_VERSION \
-    && GRAPPA_CREDITS="$(sh infra/packaging/credits.sh)" \
+    && GRAPPA_CREDITS="${GRAPPA_CREDITS:-$(sh infra/packaging/credits.sh)}" \
     && export GRAPPA_CREDITS \
     && echo "cic build: GRAPPA_VERSION=${GRAPPA_VERSION}" \
     && bun run build -- --outDir /cic-dist --emptyOutDir
