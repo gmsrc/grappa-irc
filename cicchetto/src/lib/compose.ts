@@ -660,13 +660,29 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // would reject ops verbs that require a channel).
     const getActiveChannel = (): string | null => {
       const sel = selectedChannel();
-      if (!sel) return null;
-      const name = sel.channelName;
-      // A channel window opens with one of the sigils THIS network
-      // advertises. Query windows use a nick; server/list/mentions
-      // pseudo-windows use synthetic keys that carry no sigil at all.
-      if (!isChannelName(name, sigilsFor(sel.networkSlug))) return null;
-      return name;
+      // issue 1831 — ask the selection's KIND, do not re-derive it from the
+      // name. `WindowKind` mirrors the server-side atom, so `"channel"` IS
+      // the answer to "am I in a channel window?", and the store commits to
+      // it hard enough to MUTATE on it: `foldChannelKey` folds the key for
+      // `kind: "channel"` and for no other kind.
+      //
+      // What this replaces: an `isChannelName(name, sigilsFor(...))` sniff —
+      // a second, independent answer to a question the selection had already
+      // answered, derived from different data (the network's advertised
+      // CHANTYPES) that can disagree with it. When it did, a window the store
+      // had accepted as a channel became invisible to all 17 channel-scoped
+      // verb sites at once (13 through `requireChannel`, 4 here), while
+      // TopicBar — mounted under `<Show when={selKind() === "channel"}>` and
+      // handed `selectedChannel()?.channelName` as a prop — kept opening the
+      // very same modal from its button. Two derivations of one fact, and the
+      // duplicate is the one that can be wrong (CLAUDE.md: derive, don't
+      // duplicate).
+      //
+      // The sigil class is still the right tool one layer out, where the
+      // question is genuinely "is this TOKEN a channel?" and there is no
+      // window to ask: the parser's channel-vs-nick split, `modeCommand`'s
+      // explicit target, and Tab completion all keep it.
+      return sel?.kind === "channel" ? sel.channelName : null;
     };
 
     // Require a channel window; emit inline error if not in one.

@@ -5750,7 +5750,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
             "socket.pushChannelBan(1, "#a", "bob")",
           ],
@@ -5762,7 +5761,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
           "effects": [
             "aliasList.aliases()",
             "banlistModal.openBanlistModal("freenode", "#a", "b")",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -5811,7 +5809,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
             "socket.pushChannelDeop(1, "#a", ["bob"])",
           ],
@@ -5822,7 +5819,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
         "devoice": {
           "effects": [
             "aliasList.aliases()",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -5889,7 +5885,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
             "socket.pushChannelKick(1, "#a", "bob", "")",
             "socket.resolveUserhost(1, "bob")",
@@ -5901,7 +5896,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
         "kick": {
           "effects": [
             "aliasList.aliases()",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -5980,7 +5974,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
             "socket.pushChannelMode(1, "#a", "+s", [])",
           ],
@@ -6026,7 +6019,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
         "names": {
           "effects": [
             "aliasList.aliases()",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -6079,7 +6071,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
         "op": {
           "effects": [
             "aliasList.aliases()",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -6236,7 +6227,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
             "socket.pushChannelTopicClear(1, "#a")",
           ],
@@ -6249,7 +6239,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "api.postTopic("tok", "freenode", "#a", "new topic")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
           ],
           "result": {
@@ -6259,7 +6248,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
         "topic-show": {
           "effects": [
             "aliasList.aliases()",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
           ],
@@ -6315,7 +6303,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
             "socket.pushChannelUnban(1, "#a", "bob")",
           ],
@@ -6337,7 +6324,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
         "voice": {
           "effects": [
             "aliasList.aliases()",
-            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -6464,5 +6450,106 @@ describe("#1396 — dispatch characterization over every arm", () => {
         ],
       }
     `);
+  });
+});
+
+// issue 1831 — the window KIND is the answer to "am I in a channel?", and the
+// selection store already carries it. `getActiveChannel` used to re-derive
+// that answer by matching the window NAME against the network's advertised
+// CHANTYPES, so a window the store had already accepted as `kind: "channel"`
+// — and whose key it FOLDED, which `foldChannelKey` does for that kind and no
+// other — could still be invisible to every channel-scoped verb. TopicBar's
+// modes button mounts off `kind` (`Shell.tsx` `<Show when={selKind() ===
+// "channel"}>`) and keeps working straight through the divergence, which is
+// the button-works/command-fails split reported in the PWA. WHICH state
+// produces the divergence there is not established by these tests, and they
+// do not claim it.
+describe("compose submit — the active-channel resolver reads the window KIND (issue 1831)", () => {
+  // A channel window whose sigil the network does not advertise: the store
+  // says `kind: "channel"`, the CHANTYPES sniff says nick. Every
+  // channel-scoped verb has to follow the store.
+  const divergeKindFromSigil = async (): Promise<() => void> => {
+    const sel = await import("../lib/selection");
+    // Not `…Once`: dispatch consults the selection more than once per submit.
+    vi.mocked(sel.selectedChannel).mockReturnValue({
+      networkSlug: "freenode",
+      channelName: "&local",
+      kind: "channel",
+    });
+    isupportMock.chantypes = ["#"];
+    return () => {
+      isupportMock.chantypes = ["#", "&", "+", "!"];
+      vi.mocked(sel.selectedChannel).mockReturnValue({
+        networkSlug: "freenode",
+        channelName: "#a",
+        kind: "channel",
+      });
+    };
+  };
+
+  it("bare /mode opens the modal for the window the store calls a channel", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const restore = await divergeKindFromSigil();
+    try {
+      const modeModal = await import("../lib/modeModal");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "&local");
+      compose.setDraft(k, "/mode");
+      const result = await compose.submit(k, "freenode", "&local");
+
+      expect(modeModal.openModeModal).toHaveBeenCalledWith("freenode", "&local");
+      expect(result).toEqual({ ok: true });
+    } finally {
+      restore();
+    }
+  });
+
+  // The cure is the resolver, so the whole class moves with it — 13 verbs
+  // share `requireChannel` and 4 more call `getActiveChannel` directly. /op
+  // stands for the class: while it re-derived the sigil it reported "requires
+  // an active channel window" for a window that plainly is one.
+  it("the requireChannel class follows — /op resolves the same window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const restore = await divergeKindFromSigil();
+    try {
+      const socket = await import("../lib/socket");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "&local");
+      compose.setDraft(k, "/op bob");
+      const result = await compose.submit(k, "freenode", "&local");
+
+      expect(socket.pushChannelOp).toHaveBeenCalledWith(1, "&local", ["bob"]);
+      expect(result).toEqual({ ok: true });
+    } finally {
+      restore();
+    }
+  });
+
+  // The guard that has to survive the swap: a QUERY window is still not a
+  // channel, and the operator must still read the actionable error.
+  it("a query window is still refused, by kind rather than by sigil", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sel = await import("../lib/selection");
+    vi.mocked(sel.selectedChannel).mockReturnValue({
+      networkSlug: "freenode",
+      channelName: "alice",
+      kind: "query",
+    });
+    try {
+      const socket = await import("../lib/socket");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "alice");
+      compose.setDraft(k, "/op bob");
+      const result = await compose.submit(k, "freenode", "alice");
+
+      expect(socket.pushChannelOp).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ error: expect.stringContaining("channel window") });
+    } finally {
+      vi.mocked(sel.selectedChannel).mockReturnValue({
+        networkSlug: "freenode",
+        channelName: "#a",
+        kind: "channel",
+      });
+    }
   });
 });
