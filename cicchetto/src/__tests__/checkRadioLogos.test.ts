@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   agreeFailure,
+  bitrateFailure,
   brokenCount,
   bytesFailure,
   catalogueLogos,
+  codecFailure,
+  identifyCodec,
   isCatalogueBacked,
+  parseIcyBitrate,
   probedCounts,
   problems,
   reachFailure,
@@ -38,10 +42,14 @@ const finding = (over: Partial<StationFinding>): StationFinding => ({
   id: "dronezone",
   logoUrl: "https://api.somafm.com/logos/120/dronezone120.jpg",
   feedUrl: "https://api.somafm.com/songs/dronezone.json",
+  streamUrl: "https://ice.somafm.com/dronezone-128-mp3",
   reach: null,
   agree: null,
   feed: null,
   bytes: null,
+  stream: null,
+  codec: null,
+  bitrate: null,
   ...over,
 });
 
@@ -273,6 +281,158 @@ describe("bytesFailure", () => {
   });
 });
 
+// #1836 — the CODEC and BITRATE axes. `codec` and `bitrate` are a fourth and
+// fifth DECLARED claim about external state in this table, and the whole point
+// of #1696 is that a baked claim nothing can check is not a fact. The `[hi-fi]`
+// badge rests on the first of them, so a wrong codec is not a cosmetic slip:
+// it is the picker telling somebody on a metered connection the opposite of
+// the truth.
+//
+// The byte prefixes below are MEASURED, 2026-08-27, off the real endpoints —
+// the first 48 bytes each server sent a fresh listener. A hand-drawn fixture
+// would prove the parser against itself.
+describe("identifyCodec", () => {
+  const bytes = (hex: string): Uint8Array =>
+    Uint8Array.from((hex.match(/../g) ?? []).map((b) => Number.parseInt(b, 16)));
+
+  // ice.somafm.com/groovesalad-128-mp3 — an MPEG frame header, sync word first.
+  const MP3 = bytes("fffb9204ef8ff3274655834f32e264a5faa063084c0ba0d1540dbc6b81731a2a");
+  // kohina.brona.dk/icecast/stream.ogg — Ogg page, then `\x01vorbis`.
+  const OGG_VORBIS = bytes(
+    "4f676753000200000000000000008ec9fc1600000000ac3972cb011e01766f7262697300000000",
+  );
+  // stream.radioparadise.com/flac — the same Ogg framing, then `\x7fFLAC`.
+  const OGG_FLAC = bytes(
+    "4f67675300020000000000000000717a3b3f00000000423dae9f01337f464c414301000001664c61",
+  );
+
+  it("reads an MPEG frame sync as mp3", () => {
+    expect(identifyCodec(MP3)).toBe("mp3");
+  });
+
+  it("reads an Ogg page carrying a vorbis identification header as vorbis", () => {
+    expect(identifyCodec(OGG_VORBIS)).toBe("vorbis");
+  });
+
+  it("reads an Ogg page carrying a FLAC identification header as flac", () => {
+    // THE case the badge rests on, and the reason this axis reads BYTES at all
+    // rather than the content type: measured the same day, kohina answers
+    // `audio/ogg` and radioparadise's FLAC answers `application/ogg`, and both
+    // headers are simply "an Ogg container". A header-only check would be
+    // green in exactly the comparison `[hi-fi]` exists to make.
+    expect(identifyCodec(OGG_FLAC)).toBe("flac");
+  });
+
+  it("refuses to name a codec it cannot see, rather than guessing the common one", () => {
+    // "not measured" must never read as "measured ok" — the equivalence this
+    // whole script was written against. A null here is a FINDING downstream,
+    // not a skip.
+    expect(identifyCodec(bytes("00112233445566778899aabbccddeeff"))).toBeNull();
+    expect(identifyCodec(bytes(""))).toBeNull();
+  });
+
+  it("refuses an Ogg container whose codec header it does not recognise", () => {
+    // CONSTRUCTED, not measured — no station in the table serves Opus, and the
+    // fixture is the real Ogg page framing above with `OpusHead` where the
+    // identification header sits. The property is what matters: the container
+    // is not the codec, and a rule that answered "vorbis" for any `OggS` would
+    // have called radioparadise lossy.
+    const OGG_OPUS = bytes(
+      "4f676753000200000000000000008ec9fc1600000000ac3972cb011e4f70757348656164",
+    );
+    expect(identifyCodec(OGG_OPUS)).toBeNull();
+  });
+});
+
+describe("codecFailure", () => {
+  it("is quiet when the stream serves what the table declares", () => {
+    expect(codecFailure("mp3", "mp3")).toBeNull();
+  });
+
+  it("fails a lossless claim the stream does not back — the badge's own defect", () => {
+    // THE positive control the whole axis exists for: a row declaring `flac`
+    // over a stream that is vorbis draws `[hi-fi]` on a lossy station. This
+    // MUST be red, and it is the case a probe that only compared content types
+    // would wave through.
+    expect(codecFailure("flac", "vorbis")).toBe("upstream serves vorbis, the table claims flac");
+  });
+
+  it("fails a lossy claim over a lossless stream, which is the same lie inverted", () => {
+    expect(codecFailure("mp3", "flac")).not.toBeNull();
+  });
+
+  it("fails a stream it could not identify rather than passing it", () => {
+    expect(codecFailure("mp3", null)).toBe(
+      "the first bytes match no codec this table can declare — the claim mp3 is unverified",
+    );
+  });
+});
+
+describe("parseIcyBitrate", () => {
+  it("reads the kbps a provider states", () => {
+    expect(parseIcyBitrate("128")).toEqual({ kind: "kbps", kbps: 128 });
+  });
+
+  it("reports a header the provider does not send as ABSENT, not as zero", () => {
+    // Measured 2026-08-27: kohina's icecast sends `icy-name` and `icy-genre`
+    // and no `icy-br` at all. That is the state `bitrate: null` exists to
+    // spell, and folding it to 0 would turn "nobody said" into a number.
+    expect(parseIcyBitrate(null)).toEqual({ kind: "absent" });
+  });
+
+  it("rejects a value that is not a bitrate instead of coercing it", () => {
+    // The boundary: `icy-br` is a free string from a third party. `Number("")`
+    // is 0 and `parseInt("128kbps")` is 128 — both of them are a made-up fact
+    // downstream, so an unreadable value gets its own state and is reported.
+    for (const raw of ["", "  ", "quite fast", "-1", "0", "128.5", "1e3"]) {
+      expect(parseIcyBitrate(raw), `icy-br ${JSON.stringify(raw)}`).toEqual({
+        kind: "unreadable",
+        raw,
+      });
+    }
+  });
+});
+
+describe("bitrateFailure", () => {
+  it("is quiet when the table states the kbps upstream states", () => {
+    expect(bitrateFailure(128, { kind: "kbps", kbps: 128 })).toBeNull();
+  });
+
+  it("is quiet when neither the table nor upstream states one", () => {
+    expect(bitrateFailure(null, { kind: "absent" })).toBeNull();
+  });
+
+  it("fails a number the table invented — #1696's defect in this field", () => {
+    // The positive control for the nullable arm: a plausible bitrate baked to
+    // fill a column, over a provider that declares nothing. It renders as a
+    // fact and is a guess.
+    expect(bitrateFailure(128, { kind: "absent" })).toBe(
+      "upstream declares no bitrate, the table claims 128 kbps",
+    );
+  });
+
+  it("fails a number the table dropped, so a knowable fact is not left unsaid", () => {
+    expect(bitrateFailure(null, { kind: "kbps", kbps: 320 })).toBe(
+      "upstream declares 320 kbps, the table claims none",
+    );
+  });
+
+  it("fails a number that has moved under the table", () => {
+    expect(bitrateFailure(128, { kind: "kbps", kbps: 320 })).toBe(
+      "upstream declares 320 kbps, the table claims 128 kbps",
+    );
+  });
+
+  it("fails an unreadable header rather than treating it as absent", () => {
+    // Absent and unreadable are different facts about upstream, and collapsing
+    // them would make a table that says `null` green against a server that is
+    // saying something nobody can parse.
+    expect(bitrateFailure(null, { kind: "unreadable", raw: "128kbps" })).toBe(
+      'upstream declares icy-br "128kbps", which is not a bitrate',
+    );
+  });
+});
+
 describe("the union verdict", () => {
   it("reports every axis that has something to say", () => {
     expect(
@@ -282,6 +442,9 @@ describe("the union verdict", () => {
           agree: "catalogue ships x",
           feed: "HTTP 500",
           bytes: "mirror is stale",
+          stream: "HTTP 502",
+          codec: "upstream serves vorbis, the table claims flac",
+          bitrate: "upstream declares no bitrate, the table claims 128 kbps",
         }),
       ),
     ).toEqual([
@@ -289,6 +452,9 @@ describe("the union verdict", () => {
       "AGREE catalogue ships x",
       "FEED HTTP 500",
       "BYTES mirror is stale",
+      "STREAM HTTP 502",
+      "CODEC upstream serves vorbis, the table claims flac",
+      "BITRATE upstream declares no bitrate, the table claims 128 kbps",
     ]);
   });
 
@@ -305,6 +471,13 @@ describe("the union verdict", () => {
     // that still resolves and still agrees with the catalogue, while the bytes
     // this build ships are last month's.
     expect(brokenCount([finding({ bytes: "mirror is stale" })])).toBe(1);
+    // #1836 — and on each of the three stream axes alone. A station whose
+    // artwork, catalogue row, feed and mirror are all perfect while the row
+    // claims a codec it does not serve is the picker lying about the one thing
+    // the `[hi-fi]` badge is there to say.
+    expect(brokenCount([finding({ stream: "HTTP 502" })])).toBe(1);
+    expect(brokenCount([finding({ codec: "upstream serves vorbis" })])).toBe(1);
+    expect(brokenCount([finding({ bitrate: "upstream declares no bitrate" })])).toBe(1);
   });
 
   it("counts a clean station as unbroken", () => {
@@ -342,11 +515,15 @@ describe("a station that publishes no logo (#1704)", () => {
     ): StationFinding => ({
       id,
       logoUrl,
+      streamUrl: `https://ice.somafm.com/${id}-128-mp3`,
       feedUrl,
       reach: null,
       agree: null,
       feed: null,
       bytes: null,
+      stream: null,
+      codec: null,
+      bitrate: null,
     });
     const counts = probedCounts([
       finding("with-logo", "https://api.somafm.com/logos/120/x120.png", null),
@@ -369,16 +546,57 @@ describe("a station that publishes no logo (#1704)", () => {
       {
         id: "unreachable",
         logoUrl: "https://api.somafm.com/logos/120/x120.png",
+        streamUrl: "https://ice.somafm.com/x-128-mp3",
         feedUrl: null,
         reach: "HTTP 503",
         agree: null,
         feed: null,
         bytes: null,
+        stream: null,
+        codec: null,
+        bitrate: null,
       },
     ]);
 
     expect(counts.logos).toBe(1);
     expect(counts.mirrored).toBe(0);
+  });
+
+  it("counts a stream it could not open out of the FORMAT denominator (#1836)", () => {
+    // The same argument one axis over, and it is why `streams` exists at all:
+    // a run where every station's stream refused the connection would compare
+    // no codec and no bitrate, and "22 stations checked, 0 broken" would read
+    // as agreement with claims nothing looked at.
+    const counts = probedCounts([
+      {
+        id: "reachable",
+        logoUrl: null,
+        streamUrl: "https://ice.somafm.com/x-128-mp3",
+        feedUrl: null,
+        reach: null,
+        agree: null,
+        feed: null,
+        bytes: null,
+        stream: null,
+        codec: null,
+        bitrate: null,
+      },
+      {
+        id: "refused",
+        logoUrl: null,
+        streamUrl: "https://ice.somafm.com/y-128-mp3",
+        feedUrl: null,
+        reach: null,
+        agree: null,
+        feed: null,
+        bytes: null,
+        stream: "TimeoutError: The operation timed out.",
+        codec: null,
+        bitrate: null,
+      },
+    ]);
+
+    expect(counts.streams).toBe(1);
   });
 
   it("counts the real table, so the denominator is not a fixture", () => {
@@ -391,10 +609,14 @@ describe("a station that publishes no logo (#1704)", () => {
         id: s.id,
         logoUrl: s.logoUrl,
         feedUrl: s.nowPlayingSource?.url ?? null,
+        streamUrl: s.streamUrl,
         reach: null,
         agree: null,
         feed: null,
         bytes: null,
+        stream: null,
+        codec: null,
+        bitrate: null,
       })),
     );
     expect(

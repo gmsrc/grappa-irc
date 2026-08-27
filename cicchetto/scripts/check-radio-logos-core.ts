@@ -1,6 +1,9 @@
 // #1696 — the pure half of the radio-logo probe.
 //
-// No filesystem, no network, no Bun API, no imports. `check-radio-logos.ts`
+// No filesystem, no network, no Bun API. #1836 added the ONE import: the
+// table's codec vocabulary, which is data rather than IO and is the same closed
+// set the rules below have to be total over — re-spelling it here would be two
+// copies of a set that exists to have one. `check-radio-logos.ts`
 // does the IO and calls in here; `src/__tests__/checkRadioLogos.test.ts`
 // exercises both sides of every rule. This is the `lock-drift-core.ts` split
 // and it exists for the same measured reason: `cicchetto/scripts/` is outside
@@ -18,6 +21,8 @@
 // provider, so a rule inverted by one edit skips EVERY station and the script
 // reports "0 broken" having compared nothing — a green that means silence. The
 // test file holds a positive control against the real table for that.
+
+import { RADIO_CODECS, type RadioCodec } from "../src/lib/radioStations";
 
 /** The shape `channels.json` gives us. Everything is optional on purpose: this
     is a third party's document and a missing field must degrade to a finding,
@@ -138,6 +143,140 @@ export function bytesFailure(upstream: Uint8Array, vendored: Uint8Array | null):
   return null;
 }
 
+// #1836 — the two claims the table makes about the STREAM: `codec` and
+// `bitrate`. Same argument as every axis above, in the field where it bites
+// hardest: a baked claim about external state that nothing can check reads
+// identically whether it is true or false, and this one decides whether the
+// picker draws `[hi-fi]` — i.e. whether somebody on a metered connection is
+// told the truth before pressing play.
+//
+// 🔴 THE CODEC IS READ OFF THE BYTES, NOT OFF THE CONTENT TYPE, and the
+// measurement is why. On 2026-08-27 kohina's Ogg VORBIS answered
+// `Content-Type: audio/ogg` and radioparadise's Ogg FLAC answered
+// `application/ogg`; both are "an Ogg container" and neither names its codec.
+// So a content-type check is green in exactly the comparison the badge rests
+// on — lossy vs lossless inside one container — which is the "green that means
+// silence" this whole file is written against. The bytes separate them in the
+// first 32.
+
+/** `\x01vorbis`, `\x7fFLAC` and `OggS` as the servers actually send them —
+    read off the wire on 2026-08-27, not copied out of a spec. */
+const OGG_PAGE = [0x4f, 0x67, 0x67, 0x53];
+const OGG_VORBIS_ID = [0x01, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73];
+const OGG_FLAC_ID = [0x7f, 0x46, 0x4c, 0x41, 0x43];
+/** `fLaC` — FLAC's OWN framing, outside any Ogg page. Unlike the three above
+    this one is UNMEASURED: every FLAC endpoint looked at so far ships inside
+    Ogg, and the constant is here because the format defines both framings and a
+    row that used the other one would otherwise be reported as unidentifiable
+    rather than as flac. Labelled so the next reader knows which of these four
+    has an endpoint behind it. */
+const NATIVE_FLAC_MAGIC = [0x66, 0x4c, 0x61, 0x43];
+
+function startsWith(head: Uint8Array, magic: readonly number[]): boolean {
+  return magic.every((byte, i) => head[i] === byte);
+}
+
+function contains(head: Uint8Array, magic: readonly number[]): boolean {
+  for (let at = 0; at + magic.length <= head.length; at++) {
+    if (magic.every((byte, i) => head[at + i] === byte)) return true;
+  }
+  return false;
+}
+
+/** How each codec announces itself in the first bytes a listener receives.
+ *
+ * A `Record` over the closed set, so a new codec is a COMPILE error until
+ * somebody supplies the bytes that identify it — the same totality
+ * `isLossless` buys, and for a sharper reason: a codec with no signature would
+ * be permanently unidentifiable, and every row declaring it would go red with
+ * no way to tell that from a genuinely wrong claim. */
+const CODEC_SIGNATURES: Record<RadioCodec, (head: Uint8Array) => boolean> = {
+  // An MPEG frame header: eleven set sync bits. Measured at offset ZERO on both
+  // mp3 vendors in the table — icecast hands a new listener whole frames — so
+  // this asks for the sync at the start rather than hunting for it, which would
+  // match a byte pair occurring by chance inside any payload.
+  mp3: (head) => {
+    const [first, second] = head;
+    return first === 0xff && second !== undefined && (second & 0xe0) === 0xe0;
+  },
+  // The container first, then the codec: `OggS` alone is not an answer, and a
+  // rule that treated it as one would have called radioparadise's FLAC vorbis.
+  vorbis: (head) => startsWith(head, OGG_PAGE) && contains(head, OGG_VORBIS_ID),
+  flac: (head) =>
+    (startsWith(head, OGG_PAGE) && contains(head, OGG_FLAC_ID)) ||
+    startsWith(head, NATIVE_FLAC_MAGIC),
+};
+
+/** Which codec these leading bytes are, or `null` when they are none of the
+ * ones this table can declare.
+ *
+ * `null` on AMBIGUITY too, not just on no-match: two signatures agreeing means
+ * the rules have gone wrong, and answering with whichever came first would
+ * hide that behind a verdict. Downstream a null is a FINDING and never a skip —
+ * "not measured" reading as "measured ok" is the equivalence this script
+ * exists to break. */
+export function identifyCodec(head: Uint8Array): RadioCodec | null {
+  const matched = RADIO_CODECS.filter((codec) => CODEC_SIGNATURES[codec](head));
+  const [only] = matched;
+  return matched.length === 1 && only !== undefined ? only : null;
+}
+
+/** `null` when the stream serves the codec the table declares; otherwise the
+    disagreement. */
+export function codecFailure(declared: RadioCodec, served: RadioCodec | null): string | null {
+  if (served === null) {
+    return `the first bytes match no codec this table can declare — the claim ${declared} is unverified`;
+  }
+  if (served !== declared) return `upstream serves ${served}, the table claims ${declared}`;
+  return null;
+}
+
+/** What upstream says about its own bitrate — THREE states, because collapsing
+ * them is the bug.
+ *
+ * `absent` is a provider that states nothing (measured: kohina's icecast sends
+ * `icy-name` and `icy-genre` and no `icy-br`), and it is the state the table's
+ * `bitrate: null` exists to agree with. `unreadable` is a header that is there
+ * and is not a number: `Number("")` is 0 and `parseInt("128kbps")` is 128, so a
+ * two-state parser would turn a value nobody can read into a fact. */
+export type UpstreamBitrate =
+  | { readonly kind: "absent" }
+  | { readonly kind: "kbps"; readonly kbps: number }
+  | { readonly kind: "unreadable"; readonly raw: string };
+
+/** The boundary where a third party's free string becomes a number, or is
+    refused. Strict on purpose — no trim, no partial parse: `fetch` already
+    strips the surrounding whitespace a well-formed header may carry, so
+    anything left over is the server saying something this rule should not be
+    guessing at. */
+export function parseIcyBitrate(header: string | null): UpstreamBitrate {
+  if (header === null) return { kind: "absent" };
+  if (!/^[1-9][0-9]*$/.test(header)) return { kind: "unreadable", raw: header };
+  return { kind: "kbps", kbps: Number(header) };
+}
+
+/** `null` when the table's bitrate claim matches what upstream declares —
+ * INCLUDING when both say nothing.
+ *
+ * Both directions are failures. A number the table invented over a silent
+ * provider is #1696's defect exactly (an unverifiable claim baked as fact); a
+ * number the table dropped over a provider that states one is the opposite and
+ * just as wrong, because the picker then draws no cost for a station that has
+ * one. */
+export function bitrateFailure(declared: number | null, upstream: UpstreamBitrate): string | null {
+  if (upstream.kind === "unreadable") {
+    return `upstream declares icy-br ${JSON.stringify(upstream.raw)}, which is not a bitrate`;
+  }
+  if (upstream.kind === "absent") {
+    return declared === null ? null : `upstream declares no bitrate, the table claims ${declared} kbps`;
+  }
+  if (declared === null) return `upstream declares ${upstream.kbps} kbps, the table claims none`;
+  if (declared !== upstream.kbps) {
+    return `upstream declares ${upstream.kbps} kbps, the table claims ${declared} kbps`;
+  }
+  return null;
+}
+
 export type StationFinding = {
   readonly id: string;
   /** #1704 — the station's logo, or `null` when it publishes none. Carried as
@@ -149,6 +288,11 @@ export type StationFinding = {
       Carried so the report line can name the URL that failed, and so a null
       row is visibly SKIPPED rather than silently absent. */
   readonly feedUrl: string | null;
+  /** #1836 — the station's stream. Not nullable, unlike its two siblings: a
+      station without one is not a station. Carried for the reason `feedUrl`
+      gives — a row now names THREE third-party URLs, and a report that prints
+      one leaves the reader guessing which of them an axis is talking about. */
+  readonly streamUrl: string;
   readonly reach: string | null;
   readonly agree: string | null;
   /** #1698 — the FEED axis: whether `feedUrl` answers with JSON. Always null
@@ -162,6 +306,20 @@ export type StationFinding = {
       offline gate's job), and null when REACH already failed — one dead fetch
       must be reported once, not counted twice under two names. */
   readonly bytes: string | null;
+  /** #1836 — the STREAM axis: whether the endless audio endpoint answers at
+      all. Its own axis rather than folded into the two below, because "the
+      connection was refused" and "the codec is not what you claim" are
+      different facts and a report that spells the first under the second name
+      sends the reader to edit the table. */
+  readonly stream: string | null;
+  /** #1836 — the CODEC axis, read off the first bytes upstream sends. Null
+      when STREAM already failed: nothing was compared, and reporting one dead
+      connection twice under two names is the double-count BYTES already
+      refuses. */
+  readonly codec: string | null;
+  /** #1836 — the BITRATE axis, `icy-br` against the declared kbps, in both
+      directions. Null when STREAM already failed, for the same reason. */
+  readonly bitrate: string | null;
 };
 
 /** How many of `findings` were actually PROBED on each axis.
@@ -175,10 +333,17 @@ export function probedCounts(findings: readonly StationFinding[]): {
   readonly logos: number;
   readonly feeds: number;
   readonly mirrored: number;
+  readonly streams: number;
 } {
   return {
     logos: findings.filter((f) => f.logoUrl !== null).length,
     feeds: findings.filter((f) => f.feedUrl !== null).length,
+    // #1836 — a FOURTH denominator, on the same argument as `mirrored`: every
+    // row has a stream URL, so the count that means anything is how many
+    // streams actually OPENED. A run where every connection timed out compares
+    // no codec and no bitrate, and "22 stations checked, 0 broken" would read
+    // as agreement with claims nothing looked at.
+    streams: findings.filter((f) => f.stream === null).length,
     // #1739 — a THIRD denominator, and deliberately not the same number as
     // `logos`: BYTES can only compare a payload it managed to fetch, so a run
     // where every logo timed out would print "21 with a logo, 0 broken" having
@@ -188,13 +353,16 @@ export function probedCounts(findings: readonly StationFinding[]): {
   };
 }
 
-/** Every problem found for one station, all four axes, in report order. */
+/** Every problem found for one station, all seven axes, in report order. */
 export function problems(finding: StationFinding): readonly string[] {
   return [
     finding.reach === null ? null : `REACH ${finding.reach}`,
     finding.agree === null ? null : `AGREE ${finding.agree}`,
     finding.feed === null ? null : `FEED ${finding.feed}`,
     finding.bytes === null ? null : `BYTES ${finding.bytes}`,
+    finding.stream === null ? null : `STREAM ${finding.stream}`,
+    finding.codec === null ? null : `CODEC ${finding.codec}`,
+    finding.bitrate === null ? null : `BITRATE ${finding.bitrate}`,
   ].filter((p): p is string => p !== null);
 }
 

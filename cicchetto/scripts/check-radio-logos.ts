@@ -19,7 +19,7 @@
 // moduledoc names it, so the next author edits the table and has a command
 // instead of a ritual.
 //
-// FOUR AXES, all reported, union verdict (the `scripts/check.ts` posture):
+// SEVEN AXES, all reported, union verdict (the `scripts/check.ts` posture):
 //
 //   REACH  — the logo URL answers 200 with an `image/*` content type. This is
 //            the property the picker needs, and it covers every station
@@ -67,6 +67,28 @@
 //            `src/__tests__/radioLogoFiles.test.ts`'s job, offline), and so is
 //            one whose REACH already failed — a single dead fetch is reported
 //            once, not counted twice under two names.
+//   STREAM — #1836: the endless audio endpoint answers 2xx at all. This was
+//            the LAST hand-measured claim in the table — `radioStations.ts`
+//            said so in a ⚠️ of its own — and it stayed hand-measured because
+//            a stream cannot be HEADed: icecast answers a GET with a body that
+//            never ends, so `HEAD` returns an empty reply (curl exit 52). The
+//            cure is an ABORTED get, which is what `probeStream` below is.
+//   CODEC  — #1836: the first bytes upstream sends ARE the codec the table
+//            declares. The picker draws `[hi-fi]` off that field, so a wrong
+//            one tells somebody on a metered connection the opposite of the
+//            truth, silently and on every render.
+//            🔴 THE BYTES, NOT THE CONTENT TYPE, and it is measured rather
+//            than fastidious: on 2026-08-27 kohina's Ogg VORBIS answered
+//            `audio/ogg` and radioparadise's Ogg FLAC answered
+//            `application/ogg` — both mean "an Ogg container" and neither
+//            names a codec, so a header check is green in exactly the
+//            lossy-vs-lossless comparison the badge exists to make.
+//   BITRATE— #1836: `icy-br` against the declared kbps, IN BOTH DIRECTIONS. A
+//            number invented over a silent provider is #1696's own defect in a
+//            new field; a number dropped over a provider that states one draws
+//            no cost for a station that has one. A station whose provider
+//            declares nothing must declare `bitrate: null` and is not a
+//            finding — that agreement is the check, not a skip.
 //
 // ⚠️ THE LOGO AXIS FETCHES WITH `GET`, NOT `HEAD`, and the feed axis still
 // uses HEAD. BYTES needs the payload, and one GET yields the status, the
@@ -96,12 +118,16 @@ import { RADIO_LOGO_PATHS } from "../src/lib/radioLogoPaths";
 import { type NowPlayingSource, RADIO_STATIONS } from "../src/lib/radioStations";
 import {
   agreeFailure,
+  bitrateFailure,
   brokenCount,
   bytesFailure,
   type CatalogueBody,
   catalogueLogos,
+  codecFailure,
   FEED_CONTENT_TYPE,
+  identifyCodec,
   LOGO_CONTENT_TYPE,
+  parseIcyBitrate,
   problems,
   probedCounts,
   reachFailure,
@@ -110,6 +136,15 @@ import {
 
 const CATALOGUE_URL = "https://api.somafm.com/channels.json";
 const TIMEOUT_MS = 15_000;
+
+/** #1836 — how much of an endless stream to pull before hanging up.
+ *
+ * Enough for the Ogg identification header and then some: measured
+ * 2026-08-27, `\x01vorbis` sits at byte 28 of kohina's first page and
+ * `\x7fFLAC` at byte 29 of radioparadise's. A kilobyte is two orders of
+ * headroom over that and still nothing — the connection is closed before the
+ * server has finished its first second of audio. */
+const STREAM_HEAD_BYTES = 1024;
 
 /** Resolved against THIS script, so the mirror is found wherever the verb is
     run from — the reason `gen-emoji.ts` and `sync-radio-logos.ts` do the
@@ -204,6 +239,58 @@ async function probeLogo(url: string): Promise<{
   }
 }
 
+/** #1836 — the first bytes of a station's stream and what it says about
+ * itself, from ONE aborted GET.
+ *
+ * ABORTED, and that is the whole mechanism: icecast answers a GET with a body
+ * that never ends, which is why `HEAD` returns an empty reply and why this
+ * claim stayed hand-measured until now. The reader is cancelled the moment
+ * there are enough bytes to identify the codec, so the probe costs a kilobyte
+ * per station and closes the socket itself rather than waiting for a timeout.
+ *
+ * `head` is null exactly when `stream` is not — the `probeLogo` contract one
+ * function up, and for the same reason: there are no bytes to identify when the
+ * fetch produced none, and reporting one dead connection under three axis names
+ * would treble-count it. */
+async function probeStream(url: string): Promise<{
+  readonly stream: string | null;
+  readonly head: Uint8Array | null;
+  readonly icyBr: string | null;
+}> {
+  const dead = (why: string): { stream: string; head: null; icyBr: null } => ({
+    stream: why,
+    head: null,
+    icyBr: null,
+  });
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (!res.ok) return dead(`HTTP ${res.status}`);
+    // Not `reachFailure`: a stream has no one content type to demand. Measured
+    // 2026-08-27, the three vendors here answer `audio/mpeg`, `audio/ogg` and
+    // `application/ogg`, and the CODEC axis reads the payload precisely because
+    // the header cannot separate the last two. A status check is what this axis
+    // can honestly assert on its own.
+    const body = res.body;
+    if (body === null) return dead("answered 2xx with no body at all");
+
+    const reader = body.getReader();
+    const head = new Uint8Array(STREAM_HEAD_BYTES);
+    let filled = 0;
+    while (filled < STREAM_HEAD_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      const take = Math.min(value.byteLength, STREAM_HEAD_BYTES - filled);
+      head.set(value.subarray(0, take), filled);
+      filled += take;
+    }
+    await reader.cancel();
+    return { stream: null, head: head.subarray(0, filled), icyBr: res.headers.get("icy-br") };
+  } catch (err) {
+    return dead(`${err}`);
+  }
+}
+
 /** What `public/radio-logos/` holds for this station, or null when it holds
     nothing — which `bytesFailure` reports rather than skips. */
 function mirroredBytes(id: string): Uint8Array | null {
@@ -230,11 +317,16 @@ const findings: StationFinding[] = await Promise.all(
     // cannot 404. Counted out of the denominator below rather than folded into
     // the green.
     const logo = station.logoUrl === null ? null : await probeLogo(station.logoUrl);
+    // #1836 — unconditional, unlike the two probes above: `streamUrl` is not
+    // nullable, so there is no arm to skip. A station with no stream is not a
+    // station.
+    const stream = await probeStream(station.streamUrl);
     const source = station.nowPlayingSource;
     return {
       id: station.id,
       logoUrl: station.logoUrl,
       feedUrl: source?.url ?? null,
+      streamUrl: station.streamUrl,
       reach: logo?.reach ?? null,
       agree: agreeFailure(station.logoUrl, station.id, catalogue),
       // A station that publishes no feed is not probed and is not a finding.
@@ -246,6 +338,16 @@ const findings: StationFinding[] = await Promise.all(
         logo?.upstream === undefined || logo.upstream === null
           ? null
           : bytesFailure(logo.upstream, mirroredBytes(station.id)),
+      stream: stream.stream,
+      // #1836 — gated on the bytes being IN HAND, the `bytes` arm above. A
+      // connection that never opened has already been reported once under
+      // STREAM; saying it again under two more names is the double-count that
+      // gate exists to refuse.
+      codec: stream.head === null ? null : codecFailure(station.codec, identifyCodec(stream.head)),
+      bitrate:
+        stream.head === null
+          ? null
+          : bitrateFailure(station.bitrate, parseIcyBitrate(stream.icyBr)),
     };
   }),
 );
@@ -267,6 +369,12 @@ for (const finding of findings) {
   // stated for the same reason the summary states its denominator — a skipped
   // row must not read as a probed one.
   console.log(`          feed ${finding.feedUrl ?? "(no feed)"}`);
+  // #1836 — the third URL gets its own line for the reason the feed does, and
+  // more sharply: THREE of the seven axes talk about this endpoint, so a reader
+  // holding a `STREAM`/`CODEC`/`BITRATE` red would otherwise have to go back to
+  // the table to learn which URL was probed. No `(no stream)` arm — the field
+  // is not nullable.
+  console.log(`          stream ${finding.streamUrl}`);
   for (const p of found) console.log(`          ${p}`);
 }
 
@@ -280,11 +388,16 @@ const broken = brokenCount(findings);
 // #1704 adds the logo half of that same denominator, now that `logoUrl` is
 // nullable too: without it a table whose logos had all gone null would report
 // "21 stations checked, 0 broken" having fetched nothing at all.
+// #1836 adds the STREAM half. Every row has a stream, so the number that means
+// anything is how many actually OPENED: a run where the connections all timed
+// out compared no codec and no bitrate, and the station count alone would read
+// as agreement with claims nothing looked at.
 const probed = probedCounts(findings);
 console.log(
   `\ncheck:radio summary — ${findings.length} stations checked ` +
     `(${probed.logos} with a logo, ${probed.mirrored} compared against the mirror, ` +
-    `${probed.feeds} with a now-playing feed), ${broken} broken`,
+    `${probed.feeds} with a now-playing feed, ${probed.streams} streams opened), ` +
+    `${broken} broken`,
 );
 
 process.exit(broken === 0 ? 0 : 1);
