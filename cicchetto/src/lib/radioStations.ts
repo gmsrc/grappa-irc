@@ -627,4 +627,99 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       mount: "/stream.ogg",
     },
   },
+  // #1837 — KNAC, and the first row this table reaches through a THIRD PARTY'S
+  // PROXY rather than through the station's own infrastructure. Suggested in
+  // channel; every claim below was measured 2026-08-27, and the ones the issue
+  // arrived with were re-measured rather than copied.
+  //
+  // THE CHAIN, end to end, because most of the obvious URLs for this station
+  // are not streams: `www.knac.com` embeds `players.rcast.net/sombras/71987`,
+  // and that page's own `var settings` names `url_streaming` as EXACTLY the URL
+  // baked below. So the row is not a guess at a mount — it is the address the
+  // station's own player dials.
+  //
+  // WHY NOT THE ORIGIN. `http://178.159.3.19:8664/stream` is the real Icecast
+  // 2.4.4 behind it (`audio/mpeg`, `icy-metaint: 16000`), and it is plain http
+  // on a bare IP:port. `media-src 'self' blob: https:`
+  // (GrappaWeb.Plugs.SecurityHeaders, re-read 2026-08-27) is SCHEME-scoped, so
+  // the browser refuses it as mixed content before the request leaves — the
+  // same wall Kohina hit one row up. There is no TLS to switch to: an https
+  // request to that same port times out with no handshake.
+  //
+  // ⚠️ SO THIS ROW DEPENDS ON A THIRD PARTY FOR REACHABILITY, and that is
+  // stated rather than discovered. `s6.autopo.st` is the only https door to
+  // this audio; if it goes away the row goes dark and there is no https origin
+  // to fall back to. Every other row here streams from its own provider. The
+  // trade was taken because the alternative is not a worse URL, it is no row.
+  //
+  // 🔴 THE STREAM ANNOUNCES ITSELF AS SOMETHING ELSE — `icy-name: Highway Rock
+  // 96.9 / 94.9`, `icy-url: www.highwayrock.fm`. DO NOT "fix" the row to match
+  // them: they are a stale encoder label, and that is MEASURED rather than
+  // conceded. At 12:20:54Z the in-band ICY `StreamTitle` read from the proxy at
+  // `metaint` 16000 was `Avenged Sevenfold - Afterlife`, and the provider's own
+  // now-playing for station 71987 answered the identical string at the same
+  // instant — so the bytes on this URL are station 71987's, which is the player
+  // knac.com embeds. KNAC's own artwork spells the same frequency pair
+  // (96.9 / 94.9), which is what a rebrand on one transmitter looks like from
+  // the encoder's side.
+  //
+  // `nowPlayingSource` is null — PROBED against BOTH of #1835's kinds, not
+  // assumed, and the second probe is the one worth writing down because the
+  // document EXISTS. `somafm`: the provider publishes
+  // `https://status.rcast.net/71987`, which answers 200 `text/plain` with NO
+  // `Access-Control-Allow-Origin` even when an `Origin` is sent, and it is a
+  // bare `Artist - Title` line rather than the `{songs:[…]}` document
+  // `parseSongsFeed` reads. `icecast-status`: the proxy serves a real one at
+  // `?mp=/status-json.xsl` on the same door — `Icecast 2.4.4`, one `source`
+  // object, and its `title` is the track on air — and measured 2026-08-27 with
+  // an `Origin` presented it carries no `Access-Control-Allow-Origin` either,
+  // so a browser cannot read that one either. The icecast behind it is plain
+  // http on a bare IP:port, which our own scheme refuses before CORS is even
+  // consulted. Reading the ICY metadata in-band, the way the identity above
+  // was established, would mean becoming the player — a different piece of
+  // work. `unsupported` is the field's designed arm.
+  //
+  // `logoUrl` is the station's REAL artwork, 300x300 `image/png`, and the
+  // player itself names it `default_cover_art` for station 71987. Two other
+  // candidates were refused: knac.com's `rel=icon` is a 75x75 JPEG, i.e. the
+  // favicon shape #1704 wrote a whole paragraph to refuse; and its CMS
+  // `site_logo` is a 1637x748 white-on-transparent wordmark, which is a banner
+  // rather than a tile and would vanish on a light background. The URL carries
+  // a dated upload folder and a per-upload hash under
+  // `cache-control: max-age=315360000`, so it is immutable in the same sense
+  // the Rock Antenne row's content address is — a re-upload mints a new path
+  // rather than changing this one — and the bytes are mirrored locally anyway.
+  //
+  // THE CSP NEEDS NOTHING, checked rather than assumed: `media-src` carries the
+  // stream by scheme, `img-src` never sees this host because #1739 vendors the
+  // logo onto our own origin, and `connect-src` is only consulted for a
+  // `nowPlayingSource` — of which this row has none, the one document that
+  // exists being unreadable cross-origin anyway.
+  //
+  // `check:radio` covers it exactly as it covers Rock Antenne: REACH, BYTES,
+  // STREAM, CODEC and BITRATE run, AGREE goes quiet by construction
+  // (`isCatalogueBacked` keys on a somafm logo host) and FEED skips a null. The
+  // front-door rule's third state — this vendor was measured and HAS no
+  // vendor-wide door — is in `radioStations.test.ts`, with the hosts that 404.
+  {
+    id: "knac",
+    title: "KNAC Pure Rock",
+    genres: ["rock", "metal"],
+    description: "Hard rock and metal out of Los Angeles. The loudest dot com on the planet.",
+    streamUrl: "https://s6.autopo.st/proxy/ggjdvxin?mp=/stream",
+    codec: "mp3",
+    // #1836's authority is PER CODEC and read off the codec SERVED; for mp3
+    // that is the MPEG frame header, and this row is the case the rule was
+    // written for. The proxy sends NO `icy-br` at all — which under the
+    // superseded "icy-br or null" reading would have made this null, and under
+    // the ruling does not, because MPEG restates its rate in every frame.
+    // Decoded off the first bytes 2026-08-27: MPEG-1 Layer III, 44.1 kHz joint
+    // stereo, a frame chain stepping 418 bytes, bitrate index reading 128 kbps.
+    // Hand-decoded here, re-derived on every run by `readBitrate` — the comment
+    // records the provenance, `check:radio` is what holds the number true.
+    bitrate: 128,
+    logoUrl:
+      "https://players.rcast.net/uploads/images/202510/img_x300_6904b4277b0f63-96450021-24676101.png",
+    nowPlayingSource: null,
+  },
 ];

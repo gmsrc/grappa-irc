@@ -30,6 +30,7 @@ export const RADIO_LOGO_PATHS: Readonly<Record<string, string>> = {
   folkfwd: "/radio-logos/folkfwd.jpg",
   groovesalad: "/radio-logos/groovesalad.png",
   indiepop: "/radio-logos/indiepop.jpg",
+  knac: "/radio-logos/knac.png",
   kohina: "/radio-logos/kohina.svg",
   lush: "/radio-logos/lush.jpg",
   metal: "/radio-logos/metal.png",

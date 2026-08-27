@@ -282,6 +282,18 @@ describe("RADIO_STATIONS", () => {
   //     The redirect target is also https, so following it costs no
   //     mixed-content step. Baking any `s<N>` host pins one member of a
   //     balancer that is actively distributing.
+  //   * autopo.st    (2026-08-27, #1837) — MEASURED TO HAVE NO FRONT DOOR, and
+  //     that is the third shape rather than an omission. `s6.autopo.st` LOOKS
+  //     exactly like the numbered pool member this rule exists to refuse, and
+  //     it is not one: it resolves to `178.159.3.19`, the very host whose
+  //     Icecast serves KNAC's origin on :8664, so the number names a customer
+  //     SERVER and not a balancer member. The mount token is server-local —
+  //     `s1.autopo.st` and `s7.autopo.st` answer 404 for the same
+  //     `/proxy/ggjdvxin?mp=/stream`, `s2` and `s5` refuse the connection
+  //     outright — and the unnumbered apex is a different machine altogether
+  //     (`autopo.st` → `185.151.30.162`, 404 with no `cc-web` server header).
+  //     So there is no vendor-wide host to prefer: the correct host is
+  //     PER-MOUNT, which is the 20% that does not fit this rule's shape.
   //
   // WHY A TABLE AND NOT A SECOND COPY OF THE SOMAFM TEST. This rule used to
   // name somafm alone, and the moment the first non-SomaFM station landed that
@@ -292,9 +304,22 @@ describe("RADIO_STATIONS", () => {
   // type on purpose: it is a fact about vendors' infrastructure, and baking it
   // into `RadioStation` is exactly the "table of vendor slugs" the module
   // header refuses to become.
-  const STREAM_FRONT_DOORS: readonly { readonly vendor: string; readonly frontDoor: string }[] = [
+  // #1837 — `frontDoor` is NULLABLE, and the null is a MEASUREMENT rather than
+  // an accommodation: "this vendor was measured and publishes no host to
+  // prefer". It is a different fact from a vendor being absent below, which
+  // means nobody has looked, and collapsing the two would throw away the
+  // measurement — leaving the next reader free to "fix" the KNAC row by
+  // pointing it at the apex that 404s, which is exactly the repair a bare
+  // absence invites. Spelling it here rather than in a comment is #1696's own
+  // rule one file over: a claim about external state that nothing in the repo
+  // can hold reads identically whether it is true or false.
+  const STREAM_FRONT_DOORS: readonly {
+    readonly vendor: string;
+    readonly frontDoor: string | null;
+  }[] = [
     { vendor: "somafm.com", frontDoor: "ice.somafm.com" },
     { vendor: "rockantenne.de", frontDoor: "stream.rockantenne.de" },
+    { vendor: "autopo.st", frontDoor: null },
   ];
 
   it("uses each vendor's stable front door, never a numbered pool host", () => {
@@ -306,17 +331,28 @@ describe("RADIO_STATIONS", () => {
       // and inventing a front door for it would be the unverifiable claim
       // #1696 was filed about. It is simply un-pinned until someone measures.
       if (door === undefined) continue;
+      // #1837 — and a MEASURED null is un-pinned too, for the opposite reason:
+      // somebody did look and there is nothing to pin. The vacuity control
+      // below still applies to it, so the entry cannot rot into a claim about
+      // a vendor no row uses any more.
+      if (door.frontDoor === null) continue;
       expect(host, `station ${s.id} pins a rotating pool host`).toBe(door.frontDoor);
     }
   });
 
-  it("has a station behind every vendor it pins — an unused rule proves nothing", () => {
+  it("has a station behind every vendor it names — an unused rule proves nothing", () => {
     // The positive control, and the reason it is a separate test: the rule
     // above SKIPS, so a vendor whose rows all disappeared (renamed, pruned,
     // re-hosted) would keep reporting green having compared nothing. That is
     // the vacuity `check-radio-logos-core.ts` exports `isCatalogueBacked` to
     // guard against, in the same table, for the same reason — a green built
     // from zero comparisons is silence, not agreement.
+    //
+    // #1837 — every vendor NAMED, including one whose `frontDoor` is a
+    // measured null. That entry pins nothing by design, so this is the only
+    // thing standing between it and a note about a provider the table stopped
+    // using: a recorded measurement with no row behind it is a claim nobody
+    // can check, which is the shape #1696 was filed about.
     for (const door of STREAM_FRONT_DOORS) {
       const behind = RADIO_STATIONS.filter((s) => new URL(s.streamUrl).host.endsWith(door.vendor));
       expect(
