@@ -142,6 +142,26 @@ test.afterEach(async () => {
 test("issue #1769 — a paused channel stops RECEIVING peer presence, while messages and the focused channel keep arriving", async ({
   page,
 }) => {
+  // #1848 — SUSPENDED, not broken. The pause it exercises ships OFF
+  // (`PRESENCE_PAUSE_ENABLED = false` in `src/lib/presencePause.ts`) until
+  // #1847 re-anchors the scrollback, so cic never re-joins with
+  // `{"presence": false}` and every arm past CONTROL 1 below asserts a
+  // suppression that is deliberately not happening.
+  //
+  // Skipped rather than weakened: the arms are correct and must come back
+  // UNTOUCHED with the flag. There is no fixture that could rescue them here
+  // — the switch is a build-time constant with no runtime seam, deliberately
+  // (a seam is exactly the "second way to say the same thing" #1769 refused),
+  // so an e2e driving a real bundle cannot turn it on. The unit-level twin in
+  // `src/__tests__/subscribe.test.ts` DOES keep running against the flag on,
+  // via `vi.doMock`; what is suspended here is only the live-socket proof.
+  //
+  // Restore by deleting this call in the same commit that flips the flag.
+  test.skip(
+    true,
+    "#1848 — presence pause is switched off until #1847; nothing re-joins with {presence:false}",
+  );
+
   const frames = recordFrames(page);
 
   // install() pauses the page clock; resume() lets it tick again immediately,
