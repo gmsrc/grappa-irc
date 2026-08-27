@@ -42473,3 +42473,142 @@ And `test/infra/cic_version_export_test.bats` still guards only
 `GRAPPA_VERSION`. All eleven rostered launchers plumb `GRAPPA_CREDITS`
 today (measured), but nothing turns red if one stops — the drift guard
 #1773 inherited was never generalised to the second variable it created.
+<!-- entry #1835 -->
+
+---
+
+## 2026-08-27 — #1835: a now-playing descriptor per vendor, and one opaque line
+
+`nowPlaying` could read exactly one document shape — SomaFM's
+`…/songs/<id>.json` — so `RadioStation` spelled the capability as
+`songsUrl: string | null` and every station from any other provider was null,
+i.e. `{status: "unsupported"}`: muted band, `/np` refusing. Kohina is the row
+that showed it, and it is not metadata-less: its Icecast has been publishing a
+title the whole time.
+
+The field is now a DESCRIPTOR, `nowPlayingSource: NowPlayingSource | null`, a
+closed union of literals (`{kind: "somafm", url}` /
+`{kind: "icecast-status", url, mount}` / `null`) with one parser per `kind`
+behind `parseNowPlayingFeed`. `null` still exists and still means the same
+thing for rockantenne-metal, but it means LESS than it did: it used to say both
+"publishes nothing" and "publishes nothing we can read", and only the first
+survives.
+
+### The constraint that shaped it: the title is one string, so it stays one
+
+Icecast carries a single `title` with no agreed internal structure. Measured on
+Kohina twice, on different days:
+
+```
+Hisayoshi Ogura (Zuntata) - The Ninja Warriors - Che! - Arcade
+Yuzo Koshiro - SOR2 - Good End - Mega Drive
+```
+
+FOUR segments on `" - "`, spelling `<composer> - <game> - <track> - <platform>`.
+No split recovers an artist. Splitting on the first dash is wrong here and
+unfixably wrong in general — and it is the exact defect for which
+`nowPlaying.ts`'s own header had ALREADY rejected SomaFM's `lastPlaying`, so
+re-introducing it for a second vendor would be reopening a door the module shut
+on itself. `parseIcecastStatus` therefore returns `artist: null` BY
+CONSTRUCTION, never by absence in the feed, and the line is shown whole.
+
+**No discriminator was added for "opaque" and that is deliberate.** The
+temptation is a third field distinguishing "no artist because the feed omitted
+one" from "no artist because the format cannot express one". Measured against
+the consumers: `trackLabel` drops the dash with the artist, `mediaSession` sends
+`artist ?? ""`, `/np` renders `trackLabel`. Not one of them would branch on it.
+`NowPlayingTrack.artist` has been nullable since #1698, so the opaque vendor
+needed NO consumer change at all — and a field no door reads is a field that
+rots unnoticed, which is why `album` never entered the type either.
+
+### Measured on the third party, 2026-08-27, before anything was typed
+
+* `GET https://kohina.brona.dk/icecast/status-json.xsl` → 200,
+  `application/json; charset=UTF-8`, `Access-Control-Allow-Origin: *`,
+  Icecast 2.4.4, 1707 bytes.
+* `HEAD` on the same URL → **400**. The issue claimed this and it reproduces;
+  it is why `check:radio`'s FEED axis cannot keep one shared HEAD probe.
+* THREE mounts in one document (`/stream.aac`, `/stream.ogg`, `/stream.opus`),
+  and the opus one carries no `title` key at all.
+
+**The mount is matched on the `listenurl` PATH, and that is not a style
+choice.** Icecast 2.4.4 puts no bare `mount` key in this document; `listenurl`
+is the only mount identity, and it reads `http://localhost:8000/stream.ogg` —
+the icecast sits behind a reverse proxy that does not rewrite it. So its host,
+scheme and port describe the server's own loopback and say nothing about how
+anyone reaches it. Comparing the whole URL against `streamUrl`
+(`https://kohina.brona.dk/icecast/stream.ogg`) would match nothing, forever, and
+silently. `mount` is consequently a COPIED value like every other URL in that
+table, not derivable from `streamUrl` — the `/icecast` prefix is the proxy's,
+not icecast's.
+
+### `mount` is a hand-copied string, so `check:radio` runs the real parser
+
+A wrong mount answers 200 `application/json` and yields no track: the station
+plays perfectly and its line stays empty. A content-type probe waves that
+straight through, which is precisely the defect class `check-radio-logos.ts`
+exists for. Since the icecast arm must GET anyway (the 400 above), it has the
+body in hand and runs the PRODUCTION `parseIcecastStatus` over it, demanding a
+track. That is the only executable check `mount` can have.
+
+To import a parser from a bun script without opening the store's reactive root
+(`nowPlaying.ts` runs `moduleRoot` eagerly, creating a `createEffect` over
+`tunedStation()` — no DOM, no identity in that process), the parsers moved to a
+pure `lib/nowPlayingFeeds.ts`. Same split, and the same stated reason, as
+`check-radio-logos-core.ts`.
+
+### The in-flight guard moved from the feed URL to the station's identity
+
+`poll` used to discard a late answer by comparing `tunedStation()?.songsUrl`
+against the URL it had fetched. One icecast status document serves EVERY mount
+on that server, so two rows for two mounts of the same station would share a
+URL and each would have accepted the other's answer. Comparing
+`tunedStation() !== station` is total instead: `tunedStation()` resolves to a
+row of the module-constant table, so the reference is stable and a re-tune of
+the SAME station still accepts the answer it is already waiting for — the
+property the URL comparison was chosen for in the first place.
+
+### CSP: a second host, and the gate stays per-vendor
+
+`connect-src` gains `https://kohina.brona.dk`. **This is a network-surface
+change and it is meant to be visible.** The shape refused is `connect-src
+https:`, which would let any future table row `fetch` anywhere and would take
+the #1695 refusals with it. The station's AUDIO already comes off that host and
+needed no entry — a stream is `media-src https:`, a status document is a
+`fetch`; the two directives are not one axis, and `security_headers_test.exs`
+pins that nothing leaked sideways plus a positive control proving the
+scheme-detector can match at all.
+
+Neither side can see the other — the plug does not know what the station table
+holds, the browser bundle cannot read the header — so the allowlist is pinned
+from both ends: `@csp` in Elixir and `CSP_FEED_HOSTS` in
+`radioStations.test.ts`, the latter with a vacuity control that reds when a host
+outlives the station that needed it.
+
+### Refused, and left refused
+
+* **The in-band path.** `<audio>` does not surface ICY or Vorbis comments to the
+  page, and becoming the player (fetch + demux) is out of proportion for a band
+  of text. VLC shows Kohina's track by reading the ogg pages; we are not VLC.
+* **A single-mount icecast** is reported to answer `source` as a bare object
+  rather than a one-element array. We have no such server to measure, so it is
+  NOT handled: it degrades to "no track", never to a throw, and such a station
+  would go red on `check:radio`'s FEED axis before it could ship. Handling an
+  unmeasured shape is the unverifiable claim #1696 was filed about.
+* **The cadence.** Unchanged at 60 s, one poll per listening tab, keyed on
+  `tunedStation()`. A second vendor buys itself nothing here, and a test pins it.
+
+### A correction this work owes the record
+
+`radioStations.ts` asserted "Kohina has no non-Ogg endpoint, so there is no
+fallback stream to prefer" (#1744's iOS-Vorbis note). That is FALSE, and the
+status document read for this feed is what exposed it. Measured over our own
+https front door on 2026-08-27: `…/icecast/stream.aac` → 200 `audio/aac`,
+`…/icecast/stream.opus` → 200 `audio/webm`. An AAC mount would play on every
+iOS version the Vorbis note excludes.
+
+The sentence is corrected; the baked `streamUrl` is NOT changed here. Which
+bytes an operator hears is a codec decision with its own trade — #1744's failure
+surfacing was designed around this row, and aac carries no in-band Vorbis
+comments — and it belongs to that issue. A slice that widens a CSP should not
+also silently move the audio.
