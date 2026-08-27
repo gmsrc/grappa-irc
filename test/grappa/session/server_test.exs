@@ -31,7 +31,19 @@ defmodule Grappa.Session.ServerTest do
   import Mox
 
   alias Grappa.IRC.Message
-  alias Grappa.{IRCServer, PubSub.Topic, QueryWindows, ReadCursor, Repo, Scrollback, Session, WSPresence}
+
+  alias Grappa.{
+    IRCServer,
+    PubSub.Topic,
+    QueryWindows,
+    ReadCursor,
+    Repo,
+    Scrollback,
+    Session,
+    WindowCounts,
+    WSPresence
+  }
+
   alias Grappa.Networks.{Credentials, SessionPlan}
 
   alias Grappa.Session.{
@@ -12417,9 +12429,11 @@ defmodule Grappa.Session.ServerTest do
       :ok = IRCServer.await_handshake(server, 1_000)
       IRCServer.feed(server, ":irc.test.org 372 vjt :- Welcome to TestNet\r\n")
 
-      # Exactly one event for this MOTD line.
+      # Exactly one event for this MOTD line. issue 1832 moved the kind to
+      # `:server_event`; the one-row property this test exists for is
+      # unchanged.
       assert_message_event(
-        kind: :notice,
+        kind: :server_event,
         channel: "$server",
         network: network.slug
       )
@@ -12430,11 +12444,65 @@ defmodule Grappa.Session.ServerTest do
       # Confirms it came from the delegated handler, not the routed path —
       # which is what `numeric` + `severity` would prove, so assert their
       # ABSENCE rather than an empty map. #1070 adds `sender_kind` to every
-      # notice row, and an exact-equality assertion here would read as a
-      # routing regression when the discriminator is untouched.
+      # row this path writes, and an exact-equality assertion here would read
+      # as a routing regression when the discriminator is untouched.
       refute Map.has_key?(row.meta, :numeric)
       refute Map.has_key?(row.meta, :severity)
       assert row.meta.sender_kind == "server"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # issue 1832 — the defect was a COUNT, so this asserts the count, end to
+    # end: socket → parser → Session.Server → EventRouter → persist → DB →
+    # `WindowCounts.snapshot/7`. Asserting the persisted KIND would only
+    # restate the fix; the tier is what the operator sees on the tab.
+    test "connect MOTD counts as events, a real NOTICE still counts as a message" do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, network, _} = setup_user_and_network(port)
+
+      topic = Topic.channel(user.name, network.slug, "$server")
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+
+      pid = start_session_for(user, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      IRCServer.feed(server, ":irc.test.org 375 vjt :- irc.test.org Message of the Day -\r\n")
+      IRCServer.feed(server, ":irc.test.org 372 vjt :- welcome aboard\r\n")
+      IRCServer.feed(server, ":irc.test.org 376 vjt :End of /MOTD command.\r\n")
+
+      for _ <- 1..3, do: assert_message_event(channel: "$server", network: network.slug)
+
+      subject = {:user, user.id}
+      counts = WindowCounts.snapshot(subject, network.id, "$server", nil, nil, [], false)
+
+      # Three unread MOTD lines and the badge is the LOW tier — the numeretto
+      # piccolo used for join/part, not three unread messages.
+      assert counts.messages == 0
+      assert counts.events == 3
+      assert counts.severity == :event
+
+      # And the lines are still READABLE in the window, which is the whole
+      # reason for keeping them on `$server` rather than dropping them:
+      # `:server_event` is outside `@body_required_kinds`, not barred from
+      # carrying a body.
+      bodies =
+        subject
+        |> Scrollback.fetch(network.id, "$server", nil, 10, nil, false)
+        |> Enum.map(& &1.body)
+
+      assert "- welcome aboard" in bodies
+
+      # Non-regression, the other half of the ruling: a REAL NOTICE into the
+      # SAME window is somebody talking to you. It stays content and takes the
+      # severity back up to `:message`.
+      IRCServer.feed(server, ":NickServ!services@services. NOTICE vjt :This nickname is registered.\r\n")
+      assert_message_event(kind: :notice, channel: "$server", network: network.slug)
+
+      after_notice = WindowCounts.snapshot(subject, network.id, "$server", nil, nil, [], false)
+      assert after_notice.messages == 1
+      assert after_notice.events == 3
+      assert after_notice.severity == :message
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end

@@ -2276,9 +2276,11 @@ defmodule Grappa.Session.EventRouter do
   #
   #   * connect-time / unprimed (motd_pending == nil) — the server auto-sends
   #     the MOTD on registration (or a stray 402 arrives with no /motd in
-  #     flight). Keep the legacy BUG2 behaviour: persist each line as a
-  #     `:notice` row on the synthetic "$server" window so the server-messages
-  #     window has content. NumericRouter marks these :delegated so no
+  #     flight). Keep the BUG2 routing: persist each line on the synthetic
+  #     "$server" window so the server-messages window has content — as a
+  #     `:server_event` row since issue 1832, so the burst counts in the low
+  #     `events` tier instead of badging the tab with unread messages (see
+  #     `persist_server_event/2`). NumericRouter marks these :delegated so no
   #     numeric_routed persist fires — this clause is the canonical surface.
   #
   #   * explicit /motd (motd_pending == %{lines: _}) — the operator asked.
@@ -2290,7 +2292,7 @@ defmodule Grappa.Session.EventRouter do
   #     they fold their own body before draining — an explicit /motd never
   #     dangles and a 402 never gets swallowed into a wrong-server MOTD.
   #
-  # BUG2 fix-up (still applies to the $server path in persist_server_notice/2):
+  # BUG2 fix-up (still applies to the $server path in persist_server_event/2):
   # sender must be Message.sender_nick/1, never "".
   defp do_route(
          %Message{command: {:numeric, motd_numeric}} = msg,
@@ -2299,7 +2301,7 @@ defmodule Grappa.Session.EventRouter do
        when motd_numeric in [375, 372, 376, 422] do
     case Map.get(state, :motd_pending) do
       nil ->
-        persist_server_notice(state, msg)
+        persist_server_event(state, msg)
 
       accum ->
         cond do
@@ -2321,7 +2323,7 @@ defmodule Grappa.Session.EventRouter do
   # #992 — ADMIN (256 RPL_ADMINME, 257 RPL_ADMINLOC1, 258 RPL_ADMINLOC2,
   # 259 RPL_ADMINEMAIL) + 423 ERR_NOADMININFO + 447 ERR_RESTRICTED. Fourth
   # member of the #127 family, gated on `state.admin_pending` (primed by
-  # `:send_admin`); unprimed it falls back to the same `$server` :notice
+  # `:send_admin`); unprimed it falls back to the same `$server` `:server_event`
   # persist, so an unsolicited burst is visible, never silent.
   #
   # WHY the terminator set is four wide and not one. Read out of
@@ -2356,7 +2358,7 @@ defmodule Grappa.Session.EventRouter do
        when admin_numeric in [256, 257, 258, 259, 423, 447] do
     case Map.get(state, :admin_pending) do
       nil ->
-        persist_server_notice(state, msg)
+        persist_server_event(state, msg)
 
       accum ->
         folded = server_reply_fold(accum, msg)
@@ -2392,7 +2394,7 @@ defmodule Grappa.Session.EventRouter do
   defp do_route(%Message{command: {:numeric, 402}} = msg, state) do
     case Enum.filter(@server_reply_402_owners, fn {key, _} -> Map.get(state, key) end) do
       [] ->
-        persist_server_notice(state, msg)
+        persist_server_event(state, msg)
 
       [{key, source} | _] = armed ->
         accum = Map.get(state, key)
@@ -2410,11 +2412,11 @@ defmodule Grappa.Session.EventRouter do
   # #127 — INFO (371 RPL_INFO burst, 374 RPL_ENDOFINFO terminator). Gated on
   # state.info_pending (primed by :send_info). Primed: fold 371 lines, drain
   # `{:server_reply, :info, lines}` on 374. Unprimed (no connect-time INFO —
-  # on-demand only): fall back to the same `$server` :notice persist, so an
+  # on-demand only): fall back to the same `$server` `:server_event` persist, so an
   # unsolicited reply is still visible, never silent.
   defp do_route(%Message{command: {:numeric, 371}} = msg, state) do
     case Map.get(state, :info_pending) do
-      nil -> persist_server_notice(state, msg)
+      nil -> persist_server_event(state, msg)
       accum -> {:cont, %{state | info_pending: server_reply_fold(accum, msg)}, []}
     end
   end
@@ -2422,7 +2424,7 @@ defmodule Grappa.Session.EventRouter do
   defp do_route(%Message{command: {:numeric, 374}} = msg, state) do
     case Map.get(state, :info_pending) do
       nil ->
-        persist_server_notice(state, msg)
+        persist_server_event(state, msg)
 
       accum ->
         {:cont, %{state | info_pending: nil},
@@ -2437,7 +2439,7 @@ defmodule Grappa.Session.EventRouter do
   defp do_route(%Message{command: {:numeric, 351}, params: [_ | rest]} = msg, state) do
     case Map.get(state, :version_pending) do
       nil ->
-        persist_server_notice(state, msg)
+        persist_server_event(state, msg)
 
       accum ->
         line = rest |> Enum.filter(&is_binary/1) |> Enum.join(" ")
@@ -3326,10 +3328,15 @@ defmodule Grappa.Session.EventRouter do
   # shape is the ONLY thing telling another client whether a NOTICE came
   # from a user or a server, and clients route the two differently.
   #
-  # The `$server` window is where the two become indistinguishable —
-  # `persist_server_notice/2` files MOTD and INFO numerics there as
-  # `:notice` with a SERVER sender, while a private notice to the user's
-  # own nick lands on the same window, same kind, with a USER sender.
+  # The `$server` window is where the two become indistinguishable — the
+  # generic numeric scan (`Session.Server`'s routed-numeric clause) files
+  # server replies there as `:notice` with a SERVER sender, while a private
+  # notice to the user's own nick lands on the same window, same kind, with a
+  # USER sender. `persist_server_event/2` used to be the headline example of
+  # that collision and no longer is (issue 1832 moved it to `:server_event`),
+  # but it still writes a server sender to `$server`, and the scan path — a
+  # much larger set of numerics — still writes `:notice` there. The key earns
+  # its keep on both.
   #
   # Additive, same contract as `sender_prefix` above: a consumer that does
   # not know the key behaves exactly as before, and rows persisted earlier
@@ -3408,26 +3415,51 @@ defmodule Grappa.Session.EventRouter do
     )
   end
 
-  # #127 — legacy `$server` :notice persist for an unprimed / connect-time
-  # server-info numeric (connect MOTD, unsolicited INFO/VERSION). Extracted
-  # from the pre-#127 MOTD BUG2 clause; sender via Message.sender_nick/1 (a
-  # server-prefixed numeric returns the server hostname, a prefix-less line
-  # the "*" sentinel — both pass Identifier.valid_sender?).
-  defp persist_server_notice(state, %Message{params: [_ | rest]} = msg) do
+  # #127 — the `$server` persist for an unprimed / connect-time server-info
+  # numeric (connect MOTD, unsolicited ADMIN/INFO/VERSION, an uncorrelated
+  # 402). Extracted from the pre-#127 MOTD BUG2 clause; sender via
+  # Message.sender_nick/1 (a server-prefixed numeric returns the server
+  # hostname, a prefix-less line the "*" sentinel — both pass
+  # Identifier.valid_sender?).
+  #
+  # issue 1832 — the kind is `:server_event`, and it used to be `:notice`.
+  # `:notice` is a CONTENT kind (`Scrollback.Message.content_kinds/0`), so
+  # `WindowCounts` bucketed every connect-MOTD line as an unread MESSAGE and
+  # pushed the `$server` severity to `:message`: a bare reconnect badged the
+  # tab as if somebody had talked to you. vjt's ruling (IRC, 2026-08-27,
+  # relayed): these lines are signalling and belong in the low `events` tier,
+  # the one join/part use — which is exactly what `:server_event` is.
+  #
+  # The change lives HERE, at the fallback, and not in a kind swap on the
+  # `$server` window: a REAL server NOTICE (services, opers) is somebody
+  # talking to you and keeps `:notice`. Every caller of this function is an
+  # unprimed-burst clause, so the whole family moves together and no arm is
+  # left half-migrated (CLAUDE.md "Total consistency or nothing").
+  #
+  # Body survives the move: `:server_event` is outside `@body_required_kinds`
+  # (body OPTIONAL, not barred), and cic renders a `:server_event` row with no
+  # `meta.raw_verb` through its body arm, so the MOTD text stays legible in
+  # the window — which is the only reason to keep these rows at all.
+  #
+  # HISTORY IS NOT REWRITTEN. Rows persisted before this keep `:notice` and
+  # keep counting as messages; the badge settles on the next connection. A
+  # backfill would be a data migration, hence a COLD deploy, hence every live
+  # IRC session dropped — not a price this cosmetic fix gets to charge.
+  defp persist_server_event(state, %Message{params: [_ | rest]} = msg) do
     body = List.last(rest)
 
     if is_binary(body) do
       sender = Message.sender_nick(msg)
       # sender_meta/1, not %{}: this is the exact call that makes a server
       # hostname and a user nick indistinguishable downstream (#1070).
-      {state, eff} = build_persist(state, :notice, "$server", sender, body, sender_meta(msg))
+      {state, eff} = build_persist(state, :server_event, "$server", sender, body, sender_meta(msg))
       {:cont, state, [eff]}
     else
       {:cont, state, []}
     end
   end
 
-  defp persist_server_notice(state, _), do: {:cont, state, []}
+  defp persist_server_event(state, _), do: {:cont, state, []}
 
   defp build_persist(state, kind, channel, sender, body, meta) do
     meta = put_sender_prefix(meta, state, kind, channel, sender)

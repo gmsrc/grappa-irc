@@ -843,12 +843,15 @@ defmodule Grappa.Session.EventRouterTest do
     # sender = server hostname from the numeric's prefix. Previously sender
     # was hardcoded to "" which fails valid_sender? and causes changeset
     # rejection → every MOTD line silently dropped.
+    #
+    # issue 1832 — the KIND is `:server_event`, not `:notice`. The routing
+    # and sender contract this test was written for is untouched.
     test "372 RPL_MOTD routes to $server with sender from numeric prefix" do
       state = base_state()
 
       m = msg({:numeric, 372}, ["vjt", "- Welcome to this IRC server"], {:server, "irc.azzurra.chat"})
 
-      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+      assert {:cont, ^state, [{:persist, :server_event, attrs}]} =
                EventRouter.route(m, state)
 
       assert attrs.channel == "$server"
@@ -862,7 +865,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg({:numeric, 372}, ["vjt", "- MOTD line"], nil)
 
-      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+      assert {:cont, ^state, [{:persist, :server_event, attrs}]} =
                EventRouter.route(m, state)
 
       assert attrs.channel == "$server"
@@ -1641,12 +1644,13 @@ defmodule Grappa.Session.EventRouterTest do
       assert drained.motd_pending == nil
     end
 
-    # Connect-time MOTD (motd_pending == nil) keeps the legacy $server
-    # :notice persist — the modal is ONLY for an explicit /motd.
+    # Connect-time MOTD (motd_pending == nil) keeps the $server persist —
+    # the modal is ONLY for an explicit /motd. issue 1832 moved the kind
+    # from `:notice` to `:server_event`; the window is unchanged.
     test "unprimed (connect-time) MOTD persists to $server, no server_reply" do
       state = base_state()
 
-      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+      assert {:cont, ^state, [{:persist, :server_event, attrs}]} =
                EventRouter.route(msg({:numeric, 372}, ["vjt", "- connect banner"], {:server, "irc.test"}), state)
 
       assert attrs.channel == "$server"
@@ -1671,12 +1675,12 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     # An UNPRIMED 402 (no explicit /motd in flight) falls back to the same
-    # $server :notice persist the connect-time MOTD family uses — never
-    # silently swallowed.
+    # $server `:server_event` persist the connect-time MOTD family uses —
+    # never silently swallowed.
     test "unprimed 402 persists to $server, no server_reply" do
       state = base_state()
 
-      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+      assert {:cont, ^state, [{:persist, :server_event, attrs}]} =
                EventRouter.route(
                  msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], {:server, "irc.test"}),
                  state
@@ -1717,18 +1721,18 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     # Unprimed INFO/VERSION (unsolicited — no connect-time source) fall back
-    # to the $server :notice persist, never silently dropped.
+    # to the $server `:server_event` persist, never silently dropped.
     test "unprimed 371 RPL_INFO persists to $server" do
       state = base_state()
 
-      assert {:cont, ^state, [{:persist, :notice, %{channel: "$server"}}]} =
+      assert {:cont, ^state, [{:persist, :server_event, %{channel: "$server"}}]} =
                EventRouter.route(msg({:numeric, 371}, ["vjt", "stray info"], {:server, "irc.test"}), state)
     end
 
     test "unprimed 351 RPL_VERSION persists to $server" do
       state = base_state()
 
-      assert {:cont, ^state, [{:persist, :notice, %{channel: "$server"}}]} =
+      assert {:cont, ^state, [{:persist, :server_event, %{channel: "$server"}}]} =
                EventRouter.route(
                  msg({:numeric, 351}, ["vjt", "v", "irc.test", "stray version"], {:server, "irc.test"}),
                  state
@@ -1820,7 +1824,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "unprimed 257 with a DOTLESS A-line persists to $server, never a query window" do
       state = base_state()
 
-      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+      assert {:cont, ^state, [{:persist, :server_event, attrs}]} =
                EventRouter.route(
                  msg({:numeric, 257}, ["vjt", "Azzurra"], {:server, "irc.test"}),
                  state
@@ -1832,7 +1836,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "unprimed 259 RPL_ADMINEMAIL persists to $server, no server_reply" do
       state = base_state()
 
-      assert {:cont, ^state, [{:persist, :notice, %{channel: "$server"}}]} =
+      assert {:cont, ^state, [{:persist, :server_event, %{channel: "$server"}}]} =
                EventRouter.route(
                  msg({:numeric, 259}, ["vjt", "staff@azzurra.org"], {:server, "irc.test"}),
                  state
@@ -1874,6 +1878,71 @@ defmodule Grappa.Session.EventRouterTest do
       # of the ruling.
       assert drained.motd_pending == nil
       assert drained.admin_pending == nil
+    end
+  end
+
+  describe "route/2 — issue 1832: the unprimed server-info fallback is event-tier" do
+    # vjt's ruling (IRC, 2026-08-27, relayed): connect-time MOTD lines
+    # "dovrebbero esser contate come signalling, quindi col numeretto piccolo
+    # che usiamo per i join/part" — i.e. the `events` tier, i.e. kind
+    # `:server_event`. Every clause that falls back to
+    # `persist_server_event/2` is that same unprimed-burst shape, so the whole
+    # family moves together (CLAUDE.md "Total consistency or nothing").
+    #
+    # The table IS the guard: a seventh fallback clause added later without
+    # the right kind fails here, not in review.
+    @unprimed_fallbacks [
+      {375, ["vjt", "- irc.test Message of the Day -"], "375 RPL_MOTDSTART"},
+      {372, ["vjt", "- welcome aboard"], "372 RPL_MOTD"},
+      {376, ["vjt", "End of /MOTD command."], "376 RPL_ENDOFMOTD"},
+      {422, ["vjt", "MOTD File is missing"], "422 ERR_NOMOTD"},
+      {402, ["vjt", "nope.invalid", "No such server"], "402 ERR_NOSUCHSERVER"},
+      {256, ["vjt", "Administrative info about irc.test"], "256 RPL_ADMINME"},
+      {257, ["vjt", "Azzurra"], "257 RPL_ADMINLOC1"},
+      {258, ["vjt", "Milano"], "258 RPL_ADMINLOC2"},
+      {259, ["vjt", "staff@azzurra.org"], "259 RPL_ADMINEMAIL"},
+      {423, ["vjt", "No administrative info available"], "423 ERR_NOADMININFO"},
+      {447, ["vjt", "Restricted connection"], "447 ERR_RESTRICTED"},
+      {371, ["vjt", "grappa test server"], "371 RPL_INFO"},
+      {374, ["vjt", "End of /INFO list."], "374 RPL_ENDOFINFO"},
+      {351, ["vjt", "bahamut-2.2.1", "irc.test", "options"], "351 RPL_VERSION"}
+    ]
+
+    test "every unprimed server-info numeric persists :server_event on $server" do
+      state = base_state()
+
+      for {code, params, label} <- @unprimed_fallbacks do
+        assert {:cont, ^state, [{:persist, kind, attrs}]} =
+                 EventRouter.route(msg({:numeric, code}, params, {:server, "irc.test"}), state),
+               "#{label} did not persist exactly one row"
+
+        assert kind == :server_event, "#{label} persisted #{inspect(kind)}, expected :server_event"
+        assert attrs.channel == "$server", "#{label} landed on #{inspect(attrs.channel)}"
+
+        # The counting consequence, stated against the SSOT rather than a
+        # copied literal: a content kind is what `WindowCounts` buckets as
+        # `messages`, and that is the bucket these rows must NOT be in.
+        refute kind in Grappa.Scrollback.Message.content_kinds(),
+               "#{label} is still a content kind — it will inflate the unread MESSAGE count"
+      end
+    end
+
+    # The other half of the ruling, and the reason the cure is scoped to the
+    # numeric fallback rather than to a kind swap on the `$server` window: a
+    # REAL server NOTICE (services, opers) is somebody talking to you. It
+    # keeps `:notice`, stays a content kind, and so keeps raising the window
+    # severity to `:message`.
+    test "a real server NOTICE to $server stays :notice — a content kind" do
+      state = base_state()
+
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+               EventRouter.route(
+                 msg(:notice, ["vjt", "This nickname is registered."], {:nick, "NickServ", "s", "services."}),
+                 state
+               )
+
+      assert attrs.channel == "$server"
+      assert :notice in Grappa.Scrollback.Message.content_kinds()
     end
   end
 

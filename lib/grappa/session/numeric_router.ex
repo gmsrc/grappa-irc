@@ -641,7 +641,7 @@ defmodule Grappa.Session.NumericRouter do
                         # state.motd_pending — an explicit /motd drains the
                         # burst into a `{:server_reply, :motd, lines}` modal
                         # effect; connect-time MOTD (no pending flag) keeps the
-                        # legacy `$server` :notice persist. Both live inside
+                        # `$server` persist. Both live inside
                         # the delegated clause, so 422 joins the family (a
                         # /motd against a server with no MOTD still resolves
                         # the modal instead of dangling).
@@ -649,15 +649,18 @@ defmodule Grappa.Session.NumericRouter do
                         # an unknown server. Delegated so the primed MOTD clause
                         # drains a modal + clears motd_pending (never a
                         # wrong-server MOTD); an unprimed 402 falls through the
-                        # clause's nil branch to the same `$server` :notice
+                        # clause's nil branch to the same `$server`
                         # persist the rest of the MOTD family uses (same window
-                        # + kind as the pre-#374 scan route). One difference vs
-                        # the old generic scan: `persist_server_notice/2` writes
-                        # NO meta, so the unprimed row loses the scan path's
+                        # as the pre-#374 scan route). TWO differences vs
+                        # the old generic scan. (1) `persist_server_event/2` writes
+                        # NO numeric meta, so the unprimed row loses the scan path's
                         # `severity: :error` (renders plain, not red) — but that
                         # matches how unprimed 422/375/372/376 already persist,
                         # so it's family-consistent, and it stays VISIBLE on
-                        # $server (no silent swallow). Introduced WITH the
+                        # $server (no silent swallow). (2) issue 1832 — the KIND
+                        # is `:server_event`, not the scan path's `:notice`: the
+                        # unprimed burst is signalling and counts in the low
+                        # `events` tier. Introduced WITH the
                         # EventRouter clause in the same commit per the
                         # delegation contract.
                         375,
@@ -672,8 +675,8 @@ defmodule Grappa.Session.NumericRouter do
                         # drains into a `{:server_reply, source, lines}` modal
                         # effect (NOT persisted); unprimed (never happens at
                         # connect — these are on-demand only) they fall back to
-                        # the same `$server` :notice persist MOTD uses, so an
-                        # unsolicited reply is still visible, never silent.
+                        # the same `$server` `:server_event` persist MOTD uses,
+                        # so an unsolicited reply is still visible, never silent.
                         371,
                         374,
                         351,
