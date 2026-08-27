@@ -1008,10 +1008,18 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       if (meta && typeof meta.raw_verb === "string") {
         return renderRawEvent(meta, msg, bareSenderSpan, handlers);
       }
-      // Defensive: a :server_event row with no raw_verb is a server
-      // bug, but render the body so it isn't invisible. Server-generated
-      // → the #455 marker layer stays OFF here, like the sibling ERROR /
-      // generic-numeric arms (only the wire mIRC layer renders).
+      // No raw_verb. This used to be described here as a server bug
+      // rendered defensively; since issue 1832 it is also the ORDINARY
+      // shape of the connect-time server-info burst — MOTD lines and the
+      // unprimed ADMIN / INFO / VERSION replies, which the server persists
+      // as `:server_event` with `meta.sender_kind` and no verb, precisely
+      // so they count in the low `events` tier instead of badging $server
+      // with unread messages. This arm is what keeps those lines READABLE,
+      // which is the only reason to keep them in the window at all — do
+      // not "tidy" it into a drop. Server-generated → the #455 marker
+      // layer stays OFF here, like the sibling ERROR / generic-numeric
+      // arms (only the wire mIRC layer renders, so a colour-coded MOTD
+      // banner keeps its colours).
       return (
         <span class="scrollback-body">
           *** {bareSenderSpan(msg.sender)} <MircBody body={msg.body ?? ""} />

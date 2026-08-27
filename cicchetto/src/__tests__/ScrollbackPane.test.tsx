@@ -4258,6 +4258,60 @@ describe("ScrollbackPane", () => {
       expect(line.textContent).toContain("naked body — meta missing raw_verb");
     });
 
+    // issue 1832 — the connect-time MOTD burst is persisted `:server_event`
+    // so it counts in the low `events` tier. That only holds up if the lines
+    // stay READABLE in $server, which is the entire reason the server keeps
+    // them instead of dropping them: `:server_event` is outside the server's
+    // `@body_required_kinds`, which makes the body OPTIONAL, not forbidden.
+    // The row shape here is the real one EventRouter writes — sender = server
+    // hostname, `meta.sender_kind`, NO raw_verb — not the synthetic empty
+    // meta of the defensive case above.
+    it("kind=server_event MOTD row (sender_kind, no raw_verb) still shows the MOTD text", () => {
+      setScrollback({
+        "freenode $server": [
+          {
+            id: 205,
+            network: "freenode",
+            channel: "$server",
+            server_time: 205,
+            kind: "server_event",
+            sender: "irc.azzurra.chat",
+            body: "- Benvenuto su Azzurra IRC Network",
+            meta: { sender_kind: "server" },
+          },
+        ],
+      });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      expect(line.textContent).toContain("irc.azzurra.chat");
+      expect(line.textContent).toContain("- Benvenuto su Azzurra IRC Network");
+    });
+
+    // A MOTD banner is very often mIRC-coloured ASCII art. The arm renders
+    // through <MircBody> without the #455 emphasis layer, so the colour runs
+    // must survive as spans while the control bytes never reach the text.
+    it("kind=server_event MOTD row keeps mIRC colour runs out of the text", () => {
+      setScrollback({
+        "freenode $server": [
+          {
+            id: 206,
+            network: "freenode",
+            channel: "$server",
+            server_time: 206,
+            kind: "server_event",
+            sender: "irc.azzurra.chat",
+            body: "\x0304red banner\x0F plain",
+            meta: { sender_kind: "server" },
+          },
+        ],
+      });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="$server" kind="channel" />);
+      const line = screen.getByTestId("scrollback-line");
+      expect(line.textContent).toContain("red banner");
+      expect(line.textContent).toContain("plain");
+      expect(line.textContent).not.toContain("\x03");
+    });
+
     it("kind=server_event row gets scrollback-presence + scrollback-muted classes", () => {
       setScrollback({
         "freenode $server": [
