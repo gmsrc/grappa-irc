@@ -30,9 +30,14 @@ export type Contributor = {
 
 /**
  * The build's git facts. `sha` / `date` are `null` on a build that HAD no
- * repo — the AUR source tarball and Dockerfile.release both build with `.git`
- * absent by construction, exactly as `Grappa.Version` reports the bare base
- * there. That is a legitimate build, not a fault.
+ * repo — the AUR source tarball builds with `.git` absent by construction,
+ * exactly as `Grappa.Version` reports the bare base there. That is a
+ * legitimate build, not a fault.
+ *
+ * Dockerfile.release's context has no `.git` either, but since #1834 it is no
+ * longer a degraded build: release.yml derives the payload on the runner and
+ * passes it in as a build arg, so the PUBLISHED image carries the real facts.
+ * Only a plain `docker build` from a source checkout degrades there.
  */
 export type BuildCredits = {
   readonly sha: string | null;

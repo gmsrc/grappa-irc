@@ -54,11 +54,15 @@ if (!CIC_VERSION) {
 // UNSET is fatal, exactly like GRAPPA_VERSION, and for exactly its reason: it
 // means a wrapper forgot to plumb it, and a silently empty credit roll is
 // worse than a broken build. A build that HAS NO GIT is a different thing and
-// is NOT an error — the AUR source tarball and Dockerfile.release both build
-// with `.git` absent by construction, and credits.sh reports that as a
-// well-formed payload of nulls. The two states are kept distinct here on
-// purpose; the same distinction `Grappa.Version.verify_build_sha/2` draws
-// between `{:skip, :no_git}` and a degraded snapshot.
+// is NOT an error — the AUR source tarball builds with `.git` absent by
+// construction, and credits.sh reports that as a well-formed payload of
+// nulls. The two states are kept distinct here on purpose; the same
+// distinction `Grappa.Version.verify_build_sha/2` draws between
+// `{:skip, :no_git}` and a degraded snapshot. Dockerfile.release's context has
+// no `.git` either, but since #1834 the PUBLISHED image is not a degraded
+// build: release.yml derives the payload on the runner (which has the
+// history) and passes it as `--build-arg GRAPPA_CREDITS`, with the in-context
+// call left as the fallback a naked `docker build` still takes.
 //
 // Parsed rather than passed through: the parse IS the validation, so a
 // malformed payload fails the build here instead of reaching the browser as a

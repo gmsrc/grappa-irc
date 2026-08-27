@@ -55,7 +55,9 @@ type BakedCredits = {
  *    to `{}` here would turn the spec into a shape check silently, which is the
  *    failure mode the whole file exists to avoid.
  *  - DEGRADED (`sha: null`) is a legitimate payload in production — the AUR
- *    tarball and the release image both build with no `.git` — but it is NOT
+ *    tarball builds with no `.git`, and so does a plain `docker build` of
+ *    Dockerfile.release (the PUBLISHED image no longer degrades: release.yml
+ *    passes the payload in as a build arg, #1834) — but it is NOT
  *    legitimate HERE: `scripts/integration.sh` runs inside the repository, so a
  *    null sha means the deriver failed rather than that the build has no
  *    history. Accepting it would let this spec pass against a wrapper that

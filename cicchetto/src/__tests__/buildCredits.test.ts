@@ -36,9 +36,11 @@ describe("coerceBuildCredits (#1773)", () => {
   });
 
   it("accepts the no-git payload as data, not as a fault", () => {
-    // The AUR source tarball and Dockerfile.release both build with no `.git`,
-    // so credits.sh emits exactly this. It is a legitimate build, and the roll
-    // must degrade to the version alone rather than read as corruption.
+    // The AUR source tarball builds with no `.git`, and so does a plain
+    // `docker build` of Dockerfile.release — the PUBLISHED image is fed the
+    // payload as a build arg instead (#1834). credits.sh emits exactly this
+    // for the ones that are not. It is a legitimate build, and the roll must
+    // degrade to the version alone rather than read as corruption.
     const noGit = '{"sha":null,"date":null,"contributors":[]}';
 
     expect(coerceBuildCredits(noGit)).toEqual(EMPTY_BUILD_CREDITS);
