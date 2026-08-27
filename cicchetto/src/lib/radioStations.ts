@@ -405,6 +405,45 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     logoUrl: "https://api.somafm.com/logos/120/missioncontrol120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/missioncontrol.json" },
   },
+  // #1838 — hip-hop, requested in channel. The whole catalogue (46 channels,
+  // fetched 2026-08-27) was grepped over genre AND description for
+  // `hip|rap|trap|soul|funk|break`: four hits, and three of them are something
+  // else wearing one of those words (`7soul` is vintage soul 45s, `insound` is
+  // 60s/70s euro pop, `doomed` is industrial — it is already in this table one
+  // block down). So this row is not a pick among several, it is the provider's
+  // entire answer to the request.
+  //
+  // ⚠️ IT IS INSTRUMENTAL hip-hop — no vocals, no bars — and that is upstream's
+  // own word (`instrumental hiphop` in the description below). Somebody asking
+  // for vocal rap is not served by this row, and SomaFM has nothing that would
+  // be; that needs a station URL from outside this provider and the whole chain
+  // measured again, which is a different piece of work.
+  //
+  // 🔴 128 IS MEASURED, NOT READ OFF THE MOUNT NAME. The path spells
+  // `-128-mp3`, and the reggae row above is this table's own proof that the
+  // number in a mount name is a legacy LABEL: it spells 128 and serves 160. So
+  // the name was treated as saying nothing and the bytes were asked instead —
+  // first frame header `ff fb 92 04` on 2026-08-27, i.e. MPEG1 (version bits
+  // 3) Layer III (layer bits 1), bitrate index 9 = 128 kbps, 44.1 kHz stereo,
+  // with `icy-br: 128` agreeing independently. The label happening to be right
+  // here is not evidence that a label can be trusted — it is one datum against
+  // reggae's one, and `bun run check:radio` is what keeps either honest.
+  {
+    id: "fluid",
+    title: "Fluid",
+    // Catalogue order, `electronic|hiphop`, split and NOT reordered — every
+    // multi-tag row here spells the pipe-joined string in the order upstream
+    // publishes it, and putting the requested tag first would make this the
+    // one row where the order carries a meaning the others do not.
+    genres: ["electronic", "hiphop"],
+    description:
+      "Drown in the electronic sound of instrumental hiphop, future soul and liquid trap.",
+    streamUrl: "https://ice.somafm.com/fluid-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
+    logoUrl: "https://api.somafm.com/logos/120/fluid120.jpg",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/fluid.json" },
+  },
   // #1703 — guitar music. The table above answered "no metal, and one row of
   // rock", and these six are what SomaFM can contribute to that: measured
   // 2026-08-24 against the live catalogue, `metal` is the ONLY metal channel

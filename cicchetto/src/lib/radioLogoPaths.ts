@@ -27,6 +27,7 @@ export const RADIO_LOGO_PATHS: Readonly<Record<string, string>> = {
   defcon: "/radio-logos/defcon.png",
   doomed: "/radio-logos/doomed.png",
   dronezone: "/radio-logos/dronezone.jpg",
+  fluid: "/radio-logos/fluid.jpg",
   folkfwd: "/radio-logos/folkfwd.jpg",
   groovesalad: "/radio-logos/groovesalad.png",
   indiepop: "/radio-logos/indiepop.jpg",
