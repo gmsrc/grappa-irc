@@ -42776,3 +42776,159 @@ vjt's ruling reached this work RELAYED in the issue body by the ircbot, not read
 first-hand on IRC. The comment author field reads `vjt`, but every agent here
 comments with the same token, so the field is not independent evidence of
 authorship.
+<!-- entry #1837 -->
+
+---
+
+## 2026-08-27 — #1837: KNAC, a front door that does not exist, and how you prove a stream is who it is not saying it is
+
+KNAC (Pure Rock, Los Angeles) joins the curated station table. Four of its
+facts are worth keeping, because none of them is about this station in
+particular.
+
+### A vendor can be MEASURED to have no front door, and that is a third state
+
+`radioStations.test.ts`'s `STREAM_FRONT_DOORS` map has said two things since
+#1703: a vendor with an entry must be reached through the host named there,
+and a vendor with no entry is un-pinned "until someone measures". KNAC needs
+a third: measured, and there is nothing to pin.
+
+`https://s6.autopo.st/proxy/ggjdvxin?mp=/stream` has exactly the shape that
+rule exists to refuse — an `s<N>` host, the same spelling as the Rock Antenne
+pool members that rotate per request. Measured 2026-08-27 it is not one of
+those. `s6.autopo.st` resolves to `178.159.3.19`, which is the very host whose
+Icecast 2.4.4 serves KNAC's origin on port 8664; the number names a customer
+SERVER, not a balancer member. The mount token is server-local — `s1` and `s7`
+answer 404 for the identical path, `s2` and `s5` refuse the connection — and
+the unnumbered apex is a different machine entirely (`autopo.st` →
+`185.151.30.162`, 404, no `cc-web` server header). A second station on this
+provider would live on its own `s<N>`, so there is no vendor-wide host that
+could ever be correct.
+
+So `frontDoor` went `string | null`, and the null is a recorded measurement
+rather than an accommodation. Leaving the vendor ABSENT would have been the
+cheap move and it throws the measurement away: absence means nobody looked,
+and a later reader acting on that is free to "repair" this row onto the apex
+that does not serve it. The vacuity control was widened with it — every vendor
+NAMED must have a row behind it, null included — because a recorded
+measurement about a provider the table stopped using is a claim nobody can
+check, which is the shape #1696 was filed about.
+
+### Two readings of one instant establish a stream's identity; its own labels do not
+
+This stream announces `icy-name: Highway Rock 96.9 / 94.9` and
+`icy-url: www.highwayrock.fm`. A row asserting it is KNAC therefore contradicts
+the only self-description the transport carries, and "the label is stale" is
+precisely the kind of unverifiable claim #1696 exists to refuse.
+
+What settles it is not an argument but two independent reads of the SAME
+moment. At 12:20:54Z the in-band ICY `StreamTitle`, parsed off the proxy body
+at `metaint` 16000, read `Avenged Sevenfold - Afterlife`; the provider's own
+now-playing for station 71987 answered the identical string at that instant.
+Station 71987 is the player `www.knac.com` embeds, and that page's own
+`var settings.url_streaming` names this exact URL. The chain closes on
+measurements at every hop rather than on anybody's concession. KNAC's artwork
+independently spells the same frequency pair the stale label carries, which is
+what a rebrand on one transmitter looks like from the encoder's side.
+
+The general rule: when a source's self-declared identity disagrees with the row
+you want to write, correlate its CONTENT with a second publisher at one
+timestamp. A label can be stale for years; two publishers cannot agree on the
+same track by accident.
+
+### #1704's "refuse a favicon" has a second arm: refuse a banner
+
+`logoUrl` is the station's real 300×300 PNG, the tile the player itself names
+`default_cover_art`. Two other images answer 200 and both were refused. The
+first is the familiar one — `knac.com`'s `rel=icon` is a 75×75 JPEG, the
+favicon shape #1704 wrote a paragraph about. The second is new and is the arm
+worth recording: the site's CMS `site_logo` is a genuine, official, current
+station wordmark — and it is 1637×748 white-on-transparent, i.e. a header
+banner. It is not a wrong image; it is the right image for a different slot,
+and dropped into a square tile it is a 2.19:1 wordmark that disappears on any
+light background. Real provenance is not sufficient. The question the field
+asks is whether the artwork is a TILE.
+
+### What a row may state as its bitrate, and which part of the stream says so
+
+This row was written while `codec` / `bitrate` were still in flight on another
+branch, so the two were serialised by ruling rather than merged hopefully: two
+branches each green on its own base can still break `main` together, and
+textual non-overlap is not semantic independence. The serialisation is spent —
+#1836 landed first and this row carries both fields, `codec: "mp3"` and
+`bitrate: 128`.
+
+The number arrived by the wrong argument first, and the correction is the part
+worth keeping. The reading in flight while this was measured was "the frame
+header beats the label", generalised off a station whose URL spells
+`reggae-128-mp3` while its frames read 160: if a string a vendor puts in a URL
+is a label, the reasoning went, then so is `icy-br`. Decoding the bytes refused
+the generalisation. On that same station `icy-br` ALSO read 160 — it agreed
+with the frames. So that measurement convicts the URL and ACQUITS `icy-br`,
+which is not a label somebody stuck around the stream but the origin server
+restating its encoder configuration on every connection. A frames-only rule was
+unbuildable besides: FLAC's STREAMINFO carries no bitrate field at all, being
+variable-rate by construction, so the rule would have written `null` on exactly
+the rows the `[hi-fi]` badge exists for.
+
+What it became, and what this row is measured under: authority PER CODEC, total
+over the union, read on the codec SERVED rather than the one declared — mp3
+from the MPEG frame header with version and layer verified (MPEG2 and Layers
+I/II index a different table), vorbis from `bitrate_nominal` (a nominal of 0 is
+ABSENT, not zero), flac from `icy-br`. `null` keeps exactly one meaning: NOT
+MEASURABLE.
+
+For KNAC the conclusion does not move and the reason does. The proxy sends no
+`icy-br` at all, the codec served is mp3, and the frames say 128 — MPEG-1 Layer
+III, 44.1 kHz joint stereo, a frame chain stepping 418 bytes. Under the
+superseded reading that silence would have produced a `null`: a null on a fact
+the bytes already hold, which is the mirror image of #1696's invented number
+and just as false.
+
+Reading it took a change to the probe, and that change is the part with a rule
+in it. Both byte-reading axes asked for the MPEG sync at offset ZERO — measured
+on two vendors and written down as "icecast hands a new listener whole frames".
+It does. But the frame boundary is a property of the SERVER, not of the codec:
+KNAC's only door is a third-party RELAY, and over three consecutive connections
+its first frame sat at byte 93, 174 and 405, because it hands over whatever its
+buffer holds. So `check:radio` reddened a row whose claim is TRUE, which is the
+failure that sends the next reader to edit a correct table.
+
+The probe now resynchronises, and the fallback is STRICTER than the rule it
+falls back from rather than looser. Offset zero keeps its exact old meaning — a
+stream that begins with a sync is the stream declaring itself, and nothing that
+read as mp3 before stops doing so. Anywhere else a candidate counts only when
+the frame length it states lands the next sync precisely where it should. A
+lone `ff fb ..` turns up inside compressed audio by chance at roughly one
+position in 10^5; two headers agreeing on a computed offset is about one in
+10^9. Hunting for a sync would have been the wrong fix and #1836's comment says
+so in advance; hunting for a CHAIN is a different claim, and the general rule
+is that a corroborated match may go looking where a bare one may not.
+
+One latent defect fell out of writing it: `mpegFrameBitrate` never checked the
+sync word at all. Handed the filler bytes of a fixture it answered `64 kbps`,
+because the version and layer bits happen to validate inside `0x5a`. It was
+unreachable through the probe, which only calls it for a stream already
+identified as mp3, and it is now structurally impossible — one function decides
+where the frame is and both axes read its answer.
+
+### What this does NOT settle
+
+`nowPlayingSource` stays null and no now-playing is possible for this provider
+today — probed against BOTH of #1835's kinds, and the second probe is the one
+that needed doing. The `somafm` shape: `status.rcast.net/71987` sends no
+`Access-Control-Allow-Origin` even when an `Origin` is presented, and it
+answers a bare `Artist - Title` line rather than the `{songs:[…]}` document
+`parseSongsFeed` reads. The `icecast-status` shape, and the reason the null is
+a measurement rather than an inheritance: the proxy DOES serve a genuine
+icecast status document at `?mp=/status-json.xsl` on the same door, one
+`source` object whose `title` is the track on air — and it too carries no
+`Access-Control-Allow-Origin` with an `Origin` presented, so a browser cannot
+read it either. The icecast behind it is plain http on a bare IP:port, refused
+by our own scheme before CORS is even consulted. Reading the ICY metadata
+in-band — which is how the identity above was established — would mean the
+client becoming the player, and that is deliberately not this work.
+
+The reachability of this row depends on a third party with no fallback, and
+that is written into the row rather than discovered later. Every other station
+here streams from its own provider's infrastructure.
