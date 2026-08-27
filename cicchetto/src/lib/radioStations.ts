@@ -72,6 +72,38 @@
 // first entry that is not a SomaFM channel; this is a table of stations, not
 // a table of SomaFM slugs.
 
+/** #1835 — WHERE a station's now-playing fact comes from, and in WHOSE shape.
+ *
+ * A CLOSED set of literals rather than a free string, per CLAUDE.md: the reader
+ * is picked by `kind`, and `parseNowPlayingFeed`'s `assertNever` turns a new
+ * vendor added here without an arm there into a compile error rather than a
+ * station that silently reads `unanswered` forever.
+ *
+ * This replaced a bare `songsUrl: string | null`, which encoded ONE vendor's
+ * document shape in a field name and left every other provider with no way to
+ * say "I publish this, in my own format". Kohina is the row that showed it: it
+ * landed as `unsupported` with a muted band while its icecast has been
+ * publishing a title all along.
+ *
+ * The URL is COPIED, never templated from `id` — the rule `logoUrl` states
+ * above, for the same reason.
+ */
+export type NowPlayingSource =
+  /** SomaFM's `…/songs/<id>.json`: `songs[0]` is the current track, already
+      SPLIT into title / artist / album by the provider. */
+  | { readonly kind: "somafm"; readonly url: string }
+  /** An Icecast `status-json.xsl` document. Renders ONE OPAQUE LINE and
+      deliberately no artist — see `parseIcecastStatus`.
+      `mount` is icecast's OWN mount path and is NOT derivable from `streamUrl`:
+      measured on Kohina 2026-08-27, the document's `listenurl` reads
+      `http://localhost:8000/stream.ogg` (the icecast sits behind a reverse
+      proxy that does not rewrite it) while we stream from
+      `https://kohina.brona.dk/icecast/stream.ogg`. Neither host, scheme nor
+      path prefix agree, so the mount is a copied value like every other URL in
+      this table — and it is load-bearing, because one status document serves
+      every mount the server carries. */
+  | { readonly kind: "icecast-status"; readonly url: string; readonly mount: string };
+
 /** One tunable station. All URLs must be https — the CSP tokens that admit
     them (`media-src https:`, `img-src https:`) are scheme-scoped, and an http
     stream on an https page is refused as mixed content anyway. */
@@ -86,8 +118,8 @@ export type RadioStation = {
   /** The endless audio endpoint handed to `playAudio`. */
   readonly streamUrl: string;
   /** #1704 — the station's own artwork, or `null` when it publishes none.
-      NULLABLE since Kohina, and the reasoning is the one `songsUrl` gives
-      below rather than a second mechanism: a logo is a thing most stations
+      NULLABLE since Kohina, and the reasoning is the one `nowPlayingSource`
+      gives below rather than a second mechanism: a logo is a thing most stations
       HAVE, so the field stays required-looking for every row that has one —
       but "publishes no artwork" is a real state of the world and the type has
       to be able to say it. The alternative was pointing this at Kohina's
@@ -103,20 +135,19 @@ export type RadioStation = {
       `bun run check:radio` reports a null row as SKIPPED rather than passing
       it silently — a green built from zero probes is silence, not agreement. */
   readonly logoUrl: string | null;
-  /** #1698 — the JSON feed naming the track on air, or `null` when the
-      provider publishes none.
+  /** #1698 — where the track on air is published, or `null` when the provider
+      publishes it NOWHERE a browser can read.
       NULLABLE, unlike every sibling above, and the difference is real rather
       than defensive: a title, a stream and a logo are things every station HAS,
       while a machine-readable now-playing feed is a provider CAPABILITY. A
-      required field would force the next non-SomaFM station to invent a URL,
-      and an invented URL is the unverifiable claim #1696 was filed about.
-      COPIED, never templated from `id` — the same rule `logoUrl` states above,
-      for the same reason: `id` is our slug, not a SomaFM one, and deriving
-      `…/songs/${id}.json` would bake a vendor's naming convention into the
-      type. That the two coincide for all fourteen rows today is a fact about
-      SomaFM, not a contract. `bun run check:radio` probes this URL alongside
-      the logo, so the claim stays executable. */
-  readonly songsUrl: string | null;
+      required field would force the next station to invent a URL, and an
+      invented URL is the unverifiable claim #1696 was filed about.
+      #1835 — a DESCRIPTOR rather than a URL, because the second vendor to
+      publish a feed did not publish SomaFM's document. `null` now means "no
+      readable feed", which is a smaller claim than it used to make: it no
+      longer also means "not SomaFM". `bun run check:radio` probes it per kind,
+      so the claim stays executable. */
+  readonly nowPlayingSource: NowPlayingSource | null;
 };
 
 export const RADIO_STATIONS: readonly RadioStation[] = [
@@ -127,7 +158,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "A nicely chilled plate of ambient/downtempo beats and grooves.",
     streamUrl: "https://ice.somafm.com/groovesalad-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/groovesalad120.png",
-    songsUrl: "https://api.somafm.com/songs/groovesalad.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/groovesalad.json" },
   },
   {
     id: "dronezone",
@@ -137,7 +168,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "Served best chilled, safe with most medications. Atmospheric textures with minimal beats.",
     streamUrl: "https://ice.somafm.com/dronezone-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/dronezone120.jpg",
-    songsUrl: "https://api.somafm.com/songs/dronezone.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/dronezone.json" },
   },
   {
     id: "spacestation",
@@ -146,7 +177,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Tune in, turn on, space out. Spaced-out ambient and mid-tempo electronica.",
     streamUrl: "https://ice.somafm.com/spacestation-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/spacestation120.jpg",
-    songsUrl: "https://api.somafm.com/songs/spacestation.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/spacestation.json" },
   },
   {
     id: "lush",
@@ -155,7 +186,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Sensuous and mellow female vocals, many with an electronic influence.",
     streamUrl: "https://ice.somafm.com/lush-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/lush120.jpg",
-    songsUrl: "https://api.somafm.com/songs/lush.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/lush.json" },
   },
   {
     id: "indiepop",
@@ -164,7 +195,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "New and classic favorite indie pop tracks.",
     streamUrl: "https://ice.somafm.com/indiepop-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/indiepop120.jpg",
-    songsUrl: "https://api.somafm.com/songs/indiepop.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/indiepop.json" },
   },
   {
     id: "u80s",
@@ -173,7 +204,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Early 80s UK Synthpop and a bit of New Wave.",
     streamUrl: "https://ice.somafm.com/u80s-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/u80s120.png",
-    songsUrl: "https://api.somafm.com/songs/u80s.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/u80s.json" },
   },
   {
     id: "secretagent",
@@ -183,7 +214,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "The soundtrack for your stylish, mysterious, dangerous life. For Spies and PIs too!",
     streamUrl: "https://ice.somafm.com/secretagent-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/secretagent120.jpg",
-    songsUrl: "https://api.somafm.com/songs/secretagent.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/secretagent.json" },
   },
   {
     id: "defcon",
@@ -192,7 +223,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Music for Hacking. The DEF CON Year-Round Channel.",
     streamUrl: "https://ice.somafm.com/defcon-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/defcon120.png",
-    songsUrl: "https://api.somafm.com/songs/defcon.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/defcon.json" },
   },
   {
     id: "folkfwd",
@@ -201,7 +232,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Indie Folk, Alt-folk and the occasional folk classics. ",
     streamUrl: "https://ice.somafm.com/folkfwd-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/folkfwd120.jpg",
-    songsUrl: "https://api.somafm.com/songs/folkfwd.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/folkfwd.json" },
   },
   {
     id: "bootliquor",
@@ -210,7 +241,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Americana Roots music for Cowhands, Cowpokes and Cowtippers",
     streamUrl: "https://ice.somafm.com/bootliquor-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/bootliquor120.jpg",
-    songsUrl: "https://api.somafm.com/songs/bootliquor.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/bootliquor.json" },
   },
   {
     id: "bossa",
@@ -219,7 +250,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Silky-smooth, laid-back Brazilian-style rhythms of Bossa Nova, Samba and beyond",
     streamUrl: "https://ice.somafm.com/bossa-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/bossa120.jpg",
-    songsUrl: "https://api.somafm.com/songs/bossa.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/bossa.json" },
   },
   {
     id: "reggae",
@@ -228,7 +259,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Reggae, Ska, Rocksteady classic and deep tracks.",
     streamUrl: "https://ice.somafm.com/reggae-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/reggae120.png",
-    songsUrl: "https://api.somafm.com/songs/reggae.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/reggae.json" },
   },
   {
     id: "sonicuniverse",
@@ -237,7 +268,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Transcending the world of jazz with eclectic, avant-garde takes on tradition.",
     streamUrl: "https://ice.somafm.com/sonicuniverse-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/sonicuniverse120.jpg",
-    songsUrl: "https://api.somafm.com/songs/sonicuniverse.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/sonicuniverse.json" },
   },
   {
     id: "missioncontrol",
@@ -246,7 +277,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Celebrating NASA and Space Explorers everywhere.",
     streamUrl: "https://ice.somafm.com/missioncontrol-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/missioncontrol120.jpg",
-    songsUrl: "https://api.somafm.com/songs/missioncontrol.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/missioncontrol.json" },
   },
   // #1703 — guitar music. The table above answered "no metal, and one row of
   // rock", and these six are what SomaFM can contribute to that: measured
@@ -269,7 +300,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "From black to doom, prog to sludge, thrash to post, stoner to crossover, punk to industrial.",
     streamUrl: "https://ice.somafm.com/metal-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/metal120.png",
-    songsUrl: "https://api.somafm.com/songs/metal.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/metal.json" },
   },
   {
     id: "seventies",
@@ -278,7 +309,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Mellow album rock from the Seventies. Yacht not required.",
     streamUrl: "https://ice.somafm.com/seventies-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/seventies120.jpg",
-    songsUrl: "https://api.somafm.com/songs/seventies.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/seventies.json" },
   },
   {
     id: "poptron",
@@ -287,7 +318,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Electropop and indie dance rock with sparkle and pop.",
     streamUrl: "https://ice.somafm.com/poptron-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/poptron120.png",
-    songsUrl: "https://api.somafm.com/songs/poptron.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/poptron.json" },
   },
   {
     id: "covers",
@@ -296,7 +327,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Just covers. Songs you know by artists you don't. We've got you covered.",
     streamUrl: "https://ice.somafm.com/covers-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/covers120.jpg",
-    songsUrl: "https://api.somafm.com/songs/covers.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/covers.json" },
   },
   {
     id: "brfm",
@@ -305,7 +336,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "From the Black Rock Desert playa to the world, year round!",
     streamUrl: "https://ice.somafm.com/brfm-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/brfm120.jpg",
-    songsUrl: "https://api.somafm.com/songs/brfm.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/brfm.json" },
   },
   {
     id: "doomed",
@@ -314,7 +345,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Where every day is Halloween: dark industrial/ambient music for tortured souls.",
     streamUrl: "https://ice.somafm.com/doomed-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/doomed120.png",
-    songsUrl: "https://api.somafm.com/songs/doomed.json",
+    nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/doomed.json" },
   },
   // #1703 — THE FIRST STATION THAT IS NOT SOMAFM, and the row the issue was
   // actually about. SomaFM publishes exactly one metal channel, so "more than a
@@ -326,12 +357,15 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
   // What changes now that the table is no longer a SomaFM mirror, all three
   // already provided for by the type and none of them requiring a server edit:
   //
-  //   * `songsUrl` is null because Rock Antenne publishes no now-playing feed —
-  //     probed, not assumed. That is the field's designed arm (`unsupported`),
-  //     and it is also what keeps this a pure client change: `connect-src`
-  //     names `api.somafm.com` alone, so ANY feed URL here would have needed a
-  //     CSP widening — for a document `parseSongsFeed` could not read anyway,
-  //     since it parses SomaFM's `{songs:[…]}` shape and nothing else.
+  //   * `nowPlayingSource` is null because Rock Antenne publishes no
+  //     now-playing feed — probed, not assumed. That is the field's designed
+  //     arm (`unsupported`), and it is also what keeps this a pure client
+  //     change: `connect-src` names `api.somafm.com` alone, so ANY feed URL
+  //     here would have needed a CSP widening. (#1835 has since widened it once
+  //     more, for Kohina, and the half of this bullet about `parseSongsFeed`
+  //     being unable to read a foreign document is what that issue fixed —
+  //     there is now a reader per vendor. Rock Antenne stays null because it
+  //     publishes nothing to read, which is the ONLY thing null still claims.)
   //   * `check:radio`'s AGREE axis goes quiet for this row by construction
   //     (`isCatalogueBacked` keys on a somafm logo host) and it stays REACH-only
   //     forever. There is no upstream catalogue to pin it against; naming that
@@ -356,7 +390,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     streamUrl: "https://stream.rockantenne.de/heavy-metal/stream/mp3",
     logoUrl:
       "https://www.rockantenne.de/media/cache/3/version/597/streamlogo_heavymetal_ra-v1.jpg/f1b996498456cb64.jpg",
-    songsUrl: null,
+    nowPlayingSource: null,
   },
   // #1704 — KOHINA, and the first row in this table that publishes no artwork
   // at all. Requested in channel as chiptune / demoscene; measured 2026-08-24
@@ -387,13 +421,45 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
   // 17.3 and below. So this row does not play for some population of phones,
   // and #1744 is why it ships anyway: a source the browser refuses now SAYS so
   // on the transport, the rail and the lock screen instead of looking paused.
-  // Kohina has no non-Ogg endpoint, so there is no fallback stream to prefer.
   //
-  // `songsUrl` is null — no now-playing feed published. `logoUrl` is null and
-  // that is the field's new arm: kohina.com serves only favicons, the largest
-  // being a 192px PNG that answers 200. Pointing this at it was refused twice
-  // over — a favicon is not a station logo, and because it ANSWERS no error
-  // handler would ever fire, so the wrong image would render silently forever.
+  // ⚠️ CORRECTION (#1835, measured 2026-08-27). This comment used to end "Kohina
+  // has no non-Ogg endpoint, so there is no fallback stream to prefer", and that
+  // is FALSE. The status document read for the feed below enumerates THREE
+  // mounts, and both siblings answer over our own https front door:
+  // `…/icecast/stream.aac` → 200 `audio/aac`, `…/icecast/stream.opus` → 200
+  // `audio/webm`. An AAC mount would play on every iOS version the Vorbis note
+  // above excludes. Switching the baked `streamUrl` is NOT done here on purpose:
+  // it is a codec decision with its own trade (aac carries no in-band Vorbis
+  // comments, and #1744's failure surfacing was designed around this row), it
+  // belongs to that issue rather than to this one, and a slice that widens a CSP
+  // should not also silently move which bytes the operator hears. The false
+  // sentence is corrected rather than left standing; acting on it is a separate
+  // call.
+  //
+  // #1835 — `nowPlayingSource` IS NO LONGER NULL, and this row is why the field
+  // stopped being a URL. Kohina publishes nothing in SomaFM's shape, so under
+  // the old `songsUrl` it could only be null, which rendered as `unsupported`:
+  // a muted band and a `/np` that refused, for a station that has been naming
+  // its track all along. Measured 2026-08-27 on the URL below: HTTP 200,
+  // `application/json`, `Access-Control-Allow-Origin: *`, Icecast 2.4.4.
+  // `HEAD` on it answers 400 — it reads with a GET, which is why
+  // `check:radio`'s FEED axis needs a per-kind probe and not one shared HEAD.
+  //
+  // WHY THE LINE IS OPAQUE, and it is the whole design rather than a shortcut.
+  // The title is ONE joined string: measured twice on different days,
+  // `Hisayoshi Ogura (Zuntata) - The Ninja Warriors - Che! - Arcade` and
+  // `Yuzo Koshiro - SOR2 - Good End - Mega Drive` — FOUR segments on `" - "`,
+  // spelling `<composer> - <game> - <track> - <platform>`. No split recovers an
+  // artist from that, and guessing one is precisely why this module's own
+  // header already REFUSED SomaFM's `lastPlaying`. So the row renders a single
+  // line with no artist, and the UI says a shorter sentence rather than a wrong
+  // one.
+  //
+  // `logoUrl` is null and that is the field's new arm: kohina.com serves only
+  // favicons, the largest being a 192px PNG that answers 200. Pointing this at
+  // it was refused twice over — a favicon is not a station logo, and because it
+  // ANSWERS no error handler would ever fire, so the wrong image would render
+  // silently forever.
   {
     id: "kohina",
     title: "Kohina",
@@ -402,6 +468,13 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "Hand picked chip tunes from classic computers and consoles. SID, Amiga, Atari ST, Arcade, PC, and more!",
     streamUrl: "https://kohina.brona.dk/icecast/stream.ogg",
     logoUrl: null,
-    songsUrl: null,
+    // `mount` is the icecast-internal path, copied off the document's
+    // `listenurl` (`http://localhost:8000/stream.ogg`) and NOT derived from
+    // `streamUrl` — the proxy prefix `/icecast` is ours, not icecast's.
+    nowPlayingSource: {
+      kind: "icecast-status",
+      url: "https://kohina.brona.dk/icecast/status-json.xsl",
+      mount: "/stream.ogg",
+    },
   },
 ];

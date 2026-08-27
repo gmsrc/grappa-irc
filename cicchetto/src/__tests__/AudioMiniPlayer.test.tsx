@@ -42,7 +42,8 @@ beforeEach(() => {
   // a real track that was genuinely on the air.
   //
   // It also RACED. The in-flight real answer clears the poll's own guard
-  // (`tunedStation()?.songsUrl !== url`) because the feed test tunes the SAME
+  // (`tunedStation() !== station`, `?.songsUrl !== url` before #1835) because
+  // the feed test tunes the SAME
   // station, so it lands on top of the stub. That guard is not the defect and
   // is deliberately left alone — it is asking the right question; the barrier
   // below is what let a stale answer reach it at the wrong moment.

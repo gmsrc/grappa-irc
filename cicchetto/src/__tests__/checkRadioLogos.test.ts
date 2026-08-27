@@ -204,25 +204,26 @@ describe("the AGREE axis is not vacuous over the real table", () => {
   });
 });
 
-// #1698 — the FEED axis. `songsUrl` is a third baked third-party URL in the
+// #1698 — the FEED axis. `nowPlayingSource` is a third baked third-party URL
+// in the
 // same table, and #1696's lesson is that a baked URL nothing can check is a
 // claim, not a fact. Adding one without extending this probe would repeat the
 // exact defect the probe exists for.
 describe("the FEED axis is not vacuous over the real table", () => {
   it("has something to probe, on the stations that publish a feed", () => {
     // The positive control, the sibling of AGREE's above: FEED skips a station
-    // whose `songsUrl` is null, so a table that lost the field would report
+    // whose `nowPlayingSource` is null, so a table that lost the field would report
     // "0 broken" having probed nothing.
     //
     // #1703 — the second clause used to be `toBe(RADIO_STATIONS.length)`, i.e.
     // every row publishes a feed. That was an accident of the table being
-    // all-SomaFM and it contradicted the field's own type: `songsUrl` is
+    // all-SomaFM and it contradicted the field's own type: `nowPlayingSource` is
     // nullable precisely because a track feed is a provider CAPABILITY, and
     // the first provider without one made the assertion red for a row that is
     // correctly spelled. Non-vacuity is the property worth holding here, and
     // `> 0` is the whole of it — a table that went uniformly null lands on
     // zero and this goes red, which is the threat the control names.
-    const withFeed = RADIO_STATIONS.filter((s) => s.songsUrl !== null);
+    const withFeed = RADIO_STATIONS.filter((s) => s.nowPlayingSource !== null);
     expect(withFeed.length).toBeGreaterThan(0);
   });
 });
@@ -312,7 +313,7 @@ describe("the union verdict", () => {
   });
 
   it("says nothing about a station that publishes no feed", () => {
-    // A null `songsUrl` is a station from a provider that has no track feed,
+    // A null `nowPlayingSource` is a station from a provider that has no track feed,
     // not a broken row. Reported as a finding it would make the table's own
     // nullable field permanently red.
     expect(problems(finding({ feedUrl: null, feed: null }))).toEqual([]);
@@ -389,7 +390,7 @@ describe("a station that publishes no logo (#1704)", () => {
       RADIO_STATIONS.map((s) => ({
         id: s.id,
         logoUrl: s.logoUrl,
-        feedUrl: s.songsUrl,
+        feedUrl: s.nowPlayingSource?.url ?? null,
         reach: null,
         agree: null,
         feed: null,

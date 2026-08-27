@@ -40,20 +40,20 @@ const pngStation = RADIO_STATIONS.find((s) => RADIO_LOGO_PATHS[s.id]?.endsWith("
 if (jpgStation === undefined || pngStation === undefined) {
   throw new Error("these tests need one .jpg-logo and one .png-logo station in the curated table");
 }
-const feedUrl = jpgStation.songsUrl;
-if (feedUrl === null) {
+// A guard, not a binding anyone reads: these tests stub `fetch` wholesale and
+// only need the station they tune to HAVE a feed, so that the poll runs at all.
+if (jpgStation.nowPlayingSource === null) {
   throw new Error("this test needs a station that publishes a now-playing feed");
 }
 
 /** A provider with no track feed — the `unsupported` arm. Constructed rather
-    than found, because no real row is null today and a skipped test is
-    silence. */
+    than found, so the arm is exercised whichever real rows happen to be null. */
 const feedless: RadioStation = {
   ...jpgStation,
   id: "feedless",
   title: "Feedless FM",
   streamUrl: "https://stream.example.org/feedless",
-  songsUrl: null,
+  nowPlayingSource: null,
 };
 
 const okOnce = (body: unknown): Response =>

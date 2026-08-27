@@ -30,17 +30,32 @@
 //            and it is what pins the table to the authority WITHOUT making the
 //            running client depend on that authority (see the table's
 //            moduledoc for why the fetch stays out of the render path).
-//   FEED   — #1698: the `songsUrl` now-playing feed answers 200 with
+//   FEED   — #1698: the `nowPlayingSource` feed answers 200 with
 //            `application/json`. A third baked third-party URL in the same
 //            table, so it inherits the same problem this script exists for:
 //            get the slug wrong and the station still plays perfectly while
 //            the track line stays permanently empty — a defect with no symptom
 //            anywhere the operator looks. A station that publishes no feed
-//            (`songsUrl: null`) is SKIPPED, not failed.
+//            (`nowPlayingSource: null`) is SKIPPED, not failed.
 //            No AGREE twin: `channels.json` publishes a `lastPlaying` STRING,
 //            not the feed's URL, so there is no upstream value to compare the
 //            baked one against. Naming that absence beats inventing a
 //            comparison that would pass on anything.
+//            #1835 — the axis is PER KIND now, and both halves of that are
+//            measured rather than stylistic:
+//              * a somafm feed is probed with HEAD, as before;
+//              * an icecast `status-json.xsl` answers HEAD with **400**
+//                (measured on kohina.brona.dk 2026-08-27), so it is probed with
+//                a GET. A shared HEAD would report a false RED for a feed that
+//                works perfectly.
+//              * and because the GET has the body in hand anyway, the icecast
+//                arm runs the PRODUCTION parser over it and demands a track.
+//                That is the only executable check on `mount`, which is a
+//                hand-copied string that nothing else can validate: get it
+//                wrong and the feed still answers 200 `application/json` while
+//                the station's track line stays empty forever. A content-type
+//                probe would wave that straight through — which is the exact
+//                defect class the paragraph above says this script exists for.
 //   BYTES  — #1739: `public/radio-logos/<id>.<ext>` still holds what upstream
 //            serves. The picker draws the VENDORED bytes now — no viewer
 //            contacts api.somafm.com — and the one thing that mirror gave up
@@ -72,8 +87,13 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { assertNever } from "../src/lib/api";
+// The PRODUCTION parser, not a copy. #1835 — `nowPlayingFeeds.ts` is pure
+// precisely so this script can import it: pulling `nowPlaying.ts` instead would
+// eagerly open the store's reactive root in a process with no DOM.
+import { parseIcecastStatus } from "../src/lib/nowPlayingFeeds";
 import { RADIO_LOGO_PATHS } from "../src/lib/radioLogoPaths";
-import { RADIO_STATIONS } from "../src/lib/radioStations";
+import { type NowPlayingSource, RADIO_STATIONS } from "../src/lib/radioStations";
 import {
   agreeFailure,
   brokenCount,
@@ -129,6 +149,40 @@ async function probeReach(url: string, expected: string): Promise<string | null>
   }
 }
 
+/** `null` when the station's declared source answers with a track we would
+ * actually show; otherwise why it does not.
+ *
+ * #1835 — dispatched on `kind` rather than shared, for the two measured reasons
+ * the header gives (HEAD is a 400 on icecast; `mount` has no other check). The
+ * `assertNever` is what makes a third vendor added to the union impossible to
+ * ship with this axis silently un-probed.
+ */
+async function probeFeed(source: NowPlayingSource): Promise<string | null> {
+  switch (source.kind) {
+    case "somafm":
+      return probeReach(source.url, FEED_CONTENT_TYPE);
+    case "icecast-status": {
+      try {
+        const res = await fetch(source.url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+        const reach = reachFailure(res.status, res.headers.get("content-type"), FEED_CONTENT_TYPE);
+        if (reach !== null) return reach;
+        // The body is already here, so the strong claim costs nothing extra.
+        // Reported with the mount spelled out because that is the value the
+        // reader has to go and fix, and it is the one the document disagrees
+        // with.
+        const track = parseIcecastStatus(await res.json(), source.mount);
+        return track === null
+          ? `answers 200 but carries no track at mount ${source.mount}`
+          : null;
+      } catch (err) {
+        return `${err}`;
+      }
+    }
+    default:
+      return assertNever(source);
+  }
+}
+
 /** REACH and the payload BYTES for one logo, from ONE request.
  *
  * #1739 — a GET rather than the HEAD above, because the BYTES axis needs the
@@ -171,22 +225,20 @@ if (catalogue === null) {
 const findings: StationFinding[] = await Promise.all(
   RADIO_STATIONS.map(async (station) => {
     // #1704 — a station that publishes NO logo is not probed and is not a
-    // finding, the same arm `songsUrl` has had since #1698. There is no URL to
-    // reach; what the UI draws instead is our own placeholder, which cannot
-    // 404. Counted out of the denominator below rather than folded into the
-    // green.
+    // finding, the same arm `nowPlayingSource` has had since #1698. There is no
+    // URL to reach; what the UI draws instead is our own placeholder, which
+    // cannot 404. Counted out of the denominator below rather than folded into
+    // the green.
     const logo = station.logoUrl === null ? null : await probeLogo(station.logoUrl);
+    const source = station.nowPlayingSource;
     return {
       id: station.id,
       logoUrl: station.logoUrl,
-      feedUrl: station.songsUrl,
+      feedUrl: source?.url ?? null,
       reach: logo?.reach ?? null,
       agree: agreeFailure(station.logoUrl, station.id, catalogue),
       // A station that publishes no feed is not probed and is not a finding.
-      feed:
-        station.songsUrl === null
-          ? null
-          : await probeReach(station.songsUrl, FEED_CONTENT_TYPE),
+      feed: source === null ? null : await probeFeed(source),
       // #1739 — only when there is an upstream payload in hand. A skipped row
       // and a row whose fetch died both report null here: the first has
       // nothing to compare, and the second is already red on REACH.

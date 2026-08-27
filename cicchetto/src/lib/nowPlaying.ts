@@ -1,8 +1,30 @@
 import { createEffect, createSignal, on } from "solid-js";
 import { moduleRoot } from "./moduleRoot";
+import { type NowPlayingTrack, parseNowPlayingFeed } from "./nowPlayingFeeds";
 import { tunedStation } from "./radio";
+import type { NowPlayingSource, RadioStation } from "./radioStations";
 
 // #1698 — what the tuned station is playing right now.
+//
+// ONE READER PER VENDOR (#1835). The station table declares WHERE its fact
+// lives and in WHOSE shape (`NowPlayingSource`, a closed union of literals) and
+// `nowPlayingFeeds.ts` holds one parser per `kind`; this module stays the
+// STORE, and asks that one door. Before #1835 there was one parser, SomaFM's,
+// and the field was spelled `songsUrl` — so a station from any other provider
+// had nothing to put there, landed in `unsupported`, and showed a muted band
+// for a fact its server was publishing all along. Adding a vendor is a `kind`,
+// a parser and a CSP entry; the store, the cadence, the five states and every
+// consumer are untouched by construction.
+//
+// WHAT A VENDOR IS ALLOWED TO GIVE US, and it is not the same everywhere. The
+// somafm arm hands back a track already SPLIT by the provider; the
+// icecast-status arm hands back ONE OPAQUE LINE with no artist, because that is
+// all its document honestly contains (see `parseIcecastStatus`). Both flow into
+// the same `NowPlayingTrack`, whose `artist` has been nullable since #1698 —
+// the display, the lock screen and the `/np` wire line already say a shorter
+// sentence when it is null, so an opaque vendor needed NO consumer change and
+// gets no discriminator of its own. A field no door reads is a field that rots
+// unnoticed, which is the same reason `album` never entered the type.
 //
 // WHERE THE FACT COMES FROM, AND WHAT WAS RULED OUT. Measured 2026-08-24:
 //
@@ -78,15 +100,6 @@ export const NOW_PLAYING_POLL_MS = 60_000;
     Expressed as a multiple so a cadence change carries it along. */
 export const NOW_PLAYING_STALE_MS = NOW_PLAYING_POLL_MS * 3;
 
-/** The track on air. `album` is in the feed and deliberately NOT here: nothing
-    renders it, and a field no door reads is a field that rots unnoticed. */
-export type NowPlayingTrack = {
-  /** Absent when the feed gave a blank one — the line then names the title
-      alone rather than dangling a dash. */
-  readonly artist: string | null;
-  readonly title: string;
-};
-
 /** What the store can honestly say. Named for what was OBSERVED, per the
     log-honesty rule: `unanswered` is true whether the feed has been silent for
     200ms or for an hour, and does not promise a "yet". */
@@ -103,36 +116,6 @@ export type NowPlaying =
   | { readonly status: "unanswered"; readonly station: string }
   | { readonly status: "stale"; readonly station: string }
   | { readonly status: "playing"; readonly track: NowPlayingTrack; readonly station: string };
-
-/** The shape SomaFM gives us. Everything optional: this is a third party's
-    document and a missing field must degrade to "no track", never to a throw —
-    the poll's error handling exists to keep the previous track on screen
-    through a bad answer, and it cannot do that if parsing takes it out. */
-type SongsBody = { readonly songs?: unknown };
-
-const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
-
-/**
- * The newest track in a `…/songs/<id>.json` body, or `null` when the document
- * carries none we would show.
- *
- * A blank TITLE is rejected here rather than downstream, and that is the
- * boundary doing its job: `/np` renders the track into a channel, and a blank
- * title is exactly the empty sentence that must never reach the wire. A blank
- * ARTIST is kept — it shortens the line instead of voiding it.
- */
-export function parseSongsFeed(body: unknown): NowPlayingTrack | null {
-  if (typeof body !== "object" || body === null) return null;
-  const songs = (body as SongsBody).songs;
-  if (!Array.isArray(songs)) return null;
-  const first: unknown = songs[0];
-  if (typeof first !== "object" || first === null) return null;
-  const row = first as Record<string, unknown>;
-  const title = str(row.title);
-  if (title === "") return null;
-  const artist = str(row.artist);
-  return { artist: artist === "" ? null : artist, title };
-}
 
 /**
  * A track as one string: `<artist> — <title>`, or the title alone when the
@@ -191,16 +174,16 @@ const exports_ = moduleRoot(() => {
     }
   };
 
-  const poll = async (url: string): Promise<void> => {
+  const poll = async (station: RadioStation, source: NowPlayingSource): Promise<void> => {
     let track: NowPlayingTrack | null = null;
     try {
-      const res = await fetch(url, {
+      const res = await fetch(source.url, {
         // Explicit, though it is also the cross-origin default: this is a
         // third party's host and must never be handed a grappa cookie. Stated
         // so a later edit to this options object cannot silently turn it on.
         credentials: "omit",
       });
-      if (res.ok) track = parseSongsFeed(await res.json());
+      if (res.ok) track = parseNowPlayingFeed(source, await res.json());
     } catch {
       // A transport failure and a malformed answer are the SAME event here —
       // "we did not learn anything this time" — and both are handled below by
@@ -210,10 +193,15 @@ const exports_ = moduleRoot(() => {
 
     // The station may have changed while this was in flight. Writing anyway
     // would caption the new station with the old one's track, which `/np`
-    // would then publish into a channel. Compared by URL rather than by a
-    // generation counter, which also makes a re-tune of the SAME station
-    // accept the answer it is still waiting for.
-    if (tunedStation()?.songsUrl !== url) return;
+    // would then publish into a channel. Compared by station IDENTITY rather
+    // than by a generation counter: `tunedStation()` resolves to a row of the
+    // module-constant table, so the reference is stable and a re-tune of the
+    // SAME station still accepts the answer it is already waiting for.
+    // #1835 — identity rather than the feed URL, which this used to compare.
+    // One icecast status document serves EVERY mount on that server, so two
+    // rows of the same station's mounts would share a URL and each would have
+    // accepted the other's answer.
+    if (tunedStation() !== station) return;
 
     if (track !== null) {
       setRead({ track, at: Date.now() });
@@ -233,19 +221,22 @@ const exports_ = moduleRoot(() => {
       stopPolling();
       setRead(null);
       setStaleFlag(false);
-      const url = station?.songsUrl;
-      if (url === undefined || url === null) return;
+      if (station === null) return;
+      const source = station.nowPlayingSource;
+      if (source === null) return;
       // Immediately, then on the interval: a 60s blank at tune-in is the
-      // operator's first impression of the feature.
-      void poll(url);
-      timer = setInterval(() => void poll(url), NOW_PLAYING_POLL_MS);
+      // operator's first impression of the feature. The cadence is the vendor's
+      // business in NO respect — every `kind` polls on the same interval, for
+      // the reasons the header gives about who pays for it.
+      void poll(station, source);
+      timer = setInterval(() => void poll(station, source), NOW_PLAYING_POLL_MS);
     }),
   );
 
   const nowPlaying = (): NowPlaying => {
     const station = tunedStation();
     if (station === null) return { status: "idle" };
-    if (station.songsUrl === null) return { status: "unsupported", station: station.title };
+    if (station.nowPlayingSource === null) return { status: "unsupported", station: station.title };
     if (staleFlag()) return { status: "stale", station: station.title };
     const last = read();
     if (last === null) return { status: "unanswered", station: station.title };

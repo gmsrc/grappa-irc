@@ -4,11 +4,15 @@ import { setToken } from "../lib/auth";
 import {
   NOW_PLAYING_POLL_MS,
   NOW_PLAYING_STALE_MS,
-  type NowPlayingTrack,
   nowPlaying,
   nowPlayingLine,
-  parseSongsFeed,
 } from "../lib/nowPlaying";
+import {
+  type NowPlayingTrack,
+  parseIcecastStatus,
+  parseNowPlayingFeed,
+  parseSongsFeed,
+} from "../lib/nowPlayingFeeds";
 import { tuneStation } from "../lib/radio";
 import { RADIO_STATIONS, type RadioStation } from "../lib/radioStations";
 
@@ -23,24 +27,39 @@ const other = RADIO_STATIONS[1];
 if (station === undefined || other === undefined) {
   throw new Error("the curated table must carry at least two stations for these tests");
 }
-// Narrowed once: `songsUrl` is nullable in the type and these tests are about
-// the arm where it is present. A row that lost its feed would otherwise make
-// them pass while probing nothing.
-const feedUrl = station.songsUrl;
-const otherFeedUrl = other.songsUrl;
-if (feedUrl === null || otherFeedUrl === null) {
+// Narrowed once: `nowPlayingSource` is nullable in the type and these tests are
+// about the arm where it is present. A row that lost its feed would otherwise
+// make them pass while probing nothing.
+const source = station.nowPlayingSource;
+const otherSource = other.nowPlayingSource;
+if (source === null || otherSource === null) {
   throw new Error("these tests need two stations that publish a now-playing feed");
 }
+const feedUrl = source.url;
+const otherFeedUrl = otherSource.url;
 
-/** A station from a provider with no track feed — the null arm of `songsUrl`.
-    Constructed rather than taken from the table, because no real row is null
-    today and a test that skipped when none was found would be silence. */
+// #1835 — the SECOND vendor shape, taken from the real table rather than
+// invented. A positive control by construction: the moment the table holds no
+// `icecast-status` row, every assertion below it stops being reachable and this
+// throws instead of reporting a green built from zero comparisons.
+const icecastStation = RADIO_STATIONS.find((s) => s.nowPlayingSource?.kind === "icecast-status");
+const icecastSource = icecastStation?.nowPlayingSource;
+if (icecastStation === undefined || icecastSource?.kind !== "icecast-status") {
+  throw new Error("these tests need a station whose feed is an icecast status document");
+}
+
+/** A station from a provider with no track feed — the null arm of
+    `nowPlayingSource`. Constructed rather than taken from the table, and the
+    reason is that it must be OUTSIDE it: the one test that uses it asserts that
+    an untabled station is not tunable at all. (Real null rows do exist —
+    rockantenne-metal since #1703 — so this is not standing in for an empty
+    arm.) */
 const feedless: RadioStation = {
   ...station,
   id: "feedless",
   title: "Feedless FM",
   streamUrl: "https://stream.example.org/feedless",
-  songsUrl: null,
+  nowPlayingSource: null,
 };
 
 const songsBody = (
@@ -122,6 +141,178 @@ describe("parseSongsFeed", () => {
     expect(parseSongsFeed("not json at all")).toBeNull();
     expect(parseSongsFeed({ songs: "not an array" })).toBeNull();
     expect(parseSongsFeed({ songs: [42] })).toBeNull();
+  });
+});
+
+// #1835 — the icecast `status-json.xsl` document, in the shape Kohina's server
+// actually answers with. Measured 2026-08-27 against
+// `https://kohina.brona.dk/icecast/status-json.xsl`: HTTP 200,
+// `application/json`, `Access-Control-Allow-Origin: *`, Icecast 2.4.4, THREE
+// mounts, and every `listenurl` on `http://localhost:8000/...` because the
+// icecast sits behind a reverse proxy that does not rewrite it.
+const mountSource = (mount: string, over: Record<string, unknown>): Record<string, unknown> => ({
+  listenurl: `http://localhost:8000${mount}`,
+  server_name: "Kohina - Old School Game and Demo Music",
+  server_description: "Hand picked chip tunes from classic computers and consoles.",
+  ...over,
+});
+
+const icecastBody = (sources: readonly Record<string, unknown>[]): unknown => ({
+  icestats: { server_id: "Icecast 2.4.4", host: "localhost", source: sources },
+});
+
+/** The title as measured, and the whole reason this vendor renders opaquely:
+    FOUR segments on `" - "`, artist not recoverable by any split. */
+const OPAQUE_TITLE = "Yuzo Koshiro - SOR2 - Good End - Mega Drive";
+
+describe("parseIcecastStatus", () => {
+  it("renders the mount's title as ONE opaque line, inventing no artist", () => {
+    // The load-bearing assertion of the whole slice. `" - "` appears three
+    // times and none of them is an artist boundary — the string is
+    // `<composer> - <game> - <track> - <platform>`. A split-and-hope would put
+    // "Yuzo Koshiro" in `artist` and "SOR2 - Good End - Mega Drive" in `title`,
+    // which is wrong here and unfixably wrong in general, and it is exactly the
+    // shape `nowPlaying.ts`'s header already refused for SomaFM's `lastPlaying`.
+    expect(
+      parseIcecastStatus(
+        icecastBody([mountSource("/stream.ogg", { title: OPAQUE_TITLE })]),
+        "/stream.ogg",
+      ),
+    ).toEqual({ artist: null, title: OPAQUE_TITLE });
+  });
+
+  it("takes the title from the mount asked for, not from the first source", () => {
+    // Measured: this server publishes three mounts off ONE status document, and
+    // the row we ship is the ogg. Reading `source[0]` would caption our stream
+    // with the aac mount's title — which is the same track today and is not
+    // guaranteed to be, since each mount is a separate icecast source.
+    expect(
+      parseIcecastStatus(
+        icecastBody([
+          mountSource("/stream.aac", { title: "aac mount track" }),
+          mountSource("/stream.ogg", { title: OPAQUE_TITLE }),
+          mountSource("/stream.opus", {}),
+        ]),
+        "/stream.ogg",
+      ),
+    ).toEqual({ artist: null, title: OPAQUE_TITLE });
+  });
+
+  it("matches the mount on the listenurl PATH, never on the whole URL", () => {
+    // The measured trap. `listenurl` names `http://localhost:8000/stream.ogg`
+    // while our station streams from `https://kohina.brona.dk/icecast/stream.ogg`
+    // — neither the host, the scheme nor the path prefix agree. A comparison
+    // against the stream URL would match nothing and the row would read
+    // `unanswered` forever, silently.
+    const body = icecastBody([mountSource("/stream.ogg", { title: OPAQUE_TITLE })]);
+    expect(parseIcecastStatus(body, icecastStation.streamUrl)).toBeNull();
+    expect(parseIcecastStatus(body, "/stream.ogg")).toEqual({
+      artist: null,
+      title: OPAQUE_TITLE,
+    });
+  });
+
+  it("refuses a mount the document does not carry rather than guessing one", () => {
+    // A mistyped `mount` in the table must read as "no track", not as some
+    // other mount's track. This is the arm that makes `check:radio`'s FEED
+    // probe able to catch the typo at all.
+    expect(
+      parseIcecastStatus(
+        icecastBody([mountSource("/stream.ogg", { title: OPAQUE_TITLE })]),
+        "/stream.mp3",
+      ),
+    ).toBeNull();
+  });
+
+  it("refuses a mount with no title key at all", () => {
+    // Measured: the opus mount answers with no `title` whatsoever. A source
+    // that is up and silent about what it is playing is not a track.
+    expect(
+      parseIcecastStatus(icecastBody([mountSource("/stream.opus", {})]), "/stream.opus"),
+    ).toBeNull();
+  });
+
+  it("refuses a blank title — the empty line, caught at the same door", () => {
+    // The icecast twin of `parseSongsFeed`'s blank-title rule. Without it
+    // `/np` publishes `* nick is now playing:  [Kohina]` into a channel, and
+    // the rail draws a caption made of nothing.
+    expect(
+      parseIcecastStatus(
+        icecastBody([mountSource("/stream.ogg", { title: "   " })]),
+        "/stream.ogg",
+      ),
+    ).toBeNull();
+  });
+
+  it("survives garbage rather than throwing at the caller", () => {
+    // Same contract `parseSongsFeed` states: a crash here takes out the poll's
+    // error handling, whose whole job is to keep the previous track on screen
+    // through a bad answer.
+    expect(parseIcecastStatus(null, "/stream.ogg")).toBeNull();
+    expect(parseIcecastStatus("not json at all", "/stream.ogg")).toBeNull();
+    expect(parseIcecastStatus({ icestats: null }, "/stream.ogg")).toBeNull();
+    // A single-mount icecast is REPORTED to answer `source` as a bare object
+    // rather than a one-element array. Unmeasured — we have no single-mount
+    // server to point at — so it is deliberately NOT handled: it degrades to
+    // "no track", never to a throw, and inventing the branch would be the
+    // unverifiable claim #1696 was filed about. `check:radio`'s FEED axis is
+    // where such a station would go red, loudly, before it ever shipped.
+    expect(parseIcecastStatus({ icestats: { source: { title: "x" } } }, "/stream.ogg")).toBeNull();
+    expect(parseIcecastStatus({ icestats: { source: [42] } }, "/stream.ogg")).toBeNull();
+    expect(
+      parseIcecastStatus({ icestats: { source: [{ title: "x" }] } }, "/stream.ogg"),
+    ).toBeNull();
+    expect(
+      parseIcecastStatus(
+        { icestats: { source: [{ listenurl: "://not a url", title: "x" }] } },
+        "/stream.ogg",
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseNowPlayingFeed", () => {
+  // The dispatcher is what makes `kind` a CLOSED set with teeth: a third vendor
+  // added to the union without an arm here is a compile error at `assertNever`,
+  // not a station that silently reads `unanswered`.
+  it("reads a somafm body through the somafm arm — title and artist stay SPLIT", () => {
+    // The non-regression that matters: the vendor that CAN separate the two
+    // still does. Collapsing SomaFM into the opaque shape "for consistency"
+    // would lose a fact we are given.
+    expect(
+      parseNowPlayingFeed(
+        { kind: "somafm", url: feedUrl },
+        songsBody([{ title: "A Land Unknown", artist: "Trestal" }]),
+      ),
+    ).toEqual({ artist: "Trestal", title: "A Land Unknown" });
+  });
+
+  it("reads an icecast body through the icecast arm, at the descriptor's mount", () => {
+    expect(
+      parseNowPlayingFeed(
+        icecastSource,
+        icecastBody([
+          mountSource("/stream.aac", { title: "aac mount track" }),
+          mountSource(icecastSource.mount, { title: OPAQUE_TITLE }),
+        ]),
+      ),
+    ).toEqual({ artist: null, title: OPAQUE_TITLE });
+  });
+
+  it("hands each vendor's body to its OWN reader and to no other", () => {
+    // Crossed on purpose. Each parser must fail to find a track in the other
+    // vendor's document — if either one accidentally read the other's shape,
+    // the dispatch would be decoration and a mis-typed `kind` would go
+    // unnoticed.
+    expect(
+      parseNowPlayingFeed(
+        { kind: "somafm", url: feedUrl },
+        icecastBody([mountSource("/stream.ogg", { title: OPAQUE_TITLE })]),
+      ),
+    ).toBeNull();
+    expect(
+      parseNowPlayingFeed(icecastSource, songsBody([{ title: "Juno", artist: "Setsuna" }])),
+    ).toBeNull();
   });
 });
 
@@ -411,6 +602,74 @@ describe("nowPlaying store", () => {
     // one, and saying otherwise would put a track-shaped hole where an
     // honest "the feed has not answered" belongs.
     expect(nowPlaying()).toEqual({ status: "unanswered", station: station.title });
+  });
+
+  it("plays an icecast station's opaque line, from the descriptor's own URL", async () => {
+    // #1835, end to end through the real table row. The station that used to
+    // land in `unsupported` with a muted band now names what is on — as ONE
+    // line, with no artist, which is all this provider can honestly give.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        okOnce(icecastBody([mountSource(icecastSource.mount, { title: OPAQUE_TITLE })])),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    tuneStation(icecastStation);
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(icecastSource.url);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ credentials: "omit" });
+    expect(nowPlaying()).toEqual({
+      status: "playing",
+      track: { artist: null, title: OPAQUE_TITLE },
+      station: icecastStation.title,
+    });
+  });
+
+  it("keeps an icecast station on the SAME cadence as every other vendor", async () => {
+    // The brief's non-negotiable, pinned rather than trusted: a second vendor
+    // must not quietly buy itself a tighter poll. One read at tune-in, then one
+    // per interval, at a third party's expense exactly like SomaFM.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        okOnce(icecastBody([mountSource(icecastSource.mount, { title: OPAQUE_TITLE })])),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    tuneStation(icecastStation);
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(NOW_PLAYING_POLL_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    closeAudio();
+    await vi.advanceTimersByTimeAsync(NOW_PLAYING_POLL_MS * 5);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes an icecast track as the opaque line `/np` would send", async () => {
+    // The wire text, built by the production formatter rather than retyped.
+    // The four `" - "` segments must arrive VERBATIM: any pipeline stage that
+    // decided to split them would show up here as a mangled sentence.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        okOnce(icecastBody([mountSource(icecastSource.mount, { title: OPAQUE_TITLE })])),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    tuneStation(icecastStation);
+    await settle();
+
+    const state = nowPlaying();
+    if (state.status !== "playing") throw new Error(`expected a track, got ${state.status}`);
+    expect(nowPlayingLine(state.track, state.station)).toBe(
+      `is now playing: ${OPAQUE_TITLE} [${icecastStation.title}]`,
+    );
   });
 
   it("the stale threshold outlives more than one missed read", () => {

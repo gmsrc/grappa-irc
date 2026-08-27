@@ -55,48 +55,99 @@ describe("RADIO_STATIONS", () => {
 
   it("carries a logo for at least one station", () => {
     // #1704 — the positive control for the rule above, the same one #1698 gave
-    // `songsUrl`. `logoUrl` went nullable for Kohina, which publishes only a
-    // favicon; a table where the field had gone uniformly null would sail
-    // through the https rule having checked nothing at all.
+    // `nowPlayingSource`. `logoUrl` went nullable for Kohina, which publishes
+    // only a favicon; a table where the field had gone uniformly null would
+    // sail through the https rule having checked nothing at all.
     const withLogo = RADIO_STATIONS.filter((s) => s.logoUrl !== null);
     expect(withLogo.length).toBeGreaterThan(0);
   });
 
-  // #1698 — the now-playing feed URL. Same posture as `logoUrl`: a verbatim
-  // copy, never templated from `id` (this is a table of stations, not a table
-  // of SomaFM slugs), and nullable because publishing a track feed is a
+  // #1698 / #1835 — the now-playing SOURCE. Same posture as `logoUrl`: a
+  // verbatim copy, never templated from `id` (this is a table of stations, not
+  // a table of SomaFM slugs), and nullable because publishing a track feed is a
   // provider CAPABILITY, not something every station has.
-  it("carries a now-playing feed for at least one station", () => {
+  const sources = RADIO_STATIONS.flatMap((s) =>
+    s.nowPlayingSource === null ? [] : [{ id: s.id, source: s.nowPlayingSource }],
+  );
+
+  it("carries a now-playing source for at least one station", () => {
     // The positive control for every rule below it. Each of those skips a
-    // station whose `songsUrl` is null, so a table where the field went
+    // station whose `nowPlayingSource` is null, so a table where the field went
     // uniformly null would report green having compared nothing — silence
     // read as agreement.
-    const withFeed = RADIO_STATIONS.filter((s) => s.songsUrl !== null);
-    expect(withFeed.length).toBeGreaterThan(0);
+    expect(sources.length).toBeGreaterThan(0);
   });
 
   it("serves every now-playing feed over https", () => {
     // A feed is a `fetch`, so it is governed by `connect-src`, and the CSP
-    // token that admits it (`https://api.somafm.com`) is scheme-scoped. An
-    // http URL is refused as mixed content before the CSP is even consulted.
-    for (const s of RADIO_STATIONS) {
-      if (s.songsUrl === null) continue;
-      expect(s.songsUrl, `station ${s.id} songs feed`).toMatch(/^https:\/\//);
+    // tokens that admit these hosts are scheme-scoped. An http URL is refused
+    // as mixed content before the CSP is even consulted.
+    for (const { id, source } of sources) {
+      expect(source.url, `station ${id} feed`).toMatch(/^https:\/\//);
     }
   });
 
-  it("aims every somafm now-playing feed at api.somafm.com, the host the CSP admits", () => {
-    // #1695 measured this and it is the trap worth pinning: `connect-src`
-    // admits `https://api.somafm.com` and NOT the bare `somafm.com`, which
-    // answers an identical 200 under curl and dies in the browser. The failure
-    // is a console CSP violation and a permanently empty track line — silent
-    // from the operator's side. Scoped to somafm hosts for the same reason the
-    // stream rule is: the table may hold a station from another provider.
-    for (const s of RADIO_STATIONS) {
-      if (s.songsUrl === null) continue;
-      const host = new URL(s.songsUrl).host;
-      if (!host.endsWith("somafm.com")) continue;
-      expect(host, `station ${s.id} songs feed is off the CSP's host`).toBe("api.somafm.com");
+  // #1835 — the CSP TWIN, client-side. `connect-src` is a per-vendor gate on
+  // the server (`GrappaWeb.Plugs.SecurityHeaders`) and it is deliberately NOT a
+  // wildcard, so a feed added here on an unlisted host fails in a way nobody
+  // sees: a console violation and a permanently empty track line, with the
+  // station otherwise playing fine. The Elixir side cannot check this — it has
+  // no idea what the table holds — and this side cannot read the header, so the
+  // two halves are pinned against the same literal set from opposite ends.
+  //
+  // ⚠️ ADDING A HOST HERE IS A NETWORK-SURFACE CHANGE. It has to land in
+  // `@csp`'s `connect-src` in the SAME change, or this table points at a host
+  // the browser will refuse.
+  const CSP_FEED_HOSTS: readonly string[] = ["api.somafm.com", "kohina.brona.dk"];
+
+  it("aims every now-playing feed at a host the CSP's connect-src admits", () => {
+    // #1695 measured the trap this generalises: `connect-src` admits
+    // `https://api.somafm.com` and NOT the bare `somafm.com`, which answers an
+    // identical 200 under curl and dies in the browser. Exact hosts, never a
+    // suffix match — a suffix would wave through the very neighbour that
+    // separates the shipped policy from a wildcard.
+    for (const { id, source } of sources) {
+      expect(CSP_FEED_HOSTS, `station ${id} feed is off the CSP's host set`).toContain(
+        new URL(source.url).host,
+      );
+    }
+  });
+
+  it("has a feed behind every host it pins — an unused entry proves nothing", () => {
+    // The positive control for the rule above, and the same vacuity argument
+    // the stream front doors get: a host left in the list after its station was
+    // pruned keeps the CSP wider than the table needs, and nothing would say so.
+    for (const host of CSP_FEED_HOSTS) {
+      expect(
+        sources.filter((s) => new URL(s.source.url).host === host),
+        `no station feeds from ${host} — the CSP entry outlived its station`,
+      ).not.toHaveLength(0);
+    }
+  });
+
+  it("keeps every somafm source on api.somafm.com — the #1695 pin, now keyed on kind", () => {
+    // Scoped by `kind` rather than by host suffix, which is what the old
+    // spelling did: the suffix version could only notice a somafm URL that had
+    // drifted to the wrong somafm host, while this one also notices a row
+    // declaring the somafm READER over some other provider's document — a
+    // parser/document mismatch that answers 200 and yields no track.
+    for (const { id, source } of sources) {
+      if (source.kind !== "somafm") continue;
+      expect(new URL(source.url).host, `station ${id} reads somafm off the wrong host`).toBe(
+        "api.somafm.com",
+      );
+    }
+  });
+
+  it("gives every icecast source an absolute mount path", () => {
+    // #1835 — the mount is compared against a `URL.pathname`, which always
+    // starts with `/`. A mount spelled `stream.ogg` would therefore match no
+    // source in any document, and the station would read `unanswered` forever
+    // with the feed answering 200 the whole time. The failure is silent from
+    // every surface, which is why it is pinned rather than left to review.
+    for (const { id, source } of sources) {
+      if (source.kind !== "icecast-status") continue;
+      expect(source.mount, `station ${id} mount is not an absolute path`).toMatch(/^\//);
     }
   });
 

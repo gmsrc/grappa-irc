@@ -4,16 +4,21 @@ import type { RadioStation } from "../lib/radioStations";
 
 // #1698 — the `unsupported` arm, which needs its own file.
 //
-// `songsUrl` is nullable because publishing a now-playing feed is a provider
-// CAPABILITY, and the type therefore FORCES `nowPlaying()` to answer something
-// for a station that has none. Answering `idle` would be a lie — a station IS
-// tuned — so the arm exists, and it must be tested.
+// `nowPlayingSource` is nullable because publishing a now-playing feed is a
+// provider CAPABILITY, and the type therefore FORCES `nowPlaying()` to answer
+// something for a station that has none. Answering `idle` would be a lie — a
+// station IS tuned — so the arm exists, and it must be tested.
 //
-// It cannot be tested from `nowPlaying.test.ts`. `tunedStation()` derives the
-// station by matching the playing href against RADIO_STATIONS, so only a table
-// row can be tuned, and all fourteen rows carry a feed today. The arm is
-// therefore unreachable in production RIGHT NOW and reachable the moment a row
-// from another provider lands — which is exactly the edit this file protects.
+// #1835 — WHAT NULL STILL MEANS, now that it means less. The field used to be
+// `songsUrl`, so null said BOTH "no feed" and "not a shape we can read", and
+// Kohina was filed under it while its icecast published a title all along. With
+// one reader per vendor, null is only the first of those. This arm is therefore
+// narrower and more honest than it was, and it still has to exist:
+// rockantenne-metal publishes nothing at all.
+//
+// Mocking rather than reaching for that real row: a test bound to whichever
+// station happens to be feedless today goes green-and-vacuous the day someone
+// finds it a feed, which is exactly the edit this file protects against.
 //
 // Mocking `../lib/radio` rather than adding a feedless row to the real table:
 // production must not gain a fixture to make a test reachable (CLAUDE.md —
@@ -34,7 +39,7 @@ vi.mock("../lib/radio", () => {
     description: "A station from a provider that publishes no track feed.",
     streamUrl: "https://stream.example.org/feedless",
     logoUrl: "https://example.org/logo.png",
-    songsUrl: null,
+    nowPlayingSource: null,
   };
   return { tunedStation: (): RadioStation | null => feedless };
 });
