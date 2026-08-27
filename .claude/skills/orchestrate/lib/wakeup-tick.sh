@@ -155,6 +155,21 @@ spinner_timer() {
     | grep -oE '… \([^·)]*' | tail -1
 }
 
+# Hash one line, portably. The orchestrator host (Pi, Linux) ships `md5sum`;
+# the worker host (voyager, macOS/BSD) ships `md5`. `cksum` is the POSIX
+# floor and exists on both. Only used for USER-TYPED dedup, so a weak hash
+# is fine — what is NOT fine is the command being absent, because the caller
+# then gets an empty string and the dedup guard silently never fires.
+hash_line() {
+  if command -v md5sum >/dev/null 2>&1; then
+    printf '%s' "$1" | md5sum | cut -d' ' -f1
+  elif command -v md5 >/dev/null 2>&1; then
+    printf '%s' "$1" | md5
+  else
+    printf '%s' "$1" | cksum | cut -d' ' -f1
+  fi
+}
+
 # A SECOND LIVENESS WITNESS, because the spinner timer is not always one.
 #
 # MEASURED on w1 (%16) 2026-08-25 14:54Z, not deduced. That pane renders
@@ -246,7 +261,12 @@ last_user_line=$(echo "$out" | grep -E '^❯ .+' | tail -1 | sed 's/^❯ //')
 user_hash=""
 user_typed_event=""
 if [ -n "$last_user_line" ]; then
-  user_hash=$(echo -n "$last_user_line" | md5)
+  # Portable hash: the Pi (Linux) has md5sum, voyager (macOS/BSD) has md5.
+  # Hardcoding `md5` made this silently no-op on the Pi — user_hash stayed
+  # empty, so the `-n "$prev_user_hash"` guard was never true and USER-TYPED
+  # NEVER fired. The daemon forks with 2>&1 >/dev/null, so the
+  # `md5: command not found` was discarded at every tick for days.
+  user_hash=$(hash_line "$last_user_line")
   if [ "$user_hash" != "$prev_user_hash" ] && [ -n "$prev_user_hash" ]; then
     user_typed_event="USER-TYPED ctx=${ctx}%"
   fi
