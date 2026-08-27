@@ -42612,3 +42612,121 @@ bytes an operator hears is a codec decision with its own trade — #1744's failu
 surfacing was designed around this row, and aac carries no in-band Vorbis
 comments — and it belongs to that issue. A slice that widens a CSP should not
 also silently move the audio.
+<!-- entry #1836 -->
+
+---
+
+## 2026-08-27 — #1836: a station declares its codec and bitrate, and the picker prices the row
+
+`RadioStation` said nothing about how heavy a row is to listen to. Fine while
+every station was a ~128k SomaFM MP3; not fine the moment a 1000+ kbps FLAC is
+offered beside one, because on a metered connection those are different
+propositions and the picker gave the listener no way to tell them apart before
+pressing play. vjt's ruling: the FLAC rows get a `[hi-fi]` badge. Two DECLARED
+fields (`codec`, `bitrate`), the format rendered on every picker row, and the
+badge derived from the codec.
+
+### Declared, not sniffed — and the badge ships BEFORE the rows it marks
+
+The values sit next to `streamUrl` for the reason that file's header already
+gives for every URL in it: the table is CURATED and what a row claims stays our
+choice. Discovering the codec at render would mean opening the audio connection
+before the listener asked for it, on every row — the exact opposite of what the
+picker does today, which is draw from a constant and await nothing.
+
+The badge is a PRECONDITION for adding the FLAC stations, not a follow-up: it is
+what makes them safe to offer. So `flac` is in the codec union with no row using
+it, and the slice stands alone. The consequence for testing is stated where it
+bites: the real table cannot demonstrate a lossless row, so a test written
+against it could only assert that nothing draws the badge — which passes just as
+happily against a component that cannot draw it at all. `railRadioHiFiBadge.test.tsx`
+mocks the table with real rows whose format is overridden, and says so.
+
+### The codec is read off the BYTES, and that is measured rather than fastidious
+
+`bun run check:radio` gained three axes (STREAM, CODEC, BITRATE). The obvious
+design reads the response headers, which is what the issue proposed. Measured
+2026-08-27, it cannot work: kohina's Ogg VORBIS answers `Content-Type: audio/ogg`
+and radioparadise's Ogg FLAC answers `application/ogg`. Both mean "an Ogg
+container" and neither names a codec — so a header check is green in exactly the
+lossy-vs-lossless comparison the `[hi-fi]` badge exists to make. The first bytes
+separate them inside 32: `OggS` then `\x01vorbis` at byte 28, or `\x7fFLAC` at
+byte 29.
+
+Reading them needs an ABORTED get. This was the last hand-measured claim in the
+table and it stayed hand-measured because a stream cannot be HEADed — icecast
+answers a GET with a body that never ends, so HEAD returns an empty reply (curl
+exit 52). `probeStream` cancels the reader once it holds a kilobyte, so the probe
+closes the socket itself rather than waiting on a timeout.
+
+### The row that proved the probe: `reggae` is 160, not the 128 its mount spells
+
+The FIRST run against the real table reddened exactly one row.
+`ice.somafm.com/reggae-128-mp3` answers `icy-br: 160`, and the payload agrees
+independently of the server's say-so: the first frame header reads `ff fb a0 04`
+— MPEG1 Layer III bitrate index 10 = 160 kbps — where every sibling reads
+`ff fb 92 ..` = index 9 = 128. Its `icy-name` also breaks the house style
+(`SomaFM Reggae: Stuff`), so the mount was very likely rebuilt at a higher rate
+and kept its old path.
+
+**What that killed.** This work first carried an OFFLINE test asserting that a
+`<id>-<kbps>-<codec>` mount agrees with the declared bitrate — attractive
+because it needs no network and covers twenty rows, and because it looks like
+the provider writing its own claim down. It is false, and worse than false: to
+stay green it would have forced 128 into the table, i.e. a test dictating a
+falsehood to the data. It is deleted rather than scoped to nineteen rows, and
+the codec half went with it — a naming convention that lies about one field of
+the mount earns no trust about the other, and the probe reads BOTH off the
+payload, which is the authority the name only imitates.
+
+**The general rule this instance belongs to:** a string that a vendor puts in a
+URL is a LABEL, not a declaration. The declaration is what the server sends at
+listen time. Same shape as #1696's logo extensions, which also only LOOKED like
+a convention.
+
+### Both directions are failures, and there are three upstream states
+
+BITRATE compares in both directions. A number invented over a silent provider is
+#1696's defect in a new field; a number dropped over a provider that states one
+draws no cost for a station that has one. And `icy-br` is a free string —
+`Number("")` is 0, `parseInt("128kbps")` is 128 — so `parseIcyBitrate` has a
+third state (`unreadable`) and reports it rather than coercing it. Collapsing
+"nobody said" and "somebody said something unparseable" would make the table
+green against a server saying something no one can read.
+
+`bitrate: null` draws the codec ALONE in the picker: not "0k", not "unknown".
+Measured: SomaFM and Rock Antenne send `icy-br`, kohina's icecast sends none.
+
+### Totality, twice, and no name lists
+
+`RADIO_CODECS` is the source and `RadioCodec` is derived from it, because the
+probe has to WALK every codec to identify one and a hand-written union would
+have needed a hand-written array beside it — two spellings of the set a closed
+set exists to have one of. `isLossless` and the byte signatures are both
+`Record`s over that union, so a new codec is a compile error until somebody both
+classifies it and supplies the bytes that identify it. A codec with no signature
+would be permanently unidentifiable, and every row declaring it would go red
+with no way to tell that from a genuinely wrong claim.
+
+Nothing consults a station NAME. Keying "this row is lossless" on a list of
+stations is right for exactly the rows somebody remembered and silently wrong
+for the next one added.
+
+### Scope held
+
+The badge is on the PICKER only. That is the DECISION surface — the issue is
+that the listener cannot tell the rows apart BEFORE pressing play, and after
+pressing play the cost is already being paid. The chrome band is untouched: its
+one spare line already carries three tenants (genres, track, playback failure).
+The format shares the genres' line rather than taking a third one, the trade
+#1698 made for the same reason — #500 bought this rail's vertical budget and a
+row a third taller charges part of it back on all 22.
+
+No FLAC stations were added. That is the follow-on this precondition exists for.
+
+### Provenance
+
+vjt's ruling reached this work RELAYED in the issue body by the ircbot, not read
+first-hand on IRC. The comment author field reads `vjt`, but every agent here
+comments with the same token, so the field is not independent evidence of
+authorship.
