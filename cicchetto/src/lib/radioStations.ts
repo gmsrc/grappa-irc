@@ -57,10 +57,15 @@
 // reachability and agreement with the catalogue, and it is out of CI
 // deliberately, for the reason its own header gives.
 //
-// ⚠️ The STREAM half of that claim is still hand-measured and stays that way
-// here: `HEAD` on `ice.somafm.com` returns an empty reply (curl exit 52),
-// because icecast answers a GET with an endless body — proving a stream needs a
-// ranged-or-aborted fetch, a different mechanism from the logo probe.
+// ⚠️ The STREAM half of that claim used to be hand-measured and is not any
+// more (#1836). It stayed out because `HEAD` on `ice.somafm.com` returns an
+// empty reply (curl exit 52) — icecast answers a GET with an endless body, so a
+// stream needs an ABORTED fetch, a different mechanism from the logo probe.
+// That mechanism is now written down: `check:radio` opens each stream, reads
+// the first bytes it sends and hangs up. Two claims ride on it — `codec` and
+// `bitrate` below — and the argument for making them executable is #1696's own:
+// a baked claim about external state that nothing can check reads identically
+// whether it is true or false.
 //
 // The list is CURATED, not user-editable. A user-editable list is user state
 // and would want `lib/displayPrefs.ts` treatment (server-backed + synced,
@@ -104,6 +109,52 @@ export type NowPlayingSource =
       every mount the server carries. */
   | { readonly kind: "icecast-status"; readonly url: string; readonly mount: string };
 
+/** #1836 — every codec this table is allowed to declare.
+ *
+ * A CLOSED SET and not a free string, for the reason CLAUDE.md gives for every
+ * closed set: a typo in a free string is a row that renders "mp4" forever and
+ * fails nowhere. The members are the ones the table actually serves today
+ * (`mp3`, `vorbis`) plus `flac`, which is what the `[hi-fi]` badge exists FOR —
+ * the badge is a PRECONDITION for the FLAC stations rather than a follow-up, so
+ * the type can say lossless before any row does.
+ *
+ * Deliberately NOT a superset of what an ircd-shaped listener might one day
+ * meet: `aac` and `opus` are real and no row streams them, and a member nothing
+ * exercises is a signature in `check-radio-logos-core.ts` that no measurement
+ * stands behind. They go in with the first row that needs one, alongside the
+ * bytes measured off that row's stream.
+ *
+ * The LIST is the source and the union is derived from it, not the other way
+ * round: `check-radio-logos-core.ts` has to walk every codec to identify one
+ * off a stream's bytes, and a hand-written union would have forced a second
+ * hand-written array beside it — two spellings of one closed set, free to
+ * drift, which is the thing a closed set exists to prevent. */
+export const RADIO_CODECS = ["mp3", "vorbis", "flac"] as const;
+
+export type RadioCodec = (typeof RADIO_CODECS)[number];
+
+/** Whether a codec keeps every sample it was handed.
+ *
+ * A RECORD and not a `switch` or an "is it in this array" test: `Record<
+ * RadioCodec, …>` makes a new member of the union above a COMPILE error until
+ * somebody classifies it, which is the only version of this that cannot drift.
+ * A missing arm would otherwise default to lossy and the next lossless codec
+ * would ship silently un-badged.
+ *
+ * This is also the ONLY thing that decides a badge. Keying it on a list of
+ * station names — the obvious shortcut while FLAC means "the radioparadise
+ * rows" — is right for exactly the rows somebody remembered and silently wrong
+ * for the next one added. */
+const CODEC_IS_LOSSLESS: Record<RadioCodec, boolean> = {
+  mp3: false,
+  vorbis: false,
+  flac: true,
+};
+
+export function isLossless(codec: RadioCodec): boolean {
+  return CODEC_IS_LOSSLESS[codec];
+}
+
 /** One tunable station. All URLs must be https — the CSP tokens that admit
     them (`media-src https:`, `img-src https:`) are scheme-scoped, and an http
     stream on an https page is refused as mixed content anyway. */
@@ -117,6 +168,32 @@ export type RadioStation = {
   readonly description: string;
   /** The endless audio endpoint handed to `playAudio`. */
   readonly streamUrl: string;
+  /** #1836 — what that endpoint serves, DECLARED.
+      Beside `streamUrl` rather than discovered at render for the reason this
+      file's header already argues for every URL here: it is a curated table
+      and what a row claims stays OUR choice. Sniffing the codec in the picker
+      would mean opening the audio connection before the listener asked for it,
+      on every row — the exact opposite of what the picker does today, which is
+      draw from a constant and await nothing.
+      Checked rather than trusted, at CHECK time: `bun run check:radio` reads
+      the first bytes each stream sends and reddens when a row's claim stops
+      being true. The bytes and not the content type, measured 2026-08-27,
+      because both Ogg codecs answer with an Ogg content type and the one
+      comparison the `[hi-fi]` badge rests on is vorbis vs flac. */
+  readonly codec: RadioCodec;
+  /** #1836 — kbps, or `null` where the provider declares none.
+      NULLABLE for the reason `nowPlayingSource` gives above and `logoUrl`
+      gives below (that field was `songsUrl` when this was written; #1835
+      renamed it and the argument is unchanged),
+      and here it is the whole point rather than an accommodation: a bitrate is
+      something the provider either states or does not, and a plausible number
+      invented to fill the column would render as a fact. That is precisely the
+      defect #1696 was filed about, one field over. A null draws NO number —
+      not "0k", not "unknown".
+      Measured 2026-08-27 and the reason the arm is not hypothetical: SomaFM
+      and Rock Antenne both send `icy-br: 128`; kohina's icecast sends
+      `icy-name` and `icy-genre` and no `icy-br` at all. */
+  readonly bitrate: number | null;
   /** #1704 — the station's own artwork, or `null` when it publishes none.
       NULLABLE since Kohina, and the reasoning is the one `nowPlayingSource`
       gives below rather than a second mechanism: a logo is a thing most stations
@@ -157,6 +234,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["ambient", "electronic"],
     description: "A nicely chilled plate of ambient/downtempo beats and grooves.",
     streamUrl: "https://ice.somafm.com/groovesalad-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/groovesalad120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/groovesalad.json" },
   },
@@ -167,6 +246,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description:
       "Served best chilled, safe with most medications. Atmospheric textures with minimal beats.",
     streamUrl: "https://ice.somafm.com/dronezone-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/dronezone120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/dronezone.json" },
   },
@@ -176,6 +257,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["electronic"],
     description: "Tune in, turn on, space out. Spaced-out ambient and mid-tempo electronica.",
     streamUrl: "https://ice.somafm.com/spacestation-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/spacestation120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/spacestation.json" },
   },
@@ -185,6 +268,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["electronic"],
     description: "Sensuous and mellow female vocals, many with an electronic influence.",
     streamUrl: "https://ice.somafm.com/lush-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/lush120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/lush.json" },
   },
@@ -194,6 +279,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["alternative", "rock"],
     description: "New and classic favorite indie pop tracks.",
     streamUrl: "https://ice.somafm.com/indiepop-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/indiepop120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/indiepop.json" },
   },
@@ -203,6 +290,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["alternative", "electronic"],
     description: "Early 80s UK Synthpop and a bit of New Wave.",
     streamUrl: "https://ice.somafm.com/u80s-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/u80s120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/u80s.json" },
   },
@@ -213,6 +302,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description:
       "The soundtrack for your stylish, mysterious, dangerous life. For Spies and PIs too!",
     streamUrl: "https://ice.somafm.com/secretagent-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/secretagent120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/secretagent.json" },
   },
@@ -222,6 +313,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["electronic", "specials"],
     description: "Music for Hacking. The DEF CON Year-Round Channel.",
     streamUrl: "https://ice.somafm.com/defcon-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/defcon120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/defcon.json" },
   },
@@ -231,6 +324,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["folk", "alternative"],
     description: "Indie Folk, Alt-folk and the occasional folk classics. ",
     streamUrl: "https://ice.somafm.com/folkfwd-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/folkfwd120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/folkfwd.json" },
   },
@@ -240,6 +335,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["americana"],
     description: "Americana Roots music for Cowhands, Cowpokes and Cowtippers",
     streamUrl: "https://ice.somafm.com/bootliquor-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/bootliquor120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/bootliquor.json" },
   },
@@ -249,15 +346,33 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["bossanova", "world"],
     description: "Silky-smooth, laid-back Brazilian-style rhythms of Bossa Nova, Samba and beyond",
     streamUrl: "https://ice.somafm.com/bossa-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/bossa120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/bossa.json" },
   },
+  // #1836 — 🔴 160, NOT the 128 its own mount name spells, and this is the row
+  // that proved the check-time probe was worth building. The first run of
+  // `bun run check:radio` after the two fields landed reddened exactly this one:
+  // `ice.somafm.com/reggae-128-mp3` answers `icy-br: 160`, and the payload
+  // agrees independently of the server's say-so — the first frame header reads
+  // `ff fb a0 04`, MPEG1 Layer III bitrate index 10 = 160 kbps, where every
+  // sibling row reads `ff fb 92 ..` = index 9 = 128. `icy-name` differs from the
+  // house style too (`SomaFM Reggae: Stuff`), so the mount was very likely
+  // rebuilt at a higher rate and kept its old path.
+  //
+  // DO NOT "correct" this to 128 to match the URL. The mount name is a legacy
+  // label, the bytes are the fact, and an offline test asserting the two agree
+  // was written for this table and then deleted for exactly this row — see
+  // `radioStations.test.ts`.
   {
     id: "reggae",
     title: "Heavyweight Reggae",
     genres: ["reggae"],
     description: "Reggae, Ska, Rocksteady classic and deep tracks.",
     streamUrl: "https://ice.somafm.com/reggae-128-mp3",
+    codec: "mp3",
+    bitrate: 160,
     logoUrl: "https://api.somafm.com/logos/120/reggae120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/reggae.json" },
   },
@@ -267,6 +382,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["jazz"],
     description: "Transcending the world of jazz with eclectic, avant-garde takes on tradition.",
     streamUrl: "https://ice.somafm.com/sonicuniverse-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/sonicuniverse120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/sonicuniverse.json" },
   },
@@ -276,6 +393,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["ambient", "electronic"],
     description: "Celebrating NASA and Space Explorers everywhere.",
     streamUrl: "https://ice.somafm.com/missioncontrol-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/missioncontrol120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/missioncontrol.json" },
   },
@@ -299,6 +418,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description:
       "From black to doom, prog to sludge, thrash to post, stoner to crossover, punk to industrial.",
     streamUrl: "https://ice.somafm.com/metal-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/metal120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/metal.json" },
   },
@@ -308,6 +429,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["70s", "rock"],
     description: "Mellow album rock from the Seventies. Yacht not required.",
     streamUrl: "https://ice.somafm.com/seventies-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/seventies120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/seventies.json" },
   },
@@ -317,6 +440,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["alternative"],
     description: "Electropop and indie dance rock with sparkle and pop.",
     streamUrl: "https://ice.somafm.com/poptron-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/poptron120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/poptron.json" },
   },
@@ -326,6 +451,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["eclectic"],
     description: "Just covers. Songs you know by artists you don't. We've got you covered.",
     streamUrl: "https://ice.somafm.com/covers-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/covers120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/covers.json" },
   },
@@ -335,6 +462,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["eclectic"],
     description: "From the Black Rock Desert playa to the world, year round!",
     streamUrl: "https://ice.somafm.com/brfm-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/brfm120.jpg",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/brfm.json" },
   },
@@ -344,6 +473,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["ambient", "industrial"],
     description: "Where every day is Halloween: dark industrial/ambient music for tortured souls.",
     streamUrl: "https://ice.somafm.com/doomed-128-mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://api.somafm.com/logos/120/doomed120.png",
     nowPlayingSource: { kind: "somafm", url: "https://api.somafm.com/songs/doomed.json" },
   },
@@ -388,6 +519,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     genres: ["metal", "rock"],
     description: "Heavy metal around the clock, from Bavaria's rock station.",
     streamUrl: "https://stream.rockantenne.de/heavy-metal/stream/mp3",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl:
       "https://www.rockantenne.de/media/cache/3/version/597/streamlogo_heavymetal_ra-v1.jpg/f1b996498456cb64.jpg",
     nowPlayingSource: null,
@@ -467,6 +600,8 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description:
       "Hand picked chip tunes from classic computers and consoles. SID, Amiga, Atari ST, Arcade, PC, and more!",
     streamUrl: "https://kohina.brona.dk/icecast/stream.ogg",
+    codec: "vorbis",
+    bitrate: null,
     logoUrl: null,
     // `mount` is the icecast-internal path, copied off the document's
     // `listenurl` (`http://localhost:8000/stream.ogg`) and NOT derived from

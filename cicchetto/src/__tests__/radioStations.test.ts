@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RADIO_STATIONS } from "../lib/radioStations";
+import { isLossless, RADIO_STATIONS } from "../lib/radioStations";
 
 // #682 — the curated station table. These are SHAPE invariants, and each one
 // exists because breaking it fails SILENTLY in production rather than loudly
@@ -150,6 +150,79 @@ describe("RADIO_STATIONS", () => {
       expect(source.mount, `station ${id} mount is not an absolute path`).toMatch(/^\//);
     }
   });
+
+  // #1836 — the FORMAT half of a row: what codec it serves and at what
+  // bitrate. Both DECLARED, for the reason the module header gives for every
+  // other field — this is a curated table and what a row claims stays ours —
+  // and both checkable, at CHECK time, by `bun run check:radio`. The rules
+  // below are the OFFLINE half: they hold on a laptop with no network, in CI,
+  // where the probe deliberately does not run.
+
+  it("declares a bitrate as a whole positive number of kbps, or nothing at all", () => {
+    // A zero, a negative or a fraction would all render — "0k", "-1k",
+    // "128.5k" — and none of them is a bitrate. The field is nullable
+    // precisely so that "we do not know" has a spelling that is not a number.
+    for (const s of RADIO_STATIONS) {
+      if (s.bitrate === null) continue;
+      expect(Number.isInteger(s.bitrate), `station ${s.id} bitrate is not a whole number`).toBe(
+        true,
+      );
+      expect(s.bitrate, `station ${s.id} bitrate`).toBeGreaterThan(0);
+    }
+  });
+
+  it("declares a bitrate for at least one station", () => {
+    // The positive control for the rule above, the same one `logoUrl` and
+    // `nowPlayingSource` carry: that rule SKIPS a null, so a table where the
+    // field had gone uniformly null would report green having checked nothing.
+    const priced = RADIO_STATIONS.filter((s) => s.bitrate !== null);
+    expect(priced.length).toBeGreaterThan(0);
+  });
+
+  it("leaves at least one station's bitrate null — the arm that draws no number", () => {
+    // The other direction, and it is a VACUITY guard rather than a rule about
+    // the table, the same shape `checkRadioLogos.test.ts` gives the logo-less
+    // arm: with every row priced, the "provider states nothing" path is never
+    // exercised by real data. If every provider in the table legitimately
+    // declares a bitrate one day, this is the line to DELETE, deliberately —
+    // not the one to edit around by inventing a plausible number for a row
+    // that has none, which is the defect #1696 was filed about.
+    const unpriced = RADIO_STATIONS.filter((s) => s.bitrate === null);
+    expect(unpriced.length).toBeGreaterThan(0);
+  });
+
+  it("decides hi-fi from the CODEC, so no station name is ever consulted", () => {
+    // The `[hi-fi]` badge (vjt's #1836 ruling) marks a row whose codec keeps
+    // every sample it was handed. Keying that on a list of station names would
+    // be right for exactly the rows somebody remembered to list and silently
+    // wrong for the next one added, which is why the classification lives on
+    // the codec and this pins it.
+    expect(isLossless("flac")).toBe(true);
+    expect(isLossless("mp3")).toBe(false);
+    expect(isLossless("vorbis")).toBe(false);
+  });
+
+  // 🔴 WHAT IS DELIBERATELY NOT HERE, and it was written first and then
+  // MEASURED AWAY. Twenty rows stream from a mount named `<id>-<kbps>-<codec>`,
+  // so the obvious offline rule — and the one this file carried for an hour —
+  // is that `bitrate` must equal the number in the path. It looks like the
+  // provider writing its own claim down where a test can read it with no
+  // network.
+  //
+  // It is false. The FIRST run of `bun run check:radio` against the real table
+  // reddened exactly one row: `ice.somafm.com/reggae-128-mp3` answers
+  // `icy-br: 160`, and the frame header confirms it independently of the
+  // server's own say-so (byte 2 is `0xa0`, MPEG1 Layer III bitrate index 10 =
+  // 160 kbps, where every sibling reads `0x92` = index 9 = 128). The mount NAME
+  // is a legacy label, not a declaration.
+  //
+  // So the rule would have forced a wrong number into the table to stay green —
+  // a test dictating a falsehood to the data, which is worse than no test. It
+  // is gone rather than scoped to nineteen rows, and the codec half went with
+  // it: if the vendor's naming convention lies about one field of the mount
+  // there is no reason to trust it about the other, and `check:radio` reads
+  // BOTH off the payload, which is the authority the name only imitates.
+  // Recorded in DESIGN_NOTES 2026-08-27.
 
   // #1703 — the CURATION floor. The issue is not a shape bug: the table was
   // structurally perfect and offered no metal at all and exactly one row of

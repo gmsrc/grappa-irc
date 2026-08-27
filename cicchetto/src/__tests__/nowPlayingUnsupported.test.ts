@@ -38,6 +38,8 @@ vi.mock("../lib/radio", () => {
     genres: ["ambient"],
     description: "A station from a provider that publishes no track feed.",
     streamUrl: "https://stream.example.org/feedless",
+    codec: "mp3",
+    bitrate: 128,
     logoUrl: "https://example.org/logo.png",
     nowPlayingSource: null,
   };
