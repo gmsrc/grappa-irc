@@ -297,6 +297,17 @@ is DELETE-then-write, never append-only:
   worker to remove its worktree after merging. NEVER force-remove an UNmerged or DIRTY worktree — it belongs to a
   concurrent session's in-flight work (also the source of the "sibling stashed my changes" pitfall). Codified in
   CLAUDE.md Development Cycle too.
+  🔧 **`git branch -d` NON produce il falso rifiuto che temevo su voyager (w2, misurato 27-08, correggendo un mio
+  paletto).** Avevo messo nei brief *"se `-d` rifiuta per unmerged, FERMATI"* per paura che il main LOCALE stantio
+  (behind 374) lo facesse rifiutare su un ramo in realtà atterrato. **Falso**: `-d` accetta il merge nell'**UPSTREAM**
+  del ramo, non solo in HEAD ⇒ su `w2-1835` ha dato **rc=0** stampando *"deleting branch … that has been merged to
+  'refs/remotes/origin/main', but not yet merged to HEAD"*. **Il paletto vale solo per un ramo SENZA upstream o che ne
+  traccia un altro.** 🥇 *E lei ha dichiarato il limite da sola — un solo caso misurato, la variante senza upstream
+  NON provata: è così che si consegna una correzione.*
+  🔧 **Il criterio "i log di gate sono stati LETTI?" può essere IGNOTO e la potatura restare lecita lo stesso**: la
+  regola serve a non distruggere artefatti mai letti, quindi **se i log non stanno DENTRO la worktree** (misurato:
+  quelli di `w2-1835` erano 13 file in `/tmp`, che la rimozione non tocca) **la rimozione non può perderli** e la
+  decisione torna all'orchestratrice. **Misura DOVE stanno prima di rinunciare per un ignoto.**
 - **`status:*` label discipline (WIP board — grappa-irc #258, mandatory 2026-07-15; cut to TWO
   labels 2026-08-20 by #1632).** There are **two** mutually-exclusive grappa-irc labels —
   `status:queued` (accepted, in build queue, not started) and `status:cooking` (worker STILL ON IT —
@@ -1231,6 +1242,20 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
    pushata. *avanti* = `git log origin/main..main` · **INDIETRO = `git log main..origin/main`** ·
    *aggiornata* = **entrambi vuoti**. ⚠️ Sta in TUTTI i brief vecchi: correggila quando li riusi.
 10. 🥇 **Un numero di RIGA e' stantio appena main si muove** ⇒ **cita il NOME del tipo/assert, mai la riga.**
+11. 🥇🥇 **UNA MIA RULING COSTRUITA SULL'EVIDENZA DI UNA WORKER VA SPACCATA IN CLAUSOLE, E PER OGNUNA
+    SI CHIEDE COSA LA MISURA *CONDANNA* E COSA *ASSOLVE* (27-08, #1836).** Avevo promosso *"il frame
+    header vince, `null` solo se non misurabile"* generalizzando dalla misura di w1 sulla reggae
+    (URL 128, frame **160**, `icy-br` **160**). **Quella misura condanna la URL e ASSOLVE `icy-br`**
+    — che era d'accordo coi byte e che nessuno aveva mai misurato contro. Avevo esteso *"e'
+    un'etichetta"* da UN portatore a TUTTI. Secondo difetto, aritmetico: **lo STREAMINFO di FLAC non
+    ha un campo bitrate** (FLAC e' a rate variabile per costruzione) ⇒ la ruling alla lettera metteva
+    `null` **proprio sulle righe per cui il badge esiste**, e derivarlo dal PCM lo **sovrastima**.
+    🥇 **Presa o rifiutata IN BLOCCO si perdeva qualcosa in entrambi i versi**: una clausola ha
+    beccato un bug della worker stessa, l'altra era **incostruibile**. **Chiedi la spaccatura in
+    clausole nei brief**, e accetta che l'esito sia *meta' presa, meta' rifiutata*.
+12. 🪞 **"E' un'etichetta" e' una proprieta' del SINGOLO PORTATORE, non della classe.** Un vendor che
+    mente in una URL non dice nulla su cosa dichiara il suo header, e viceversa. **Prima di
+    generalizzare un'accusa a un secondo portatore, misura QUEL portatore.**
 
 ## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
 - 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
@@ -1490,6 +1515,12 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
 - 🔧 **LA `conclusion` DI UNA CHECK-RUN IN CORSO VALE DUE COSE DIVERSE SU DUE API:** `null` su
   `commits/<sha>/check-runs`, **stringa vuota** su `gh pr checks --json`/`statusCheckRollup`.
   ⇒ **Ennesima ragione per chiavare su `.status == "completed"`, MAI su `.conclusion`.**
+  🔴 **E QUANDO PROPRIO LA GUARDI, `conclusion != "success"` E' UN ROSSO FALSO: conta `skipped`
+  come fallimento** (misurato 27-08 — un mio monitor ha dichiarato rossa una PR che non lo era, e
+  dispatchare un altro workflow sulla SHA di una PR ne aggiunge i check-run `skipped` ALLA PR, 4 → 15
+  su #1841). **L'insieme dei rossi veri e' `failure|cancelled|timed_out|action_required`.**
+  🥇 **Meglio ancora: `lib/ci-watch.sh` chiava sul CAMBIAMENTO, non su un conteggio** ⇒ niente soglia
+  da tarare e niente falsi rossi. **E una soglia, quando serve, e' un PAVIMENTO, mai un'uguaglianza.**
 - 🔴 **`git show --name-only <sha>` GUARDA UN COMMIT, NON UN RANGE.** Usato per misurare la
   sovrapposizione fra due rami mi ha risposto *"nessun file comune"* su due rami che condividevano
   `docs/DESIGN_NOTES.md`, cioe' **proprio il file con `merge=union`**. Forma giusta:
@@ -1567,3 +1598,27 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   nello stesso turno, lasciando solo il residuo portante (la SHA nuova, un flake da tracciare).**
   E **le lezioni permanenti si migrano QUI, subito** — se restano nell'handoff muoiono alla prima
   potatura seria.
+- 🔴🔴 **UN `gh issue view --json body` NON E' AVER LETTO LA ISSUE: LE RULING STANNO NEI COMMENTI**
+  (orch, 2026-08-26, #1827). Ho dispatchato dopo aver letto **body + timeline delle label** e ho
+  ordinato a w2 di *"misurare l'esposizione ARIA, la scelta puo' dissolversi"*. **La scelta era gia'
+  fatta da 21 minuti** — commento `5430865250`, ruling **opzione 3** — e la misura ordinata poteva
+  solo costruire il caso per l'opzione **1, gia' rifiutata**. Costo: un bench gia' scritto, buttato.
+  🥇 **La sequenza delle date lo diceva e ho letto solo meta': la `status:queued` e' arrivata 21 min
+  DOPO la ruling** ⇒ *"prima decido, poi accodo"*. **Leggi SEMPRE `gh issue view N --comments`, e
+  confronta l'ora della ruling con l'ora della label prima di scrivere un brief.**
+  ⚠️ E la provenienza va dichiarata nel brief: quel commento diceva *"Posted by vjt-claude on his
+  behalf"* ⇒ **RELAYATA, non vista** — leggere IRC mi e' vietato.
+- 🔴🔴 **`<verificatore> || echo "PULITO"` TRASFORMA UN VERIFICATORE ROTTO IN UN VERDE — e il
+  verde e' indistinguibile da quello vero (w2, 2026-08-26, sulla scansione closing-keyword).**
+  Il pattern briefato conteneva **`fix(|es|ed)`**, cioe' una **sotto-espressione ALTERNATIVA VUOTA**:
+  il tool e' morto con errore, il ramo `||` ha stampato *"NESSUNA — pulito"*, e **il controllo non
+  aveva mai girato.** w2 se n'e' accorta **solo** perche' ha notato la riga di errore stampata sopra.
+  🥇 **La forma che regge, e va chiesta nei brief per QUALUNQUE verificatore:** un **CONTROLLO
+  POSITIVO accanto** — un input che DEVE matchare — e **nessun verdetto stampato se il positivo
+  fallisce** (`exit` prima dei numeri, mai un `|| echo`). Piu' un **controllo NEGATIVO** se costa
+  una riga.
+  ⚠️ **Vale per ME per prima:** la mia scansione su #1829 finiva in `|| echo "NONE — body safe"`,
+  **la stessa identica forma**. Rifatta su #1830 col positivo (`this does not fix #1767` +
+  `Closes #99` ⇒ rc=0, verificatore VIVO) e col negativo (`addresses issue 1827` ⇒ rc=1).
+  🥇 *Ennesima faccia dello ZERO FALSO E PLAUSIBILE, e la piu' insidiosa: non un comando che
+  guarda la cosa sbagliata, ma un comando che **non guarda affatto** e lo dice passando.*
