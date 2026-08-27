@@ -42932,3 +42932,93 @@ client becoming the player, and that is deliberately not this work.
 The reachability of this row depends on a third party with no fallback, and
 that is written into the row rather than discovered later. Every other station
 here streams from its own provider's infrastructure.
+<!-- entry #1839 -->
+
+---
+
+## 2026-08-27 — #1839: a copy control whose failure is loud, and the "same shape" argument that did not survive
+
+The media viewer's `.txt`/`.md` arm (#1764) shows a source and gave no way to
+take it — a fight on a phone, where the pane owns the drag as a scroll and a
+selection drag competes with it. The header grew a `copy`. Three things in it
+are decisions rather than mechanics.
+
+### The clipboard payload is the RESOURCE, never the pane
+
+The pane is TWO `<pre>` elements — a gutter and the source — so anything read
+off the DOM carries the line numbers. The value copied is
+`loaded().lines.join("\n")`, the same array the source `<pre>` renders and the
+gutter NUMBERS, so screen and clipboard cannot disagree about what the file is.
+
+Measured, not argued: with the copy verb mutated to `textPane?.textContent`,
+the fixture `alpha/beta/gamma` reached the clipboard as
+`1\n2\n3alpha\nbeta\ngamma`. The fixture is deliberately digit-free, so the
+assertion is that the payload matches no `[0-9]` at all — a gutter leak of any
+shape fails it, not only the shape that was mutated.
+
+The resource is published UPWARD (`TextPane` → `MediaViewerDialog`) rather than
+re-derived in the header, for the same reason the pane numbers the array it
+renders: a second read is a second answer.
+
+### The clipboard failure is VISIBLE, and that reverses what the issue proposed
+
+`lib/clipboard.ts` throws when `navigator.clipboard` is `undefined` — the
+plain-http LAN deploy, since the API is `[SecureContext]`-only. Its header
+declares a split: `ShareSessionModal` keeps a silent catch because its artifact
+stays in a visible, selectable input, so the failure is self-correcting. The
+issue suggested the text viewer is "the same shape" and that silent-and-inert
+is arguably right here too.
+
+It is not the same shape, and the reason is the issue's own first paragraph.
+The self-correcting argument rests on "select it by hand" being available; this
+control exists PRECISELY because on a phone that is the fight. A silent failure
+would leave the operator holding the one affordance already known not to work,
+with nothing to tell them the tap did nothing. It is also the
+no-silent-swallow-at-boundaries rule, at a boundary.
+
+Counted rather than asserted: every `copyText` caller today surfaces the
+failure — `TotpSettings` and `PasskeySettings` inline, `messageMenu` as a toast
+— three of three. `ShareSessionModal` is not a fourth: it never routes through
+the helper, it calls `navigator.clipboard.writeText` directly. The silent
+posture on offer would have been the FIRST silent `copyText` caller, adopted on
+the arm with the weakest fallback.
+
+The channel is one status line under the header rather than a toast: the viewer
+sits at `z-index: 1101` over its own backdrop, and the toast surface's stacking
+against it was never measured — a failure message rendering behind the modal is
+the same silence, reached by a different route.
+
+### Truncation is stated where the COPY happens, not only where the reading does
+
+`TEXT_VIEW_MAX_BYTES` caps the fetch and the pane already banners a cut file.
+That banner is about what is on SCREEN; the copy is what LEAVES the modal, and
+a prefix of a config file pasted somewhere else carries no banner with it. The
+same status line therefore names the slice, with the cap read from the
+production constant so the sentence cannot drift from the cap.
+
+Nothing clears the line on a timer. A confirmation that evaporates is a
+truncation warning the reader can miss, and the state dies with the modal
+anyway: the keyed `<Show>` remounts the dialog per open.
+
+`truncated` is NOT stored in the copy outcome. It already lives on the fetched
+resource; a second copy would be a parallel structure to keep in step, and the
+resource cannot change under a mounted pane.
+
+### The gate on the button is stronger than the one asked for
+
+The issue asks for the control behind `isText`, since the header is shared
+chrome. It is gated on the RESOURCE being present instead, which additionally
+keeps it off a pane that is still fetching or that 404'd — where it would have
+copied an empty string and reported success.
+
+### What was NOT established
+
+No browser ran. The claims above are pinned in jsdom against a Response-shaped
+stub, and four mutants were run to show the assertions bite (DOM scrape,
+truncation unsaid, failure swallowed, button unconditional — each killed by
+exactly the tests written for it, 1/1/2/2 failures). What jsdom cannot answer:
+whether the status line is legible at the header's width on a phone, whether
+the tap target is comfortable, and whether a real `NotAllowedError` on iOS
+carries a message worth showing verbatim. The plain-http arm in particular is
+reasoned from the `[SecureContext]` contract and from `lib/clipboard.ts`, not
+observed on a LAN deploy.
