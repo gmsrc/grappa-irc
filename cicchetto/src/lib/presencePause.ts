@@ -61,6 +61,34 @@ import type { ScrollbackMessage } from "./api";
 import type { ChannelKey } from "./channelKey";
 import { createPresenceCooldown } from "./presenceCooldown";
 
+// 🔴 THE PAUSE IS OFF. Flip this back to `true` when #1847 lands.
+//
+// #1848, vjt's call on IRC 2026-08-27. #1680/#1769 are producing visible holes
+// in the log: a peer JOIN/PART/QUIT on a channel left unfocused never reaches
+// the scrollback, and only a hard refresh brings it back. The members map is
+// rebuilt on focus; the missing ROWS are gone for good. Correctness wins over
+// the event-rate saving until #1847 re-anchors the scrollback, and then this
+// line goes back to `true` — that is the whole revert.
+//
+// It gates the ARMING, at the one wiring site in `subscribe.ts` that reports
+// focus. Nothing else changes: the machinery below, `presenceCooldown.ts`, the
+// `{presence:_}` join param and the server's filter all stay. With no channel
+// ever blurred INTO a window, `pausedKeys` stays empty, so `shouldDrop` is
+// false by construction and `onPause` never fires — the dispatch-edge drop and
+// the `{presence:false}` re-join die together, from one place.
+//
+// 🔴 NOT a large cooldown. `setTimeout` takes a 32-bit signed delay, so
+// `Infinity` (or anything past 2^31-1) is clamped — measured on node 20, to
+// 1 ms — and fires almost immediately. "Never pause" written that way pauses
+// every channel the instant it blurs: the bug, maximally. The kill has to be a
+// branch that never arms the window, which is what this is.
+//
+// What it costs, stated not hidden: #1680's measurement was 21,917 of 26,588
+// rows in 15 minutes on a 7-network account being presence for windows nobody
+// reads. Expect the event rate and the main-thread cost back at the pre-#1680
+// baseline for as long as this reads `false`.
+export const PRESENCE_PAUSE_ENABLED = false;
+
 // The paused-channel drop set: a strict SUBSET of the presence kinds, chosen
 // by "has no consumer other than the members map". Kept as its own literal
 // rather than derived from `SUPPRESSED_PRESENCE_KINDS` because the two answer

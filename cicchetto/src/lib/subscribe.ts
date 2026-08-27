@@ -27,7 +27,7 @@ import { isOperatorActionEcho } from "./operatorActionEcho";
 import { isOwnPresenceEvent } from "./ownPresenceEvent";
 import { resolveCtcpReply, resolvePing } from "./pingCorrelation";
 import { PRESENCE_COOLDOWN_MS } from "./presenceCooldown";
-import { createPresencePause } from "./presencePause";
+import { createPresencePause, PRESENCE_PAUSE_ENABLED } from "./presencePause";
 import { shouldNotify } from "./pushTriggers";
 import { setEnsureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, queryWindowsByNetwork } from "./queryWindows";
@@ -211,6 +211,16 @@ moduleRoot(() => {
   // absorb. (Issue open question 1, answered this way and recorded as an
   // assumption rather than a measurement.)
   createEffect(() => {
+    // #1848 — the kill switch bites HERE, and only here. This is the only
+    // caller of `focus`, and `focus` is the only thing that arms a window
+    // (`presenceCooldown.blurred`), so returning before it is what "the pause
+    // is off" means: nothing is ever added to `pausedKeys`, so `shouldDrop`
+    // below is false by construction and `onPause` never re-joins with
+    // `{presence: false}`. Both cuts, one branch. See
+    // `PRESENCE_PAUSE_ENABLED` in `presencePause.ts` for the why and the
+    // revert. The guard sits BEFORE the signal read on purpose: with the
+    // switch off this effect runs once, tracks nothing and never wakes again.
+    if (!PRESENCE_PAUSE_ENABLED) return;
     const sel = selectedChannel();
     presencePause.focus(
       sel && sel.kind === "channel" ? channelKey(sel.networkSlug, sel.channelName) : null,
