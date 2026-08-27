@@ -8,6 +8,8 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { copyText } from "./lib/clipboard";
+import { errorMessage } from "./lib/friendlyApiError";
 import { closeMediaViewer, type MediaViewerState, mediaViewerState } from "./lib/mediaViewer";
 import { bindDismissGesture, type DismissDirections } from "./lib/mediaViewerGesture";
 import { createOverlayLock } from "./lib/overlayScrollLock";
@@ -22,7 +24,7 @@ import {
   toggleZoom,
 } from "./lib/pinchZoom";
 import { maybeEscapePwaClick } from "./lib/platform";
-import { fetchTextResource, TEXT_VIEW_MAX_BYTES } from "./lib/textResource";
+import { fetchTextResource, TEXT_VIEW_MAX_BYTES, type TextResource } from "./lib/textResource";
 
 // In-app media viewer modal — media-link cluster (2026-06-11).
 //
@@ -317,11 +319,18 @@ const TextPane: Component<{
   // top. Not a signal: the reader is a touchstart handler, and the element
   // identity never changes for the life of the mount.
   paneRef: (el: HTMLDivElement | undefined) => void;
+  // issue 1839 — the fetched resource itself, for the header's copy control.
+  // The RESOURCE and not the DOM: the pane is two <pre> elements, so anything
+  // scraped off it carries the gutter's line numbers. Published rather than
+  // re-fetched, and published from the same settled value the pane renders, so
+  // the clipboard and the screen cannot disagree about what the file is.
+  onSource: (source: TextResource | undefined) => void;
 }> = (props) => {
   const abort = new AbortController();
   onCleanup(() => {
     abort.abort();
     props.paneRef(undefined);
+    props.onSource(undefined);
   });
 
   const [source] = createResource(
@@ -344,6 +353,13 @@ const TextPane: Component<{
 
   const settled = (): ReturnType<typeof source> | undefined =>
     source.state === "ready" ? source() : undefined;
+
+  // Same `source.state` gate as the effect above, for the same reason: reading
+  // an errored resource rethrows. An effect and not a call from the render
+  // body — publishing during render would mutate a parent signal mid-commit.
+  createEffect(() => {
+    props.onSource(settled());
+  });
 
   const gutter = (count: number): string =>
     Array.from({ length: count }, (_, i) => String(i + 1)).join("\n");
@@ -392,6 +408,7 @@ const MediaViewerBody: Component<{
   state: MediaViewerState;
   onScale: (scale: number) => void;
   onTextPaneRef: (el: HTMLDivElement | undefined) => void;
+  onTextSource: (source: TextResource | undefined) => void;
 }> = (props) => {
   const [status, setStatus] = createSignal<MediaLoadStatus>("loading");
   // Transitions only leave "loading" (review fix): a transient
@@ -465,6 +482,7 @@ const MediaViewerBody: Component<{
                 onLoad={ready}
                 onError={failed}
                 paneRef={props.onTextPaneRef}
+                onSource={props.onTextSource}
               />
             </Match>
           </Switch>
@@ -475,6 +493,13 @@ const MediaViewerBody: Component<{
     </div>
   );
 };
+
+// issue 1839 — what the last copy attempt did. A closed set, not a string:
+// the three arms render three different sentences and nothing else may reach
+// the status line. `truncated` is deliberately NOT a member — it already lives
+// on the fetched resource, and a second copy of it here would be a parallel
+// structure to keep in step (CLAUDE.md: derive, don't duplicate).
+type CopyOutcome = { kind: "idle" } | { kind: "copied" } | { kind: "failed"; message: string };
 
 // #1438 — the modal is centered by a CSS `transform: translate(-50%, -50%)`,
 // and an inline transform REPLACES that declaration wholesale. The drag offset
@@ -517,6 +542,61 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
   // free under the one that can be measured: at fit the dismiss still received
   // 11 cancelable moves out of 11, exactly as it does under `none`.
   const isImage = props.state.kind === "image";
+
+  // issue 1839 — the copy control's two pieces of state. Both ARE rendered
+  // from (unlike `scale` and `textPane` above), so both are signals: the
+  // button exists only once there is a resource to take, and the status line
+  // says what the last attempt did.
+  const [textSource, setTextSource] = createSignal<TextResource | undefined>(undefined);
+  const [copyOutcome, setCopyOutcome] = createSignal<CopyOutcome>({ kind: "idle" });
+
+  // Gating on the RESOURCE and not on `isText` is strictly stronger than the
+  // issue asks: it also keeps the button off a pane that is still fetching or
+  // that 404'd, where it would copy nothing and report success.
+  const copySource = async (): Promise<void> => {
+    const loaded = textSource();
+    if (loaded === undefined) return;
+    try {
+      // `lines` is what the source <pre> renders, so the clipboard gets the
+      // file — the gutter is a SECOND <pre> built from the same array and is
+      // never part of this value. Reading the DOM instead is the bug this
+      // whole control is written around.
+      await copyText(loaded.lines.join("\n"));
+      setCopyOutcome({ kind: "copied" });
+    } catch (value) {
+      setCopyOutcome({ kind: "failed", message: errorMessage(value) });
+    }
+  };
+
+  // The ONE feedback channel, and it always speaks.
+  //
+  // A truncated copy hands over a PREFIX: `TEXT_VIEW_MAX_BYTES` caps the fetch,
+  // so a config file that arrived cut goes to the clipboard cut, and the reader
+  // has nothing on the pasteboard to tell them. The pane's own truncation
+  // banner is about what is on SCREEN; this is about what is in the CLIPBOARD,
+  // and only the second one leaves the modal.
+  //
+  // A FAILURE is not silent either, and that is a decision, not an
+  // inheritance. `copyText` throws when `navigator.clipboard` is undefined —
+  // the plain-http LAN deploy, which this project supports. `ShareSessionModal`
+  // swallows that because its artifact sits in a selectable input; the
+  // suggestion that this arm is the same shape does not survive the reason the
+  // button exists: on a phone the pane owns the drag as a scroll, so
+  // "select it by hand" is exactly the fight the control was added to end. All
+  // three `copyText` callers today surface the failure (two inline, one toast);
+  // silent-and-inert here would be the first that does not.
+  //
+  // No timer clears it. A confirmation that evaporates is a truncation warning
+  // the reader can miss, and the state dies with the modal anyway — the keyed
+  // <Show> remounts this component per open.
+  const copyStatus = (): string | undefined => {
+    const outcome = copyOutcome();
+    if (outcome.kind === "idle") return undefined;
+    if (outcome.kind === "failed") return outcome.message;
+    return textSource()?.truncated === true
+      ? `copied the first ${TEXT_VIEW_MAX_BYTES / 1024} KiB — the rest was never fetched; "open in browser" for all of it`
+      : "copied the source";
+  };
 
   const paint = (el: HTMLElement, dy: number): void => {
     el.style.transform = draggedTransform(dy);
@@ -578,17 +658,28 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
         }}
       >
         <div class="media-viewer-header">
-          <a
-            href={props.state.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="media-viewer-open-external"
-            onClick={(e) => {
-              maybeEscapePwaClick(e, props.state.href);
-            }}
-          >
-            open in browser
-          </a>
+          {/* The take-it-away verbs are grouped so the ✕ keeps the far edge
+              whether or not the copy control is there — with three flat
+              children `space-between` would push "open in browser" to the
+              middle on the text arm and nowhere else. */}
+          <div class="media-viewer-header-actions">
+            <Show when={textSource() !== undefined}>
+              <button type="button" class="media-viewer-copy" onClick={() => void copySource()}>
+                copy
+              </button>
+            </Show>
+            <a
+              href={props.state.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="media-viewer-open-external"
+              onClick={(e) => {
+                maybeEscapePwaClick(e, props.state.href);
+              }}
+            >
+              open in browser
+            </a>
+          </div>
           <button
             type="button"
             class="media-viewer-close"
@@ -598,6 +689,17 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
             ✕
           </button>
         </div>
+        {/* Inserted on the outcome rather than pre-mounted empty: an always-
+            present region would need `display: none` while idle not to reserve
+            a row, which takes it out of the accessibility tree anyway — so the
+            pre-mount buys nothing and costs a permanently-empty node. */}
+        <Show when={copyStatus()}>
+          {(message) => (
+            <p class="muted media-viewer-copy-status" role="status">
+              {message()}
+            </p>
+          )}
+        </Show>
         <MediaViewerBody
           state={props.state}
           onScale={(next) => {
@@ -606,6 +708,7 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
           onTextPaneRef={(el) => {
             textPane = el;
           }}
+          onTextSource={setTextSource}
         />
       </div>
     </>

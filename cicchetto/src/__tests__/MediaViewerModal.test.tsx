@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { closeMediaViewer, mediaViewerState, openMediaViewer } from "../lib/mediaViewer";
 import {
   __resetForTest,
@@ -37,6 +37,35 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 const IMAGE_URL = "https://grappa.example/uploads/abcdefghijklmnopqrstuvwxyz";
 const VIDEO_URL = "https://grappa.example/uploads/zyxwvutsrqponmlkjihgfedcba";
+const TEXT_URL = "https://grappa.example/uploads/abcdefghijklmnopqrstuvwxyz.txt";
+
+// Response-shaped stub, same reason as textResource.test.ts: the component
+// depends on `res.body.getReader()`, and the platform's own Response is not
+// what is under test here. Module-scoped because the #1764 pane suite and the
+// #1839 copy suite need the same fetch, and two copies of it could drift into
+// two different notions of what the viewer is looking at.
+const stubBody = (text: string): void => {
+  const chunk = new TextEncoder().encode(text);
+  vi.stubGlobal("fetch", () =>
+    Promise.resolve({
+      ok: true,
+      status: 206,
+      body: {
+        getReader: () => {
+          let sent = false;
+          return {
+            read: () => {
+              if (sent) return Promise.resolve({ done: true });
+              sent = true;
+              return Promise.resolve({ done: false, value: chunk });
+            },
+            cancel: () => Promise.resolve(),
+          };
+        },
+      },
+    }),
+  );
+};
 
 beforeEach(() => {
   closeMediaViewer();
@@ -550,34 +579,6 @@ describe("MediaViewerModal — native pan for the zoomed image (#1805)", () => {
 // truncation is VISIBLE, and that a scrolled pane does not lose its scroll to
 // the dismiss gesture.
 describe("MediaViewerModal — text source viewer (#1764)", () => {
-  const TEXT_URL = "https://grappa.example/uploads/abcdefghijklmnopqrstuvwxyz.txt";
-
-  // Response-shaped stub, same reason as textResource.test.ts: the component
-  // depends on `res.body.getReader()`, and the platform's own Response is not
-  // what is under test here.
-  const stubBody = (text: string): void => {
-    const chunk = new TextEncoder().encode(text);
-    vi.stubGlobal("fetch", () =>
-      Promise.resolve({
-        ok: true,
-        status: 206,
-        body: {
-          getReader: () => {
-            let sent = false;
-            return {
-              read: () => {
-                if (sent) return Promise.resolve({ done: true });
-                sent = true;
-                return Promise.resolve({ done: false, value: chunk });
-              },
-              cancel: () => Promise.resolve(),
-            };
-          },
-        },
-      }),
-    );
-  };
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -719,5 +720,132 @@ describe("MediaViewerModal — text source viewer (#1764)", () => {
     const { container } = render(() => <MediaViewerModal />);
     openMediaViewer(IMAGE_URL, "image");
     expect(container.querySelector(".media-viewer-modal--text")).toBeNull();
+  });
+});
+
+// issue 1839 — a copy control on the text arm's header. Selecting a long source
+// pane by hand is a fight on a phone (the pane owns the drag as a scroll), so
+// the button is the whole affordance; what is asserted here is the three ways
+// it can be shipped wrong and look right:
+//
+//   - copying the DOM instead of the resource. The pane is a gutter <pre> and a
+//     source <pre> side by side, so `textContent` off the pane carries the line
+//     NUMBERS. The fixtures below are deliberately digit-free, which makes a
+//     gutter leak provable rather than eyeballed.
+//   - copying a TRUNCATED view without saying so. `TEXT_VIEW_MAX_BYTES` caps
+//     the fetch, and a silent prefix of a config file is the failure worth
+//     designing against.
+//   - swallowing a clipboard failure. `navigator.clipboard` is
+//     `[SecureContext]`-only and undefined on the plain-http LAN deploys this
+//     project supports, which is not a hypothetical arm.
+describe("MediaViewerModal — copy the source (issue 1839)", () => {
+  const restoreClipboard: Array<() => void> = [];
+
+  const withClipboard = (value: unknown): void => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value, configurable: true });
+    restoreClipboard.push(() => {
+      if (original === undefined) Reflect.deleteProperty(navigator, "clipboard");
+      else Object.defineProperty(navigator, "clipboard", original);
+    });
+  };
+
+  const stubClipboard = (): Mock<(t: string) => Promise<void>> => {
+    const writeText = vi.fn<(t: string) => Promise<void>>(() => Promise.resolve());
+    withClipboard({ writeText });
+    return writeText;
+  };
+
+  afterEach(() => {
+    for (const restore of restoreClipboard.splice(0)) restore();
+    vi.unstubAllGlobals();
+  });
+
+  const openTextAndCopy = async (container: HTMLElement, href: string): Promise<void> => {
+    openMediaViewer(href, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text-source")).not.toBeNull();
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+  };
+
+  it("puts the SOURCE on the clipboard — the gutter's line numbers stay out of it", async () => {
+    stubBody("alpha\nbeta\ngamma\n");
+    const writeText = stubClipboard();
+    const { container } = render(() => <MediaViewerModal />);
+    await openTextAndCopy(container, TEXT_URL);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const payload = writeText.mock.calls[0]?.[0] ?? "";
+    expect(payload).toBe("alpha\nbeta\ngamma");
+    // The gutter really is rendered, and really does carry digits — without
+    // this the negative below would pass against an empty pane.
+    expect(container.querySelector(".media-viewer-text-gutter")?.textContent).toBe("1\n2\n3");
+    // The fixture has no digits of its own, so ANY digit in the payload is a
+    // number that came off the gutter. This is the assertion a `textContent`
+    // scrape of the pane fails.
+    expect(payload).not.toMatch(/[0-9]/);
+  });
+
+  it("says the clipboard holds only a slice when the fetch was cut at the cap", async () => {
+    stubBody("x".repeat(TEXT_VIEW_MAX_BYTES + 1));
+    const writeText = stubClipboard();
+    const { container } = render(() => <MediaViewerModal />);
+    await openTextAndCopy(container, TEXT_URL);
+
+    // The slice is still delivered — refusing to copy would be worse than
+    // copying and saying so.
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(new RegExp(`first ${TEXT_VIEW_MAX_BYTES / 1024} KiB`));
+  });
+
+  it("does NOT claim a slice when the whole file arrived", async () => {
+    stubBody("alpha\nbeta\n");
+    stubClipboard();
+    const { container } = render(() => <MediaViewerModal />);
+    await openTextAndCopy(container, TEXT_URL);
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/copied/i);
+    expect(status.textContent).not.toMatch(/first/i);
+  });
+
+  it("names a missing clipboard API instead of failing inert", async () => {
+    stubBody("alpha\nbeta\n");
+    withClipboard(undefined);
+    const { container } = render(() => <MediaViewerModal />);
+    await openTextAndCopy(container, TEXT_URL);
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/secure \(HTTPS\)/);
+    // The source stays on screen: the way out the message names is real.
+    expect(container.querySelector(".media-viewer-text-source")?.textContent).toBe("alpha\nbeta");
+  });
+
+  it("names a rejected write too (denied permission)", async () => {
+    stubBody("alpha\nbeta\n");
+    withClipboard({ writeText: () => Promise.reject(new Error("NotAllowedError")) });
+    const { container } = render(() => <MediaViewerModal />);
+    await openTextAndCopy(container, TEXT_URL);
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/NotAllowedError/);
+  });
+
+  it("offers no copy control on the image arm — the header is shared chrome", () => {
+    render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    expect(screen.queryByRole("button", { name: /^copy$/i })).toBeNull();
+  });
+
+  it("offers no copy control when the text fetch failed — there is nothing to take", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, status: 404, body: null }));
+    render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load/i)).not.toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: /^copy$/i })).toBeNull();
   });
 });

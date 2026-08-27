@@ -13346,9 +13346,44 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   background: var(--bg-alt);
 }
 
+/* issue 1839 — the take-it-away verbs, grouped so the ✕ keeps the far edge
+   whatever the arm: the header is `space-between`, and a third flat child
+   would have parked "open in browser" in the middle of the text arm only. */
+.media-viewer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .media-viewer-open-external {
   color: var(--accent);
   font-size: 0.9rem;
+}
+
+/* Reads as the sibling of the "open in browser" link, because that is what it
+   is: the second way to take the file out of the viewer. A <button> and not an
+   anchor — it performs an action rather than going anywhere. */
+.media-viewer-copy {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+/* What the LAST copy put on the clipboard — a full file, a slice cut at
+   TEXT_VIEW_MAX_BYTES, or the reason the write failed. Its own band between
+   the header and the body: the pane's truncation banner speaks about what is
+   on SCREEN, this one about what left the modal, and the two must not read as
+   one line. Colour comes from the shared .muted utility. */
+.media-viewer-copy-status {
+  flex: none;
+  margin: 0;
+  padding: 0.25rem 1rem 0.5rem;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--border);
 }
 
 .media-viewer-close {
