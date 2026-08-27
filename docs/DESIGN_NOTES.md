@@ -42339,3 +42339,137 @@ The ruling reached this work RELAYED by another agent (vjt-claude) from the
 GitHub comment, not read first-hand on IRC. The comment's author field reads
 `vjt`, but every agent in this project comments with the same token, so the
 field is not independent evidence of authorship.
+<!-- entry #1834 -->
+
+---
+
+## 2026-08-27 — #1834: the release image's credit roll, and why the cure had to be an inlet and not a repair
+
+`ghcr.io/vjt/grappa` shipped a credits easter egg containing the version
+and nothing else. Reported from the outside, on IRC, which is the only
+place it could have been reported from: nothing in this repository was
+red.
+
+### What was actually wrong, and what was not
+
+Measured before touching anything, by building `Dockerfile.release
+--target cic` and reading the dist out of the image: the shipped chunk
+carried `{"sha":null,"date":null,"contributors":[]}`. That is
+`infra/packaging/credits.sh` reaching its own no-repo guard and reporting
+the absence, exactly as designed — `.git` is `.dockerignore`d for this
+image, which is the same fact that makes `Grappa.Version` take its no-git
+path here and report the bare `X.Y.Z`.
+
+So there was no broken code to find. Three things were already right and
+had to STAY right, and naming them is most of the design:
+
+* **`credits.sh` must never fail hard.** `aur/PKGBUILD` calls it while
+  building from the tag's source tarball. A hard error on a missing repo
+  would break precisely the two builds that ship.
+* **`vite.config.ts` must keep throwing on an UNSET `GRAPPA_CREDITS`.**
+  That throw catches a wrapper that forgot to plumb the variable, which is
+  a different failure from a build that legitimately has no history. The
+  two states are kept distinct on purpose, the same way
+  `Grappa.Version.verify_build_sha/2` separates `{:skip, :no_git}` from a
+  broken snapshot.
+* **A plain `docker build` from a source checkout must keep degrading
+  honestly**, not start failing. Converting an honest degradation into a
+  broken path would be a worse bug than the one being closed.
+
+The defect was therefore not in any of those; it was that the image was
+being *allowed* to take the degraded answer while the machine building it
+had the whole history sitting on disk.
+
+### The inlet
+
+`release.yml`'s docker job already checks out at `fetch-depth: 0` — for
+the #391 version derivation and the `:latest` gate. So it runs the same
+`credits.sh` on the runner and hands the payload in as `--build-arg
+GRAPPA_CREDITS`; the `cic` stage declares the matching `ARG` and spells
+its own call as the fallback.
+
+The fallback is a parameter expansion, `${GRAPPA_CREDITS:-$(sh
+infra/packaging/credits.sh)}`, and not an `if`, because the shape has to
+say that the in-context derive is still the DEFAULT rather than a
+leftover. Measured, and this is the paletto that made the cure
+non-regressive: with the arg absent, the new recipe produces a dist tree
+`diff -rq`-identical to the one the old recipe produced, still carrying
+the honest nulls.
+
+The `ARG` sits INSIDE the `cic` stage, not at the top of the file. An
+`ARG` is stage-scoped, and one declared next to `mix release` would leave
+`--build-arg` accepted, warned about and silently ignored — the original
+bug with a fix-shaped commit in front of it.
+
+### The hop that was worth proving instead of assuming
+
+The payload must reach vite VERBATIM: vite parses it as JSON and refuses a
+malformed one, and a contributor name is arbitrary text. So the
+re-quoting question was measured, not reasoned about. With the arg passed,
+the payload lands in the shipped chunk byte-for-byte identical to
+`credits.sh`'s 413-byte output — `dependabot[bot]` included, whose
+brackets are exactly the sort of character an intermediate shell would
+have eaten.
+
+Two properties `build-args` actually depends on are now asserted in the
+workflow rather than trusted: the payload is refused if it is degraded on
+a full checkout (nulls THERE mean the deriver broke, not that the build has
+no past), and refused if it spans more than one line, because a
+`build-args: |` block is line-delimited and an embedded newline would
+quietly become a second, bogus argument.
+
+### The cache key is part of the contract
+
+The `smoke` job's dry-run path re-exports the amd64 image from the docker
+job's buildkit cache. **A build arg participates in the cache key**, so
+that re-export has to pass the byte-identical value or it misses the cic
+layer, rebuilds stage 1 in a context with no `.git`, and probes the
+degraded image while the one that would have shipped is fine. It takes the
+value as a JOB OUTPUT from the docker job rather than re-deriving it —
+which would also have been wrong for a second reason, since that job
+checks out at depth 1 and `git shortlog` there sees one commit.
+
+### Why the test had to be the smoke job
+
+The issue asked for a test that the released image's credits are
+non-empty. Nothing already in CI could answer it, and the reason is
+structural: the vitest config carries no `define` at all, so every
+`buildCredits` unit test exercises the degraded path BY CONSTRUCTION, and
+the #1773 e2e spec builds its own bundle from a full checkout and treats a
+degraded payload as a setup error. Both stay green while ghcr ships nulls.
+
+Probe 5 reads the dist the container ships — every chunk under the image's
+own `CIC_DIST_ROOT`, not one named chunk, because which chunk the payload
+lands in is the bundler's business and pinning it would make this a
+code-splitting test. It has THREE outcomes and the third is what stops it
+being a mirror: populated, degraded, or *neither shape present*, which
+means the payload's spelling moved and the probe has gone blind — and
+which FAILS. That arm doubles as the positive control, since the greps
+that must reject a degraded roll must also be able to find one.
+
+All three were measured by running the probe's own bytes over real dists:
+the pre-change dist fails naming the exact degraded payload, the build-arg
+dist passes reporting `a1d57bd3` and 9 contributor rows (`git shortlog -sn
+--no-merges HEAD` agrees on 9), and a dist with the `"sha"` key renamed
+fails blind rather than passing.
+
+One incidental measurement worth keeping, because a probe was nearly
+written on top of the opposite assumption: the minifier bakes the payload
+into a **backtick** literal, which leaves the JSON's own quotes bare. A
+`"` delimiter would escape every one of them. The probe folds the escaped
+spelling onto the bare one so no assertion depends on that choice.
+
+### What this does NOT settle
+
+The AUR tarball is unchanged and cannot be changed the same way — there is
+no build host with history there, and nulls remain the honest answer.
+
+The claim was never verified against a real published image: no release
+was cut, and the only paths that build the real thing are a tag push and a
+`docker_validation` dispatch. What was verified is stage 1 of the same
+recipe, locally, on both arms.
+
+And `test/infra/cic_version_export_test.bats` still guards only
+`GRAPPA_VERSION`. All eleven rostered launchers plumb `GRAPPA_CREDITS`
+today (measured), but nothing turns red if one stops — the drift guard
+#1773 inherited was never generalised to the second variable it created.

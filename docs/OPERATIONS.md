@@ -1888,6 +1888,20 @@ D** — see **Running the published image** below.
 - **Version.** The image reports the BARE `X.Y.Z` (no `.git` in the build
   context → the `#391` no-git path, like the AUR tarball). `docker inspect`
   shows the image tag; the RUNNING app is the version source of truth.
+- **Credits (#1834) — the one fact that does NOT follow the no-git path.**
+  The credits easter egg wants three git facts (`#1773`), and the build
+  context cannot have them for the same reason the version goes bare. But
+  unlike the version, they cannot be recovered from a file in the tree, and
+  unlike the AUR tarball, the machine driving THIS build does have the
+  history. So `release.yml` runs `infra/packaging/credits.sh` on the runner
+  and passes the payload as `--build-arg GRAPPA_CREDITS`; the `cic` stage
+  declares the matching `ARG` and prefers it over its own in-context call.
+  **The in-context call stays the default**, so a plain `docker build` still
+  bakes the honest `{"sha":null,"date":null,"contributors":[]}` rather than
+  failing — see the Local build line below, and § "Deriving the credit roll"
+  under Packaging. The published image is asserted non-degraded by the smoke
+  job; the derive step also refuses to publish if the payload comes back
+  degraded on a full checkout.
 - **VALIDATE BEFORE A REAL TAG — the zero-publication dry-run.** A tag push is
   the only thing that publishes, so a broken `docker` job is discovered with the
   tag already cut and `:latest` possibly moved. Validate the job (the SAME one
@@ -1918,8 +1932,9 @@ D** — see **Running the published image** below.
   `smoke`, `needs: [docker]` and brings a real box up from the image through the
   same `infra/docker/get.sh` → `deploy.sh` path an operator runs, then asks it
   questions over HTTP: `GET /` serves a shell whose chunk actually loads as
-  JavaScript, `GET /api/config` reports this version, and a restart does not
-  rotate the generated `/data/grappa.env`. On a tag it pulls the PUBLISHED
+  JavaScript, `GET /api/config` reports this version, a restart does not
+  rotate the generated `/data/grappa.env`, and (#1834) the bundle it ships
+  carries a POPULATED credit roll rather than the degraded nulls. On a tag it pulls the PUBLISHED
   `:v<version>` — the ref operators resolve; on a dry-run it probes the amd64
   image re-exported from the build cache. amd64 only (the arm64 leg is proven by
   the build). **An unobtainable image fails the job; it never skips.** The driver
@@ -1927,10 +1942,18 @@ D** — see **Running the published image** below.
   evidence and the explicit non-coverage list are in
   `docs/TESTING.md` § "The release-image smoke".
 - **Local build** (validate the Dockerfile without CI):
-  `docker buildx build -f Dockerfile.release --load -t grappa-release:test .`
+
+  ```sh
+  docker buildx build -f Dockerfile.release --load -t grappa-release:test \
+      --build-arg GRAPPA_CREDITS="$(infra/packaging/credits.sh)" .
+  ```
+
   builds the native arch; add `--platform linux/amd64,linux/arm64` for the
   multi-arch manifest (needs `docker run --privileged --rm tonistiigi/binfmt
-  --install all` first for a recent QEMU).
+  --install all` first for a recent QEMU). **The `--build-arg` is what makes
+  this the image CI builds** (#1834) — drop it and the build still succeeds,
+  with the degraded credit roll, which is correct for a source build and is
+  what the smoke script's probe 5 will (rightly) fail on.
 
 ### Running the published image (`docker run` / `curl | bash`) — #503 unit D
 
@@ -4395,6 +4418,53 @@ Consequences to know when touching the Arch recipes:
 **Publishing an Arch pre-release to the AUR is still a human step**, and
 the ordering above is the reason to think twice before doing it: pacman
 has no `epoch`-free way back if the mapping ever changes.
+
+### Deriving the credit roll — `credits.sh` (#1773, #1834)
+
+`infra/packaging/credits.sh` is `version.sh`'s sibling and is shaped like
+it on purpose: the cic build runs in containers that mount only
+`./cicchetto`, so the repo root — and therefore git — is out of reach in
+there. It echoes ONE line of JSON with the three facts the credits easter
+egg needs and a browser cannot have:
+
+    {"sha":"a1d57bd3","date":"2026-08-27T12:22:32+02:00",
+     "contributors":[{"name":"…","commits":5193},…]}
+
+Every cic-build entrypoint that exports `GRAPPA_VERSION` exports
+`GRAPPA_CREDITS` beside it, from this script, and `cicchetto/vite.config.ts`
+parses it (the parse IS the validation) and bakes it as the
+`__GRAPPA_CREDITS_JSON__` define. POSIX `/bin/sh`, always EXECUTED, for the
+same FreeBSD-jail reason `version.sh` is.
+
+**It NEVER fails.** Two launchers that must call it have no `.git` BY
+CONSTRUCTION — `aur/PKGBUILD` builds from the tag's source tarball, and
+`Dockerfile.release` `.dockerignore`s `.git` — and both are RELEASE builds,
+so a hard error would break precisely the two paths that ship. It reports
+the absence instead: `sha:null`, `date:null`, `contributors:[]`, the same
+posture `Grappa.Version.verify_build_sha/2` takes with `{:skip, :no_git}`.
+The loud half stays in vite, which refuses an **unset** `GRAPPA_CREDITS` —
+that means a wrapper forgot to plumb it, which is a different failure from
+a build that legitimately has no history, and the two must not collapse.
+
+**The release image is the one substrate that takes the payload from
+OUTSIDE (#1834).** Its context cannot have the history, but the runner
+driving the build does, so `release.yml` derives the payload there and
+passes it as `--build-arg GRAPPA_CREDITS`; the `cic` stage declares the
+`ARG` and spells its own call as the fallback,
+`${GRAPPA_CREDITS:-$(sh infra/packaging/credits.sh)}`, so a plain
+`docker build` from a source checkout is unchanged — measured, as a
+byte-identical dist tree. The AUR tarball case is NOT changed and cannot
+be: there is no build host with history there, and nulls stay the honest
+answer. Pinned by `test/infra/release_image_credits_test.bats` (the recipe,
+every PR) and by probe 5 of `scripts/smoke-release-image.sh` (the shipped
+artifact, in the `smoke` job).
+
+⚠️ `test/infra/cic_version_export_test.bats` guards the derive+export pair
+for `GRAPPA_VERSION` only. Its roster is the same set of launchers and all
+eleven plumb `GRAPPA_CREDITS` today (measured by grep — nine `export` it
+directly, `infra/linux/cic_build.sh` exports it inside the `su` it runs and
+`Dockerfile.release` inside its `RUN`), but nothing fails if one stops: the
+drift guard was never generalised to the second variable.
 
 ### `build.sh` — one throwaway build tree, one format at a time
 
