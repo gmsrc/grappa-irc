@@ -2767,11 +2767,59 @@ html.resize-dragging * {
   object-fit: cover;
 }
 
+/* #1836 — `flex: 1` is new and it is what gives the sub-line below something
+   to distribute. Without it this box is sized by its content, so the format
+   token would sit wherever the longest title happened to end and the column
+   would ragged from row to row. Nothing else moves: the row is already
+   `width: 100%` with `text-align: start`, so a wider box only pushes the
+   title's ellipsis further out, which is the direction anyone would want. */
 .rail-radio-station-text {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
   gap: 0.1rem;
+}
+
+/* #1836 — the genres and the declared format share ONE line.
+   #500's vertical budget is why: a third line charges its cost on every row of
+   a 22-row list, and the format is two short tokens. `baseline` rather than
+   `center` so the smaller text sits on the genres' line rather than floating
+   in the middle of it. */
+.rail-radio-station-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+/* The genres take the slack and the ellipsis; the format keeps its width. A
+   long genre list must clip rather than push the codec off the row — the
+   format is the fact this line was widened for. */
+.rail-radio-station-genres {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Muted like the genres it sits beside: this is the COST, quiet until you look
+   for it. */
+.rail-radio-station-format {
+  flex: none;
+  white-space: nowrap;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+/* #1836 — the `[hi-fi]` badge (vjt's ruling). Accent, one step out of the
+   muted row, because it is the one token on this line the eye should catch
+   while scrolling — and it is bracketed TEXT rather than a pill, so it still
+   reads as a badge with the stylesheet off, which a background colour would
+   not. Colour is never the only signal: the brackets carry it. */
+.rail-radio-station-hifi {
+  flex: none;
+  white-space: nowrap;
+  font-size: 0.8em;
+  color: var(--accent);
 }
 
 /* The tuned row, marked the same way the presence toggle marks its active

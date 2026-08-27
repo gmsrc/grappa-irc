@@ -82,6 +82,28 @@ describe("RailRadio", () => {
     }
   });
 
+  it("prices every curated station, so no row is a blind press-play", () => {
+    // #1836 — the wiring half, over the REAL table: the badge's own three
+    // cases live in `railRadioHiFiBadge.test.tsx`, which can construct a
+    // lossless row that the curated table does not yet carry. What this one
+    // holds is that the declared format actually reaches the picker for every
+    // row that exists today, in the shape the row declares it — a component
+    // reading the wrong field, or rendering nothing at all, is green in that
+    // file and red here.
+    render(() => <RailRadio />);
+    openRadioPicker();
+
+    for (const s of RADIO_STATIONS) {
+      const format = screen.getByTestId(`rail-radio-station-format-${s.id}`);
+      expect(format, `station ${s.id} format`).toHaveTextContent(s.codec);
+      if (s.bitrate === null) {
+        expect(format.textContent ?? "", `station ${s.id} invented a number`).not.toMatch(/\d/);
+      } else {
+        expect(format, `station ${s.id} bitrate`).toHaveTextContent(`${s.bitrate}k`);
+      }
+    }
+  });
+
   it("picking a station hands its stream and title to the one player", () => {
     render(() => <RailRadio />);
     openRadioPicker();

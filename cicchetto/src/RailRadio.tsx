@@ -5,7 +5,7 @@ import { nowPlayingLabel } from "./lib/nowPlaying";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { closeRadioPicker, radioPickerOpen, tunedStation, tuneStation } from "./lib/radio";
 import { RADIO_LOGO_PATHS } from "./lib/radioLogoPaths";
-import { RADIO_STATIONS, type RadioStation } from "./lib/radioStations";
+import { isLossless, RADIO_STATIONS, type RadioStation } from "./lib/radioStations";
 import PaneTopBar from "./PaneTopBar";
 
 // #682 — the rail's internet-radio surface: a station PICKER and, once
@@ -83,6 +83,25 @@ import PaneTopBar from "./PaneTopBar";
 // The `undefined` arm of the lookup is unreachable by construction: that same
 // gate fails the build for any station id the map does not carry. Spelling a
 // fallback for it would put the branch back for a case no build can ship.
+/** #1836 — what a lossless row is marked with, per vjt's ruling.
+ *
+ * Exported so the tests assert against the production string rather than a
+ * copy of it, and spelled with its brackets because that IS the badge: this
+ * client is irssi-shaped, a bracketed token reads as a mark in a monospace
+ * column, and it stays legible with the stylesheet off — which the colour it
+ * carries does not. */
+export const HI_FI_BADGE = "[hi-fi]";
+
+/** #1836 — the format a row DECLARES, as the picker prints it.
+ *
+ * `bitrate: null` prints the codec ALONE. Not "0k", not "unknown", not a
+ * plausible number: a provider that states no bitrate is a fact this table
+ * records, and dressing it up as one it does not have is the defect #1696 was
+ * filed about. The codec still shows, because that much IS known. */
+function formatLabel(station: RadioStation): string {
+  return station.bitrate === null ? station.codec : `${station.codec} ${station.bitrate}k`;
+}
+
 const StationLogo: Component<{ readonly station: RadioStation; readonly class: string }> = (
   props,
 ) => (
@@ -270,7 +289,44 @@ const RailRadio: Component = () => {
                   <StationLogo station={station} class="rail-radio-station-logo" />
                   <span class="rail-radio-station-text">
                     <span class="rail-radio-station-title">{station.title}</span>
-                    <span class="rail-radio-station-genres">{station.genres.join(" · ")}</span>
+                    {/* #1836 — the format SHARES the genres' line rather than
+                        taking a third one, the same trade #1698 made for the
+                        track on the chrome band: #500 bought this rail's
+                        vertical budget by collapsing the actions behind one
+                        launcher, and a row a third taller charges part of it
+                        back on every station in the list. Nothing is lost —
+                        genres keep the ellipsis and the format is two short
+                        tokens pinned to the end.
+
+                        WHY IT IS ON THE PICKER AND NOT THE CHROME BAND. This is
+                        the DECISION surface: the issue is that the listener
+                        cannot tell a 128k MP3 from a 1000+ kbps FLAC BEFORE
+                        pressing play, and after pressing play the cost is
+                        already being paid. The band's one spare line also
+                        already has three tenants (genres, track, failure). */}
+                    <span class="rail-radio-station-sub">
+                      <span class="rail-radio-station-genres">{station.genres.join(" · ")}</span>
+                      <span
+                        class="rail-radio-station-format"
+                        data-testid={`rail-radio-station-format-${station.id}`}
+                      >
+                        {formatLabel(station)}
+                      </span>
+                      {/* Derived from the CODEC, never from a list of station
+                          names: a name list is right for exactly the rows
+                          somebody remembered and silently wrong for the next
+                          one added. `isLossless` is total over the codec union
+                          by construction — see its Record in
+                          `lib/radioStations.ts`. */}
+                      <Show when={isLossless(station.codec)}>
+                        <span
+                          class="rail-radio-station-hifi"
+                          data-testid={`rail-radio-station-hifi-${station.id}`}
+                        >
+                          {HI_FI_BADGE}
+                        </span>
+                      </Show>
+                    </span>
                   </span>
                 </button>
               )}
