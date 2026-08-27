@@ -43022,3 +43022,81 @@ the tap target is comfortable, and whether a real `NotAllowedError` on iOS
 carries a message worth showing verbatim. The plain-http arm in particular is
 reasoned from the `[SecureContext]` contract and from `lib/clipboard.ts`, not
 observed on a LAN deploy.
+<!-- entry #1848 -->
+
+---
+
+## 2026-08-27 — #1848: switching a feature off without letting its tests go quiet
+
+The #1680/#1769 presence pause ships OFF as a stopgap until #1847 re-anchors
+the scrollback (vjt's call on IRC, 2026-08-27: a log with silent holes beats a
+busy main thread, and the holes are real — a peer JOIN/PART/QUIT on a channel
+left unfocused never reached the scrollback, recoverable only by a hard
+refresh). The switch itself is one named constant,
+`PRESENCE_PAUSE_ENABLED` in `presencePause.ts`, gating the ONE call to
+`presencePause.focus` in `subscribe.ts`. That call is the only thing that arms
+a cooldown window, so killing it kills both cuts at once: `pausedKeys` stays
+empty, `shouldDrop` is false by construction, and `onPause` never re-joins
+with `{presence: false}`. The machinery is untouched — this is a switch, not a
+removal.
+
+Three decisions here outlive the stopgap, because they are what the revert
+will have to undo.
+
+### The flag lives in `presencePause.ts`, not inline at the wiring site
+
+The issue asked for the constant AT the wiring site, in `subscribe.ts`. It is
+one module over, and the reason is testability rather than taste: `subscribe.ts`
+is a side-effect module that installs its root on import, so a constant
+declared inside it can never be flipped by a test. The seven #1680 arms in
+`subscribe.test.ts` all assume a pause actually happens; with an inline
+constant the only ways to keep them are to delete them or to rewrite them
+against the OFF behaviour, and both throw away the coverage that protects the
+one-line revert. Exported from `presencePause.ts` it is a `vi.doMock` away,
+with no runtime seam added to production. A test-only setter was rejected for
+the same reason #1769 rejected a flip-it-in-place verb: it is a second way to
+say the same thing, and it makes the constant mutable to buy nothing.
+
+### The flag-on fixture is per-DESCRIBE, not per-test
+
+Only three of the seven arms assert a DROP. Gating just those looks
+sufficient and is not: the two carve-out arms ("still processes a peer NICK /
+our OWN part ON A PAUSED CHANNEL") would keep passing against a channel that
+was never paused, which is a mirror — green whatever the carve-out does. The
+general rule: when a feature is switched off, every test whose SETUP depends
+on the feature needs the fixture, not just the ones whose ASSERTION does.
+
+The `afterEach` that un-mocks is load-bearing, not hygiene: a `vi.doMock`
+registration survives `vi.resetModules`, so without it every later test in the
+file would silently run with the pause on. The new #1848 describe is placed
+AFTER the #1680 one so that a bleed shows up as a red rather than as nothing.
+
+### The e2e proof is suspended, and cannot be rescued by a fixture
+
+`issue1769-presence-suppressed-on-the-socket.spec.ts` drives a real bundle, and
+the switch is a build-time constant with no runtime seam — deliberately — so
+there is no way to turn it on from a spec. It is skipped with the reason
+attached and restored by deleting one call in the commit that flips the flag.
+Note what this costs honestly: the live-socket proof is the only place the
+`{presence: false}` re-join is observed against a real server, and the unit
+twin cannot replace it (`fireMessageEvent` drives the installed handler
+directly, so there is no socket there to have a gap). For as long as the flag
+is off, that arm is a promise rather than a measurement.
+
+### What switching it off costs
+
+#1680's own measurement, restated so nobody has to rediscover it: 21,917 of
+26,588 rows in 15 minutes on a 7-network account were presence for windows
+nobody was reading. Expect the event rate and the main-thread cost back at the
+pre-#1680 baseline until #1847 lands. That trade was made with the number in
+hand.
+
+### The trap, named because it is the obvious wrong answer
+
+`PRESENCE_COOLDOWN_MS = Infinity` is the one-character version and it does the
+exact opposite of what it reads as: `setTimeout` takes a 32-bit signed delay,
+so anything past 2^31-1 is clamped (to 1 ms on node 20) and fires almost
+immediately — "never pause" written that way pauses every channel the instant
+it blurs. The kill has to be a branch that never arms the window. Both #1848
+arms would catch that mutant; both were also confirmed to die when the flag is
+flipped back on, so neither is a mirror.
