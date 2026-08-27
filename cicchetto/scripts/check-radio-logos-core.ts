@@ -255,6 +255,126 @@ export function parseIcyBitrate(header: string | null): UpstreamBitrate {
   return { kind: "kbps", kbps: Number(header) };
 }
 
+// #1836 (ruling, 2026-08-27) — WHERE A BITRATE IS READ FROM, per codec.
+//
+// The ruling: `bitrate` is valued from the STREAM ITSELF and `null` is
+// reserved for "not knowable", never for "the provider said nothing". It rests
+// on this work's own reggae measurement, which showed that a string a vendor
+// puts in a URL is a LABEL rather than a declaration.
+//
+// 🔴 IT DOES NOT GENERALISE TO "the frame header", and the refusal is measured
+// rather than argued. FLAC's STREAMINFO — decoded from radioparadise's own
+// first bytes on 2026-08-27 — carries min/max blocksize, sample rate (44100),
+// channels (2), bits per sample (16) and a `minframesize/maxframesize` of
+// 0/0 (= unknown). There is NO bitrate field, because FLAC is inherently
+// variable-rate. Under a frame-header-only rule every FLAC row would be
+// `null`, i.e. the rows the `[hi-fi]` badge exists for would show no cost at
+// all — the opposite of what the issue asked for. And computing one from the
+// PCM rate (44100 × 2 × 16 = 1411 kbps) would OVERSTATE it: FLAC compresses
+// well below PCM, so that is an invented plausible number, the very defect
+// #1696 names.
+//
+// 🔴 The premise also needs one correction. On reggae the URL said 128, the
+// frame header said 160 and `icy-br` said 160 — so what that measurement
+// convicted is the URL, and it ACQUITS `icy-br`, which agreed with the bytes.
+// `icy-br` is not a label somebody stuck on the stream; it is the origin
+// server restating its encoder configuration on every connection.
+//
+// So: a per-codec AUTHORITY, total over the union, with the provenance DERIVED
+// from the codec rather than stored beside each row — the codec is already a
+// field, and a second column repeating what it implies is the parallel
+// structure CLAUDE.md's design discipline says to derive instead.
+export type BitrateSource = "mpeg-frame" | "vorbis-nominal" | "icy-br";
+
+/** An upstream bitrate together with which authority produced it. */
+export type BitrateReading = UpstreamBitrate & { readonly source: BitrateSource };
+
+/** MPEG1 Layer III, the only frame shape decoded here. Index 0 is "free" and
+    15 is "reserved"; both mean the header is not stating a rate. */
+const MPEG1_LAYER3_KBPS: readonly (number | null)[] = [
+  null, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, null,
+];
+
+/** The kbps an MPEG frame header states, or a reason it does not.
+ *
+ * Version and layer are CHECKED, not assumed: MPEG2/2.5 and Layers I/II have
+ * different bitrate tables, so decoding one of those against this table would
+ * produce a confident wrong number — the single worst outcome for a field
+ * whose whole purpose is to be true. Measured 2026-08-27: every mp3 row in the
+ * table is MPEG1 Layer III (`ff fb ..`). */
+export function mpegFrameBitrate(head: Uint8Array): UpstreamBitrate {
+  const [first, second, third] = head;
+  if (first === undefined || second === undefined || third === undefined) {
+    return { kind: "unreadable", raw: "fewer than 3 bytes of stream" };
+  }
+  const version = (second >> 3) & 0x03;
+  const layer = (second >> 1) & 0x03;
+  if (version !== 0x03 || layer !== 0x01) {
+    return { kind: "unreadable", raw: `MPEG version bits ${version}, layer bits ${layer}` };
+  }
+  const kbps = MPEG1_LAYER3_KBPS[third >> 4];
+  if (kbps === null || kbps === undefined) {
+    return { kind: "unreadable", raw: `MPEG bitrate index ${third >> 4}` };
+  }
+  return { kind: "kbps", kbps };
+}
+
+/** The kbps an Ogg Vorbis identification header NOMINATES, or `absent`.
+ *
+ * Vorbis states its own rate inside the codec stream — `bitrate_nominal`, a
+ * signed 32-bit little-endian bits-per-second — so this is the stream speaking
+ * about itself, exactly what the ruling asks for. Measured on kohina
+ * 2026-08-27: nominal 128000, max 0, min 0.
+ *
+ * A nominal of 0 is LEGAL and means the encoder ran in pure quality mode and
+ * nominated nothing. That is `absent`, not zero: it is the one Vorbis shape
+ * where a row honestly cannot state a number. */
+export function vorbisNominalBitrate(head: Uint8Array): UpstreamBitrate {
+  const magic = [0x01, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73];
+  for (let at = 0; at + magic.length <= head.length; at++) {
+    if (!magic.every((byte, i) => head[at + i] === byte)) continue;
+    // packet type + "vorbis" (7) + version (4) + channels (1) + rate (4) = 16
+    const off = at + 16;
+    const bytes = [head[off + 4], head[off + 5], head[off + 6], head[off + 7]];
+    if (bytes.some((b) => b === undefined)) {
+      return { kind: "unreadable", raw: "identification header cut short" };
+    }
+    const nominal = new DataView(
+      Uint8Array.from(bytes as number[]).buffer,
+    ).getInt32(0, true);
+    if (nominal <= 0) return { kind: "absent" };
+    return { kind: "kbps", kbps: Math.round(nominal / 1000) };
+  }
+  return { kind: "unreadable", raw: "no vorbis identification header in the first bytes" };
+}
+
+/** Which authority speaks for each codec. A `Record`, so a codec cannot be
+ * added without somebody deciding where its bitrate comes from — the same
+ * totality `isLossless` and the byte signatures carry.
+ *
+ * `flac` is `icy-br` and that is the measured exception, not laziness: see the
+ * block comment above. */
+const CODEC_BITRATE_AUTHORITY: Record<
+  RadioCodec,
+  (head: Uint8Array, icyBr: string | null) => BitrateReading
+> = {
+  mp3: (head) => ({ ...mpegFrameBitrate(head), source: "mpeg-frame" }),
+  vorbis: (head) => ({ ...vorbisNominalBitrate(head), source: "vorbis-nominal" }),
+  flac: (_head, icyBr) => ({ ...parseIcyBitrate(icyBr), source: "icy-br" }),
+};
+
+/** What the stream says its own bitrate is, read by the authority its codec
+    supports. Keyed on the codec the bytes turned out to BE, never on the one
+    the table claims — a row lying about its codec is already red on CODEC, and
+    asking the wrong decoder would add a second, misleading finding. */
+export function readBitrate(
+  served: RadioCodec,
+  head: Uint8Array,
+  icyBr: string | null,
+): BitrateReading {
+  return CODEC_BITRATE_AUTHORITY[served](head, icyBr);
+}
+
 /** `null` when the table's bitrate claim matches what upstream declares —
  * INCLUDING when both say nothing.
  *
@@ -263,16 +383,17 @@ export function parseIcyBitrate(header: string | null): UpstreamBitrate {
  * number the table dropped over a provider that states one is the opposite and
  * just as wrong, because the picker then draws no cost for a station that has
  * one. */
-export function bitrateFailure(declared: number | null, upstream: UpstreamBitrate): string | null {
-  if (upstream.kind === "unreadable") {
-    return `upstream declares icy-br ${JSON.stringify(upstream.raw)}, which is not a bitrate`;
+export function bitrateFailure(declared: number | null, reading: BitrateReading): string | null {
+  const from = reading.source;
+  if (reading.kind === "unreadable") {
+    return `${from} reads ${JSON.stringify(reading.raw)}, which is not a bitrate`;
   }
-  if (upstream.kind === "absent") {
-    return declared === null ? null : `upstream declares no bitrate, the table claims ${declared} kbps`;
+  if (reading.kind === "absent") {
+    return declared === null ? null : `${from} states no bitrate, the table claims ${declared} kbps`;
   }
-  if (declared === null) return `upstream declares ${upstream.kbps} kbps, the table claims none`;
-  if (declared !== upstream.kbps) {
-    return `upstream declares ${upstream.kbps} kbps, the table claims ${declared} kbps`;
+  if (declared === null) return `${from} says ${reading.kbps} kbps, the table claims none`;
+  if (declared !== reading.kbps) {
+    return `${from} says ${reading.kbps} kbps, the table claims ${declared} kbps`;
   }
   return null;
 }

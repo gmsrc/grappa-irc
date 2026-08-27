@@ -13,8 +13,10 @@ import { isLossless, RADIO_STATIONS } from "../lib/radioStations";
 // added" was the standing answer here, and for the logos it was false for ten
 // of fourteen rows on the day it was written. So the logo half is now an
 // executable, on-demand probe — `bun run check:radio`
-// (`scripts/check-radio-logos.ts`) — and the stream half remains hand-measured,
-// for the mechanical reason the table's moduledoc gives.
+// (`scripts/check-radio-logos.ts`). #1836 took the STREAM half the same way:
+// that one had stayed hand-measured because a stream cannot be HEADed, and an
+// aborted GET is the mechanism that was missing. Nothing about a station's
+// reachability is hand-asserted here any more.
 
 describe("RADIO_STATIONS", () => {
   it("is not empty — an empty table is a picker that opens onto nothing", () => {
@@ -179,17 +181,26 @@ describe("RADIO_STATIONS", () => {
     expect(priced.length).toBeGreaterThan(0);
   });
 
-  it("leaves at least one station's bitrate null — the arm that draws no number", () => {
-    // The other direction, and it is a VACUITY guard rather than a rule about
-    // the table, the same shape `checkRadioLogos.test.ts` gives the logo-less
-    // arm: with every row priced, the "provider states nothing" path is never
-    // exercised by real data. If every provider in the table legitimately
-    // declares a bitrate one day, this is the line to DELETE, deliberately —
-    // not the one to edit around by inventing a plausible number for a row
-    // that has none, which is the defect #1696 was filed about.
-    const unpriced = RADIO_STATIONS.filter((s) => s.bitrate === null);
-    expect(unpriced.length).toBeGreaterThan(0);
-  });
+  // 🔴 WHAT USED TO BE HERE, and why it is gone (vjt's ruling, 2026-08-27).
+  // A vacuity guard demanding that at least one row keep `bitrate: null`, so
+  // that the "draws no number" arm was exercised by real data. It rested on
+  // kohina, whose icecast sends no `icy-br` — and the ruling is that `null`
+  // means NOT KNOWABLE, never "the provider was quiet". Kohina's Vorbis
+  // identification header nominates 128000 bits per second, decoded off the
+  // bytes it serves, so the row is `128` and the guard has no row left to
+  // stand on.
+  //
+  // It is deleted rather than kept, exactly as its own text said it should be:
+  // "if the table legitimately goes all-priced one day, this is the line to
+  // DELETE, deliberately — not the one to edit around by inventing a plausible
+  // number for a row that has none." The inverse temptation is the live one
+  // now — keeping a null somewhere to keep a test honest — and that would be
+  // the same lie pointing the other way.
+  //
+  // The arm is still reachable and still tested: `null` survives in the type
+  // for a stream whose bitrate genuinely cannot be read (a FLAC row whose
+  // server sends no `icy-br` — FLAC's STREAMINFO carries no bitrate field),
+  // and `railRadioHiFiBadge.test.tsx` renders it from a fixture.
 
   it("decides hi-fi from the CODEC, so no station name is ever consulted", () => {
     // The `[hi-fi]` badge (vjt's #1836 ruling) marks a row whose codec keeps

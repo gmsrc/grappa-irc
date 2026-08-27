@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agreeFailure,
+  type BitrateReading,
   bitrateFailure,
   brokenCount,
   bytesFailure,
@@ -8,12 +9,15 @@ import {
   codecFailure,
   identifyCodec,
   isCatalogueBacked,
+  mpegFrameBitrate,
   parseIcyBitrate,
   probedCounts,
   problems,
   reachFailure,
+  readBitrate,
   type StationFinding,
   versionless,
+  vorbisNominalBitrate,
 } from "../../scripts/check-radio-logos-core";
 import { RADIO_STATIONS } from "../lib/radioStations";
 
@@ -393,42 +397,191 @@ describe("parseIcyBitrate", () => {
   });
 });
 
-describe("bitrateFailure", () => {
-  it("is quiet when the table states the kbps upstream states", () => {
-    expect(bitrateFailure(128, { kind: "kbps", kbps: 128 })).toBeNull();
+// #1836 (ruling, 2026-08-27) — WHERE a bitrate is read from, per codec.
+//
+// The byte prefixes are the SAME measured captures the codec fixtures use, so
+// these decode real streams rather than a hand-drawn header that would only
+// prove the parser against itself.
+describe("mpegFrameBitrate", () => {
+  const bytes = (hex: string): Uint8Array =>
+    Uint8Array.from((hex.match(/../g) ?? []).map((b) => Number.parseInt(b, 16)));
+
+  it("reads the rate an MPEG1 Layer III frame states", () => {
+    // ice.somafm.com/groovesalad-128-mp3, bitrate index 9.
+    expect(mpegFrameBitrate(bytes("fffb9204ef8ff327"))).toEqual({ kind: "kbps", kbps: 128 });
   });
 
-  it("is quiet when neither the table nor upstream states one", () => {
-    expect(bitrateFailure(null, { kind: "absent" })).toBeNull();
+  it("reads the rate that CONTRADICTS the mount name", () => {
+    // ice.somafm.com/reggae-128-mp3, bitrate index 10. This is the whole
+    // reason the field is not derived from the URL, and it is the row that
+    // reddened on the probe's first run.
+    expect(mpegFrameBitrate(bytes("fffba004eb8ff3cd"))).toEqual({ kind: "kbps", kbps: 160 });
+  });
+
+  it("refuses a version and layer whose table this is not", () => {
+    // MPEG2 Layer III (`ff f3 ..`) indexes a DIFFERENT bitrate table, so
+    // decoding it against this one would produce a confident wrong number —
+    // the worst outcome for a field that exists to be true.
+    const failure = mpegFrameBitrate(bytes("fff39204"));
+    expect(failure.kind).toBe("unreadable");
+  });
+
+  it("refuses the reserved bitrate index rather than reading it as a rate", () => {
+    expect(mpegFrameBitrate(bytes("fffbf204")).kind).toBe("unreadable");
+    expect(mpegFrameBitrate(bytes("fffb0204")).kind).toBe("unreadable");
+  });
+
+  it("refuses a stream too short to carry a header", () => {
+    expect(mpegFrameBitrate(bytes("fffb")).kind).toBe("unreadable");
+  });
+});
+
+describe("vorbisNominalBitrate", () => {
+  const bytes = (hex: string): Uint8Array =>
+    Uint8Array.from((hex.match(/../g) ?? []).map((b) => Number.parseInt(b, 16)));
+
+  // kohina.brona.dk/icecast/stream.ogg — bitrate_nominal 128000, max 0, min 0.
+  const KOHINA = bytes(
+    "4f676753000200000000000000008ec9fc1600000000ac3972cb011e01766f72626973000000000244ac00000000000000f40100000000b801",
+  );
+
+  it("reads the rate the identification header nominates", () => {
+    // The measurement that corrected this table: kohina sends NO `icy-br`, and
+    // "the provider said nothing" was read as "we cannot know". Vorbis states
+    // it inside the codec stream.
+    expect(vorbisNominalBitrate(KOHINA)).toEqual({ kind: "kbps", kbps: 128 });
+  });
+
+  it("reports a nominal of zero as ABSENT, which is what it means", () => {
+    // Legal, and it means the encoder ran in pure quality mode and nominated
+    // nothing. A 0 kbps station is not a thing; `absent` is the honest state
+    // and the one arm where a Vorbis row may still declare null.
+    // The offset is DERIVED from the header layout, not hunted for by byte
+    // value: packet type + "vorbis" (7) + version (4) + channels (1) + sample
+    // rate (4) = 16, then bitrate_maximum (4), then the nominal.
+    const magic = [0x01, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73];
+    const at = KOHINA.findIndex((_, i) => magic.every((b, k) => KOHINA[i + k] === b));
+    expect(at, "the fixture must carry an identification header").toBeGreaterThan(-1);
+    const zeroed = Uint8Array.from(KOHINA);
+    zeroed.set([0, 0, 0, 0], at + 16 + 4);
+    // Guard against zeroing the wrong field: the fixture must still parse as
+    // vorbis, and only the nominal may have moved.
+    expect(vorbisNominalBitrate(KOHINA)).toEqual({ kind: "kbps", kbps: 128 });
+    expect(vorbisNominalBitrate(zeroed)).toEqual({ kind: "absent" });
+  });
+
+  it("refuses bytes carrying no identification header at all", () => {
+    expect(vorbisNominalBitrate(bytes("00112233445566778899aabbccddeeff")).kind).toBe("unreadable");
+  });
+});
+
+describe("readBitrate picks the authority the codec supports", () => {
+  const bytes = (hex: string): Uint8Array =>
+    Uint8Array.from((hex.match(/../g) ?? []).map((b) => Number.parseInt(b, 16)));
+
+  it("reads mp3 off the frame header and IGNORES a disagreeing icy-br", () => {
+    // The frame is the stream speaking; `icy-br` is the server speaking about
+    // it. Where both exist the bytes win, which is the ruling.
+    expect(readBitrate("mp3", bytes("fffba004eb8ff3cd"), "128")).toEqual({
+      kind: "kbps",
+      kbps: 160,
+      source: "mpeg-frame",
+    });
+  });
+
+  it("reads vorbis off the identification header, with no icy-br in sight", () => {
+    const kohina = bytes(
+      "4f676753000200000000000000008ec9fc1600000000ac3972cb011e01766f72626973000000000244ac00000000000000f40100000000b801",
+    );
+    expect(readBitrate("vorbis", kohina, null)).toEqual({
+      kind: "kbps",
+      kbps: 128,
+      source: "vorbis-nominal",
+    });
+  });
+
+  it("reads flac off icy-br, because STREAMINFO states no bitrate at all", () => {
+    // 🔴 The measured exception, and the reason the ruling could not be applied
+    // as "read the frame header". Decoded off radioparadise's own first bytes
+    // 2026-08-27, FLAC's STREAMINFO carries blocksize 4096/4096, sample rate
+    // 44100, 2 channels, 16 bits and a framesize of 0/0 — no bitrate field,
+    // because FLAC is inherently variable-rate. Applied literally the ruling
+    // would leave every FLAC row null, i.e. the stations `[hi-fi]` exists for
+    // would show no cost at all.
+    const oggFlac = bytes(
+      "4f67675300020000000000000000717a3b3f00000000423dae9f01337f464c414301000001664c61",
+    );
+    expect(readBitrate("flac", oggFlac, "1441")).toEqual({
+      kind: "kbps",
+      kbps: 1441,
+      source: "icy-br",
+    });
+  });
+
+  it("gives every codec an authority — none may fall through", () => {
+    // Non-vacuity over the closed set: the table is a `Record`, so a missing
+    // arm is a compile error, but a `Record` of no-ops would still typecheck.
+    // Each codec must produce a reading with ITS own source.
+    const kohina = bytes(
+      "4f676753000200000000000000008ec9fc1600000000ac3972cb011e01766f72626973000000000244ac00000000000000f40100000000b801",
+    );
+    expect(readBitrate("mp3", bytes("fffb9204"), null).source).toBe("mpeg-frame");
+    expect(readBitrate("vorbis", kohina, null).source).toBe("vorbis-nominal");
+    expect(readBitrate("flac", bytes("00"), "1441").source).toBe("icy-br");
+  });
+});
+
+describe("bitrateFailure", () => {
+  const frame = (kbps: number): BitrateReading => ({ kind: "kbps", kbps, source: "mpeg-frame" });
+
+  it("is quiet when the table states the kbps the stream states", () => {
+    expect(bitrateFailure(128, frame(128))).toBeNull();
+  });
+
+  it("is quiet when neither the table nor the stream states one", () => {
+    expect(bitrateFailure(null, { kind: "absent", source: "icy-br" })).toBeNull();
   });
 
   it("fails a number the table invented — #1696's defect in this field", () => {
     // The positive control for the nullable arm: a plausible bitrate baked to
-    // fill a column, over a provider that declares nothing. It renders as a
-    // fact and is a guess.
-    expect(bitrateFailure(128, { kind: "absent" })).toBe(
-      "upstream declares no bitrate, the table claims 128 kbps",
+    // fill a column over a stream that states nothing. It renders as a fact
+    // and is a guess.
+    expect(bitrateFailure(128, { kind: "absent", source: "icy-br" })).toBe(
+      "icy-br states no bitrate, the table claims 128 kbps",
     );
   });
 
   it("fails a number the table dropped, so a knowable fact is not left unsaid", () => {
-    expect(bitrateFailure(null, { kind: "kbps", kbps: 320 })).toBe(
-      "upstream declares 320 kbps, the table claims none",
+    // The mirror image, and the half vjt's ruling added: `null` is reserved for
+    // NOT KNOWABLE. kohina sat here for an hour — no `icy-br`, and a Vorbis
+    // identification header stating 128000 all along.
+    expect(bitrateFailure(null, { kind: "kbps", kbps: 128, source: "vorbis-nominal" })).toBe(
+      "vorbis-nominal says 128 kbps, the table claims none",
     );
   });
 
   it("fails a number that has moved under the table", () => {
-    expect(bitrateFailure(128, { kind: "kbps", kbps: 320 })).toBe(
-      "upstream declares 320 kbps, the table claims 128 kbps",
+    expect(bitrateFailure(128, frame(320))).toBe(
+      "mpeg-frame says 320 kbps, the table claims 128 kbps",
     );
   });
 
-  it("fails an unreadable header rather than treating it as absent", () => {
-    // Absent and unreadable are different facts about upstream, and collapsing
-    // them would make a table that says `null` green against a server that is
-    // saying something nobody can parse.
-    expect(bitrateFailure(null, { kind: "unreadable", raw: "128kbps" })).toBe(
-      'upstream declares icy-br "128kbps", which is not a bitrate',
+  it("names the authority that spoke, so a red says where to look", () => {
+    // Three sources answer this axis and they fail for different reasons — a
+    // message that named none of them would send the reader to the wrong
+    // place.
+    expect(bitrateFailure(128, { kind: "absent", source: "vorbis-nominal" })).toContain(
+      "vorbis-nominal",
+    );
+    expect(bitrateFailure(128, { kind: "absent", source: "mpeg-frame" })).toContain("mpeg-frame");
+  });
+
+  it("fails an unreadable reading rather than treating it as absent", () => {
+    // Absent and unreadable are different facts, and collapsing them would
+    // make a table that says `null` green against a stream saying something no
+    // one can read.
+    expect(bitrateFailure(null, { kind: "unreadable", raw: "128kbps", source: "icy-br" })).toBe(
+      'icy-br reads "128kbps", which is not a bitrate',
     );
   });
 });

@@ -83,12 +83,23 @@
 //            `application/ogg` — both mean "an Ogg container" and neither
 //            names a codec, so a header check is green in exactly the
 //            lossy-vs-lossless comparison the badge exists to make.
-//   BITRATE— #1836: `icy-br` against the declared kbps, IN BOTH DIRECTIONS. A
-//            number invented over a silent provider is #1696's own defect in a
-//            new field; a number dropped over a provider that states one draws
-//            no cost for a station that has one. A station whose provider
-//            declares nothing must declare `bitrate: null` and is not a
-//            finding — that agreement is the check, not a skip.
+//   BITRATE— #1836: the declared kbps against what the STREAM states about
+//            itself, IN BOTH DIRECTIONS. A number invented over a silent
+//            provider is #1696's own defect in a new field; a number dropped
+//            over a stream that states one draws no cost for a station that has
+//            one.
+//            🔴 THE AUTHORITY IS PER CODEC and `readBitrate` owns the table.
+//            An MPEG frame header states its own rate exactly; an Ogg Vorbis
+//            identification header NOMINATES one; FLAC's STREAMINFO states
+//            NONE — decoded off radioparadise's own bytes 2026-08-27, it
+//            carries blocksize, sample rate, channels and bit depth and a
+//            framesize of 0/0, because FLAC is inherently variable-rate — so a
+//            FLAC row's only authority is `icy-br`. That exception is why this
+//            axis is not simply "read the frame header": applied literally,
+//            every FLAC row would be `null` and the stations the `[hi-fi]`
+//            badge exists for would show no cost at all.
+//            `null` therefore means NOT KNOWABLE, never "the provider was
+//            quiet" — if the stream states it, the table states it.
 //
 // ⚠️ THE LOGO AXIS FETCHES WITH `GET`, NOT `HEAD`, and the feed axis still
 // uses HEAD. BYTES needs the payload, and one GET yields the status, the
@@ -127,10 +138,10 @@ import {
   FEED_CONTENT_TYPE,
   identifyCodec,
   LOGO_CONTENT_TYPE,
-  parseIcyBitrate,
   problems,
   probedCounts,
   reachFailure,
+  readBitrate,
   type StationFinding,
 } from "./check-radio-logos-core";
 
@@ -321,6 +332,10 @@ const findings: StationFinding[] = await Promise.all(
     // nullable, so there is no arm to skip. A station with no stream is not a
     // station.
     const stream = await probeStream(station.streamUrl);
+    // #1836 — identified ONCE and shared by the two axes below: the codec the
+    // bytes turned out to be is both the CODEC verdict and the choice of which
+    // authority may state a bitrate.
+    const served = stream.head === null ? null : identifyCodec(stream.head);
     const source = station.nowPlayingSource;
     return {
       id: station.id,
@@ -343,11 +358,14 @@ const findings: StationFinding[] = await Promise.all(
       // connection that never opened has already been reported once under
       // STREAM; saying it again under two more names is the double-count that
       // gate exists to refuse.
-      codec: stream.head === null ? null : codecFailure(station.codec, identifyCodec(stream.head)),
+      codec: stream.head === null ? null : codecFailure(station.codec, served),
+      // #1836 (ruling) — read by the authority the SERVED codec supports, not
+      // the declared one. Quiet when the codec could not be identified: there
+      // is no authority to choose without it, and CODEC has already said so.
       bitrate:
-        stream.head === null
+        stream.head === null || served === null
           ? null
-          : bitrateFailure(station.bitrate, parseIcyBitrate(stream.icyBr)),
+          : bitrateFailure(station.bitrate, readBitrate(served, stream.head, stream.icyBr)),
     };
   }),
 );

@@ -181,18 +181,25 @@ export type RadioStation = {
       because both Ogg codecs answer with an Ogg content type and the one
       comparison the `[hi-fi]` badge rests on is vorbis vs flac. */
   readonly codec: RadioCodec;
-  /** #1836 — kbps, or `null` where the provider declares none.
+  /** #1836 — kbps, or `null` where it is NOT KNOWABLE.
       NULLABLE for the reason `nowPlayingSource` gives above and `logoUrl`
       gives below (that field was `songsUrl` when this was written; #1835
-      renamed it and the argument is unchanged),
-      and here it is the whole point rather than an accommodation: a bitrate is
-      something the provider either states or does not, and a plausible number
-      invented to fill the column would render as a fact. That is precisely the
-      defect #1696 was filed about, one field over. A null draws NO number —
-      not "0k", not "unknown".
-      Measured 2026-08-27 and the reason the arm is not hypothetical: SomaFM
-      and Rock Antenne both send `icy-br: 128`; kohina's icecast sends
-      `icy-name` and `icy-genre` and no `icy-br` at all. */
+      renamed it and the argument is unchanged), and here it is the whole point
+      rather than an accommodation: a plausible number invented to fill the
+      column renders as a fact and is a guess — the defect #1696 was filed
+      about, one field over. A null draws NO number, not "0k" and not
+      "unknown".
+      🔴 `null` is NOT "the provider sent no header" (vjt's ruling,
+      2026-08-27). The value comes from what the STREAM states about ITSELF,
+      and which part of the stream that is depends on the codec: an MPEG frame
+      header states a rate exactly, an Ogg Vorbis identification header
+      NOMINATES one, and FLAC's STREAMINFO states none at all — so a FLAC row's
+      only authority is the server's `icy-br`. `check-radio-logos-core.ts` owns
+      that per-codec table (`readBitrate`) together with the measurements
+      behind it, and `bun run check:radio` re-derives every row through it.
+      Putting `null` on a fact the bytes already hold is the mirror image of an
+      invented number and just as false — kohina was exactly that, for an
+      hour. */
   readonly bitrate: number | null;
   /** #1704 — the station's own artwork, or `null` when it publishes none.
       NULLABLE since Kohina, and the reasoning is the one `nowPlayingSource`
@@ -601,7 +608,15 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "Hand picked chip tunes from classic computers and consoles. SID, Amiga, Atari ST, Arcade, PC, and more!",
     streamUrl: "https://kohina.brona.dk/icecast/stream.ogg",
     codec: "vorbis",
-    bitrate: null,
+    // #1836 (ruling, 2026-08-27) — 128, and it was `null` for one wrong hour.
+    // This icecast sends NO `icy-br`, and "the provider said nothing" was taken
+    // for "we cannot know". It is not: Vorbis states its rate INSIDE the codec
+    // stream, and the identification header here reads `bitrate_nominal =
+    // 128000` (max 0, min 0, 44100 Hz, 2ch), decoded off the first bytes this
+    // mount serves. `null` is reserved for NOT KNOWABLE — putting it on a fact
+    // we hold is the mirror image of #1696's invented number, and just as
+    // false.
+    bitrate: 128,
     logoUrl: null,
     // `mount` is the icecast-internal path, copied off the document's
     // `listenurl` (`http://localhost:8000/stream.ogg`) and NOT derived from
