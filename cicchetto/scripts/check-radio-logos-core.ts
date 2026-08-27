@@ -191,13 +191,23 @@ function contains(head: Uint8Array, magic: readonly number[]): boolean {
  * be permanently unidentifiable, and every row declaring it would go red with
  * no way to tell that from a genuinely wrong claim. */
 const CODEC_SIGNATURES: Record<RadioCodec, (head: Uint8Array) => boolean> = {
-  // An MPEG frame header: eleven set sync bits. Measured at offset ZERO on both
-  // mp3 vendors in the table — icecast hands a new listener whole frames — so
-  // this asks for the sync at the start rather than hunting for it, which would
-  // match a byte pair occurring by chance inside any payload.
+  // An MPEG frame header: eleven set sync bits at offset ZERO, or a
+  // CORROBORATED frame chain anywhere in the head.
+  //
+  // #1837 — the second arm exists because the first one's premise is a
+  // property of the SERVER and not of the codec. "icecast hands a new listener
+  // whole frames" held for both mp3 vendors it was measured on, and KNAC's
+  // `s6.autopo.st` is a third-party RELAY that hands over whatever its buffer
+  // holds: measured over three consecutive connections, its first frame sat at
+  // byte 93, 174 and 405. Byte zero keeps its old meaning exactly — a stream
+  // that STARTS with a sync is the stream declaring itself, and nothing that
+  // was mp3 before stops being mp3. The search is the strictly-additive
+  // fallback, and it is deliberately STRICTER than the offset-zero arm rather
+  // than looser: see `mpegFrameStart`.
   mp3: (head) => {
     const [first, second] = head;
-    return first === 0xff && second !== undefined && (second & 0xe0) === 0xe0;
+    if (first === 0xff && second !== undefined && (second & 0xe0) === 0xe0) return true;
+    return mpegFrameStart(head) !== null;
   },
   // The container first, then the codec: `OggS` alone is not an answer, and a
   // rule that treated it as one would have called radioparadise's FLAC vorbis.
@@ -295,28 +305,103 @@ const MPEG1_LAYER3_KBPS: readonly (number | null)[] = [
   null, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, null,
 ];
 
-/** The kbps an MPEG frame header states, or a reason it does not.
+/** MPEG1 sampling rates, in the order the header's two-bit index spells them.
+    Index 3 is reserved; the frame length needs the rate, so a reserved one is
+    a header this decoder will not read. */
+const MPEG1_SAMPLE_RATES: readonly (number | null)[] = [44100, 48000, 32000, null];
+
+/** One MPEG1 Layer III frame header, decoded — the kbps it states and how many
+    bytes the whole frame occupies, which is what lets the next one be found. */
+type MpegFrame = { readonly kbps: number; readonly bytes: number };
+
+/** The frame these four bytes are, or `null` when they are not one. */
+function mpegFrameAt(head: Uint8Array, at: number): MpegFrame | null {
+  const first = head[at];
+  const second = head[at + 1];
+  const third = head[at + 2];
+  if (first === undefined || second === undefined || third === undefined) return null;
+  if (first !== 0xff || (second & 0xe0) !== 0xe0) return null;
+  // Version and layer are CHECKED, not assumed: MPEG2/2.5 and Layers I/II have
+  // different bitrate tables, so decoding one of those against this one would
+  // produce a confident wrong number — the single worst outcome for a field
+  // whose whole purpose is to be true. Measured 2026-08-27: every mp3 row in
+  // the table is MPEG1 Layer III (`ff fb ..`).
+  if (((second >> 3) & 0x03) !== 0x03 || ((second >> 1) & 0x03) !== 0x01) return null;
+  const kbps = MPEG1_LAYER3_KBPS[third >> 4];
+  const rate = MPEG1_SAMPLE_RATES[(third >> 2) & 0x03];
+  if (kbps === null || kbps === undefined || rate === null || rate === undefined) return null;
+  return { kbps, bytes: Math.floor((144 * kbps * 1000) / rate) + ((third >> 1) & 0x01) };
+}
+
+/** #1837 — the first MPEG1 Layer III frame in `head`, wherever it starts, or
+ * `null` when there is none this decoder will stand behind.
  *
- * Version and layer are CHECKED, not assumed: MPEG2/2.5 and Layers I/II have
- * different bitrate tables, so decoding one of those against this table would
- * produce a confident wrong number — the single worst outcome for a field
- * whose whole purpose is to be true. Measured 2026-08-27: every mp3 row in the
- * table is MPEG1 Layer III (`ff fb ..`). */
+ * WHY A SEARCH. A listener does not always arrive on a frame boundary. Measured
+ * 2026-08-27 on KNAC's `s6.autopo.st`, a third-party relay rather than an
+ * origin icecast: three consecutive connections put the first frame at byte 93,
+ * 174 and 405 — the relay hands over its buffer wherever it happens to be. Both
+ * axes that read these bytes were reading the tail of a frame nobody sent the
+ * start of, and reporting a row whose claim is true as unverified.
+ *
+ * WHY A CHAIN AND NOT A SYNC. Eleven set bits plus a plausible byte occur in
+ * compressed audio by chance — the offset-zero rule this supplements says so,
+ * and it is right. So a candidate counts only when the frame length it states
+ * lands the NEXT sync exactly where it should. Two headers agreeing on a
+ * computed offset is roughly one in 10^9 per position, against one in 10^5 for
+ * a lone sync: the search is stricter than what it falls back from, not looser.
+ *
+ * A candidate too late in `head` for its successor to fit is REFUSED rather
+ * than trusted uncorroborated. That cannot bite a real stream: frames are
+ * contiguous, so the first one starts within one frame length of the head, and
+ * the probe reads far more than two frames' worth. */
+function mpegFrameStart(head: Uint8Array): (MpegFrame & { readonly at: number }) | null {
+  for (let at = 0; at + 4 <= head.length; at++) {
+    const frame = mpegFrameAt(head, at);
+    if (frame === null) continue;
+    if (at === 0 && mpegFrameAt(head, frame.bytes) === null) {
+      // Offset zero is the one place a single header is evidence: the stream
+      // BEGINS there, so it is not a byte pair met while scanning a payload.
+      // Kept so the fixtures #1836 measured — a few dozen bytes off the wire,
+      // one frame long — keep reading as the streams they were taken from.
+      return { ...frame, at };
+    }
+    if (mpegFrameAt(head, at + frame.bytes) !== null) return { ...frame, at };
+  }
+  return null;
+}
+
+/** The kbps the stream's own frames state, or a reason they do not. */
 export function mpegFrameBitrate(head: Uint8Array): UpstreamBitrate {
-  const [first, second, third] = head;
+  const frame = mpegFrameStart(head);
+  if (frame !== null) return { kind: "kbps", kbps: frame.kbps };
+  return { kind: "unreadable", raw: mpegFrameComplaint(head) };
+}
+
+/** Why no frame was read, in the most specific terms the bytes support.
+ *
+ * A header sitting at offset zero gets diagnosed field by field, because that
+ * is the case a reader can act on — "MPEG version bits 3, layer bits 1" names
+ * a stream this table cannot declare, while "nothing found" would send the
+ * same reader hunting for a network fault. */
+function mpegFrameComplaint(head: Uint8Array): string {
+  const first = head[0];
+  const second = head[1];
+  const third = head[2];
   if (first === undefined || second === undefined || third === undefined) {
-    return { kind: "unreadable", raw: "fewer than 3 bytes of stream" };
+    return "fewer than 3 bytes of stream";
+  }
+  if (first !== 0xff || (second & 0xe0) !== 0xe0) {
+    return `no corroborated MPEG1 Layer III frame in the first ${head.length} bytes`;
   }
   const version = (second >> 3) & 0x03;
   const layer = (second >> 1) & 0x03;
   if (version !== 0x03 || layer !== 0x01) {
-    return { kind: "unreadable", raw: `MPEG version bits ${version}, layer bits ${layer}` };
+    return `MPEG version bits ${version}, layer bits ${layer}`;
   }
-  const kbps = MPEG1_LAYER3_KBPS[third >> 4];
-  if (kbps === null || kbps === undefined) {
-    return { kind: "unreadable", raw: `MPEG bitrate index ${third >> 4}` };
+  if (MPEG1_SAMPLE_RATES[(third >> 2) & 0x03] === null) {
+    return `MPEG sample-rate index ${(third >> 2) & 0x03}`;
   }
-  return { kind: "kbps", kbps };
+  return `MPEG bitrate index ${third >> 4}`;
 }
 
 /** The kbps an Ogg Vorbis identification header NOMINATES, or `absent`.

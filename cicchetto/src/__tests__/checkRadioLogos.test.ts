@@ -295,6 +295,32 @@ describe("bytesFailure", () => {
 // The byte prefixes below are MEASURED, 2026-08-27, off the real endpoints —
 // the first 48 bytes each server sent a fresh listener. A hand-drawn fixture
 // would prove the parser against itself.
+
+// #1837 — a listener that joined MID-FRAME, which the offset-zero rule above
+// could not read.
+//
+// MEASURED on `s6.autopo.st/proxy/…` (KNAC) 2026-08-27: three consecutive
+// connections put the first frame at byte 93, 174 and 405. That vendor is a
+// third-party RELAY rather than the origin icecast — it hands a joining
+// listener whatever its buffer holds — so "icecast hands a new listener whole
+// frames" is true of the two vendors it was measured on and is NOT a property
+// of mp3 over http. The four header bytes are the real ones, read at offsets
+// 93, 511 and 929 of that capture: `ff fb 92 64` is MPEG1 Layer III, bitrate
+// index 9 (128 kbps), 44.1 kHz, padded — a 418-byte frame, which is exactly
+// the step between those three offsets.
+//
+// The FILLER is constructed, and says so. What this fixture has to exercise is
+// the search and the chain; `0x5a` can never begin a sync, so the only thing
+// findable in it is what was put there on purpose.
+const KNAC_FRAME_HEADER = [0xff, 0xfb, 0x92, 0x64] as const;
+const KNAC_FRAME_BYTES = 418;
+
+function midFrameJoin(at: number, frames: number): Uint8Array {
+  const head = new Uint8Array(at + frames * KNAC_FRAME_BYTES).fill(0x5a);
+  for (let i = 0; i < frames; i++) head.set(KNAC_FRAME_HEADER, at + i * KNAC_FRAME_BYTES);
+  return head;
+}
+
 describe("identifyCodec", () => {
   const bytes = (hex: string): Uint8Array =>
     Uint8Array.from((hex.match(/../g) ?? []).map((b) => Number.parseInt(b, 16)));
@@ -312,6 +338,25 @@ describe("identifyCodec", () => {
 
   it("reads an MPEG frame sync as mp3", () => {
     expect(identifyCodec(MP3)).toBe("mp3");
+  });
+
+  it("reads mp3 off a listener that joined MID-FRAME", () => {
+    // #1837 — the offset is a property of the SERVER, not of the codec, and a
+    // rule that demands byte zero reports a perfectly ordinary relay as "no
+    // codec this table can declare". That reads as a wrong claim in the table
+    // and sends the next reader to edit a row that is right.
+    expect(identifyCodec(midFrameJoin(93, 2))).toBe("mp3");
+    expect(identifyCodec(midFrameJoin(174, 2))).toBe("mp3");
+    expect(identifyCodec(midFrameJoin(405, 2))).toBe("mp3");
+  });
+
+  it("refuses a sync the frame chain does not corroborate", () => {
+    // #1837 — the price of searching, and why the search is a CHAIN. A lone
+    // `ff fb ..` occurs in compressed audio by chance, so a rule that hunted
+    // for one would call any payload mp3 — which is worse than the offset-zero
+    // rule it replaces, not better. A second header landing exactly where the
+    // first one's length puts it is not chance.
+    expect(identifyCodec(midFrameJoin(93, 1))).toBeNull();
   });
 
   it("reads an Ogg page carrying a vorbis identification header as vorbis", () => {
@@ -433,6 +478,18 @@ describe("mpegFrameBitrate", () => {
 
   it("refuses a stream too short to carry a header", () => {
     expect(mpegFrameBitrate(bytes("fffb")).kind).toBe("unreadable");
+  });
+
+  it("reads the rate off the frame a MID-FRAME listener actually got", () => {
+    // #1837 — the same offset problem, one axis over. KNAC's proxy sends no
+    // `icy-br`, so the frame header is the ONLY authority mp3 has here; a
+    // decoder that reads byte zero reads the relay's buffer tail and reports
+    // "not a bitrate" for a stream that states one in every frame.
+    expect(mpegFrameBitrate(midFrameJoin(93, 2))).toEqual({ kind: "kbps", kbps: 128 });
+  });
+
+  it("refuses a sync the frame chain does not corroborate", () => {
+    expect(mpegFrameBitrate(midFrameJoin(93, 1)).kind).toBe("unreadable");
   });
 });
 
