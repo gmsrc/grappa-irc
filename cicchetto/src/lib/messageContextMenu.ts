@@ -24,6 +24,7 @@
 // the exclude below).
 import { SELECTABLE_TEXT_EXCLUDE } from "./keepKeyboard";
 import { MESSAGE_ROW_SELECTOR } from "./messageGestures";
+import { disarmMessageSelection } from "./messageMenu";
 import type { Point } from "./swipe";
 
 export type MessageContextMenuParams = {
@@ -37,13 +38,6 @@ export function bindMessageContextMenu(
   const onContextMenu = (e: MouseEvent): void => {
     const target = e.target instanceof Element ? e.target : null;
     if (target === null) return;
-    // The inline controls own their own right-click: the nick opens
-    // UserContextMenu, and a link's native menu (open in new tab, copy link
-    // address) beats anything we could offer. The SAME exclude the touch owner
-    // and keepKeyboard use, so the three policies cannot drift. Returning
-    // WITHOUT preventDefault is load-bearing — the nick's Solid-delegated
-    // handler runs after us and must inherit a live event.
-    if (target.closest(SELECTABLE_TEXT_EXCLUDE) !== null) return;
     // A live selection means the operator wants the browser's own copy /
     // search / spellcheck menu over that selection — the same stand-down the
     // touch owner takes mid-selection. Deliberately ANY live selection, not
@@ -51,6 +45,25 @@ export function bindMessageContextMenu(
     // and "covers the cursor" is not something the platforms agree on.
     const selection = window.getSelection();
     if (selection !== null && !selection.isCollapsed) return;
+    // issue 1857 — and past that stand-down, a callout re-enable still latched
+    // on <html> is stale. This door is not mouse-only in practice: `platform.ts`
+    // puts `is-ios` on iPadOS in desktop-mode, where a trackpad's secondary
+    // click arrives here, so a stale latch left by this door is the same
+    // two-menus-for-one-press the touch owner disarms against.
+    //
+    // Ahead of the exclude below — and that is why the selection stand-down
+    // moved above it — for the touch owner's reason: the latch is a
+    // document-level fact and the callout it lifts covers the whole
+    // scrollback, so a press we hand straight back still ends it. Both guards
+    // are side-effect-free early returns, so their order is free.
+    disarmMessageSelection();
+    // The inline controls own their own right-click: the nick opens
+    // UserContextMenu, and a link's native menu (open in new tab, copy link
+    // address) beats anything we could offer. The SAME exclude the touch owner
+    // and keepKeyboard use, so the three policies cannot drift. Returning
+    // WITHOUT preventDefault is load-bearing — the nick's Solid-delegated
+    // handler runs after us and must inherit a live event.
+    if (target.closest(SELECTABLE_TEXT_EXCLUDE) !== null) return;
     const row = target.closest<HTMLElement>(MESSAGE_ROW_SELECTOR);
     if (row === null) return;
     e.preventDefault();

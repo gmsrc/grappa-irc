@@ -5,6 +5,7 @@ import {
   closeMessageMenu,
   copyMessageRow,
   copyToasts,
+  disarmMessageSelection,
   dismissCopyToast,
   messageMenu,
   openMessageMenu,
@@ -43,6 +44,10 @@ beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.className = "";
   closeMessageMenu();
+  // The latch is module state, not DOM state: a test that armed it and never
+  // saw its selection die leaves a `selectionchange` watcher on the document
+  // for the next one. Clearing the class alone would not detach it.
+  disarmMessageSelection();
   for (const t of copyToasts()) dismissCopyToast(t.id);
 });
 
@@ -234,5 +239,83 @@ describe("selectMessageText", () => {
     expect(selectMessageText(row)).toBe(true);
     expect(addRange).toHaveBeenCalledTimes(1);
     expect(ranges[0]?.commonAncestorContainer).toBe(row);
+  });
+});
+
+// issue 1857 — the latch's SECOND exit. `selectionchange` is queued as a task,
+// so it disarms after the gesture that needed the callout suppressed has
+// already begun; the gesture doors take this one instead, synchronously.
+describe("disarmMessageSelection", () => {
+  function stubSelection(text: string): Selection {
+    const stub = {
+      removeAllRanges: vi.fn(),
+      addRange: vi.fn(),
+      toString: () => text,
+      isCollapsed: text === "",
+    } as unknown as Selection;
+    vi.spyOn(window, "getSelection").mockReturnValue(stub);
+    return stub;
+  }
+
+  it("lifts the callout re-enable that Select… armed", () => {
+    stubSelection("12:34 <vjt> ciao");
+    selectMessageText(scrollbackRow("12:34 <vjt> ciao"));
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(true);
+
+    disarmMessageSelection();
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+  });
+
+  // The callers reach it only past their own `selection.isCollapsed` guard, so
+  // there is no range left to drop and a `removeAllRanges()` here could only
+  // land on a caret — including one the compose field owns. That is the exact
+  // blur/focus/selection interaction #1106 and #79 paid for; the disarm buys
+  // the class back and nothing else.
+  it("leaves the selection itself untouched", () => {
+    const selection = stubSelection("");
+    document.documentElement.classList.add(SELECTING_CLASS);
+
+    disarmMessageSelection();
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+    expect(selection.removeAllRanges).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when nothing armed it", () => {
+    stubSelection("");
+    expect(() => {
+      disarmMessageSelection();
+    }).not.toThrow();
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+  });
+
+  // One latch ⇒ one watcher. Every Select… used to add a `selectionchange`
+  // listener that only the FIRING one ever removed, so a session that selected
+  // repeatedly accumulated them on the document.
+  it("keeps exactly one selectionchange watcher across repeated Select…", () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    stubSelection("12:34 <vjt> ciao");
+    const row = scrollbackRow("12:34 <vjt> ciao");
+
+    selectMessageText(row);
+    selectMessageText(row);
+    selectMessageText(row);
+
+    const attached =
+      add.mock.calls.filter(([type]) => type === "selectionchange").length -
+      remove.mock.calls.filter(([type]) => type === "selectionchange").length;
+    expect(attached).toBe(1);
+  });
+
+  it("still disarms on the selectionchange that finds the selection gone", () => {
+    stubSelection("12:34 <vjt> ciao");
+    selectMessageText(scrollbackRow("12:34 <vjt> ciao"));
+    stubSelection("");
+
+    document.dispatchEvent(new Event("selectionchange"));
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
   });
 });

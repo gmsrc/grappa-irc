@@ -26,6 +26,7 @@
 // a function ref with undefined at unmount the way React does — #308 landmine
 // 3 — so cleanup is explicit).
 import { LONG_PRESS_MS, SELECTABLE_TEXT_EXCLUDE } from "./keepKeyboard";
+import { disarmMessageSelection } from "./messageMenu";
 import { type Point, swipeDirection } from "./swipe";
 import { horizontalClaim, touchZone } from "./touchGesture";
 
@@ -133,6 +134,16 @@ export function bindMessageGestures(el: HTMLElement, params: MessageGestureParam
     // until the selection is dismissed.
     const selection = window.getSelection();
     if (selection !== null && !selection.isCollapsed) return;
+    // issue 1857 — past that stand-down there is provably no selection, so a
+    // callout re-enable still latched on <html> is stale and covers the WHOLE
+    // scrollback. Release it HERE, at touch-down: `selectMessageText`'s own
+    // `selectionchange` disarm is queued as a task and lands after WebKit has
+    // already read the property for this gesture, which is how the reported
+    // frame ends up with iOS's callout bar and our menu up together.
+    //
+    // Before the excludes and the zone check on purpose: the latch is a
+    // document-level fact, so a press that arms nothing still ends it.
+    disarmMessageSelection();
     // The inline controls (#350 link, #354 nick, #648 channel, the [Join] CTA)
     // already own their own press meaning — the same exclude keepKeyboard uses,
     // so the two policies cannot drift.

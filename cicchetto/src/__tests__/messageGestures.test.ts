@@ -9,6 +9,7 @@ import {
   SWIPE_MAX_SLIDE_PX,
   SWIPING_CLASS,
 } from "../lib/messageGestures";
+import { disarmMessageSelection, SELECTING_CLASS } from "../lib/messageMenu";
 import { fireTouch } from "./helpers/touchEvents";
 
 // #1067 — the scrollback's ONE touch-gesture owner: a left→right swipe on a
@@ -78,6 +79,7 @@ beforeEach(() => {
 afterEach(() => {
   dispose();
   document.body.innerHTML = "";
+  disarmMessageSelection(); // issue 1857 — the latch is <html>, outside <body>
   vi.restoreAllMocks(); // the live-selection test spies on window.getSelection
   vi.useRealTimers();
 });
@@ -279,6 +281,89 @@ describe("bindMessageGestures — long press = message menu", () => {
     dispose();
     vi.advanceTimersByTime(LONG_PRESS_MS + 100);
     expect(onLongPress).not.toHaveBeenCalled();
+  });
+});
+
+// issue 1857 — `Select…` lifts `html.is-ios`'s blanket `-webkit-touch-callout:
+// none` over the whole `.scrollback` and takes it back on the first
+// `selectionchange` that finds the selection gone. That event is QUEUED as a
+// task, so on the touch that ends the selection it lands AFTER touch-down —
+// and touch-down is when WebKit reads the property to decide whether to run
+// its own long-press selection UI. The reported frame is both menus at once:
+// iOS's callout bar over a stale range plus ours over the row just pressed.
+//
+// So the latch has a second, SYNCHRONOUS exit, taken here at the top of the
+// gesture. jsdom proves the disarm — class gone, watcher detached, and the
+// escape hatch below still intact. It does NOT prove that WebKit re-reads
+// `-webkit-touch-callout` after `touchstart` and therefore suppresses its own
+// callout for THIS gesture: jsdom has no CSS engine and Playwright webkit does
+// not render iOS selection UI, the same limit #1067 and default.css declare.
+describe("bindMessageGestures — a stale callout re-enable (issue 1857)", () => {
+  function armLatch(): void {
+    document.documentElement.classList.add(SELECTING_CLASS);
+  }
+
+  function stubSelection(collapsed: boolean): void {
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: collapsed,
+      toString: () => (collapsed ? "" : "some selected text"),
+    } as unknown as Selection);
+  }
+
+  it("lifts it at touch-down when no selection is live any more", () => {
+    armLatch();
+    stubSelection(true);
+
+    fireTouch(body, "touchstart", { clientX: CENTER_X, clientY: 300 });
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+  });
+
+  // Not "when the menu opens": the 500ms have not run yet, and by the time they
+  // have, WebKit's own recogniser has long since read the property.
+  it("lifts it at touch-down, not when the menu finally opens", () => {
+    armLatch();
+    stubSelection(true);
+
+    fireTouch(body, "touchstart", { clientX: CENTER_X, clientY: 300 });
+
+    expect(onLongPress).not.toHaveBeenCalled();
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+  });
+
+  // THE carve-out. A live selection is the operator dragging the grab handles
+  // the re-enable exists to give them; disarming there would suppress the
+  // callout mid-adjustment and take the escape hatch away.
+  it("keeps it armed while a selection is still live", () => {
+    armLatch();
+    stubSelection(false);
+
+    fireTouch(body, "touchstart", { clientX: CENTER_X, clientY: 300 });
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(true);
+  });
+
+  // The latch is on <html> and iOS's callout is on the whole `.scrollback`, so
+  // a stale one is stale wherever the finger lands. A press that arms nothing
+  // — an inline control, a stray node, an edge zone — still ends it.
+  it("lifts it on a touch that arms no gesture at all (inline control)", () => {
+    armLatch();
+    stubSelection(true);
+
+    fireTouch(link, "touchstart", { clientX: CENTER_X, clientY: 300 });
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+    vi.advanceTimersByTime(LONG_PRESS_MS + 100);
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("lifts it on a touch in the edge zone #1041 owns", () => {
+    armLatch();
+    stubSelection(true);
+
+    fireTouch(body, "touchstart", { clientX: 5, clientY: 300 });
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
   });
 });
 

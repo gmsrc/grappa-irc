@@ -65,6 +65,34 @@ export async function copyMessageRow(row: HTMLElement): Promise<void> {
 // would race iOS's own selection UI against this menu.
 export const SELECTING_CLASS = "is-selecting";
 
+// The detach for the `selectionchange` watcher `selectMessageText` installs.
+// Module scope for two reasons: the latch is ONE class on ONE <html>, so a
+// second watcher for it is a leak by construction; and the disarm below has to
+// be reachable from outside the closure that armed it.
+let detachSelectionWatch: (() => void) | null = null;
+
+// issue 1857 — the latch's SECOND exit, and the one the gesture doors take.
+//
+// The `selectionchange` disarm inside `selectMessageText` is queued as a task,
+// so on the touch that ends a selection it lands AFTER touch-down — and
+// touch-down is when WebKit reads `-webkit-touch-callout` to decide whether to
+// run its own long-press selection UI. The reported symptom is both menus at
+// once: iOS's callout bar over the stale range and ours over the row just
+// pressed. A latch that can only be released asynchronously cannot be released
+// in time, so the doors release it themselves, synchronously, at the top of
+// the gesture.
+//
+// It does NOT touch the selection. Every caller reaches it only past its own
+// `selection.isCollapsed` stand-down, so there is no range left to drop, and a
+// `removeAllRanges()` there could only land on a caret — including one the
+// compose field owns, which is precisely the blur/focus/selection interaction
+// #1106 and #79 paid for. Idempotent: with nothing armed it is a no-op.
+export function disarmMessageSelection(): void {
+  detachSelectionWatch?.();
+  detachSelectionWatch = null;
+  document.documentElement.classList.remove(SELECTING_CLASS);
+}
+
 // Hand the operator a real, adjustable native selection over the row and get
 // out of the way. Returns whether a selection could be installed.
 //
@@ -97,16 +125,23 @@ export function selectMessageText(row: HTMLElement): boolean {
   range.selectNodeContents(row);
   selection.removeAllRanges();
   selection.addRange(range);
+  // One latch, one watcher (issue 1857). A second Select… while the first
+  // selection is still live used to stack another listener on the document —
+  // only the one that FIRED ever detached itself, so a session that selected
+  // repeatedly accumulated them.
+  disarmMessageSelection();
   document.documentElement.classList.add(SELECTING_CLASS);
   // Disarm the moment the operator is done. Without this the callout stays up
   // for the rest of the session and the next hold anywhere in the scrollback
-  // pops iOS's own menu over ours.
+  // pops iOS's own menu over ours. This is the LATE exit — see
+  // `disarmMessageSelection` for why the gesture doors cannot wait for it.
   const onSelectionChange = (): void => {
     const live = window.getSelection();
     if (live !== null && live.toString() !== "") return;
-    document.documentElement.classList.remove(SELECTING_CLASS);
-    document.removeEventListener("selectionchange", onSelectionChange);
+    disarmMessageSelection();
   };
   document.addEventListener("selectionchange", onSelectionChange);
+  detachSelectionWatch = (): void =>
+    document.removeEventListener("selectionchange", onSelectionChange);
   return true;
 }

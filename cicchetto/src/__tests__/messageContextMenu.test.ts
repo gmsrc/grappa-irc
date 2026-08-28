@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { bindMessageContextMenu } from "../lib/messageContextMenu";
+import { disarmMessageSelection, SELECTING_CLASS } from "../lib/messageMenu";
 
 // #1115 — the scrollback's DESKTOP door to the message menu. #1067 gave the
 // menu one opener, a touch long-press, so a mouse user got the browser's own
@@ -44,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   dispose();
   document.body.innerHTML = "";
+  disarmMessageSelection(); // issue 1857 — the latch is <html>, outside <body>
   vi.restoreAllMocks(); // the live-selection test spies on window.getSelection
 });
 
@@ -128,6 +130,45 @@ describe("bindMessageContextMenu — what it refuses to claim", () => {
     stubSelection(true);
     rightClick(body, 412, 268);
     expect(onContextMenu).toHaveBeenCalledTimes(1);
+  });
+});
+
+// issue 1857 — the same stale latch the touch door disarms. This door is not
+// mouse-only in practice: `lib/platform.ts` puts `is-ios` on iPadOS in
+// desktop-mode too (the `Mac` UA + `maxTouchPoints > 0` clause), and an iPad
+// trackpad's secondary click arrives here as `contextmenu`. A door that opens
+// the menu without ending the latch leaves the callout up over the whole
+// scrollback for the next press.
+describe("bindMessageContextMenu — a stale callout re-enable (issue 1857)", () => {
+  it("lifts it when no selection is live any more", () => {
+    document.documentElement.classList.add(SELECTING_CLASS);
+    stubSelection(true);
+
+    rightClick(body, 412, 268);
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+  });
+
+  // Same carve-out as the touch door: a live selection is what the re-enable
+  // is FOR, and this door is standing down to the browser's own menu over it.
+  it("keeps it armed while a selection is live", () => {
+    document.documentElement.classList.add(SELECTING_CLASS);
+    stubSelection(false);
+
+    rightClick(body, 412, 268);
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(true);
+  });
+
+  it("lifts it on a right-click we hand straight back (a link)", () => {
+    document.documentElement.classList.add(SELECTING_CLASS);
+    stubSelection(true);
+
+    const e = rightClick(link, 100, 100);
+
+    expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
+    expect(onContextMenu).not.toHaveBeenCalled();
+    expect(e.defaultPrevented).toBe(false);
   });
 });
 
