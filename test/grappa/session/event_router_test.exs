@@ -572,6 +572,64 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.body == "CTCP VERSION query → grappa #{version}"
     end
 
+    test "PRIVMSG carrying CTCP USERINFO query replies with the composed profile" do
+      state =
+        base_state(%{
+          profile: %{
+            age: "30",
+            gender: :nonbinary,
+            location: "Italy",
+            languages: "it, en",
+            custom: "here for the vibes"
+          }
+        })
+
+      body = <<0x01, "USERINFO", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:reply, line}, {:persist, :notice, attrs}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) ==
+               "NOTICE alice :\x01USERINFO Age=30; Gender=X; Location=Italy; Languages=it, en; here for the vibes\x01"
+
+      assert attrs.channel == "vjt"
+      assert attrs.sender == "alice"
+
+      assert attrs.body ==
+               "CTCP USERINFO query → Age=30; Gender=X; Location=Italy; Languages=it, en; here for the vibes"
+    end
+
+    test "PRIVMSG carrying CTCP USERINFO query still replies (empty) when no profile is configured" do
+      state =
+        base_state(%{
+          profile: %{age: nil, gender: nil, location: nil, languages: nil, custom: nil}
+        })
+
+      body = <<0x01, "USERINFO", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:reply, line}, {:persist, :notice, _}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) == "NOTICE alice :\x01USERINFO \x01"
+    end
+
+    test "CTCP USERINFO omits male/female genders correctly (M/F, not X)" do
+      for {gender, letter} <- [{:male, "M"}, {:female, "F"}] do
+        state =
+          base_state(%{
+            profile: %{age: nil, gender: gender, location: nil, languages: nil, custom: nil}
+          })
+
+        body = <<0x01, "USERINFO", 0x01>>
+        m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+        assert {:cont, _, [{:reply, line}, _]} = EventRouter.route(m, state)
+        assert IO.iodata_to_binary(line) == "NOTICE alice :\x01USERINFO Gender=#{letter}\x01"
+      end
+    end
+
     test "a CTCP-framed NOTICE lands on $server and mints no query window" do
       state = base_state()
 

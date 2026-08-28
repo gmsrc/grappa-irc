@@ -235,6 +235,28 @@ defmodule Grappa.Session.Server do
   @type restored_away :: {String.t(), DateTime.t()} | nil
 
   @typedoc """
+  The KVIrc-style CTCP USERINFO profile (age/gender/location/languages/
+  custom), threaded into `init/1` via `SessionPlan.base_plan/6`'s
+  `:restored_profile` opt and updated live on a
+  `{:credential_profile_changed, network_id, profile}` message from the
+  `user_settings` bridge topic. `EventRouter`'s `{"USERINFO", _}` CTCP
+  clause reads this straight off `state.profile` — no DB hit per query.
+
+  Deliberately NOT `Grappa.Networks.Credential.profile()`: `Session`
+  must not statically alias `Networks` (Networks already deps Session;
+  the reverse closes a Boundary cycle — same reasoning as
+  `away_persister`'s closure indirection above). The shape is
+  duplicated, not shared, on purpose.
+  """
+  @type profile :: %{
+          age: String.t() | nil,
+          gender: :male | :female | :nonbinary | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil
+        }
+
+  @typedoc """
   Opaque function-reference indirection that lets `Session.Server`
   ask the producing context (Networks / Visitors) "re-resolve the
   fresh plan from the DB" without statically aliasing either module.
@@ -383,6 +405,10 @@ defmodule Grappa.Session.Server do
           # User-only (visitor plans omit both).
           optional(:away_persister) => Deps.away_persister(),
           optional(:restored_away) => restored_away(),
+          # KVIrc-style CTCP USERINFO profile snapshot — BOTH subjects
+          # (unlike away, this isn't user-only). Omitted opt boots an
+          # all-nil profile (`empty_profile/0`).
+          optional(:restored_profile) => profile(),
           optional(:query_window_open?) => EventRouter.query_window_open?(),
           optional(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
@@ -520,6 +546,7 @@ defmodule Grappa.Session.Server do
           recover_timer: reference() | nil,
           recover_settle_timer: reference() | nil,
           away_state: AwayState.t(),
+          profile: profile(),
           auto_away_timer: reference() | nil,
           # #671 — the auto-away debounce window (ms), injected from
           # `start_session/3` (the subject's #348 preference over the
@@ -1078,6 +1105,11 @@ defmodule Grappa.Session.Server do
       # persisted. The `AWAY :<reason>` is re-emitted upstream at 001 by
       # `maybe_resend_away/1` (the ircd connection is fresh and away-blind).
       away_state: restore_away_state(Map.get(opts, :restored_away)),
+      # KVIrc-style CTCP USERINFO profile — boots from the plan's
+      # `:restored_profile` snapshot (empty when omitted, e.g. a test
+      # seam that doesn't set it). Updated in place, without a
+      # reconnect, on `{:credential_profile_changed, network_id, _}`.
+      profile: Map.get(opts, :restored_profile, empty_profile()),
       auto_away_timer: nil,
       # #671 — debounce window from the spawn boundary
       # (`start_session/3`); an explicit opt still wins so a unit test can
@@ -2940,6 +2972,23 @@ defmodule Grappa.Session.Server do
   # knob turned now applies now, not at the session's next restart.
   def handle_info({:auto_away_debounce_changed, preference}, state) do
     {:noreply, apply_auto_away_debounce(state, resolve_auto_away_debounce(preference))}
+  end
+
+  # KVIrc-style CTCP USERINFO profile — a live edit via
+  # `PATCH /networks/:id/profile` broadcasts on the same subject-scoped
+  # `user_settings` bridge topic the auto-away debounce uses above. That
+  # topic is per-SUBJECT (not per-network), so every live session of this
+  # subject — on every network — receives it; the `network_id` guard here
+  # is what keeps a profile edit on network A from touching network B's
+  # session. No reconnect: `state.profile` just updates in place, and the
+  # next inbound CTCP USERINFO reply reflects it.
+  def handle_info({:credential_profile_changed, network_id, _}, %{network_id: other} = state)
+      when network_id != other do
+    {:noreply, state}
+  end
+
+  def handle_info({:credential_profile_changed, network_id, fields}, %{network_id: network_id} = state) do
+    {:noreply, %{state | profile: fields}}
   end
 
   # Linked Client crashed abnormally. Record a backoff failure (so the
@@ -6885,6 +6934,22 @@ defmodule Grappa.Session.Server do
     do: AwayState.restore_explicit(reason, since)
 
   defp restore_away_state(nil), do: AwayState.new()
+
+  # All-nil profile — the boot default when the plan omits
+  # `:restored_profile` (a test seam that doesn't set it; every real
+  # plan from `SessionPlan.base_plan/6` always supplies one, even when
+  # the credential has no profile configured, since
+  # `Credential.profile_snapshot/1` itself returns all-nil in that case).
+  @spec empty_profile() :: %{
+          age: nil,
+          gender: nil,
+          location: nil,
+          languages: nil,
+          custom: nil
+        }
+  defp empty_profile do
+    %{age: nil, gender: nil, location: nil, languages: nil, custom: nil}
+  end
 
   # GH #417 — at 001 RPL_WELCOME, re-assert any active away to the FRESH
   # upstream connection (which starts away-blind — the ircd forgot across

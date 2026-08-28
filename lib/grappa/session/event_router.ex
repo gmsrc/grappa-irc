@@ -541,6 +541,14 @@ defmodule Grappa.Session.EventRouter do
         # dispatching, not implementing.
         ctcp_ping_reply(msg, target, body, state)
 
+      {"USERINFO", _} ->
+        # The KVIrc-era CTCP USERINFO convention (age/gender/location/
+        # languages/a free custom field, `Grappa.Networks.Credential`'s
+        # profile fields formatted as `Age=…; Gender=…; …`). Own function
+        # for the same reason PING is one — keep this dispatch clause a
+        # dispatch clause.
+        ctcp_userinfo_reply(msg, target, state)
+
       _ ->
         # Non-VERSION, non-PING CTCP (ACTION handled below; TIME /
         # SOURCE / FINGER not implemented yet) — delegate to the generic
@@ -3035,6 +3043,69 @@ defmodule Grappa.Session.EventRouter do
 
     {:cont, state2, [{:auto_reply, reply, persist_eff}]}
   end
+
+  # KVIrc-era CTCP USERINFO: reply with the composed profile text
+  # regardless of whether anything is actually configured — an
+  # unconfigured profile still answers (an empty string), never
+  # silence. Silently ignoring the query would read exactly like the
+  # dead-connection problem VERSION/PING answer for: "log honesty"
+  # (state what you observed) applies here too — we observed "no
+  # profile fields set," and the honest reply says that by composing
+  # to nothing, not by pretending the query never arrived.
+  #
+  # Routing mirrors the VERSION/PING arms exactly — see VERSION for why
+  # a DM-shaped query persists on the own-nick topic.
+  @spec ctcp_userinfo_reply(Message.t(), String.t(), state()) ::
+          {:cont, state(), [effect()]}
+  defp ctcp_userinfo_reply(msg, target, state) do
+    sender = Message.sender_nick(msg)
+    info = userinfo_text(state.profile)
+    reply = "NOTICE #{sender} :\x01USERINFO #{info}\x01"
+
+    dm_channel =
+      if nick_eq?(target, state.nick),
+        do: state.nick,
+        else: Identifier.canonical_target(target, casemapping(state))
+
+    {state2, persist_eff} =
+      build_persist(
+        state,
+        :notice,
+        dm_channel,
+        sender,
+        "CTCP USERINFO query → #{info}",
+        sender_meta(msg)
+      )
+
+    {:cont, state2, [{:reply, reply}, persist_eff]}
+  end
+
+  # Composes the KVIrc-shaped `Age=…; Gender=…; Location=…; Languages=…;
+  # <custom>` reply text, joining only the parts that are actually set.
+  @spec userinfo_text(map()) :: String.t()
+  defp userinfo_text(profile) do
+    [
+      userinfo_part("Age", Map.get(profile, :age)),
+      userinfo_part("Gender", userinfo_gender(Map.get(profile, :gender))),
+      userinfo_part("Location", Map.get(profile, :location)),
+      userinfo_part("Languages", Map.get(profile, :languages)),
+      Map.get(profile, :custom)
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("; ")
+  end
+
+  defp userinfo_part(_, nil), do: nil
+  defp userinfo_part(_, ""), do: nil
+  defp userinfo_part(label, value), do: "#{label}=#{value}"
+
+  # M/F/X — the three-way gender symbol convention this feature settled
+  # on (KVIrc's original CTCP USERINFO only ever had M/F; X extends it
+  # to non-binary, matching `Credential.genders/0`'s closed set).
+  defp userinfo_gender(:male), do: "M"
+  defp userinfo_gender(:female), do: "F"
+  defp userinfo_gender(:nonbinary), do: "X"
+  defp userinfo_gender(nil), do: nil
 
   # #591 — the typed CTCP meta for a persisted row whose body is a CTCP frame,
   # or `%{}` for a plain (non-CTCP) body. FLAT keys (`ctcp_verb`/`ctcp_args`)

@@ -271,6 +271,9 @@ defmodule Grappa.Session do
           # `Grappa.Session.Server.start_opts/0` twin.
           optional(:away_persister) => Deps.away_persister(),
           optional(:restored_away) => Server.restored_away(),
+          # KVIrc-style CTCP USERINFO profile — BOTH subjects (unlike away).
+          # Kept in sync with the `Grappa.Session.Server.init_opts/0` twin.
+          optional(:restored_profile) => Server.profile(),
           optional(:refresh_plan) => Server.refresh_plan_check(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Set by
