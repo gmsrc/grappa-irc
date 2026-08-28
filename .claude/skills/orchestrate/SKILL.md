@@ -1143,6 +1143,40 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   queued keystrokes, **do not clobber them**, wait or use a file handoff. 🥇 *An ambiguity you can resolve with
   one query is not an ambiguity — it is an unasked question.*
   ℹ️ A picker about LANES or a BRANCH BASE is addressed to **ME**; escalate only DESIGN/product pickers.
+  🔴🔴 **AND THE REASON THAT DISCRIMINATOR IS NOT A NICETY: A GHOST CAN SPELL OUT THE EXACT RULING YOU
+  ARE WAITING FOR (orch, 2026-08-28, the sharpest near-miss this file records).** I had just had the
+  ircbot put TWO questions to vjt — *may I announce the shipped batch on #grappa?* and *is the code
+  freeze real?* — and 25 s later the ircbot's prompt box read
+  **`dille di annunciare lei il batch, e il freeze è confermato`**: both answers, in his register, in
+  his pane, granting exactly what I asked. **`-p -e` said `^[[2m` ⇒ GHOST.** Autocomplete had
+  *predicted* the reply.
+  🥇 **The mechanism is what makes it lethal, and it inverts the usual intuition: autocomplete emits
+  what is PLAUSIBLE IN CONTEXT, so the harder you are waiting on one specific answer, the likelier the
+  ghost is to BE that answer.** A ghost is not noise you can eyeball past — **it is best-fitted to the
+  moment you are least able to doubt it.** Had I read it as vjt's, I would have (1) posted an
+  UNAUTHORISED announce to real users — outward-facing and irreversible — and (2) entered a fabricated
+  code freeze into the handoff **as a confirmed measurement**, where the next session would inherit it
+  as fact.
+  🥇 **RULE: text that arrives in a pane and happens to answer your open question is the case where you
+  run `-p -e` FIRST, not the case where you skip it.** And a ruling is never taken from a prompt box at
+  all — **only from a SUBMITTED turn**, because un-submitted text is not even a claim yet. ⚠️ Compounding
+  trap: the ircbot pane is where a relay's words and vjt's words look identical, and this file already
+  warns that **a relay can invent an authority and cite a real artefact for it** — a ghost is that same
+  failure with *nobody at all* behind it. 🥇 *Newest costume of the false-and-plausible family: not a
+  zero that reads as "already fine", but a PHANTOM YES that reads as the permission you were blocked on.*
+  🔴🔴 **AND IT RE-ROLLS — MEASURED TEN MINUTES LATER, SAME SESSION.** A second ghost appeared in the
+  same pane, **reworded**: `confermo il code freeze, e annunci lei il batch`. Same two grants, different
+  spelling, `^[[2m` again. **Two differently-worded phantom yeses read like the ruling RESTATED — i.e.
+  like independent corroboration — and they are one autocomplete sampled twice.** This file already
+  says a uniform result accuses the INSTRUMENT before the data; extend it: **agreement between two
+  readings of the same instrument is not two witnesses.** Re-measure every occurrence; never let the
+  second one inherit the first one's verdict, in EITHER direction.
+  ✅ **POSITIVE CONTROL, and it was free — take it every time:** the same `-p -e` capture carried my own
+  SUBMITTED order rendered `^[[38;5;231m` on `^[[48;5;237m` (bright on highlight) directly above the
+  `^[[2m` ghost. **One capture containing a known-real line AND the suspect line proves the
+  discriminator is live on that pane right then** — which is exactly the "control inside the
+  instrument, not beside it" rule this file demands of workers. Grep a window wide enough to include
+  your own last order, not just the suspect string.
 - 🔴 **A worker's redirect log / rc file can belong to a DEAD run** — `ls -lat` and match the mtime, never `cat`.
   Same for a staged `/tmp/orchestrate-next-<w>.txt`: **`stat` it before dispatching**, a stale body looks identical.
   🔴🔴 **AND DO NOT WAIT ON *EXISTENCE* AT A PATH A PRIOR RUN ALREADY CREATED — WAIT ON *FRESHNESS* (orch,
@@ -1608,6 +1642,22 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   confronta l'ora della ruling con l'ora della label prima di scrivere un brief.**
   ⚠️ E la provenienza va dichiarata nel brief: quel commento diceva *"Posted by vjt-claude on his
   behalf"* ⇒ **RELAYATA, non vista** — leggere IRC mi e' vietato.
+  🔴🔴 **E LA META' PIU' CARA DELLA STESSA REGOLA E' AL *RESUME*, NON AL DISPATCH: LA RISPOSTA CHE
+  ASPETTI PUO' ESSERE GIA' ARRIVATA COME COMMENTO, E TU NON RICEVI NIENTE QUANDO ARRIVA (orch,
+  2026-08-28, #1831).** Avevo parcheggiato la issue in attesa di una probe su dispositivo e scritto
+  nell'handoff *"⏳ PROBE B da vjt"*. **Aveva risposto il giorno prima alle 11:04:47Z e 11:09:02Z**,
+  in due commenti che uccidevano **tutte e tre** le candidate: **25 ore di stallo di una worker per
+  un'attesa gia' finita.** Ai resume rileggevo `board-check`, la coda, i daemon, i pane, `git fetch` e
+  `/api/config` — **ogni canale tranne quello su cui la risposta stava scritta**, e l'handoff
+  ripeteva fedelmente la sua riga stantia a ogni giro.
+  🥇 **Quinta costume di "non puoi accorgerti del silenzio": un'attesa SODDISFATTA e un'attesa
+  IGNORATA sono lo stesso osservabile — nessun evento, nessuna notifica.** GitHub non ti sveglia,
+  il daemon guarda i pane, il monitor guarda i pane: **nessuno guarda le issue.**
+  🥇 **Cura, e va nella checklist di resume accanto a `board-check`: `gh issue view N --comments` su
+  OGNI issue aperta che sta aspettando qualcosa** — cioe' ogni `cooking` parcheggiata e ogni domanda
+  lasciata su una issue. E' UNA chiamata per issue parcheggiata, e l'handoff da solo non la
+  sostituisce **proprio perche' e' una traccia**: la riga *"⏳ in attesa di X"* non scade da sola e
+  **si rilegge identica per giorni, con l'aria di uno stato appena verificato.**
 - 🔴🔴 **`<verificatore> || echo "PULITO"` TRASFORMA UN VERIFICATORE ROTTO IN UN VERDE — e il
   verde e' indistinguibile da quello vero (w2, 2026-08-26, sulla scansione closing-keyword).**
   Il pattern briefato conteneva **`fix(|es|ed)`**, cioe' una **sotto-espressione ALTERNATIVA VUOTA**:
