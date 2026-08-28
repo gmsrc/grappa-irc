@@ -43517,3 +43517,99 @@ now the cic side end to end from a RAW wire payload through the real
 `narrowIsupportChanged` → `isupportEntryFromWire` → `seedIsupport` →
 `casemappingForNetwork` → `nickEquals` (`isupport.test.ts`). What is untested
 is the wire between them, on a live rfc1459 session.
+<!-- entry #1857 -->
+
+---
+
+## 2026-08-29 — #1857: a latch that can only be released asynchronously cannot be released in time
+
+`html.is-ios` kills `-webkit-touch-callout` across the app, and #1067 bought it
+back for the duration of one selection: `selectMessageText` puts `is-selecting`
+on `<html>`, `default.css` pairs that class with `-webkit-touch-callout:
+default` on `.scrollback`, and a `selectionchange` listener takes it away again
+on the first event that finds the selection gone. That comment already named
+the failure mode of a latch outliving its selection — *"the next hold anywhere
+in the scrollback pops iOS's own menu over ours"* — and an iPhone-PWA frame
+reported exactly it: our menu over one row, iOS's callout bar over a live range
+on another.
+
+### The mechanism is a RACE, not a leak — and that decides WHERE the cure goes
+
+The report reads the cause as the app menu opening *"without necessarily
+collapsing the existing range"*. Measured against the code, it cannot: BOTH
+doors to that menu stand down on `!selection.isCollapsed` — `onStart` in
+`lib/messageGestures.ts` and the handler in `lib/messageContextMenu.ts`. While
+the DOM reports a live selection our menu does not open at all.
+
+What is left is a race. WebKit collapses the old selection at touch-down, so
+our `touchstart` handler correctly sees `isCollapsed`; the `selectionchange`
+that would strip the class is QUEUED as a task and lands afterwards; and
+touch-down is when WebKit reads `-webkit-touch-callout` to decide whether to
+run its own long-press selection UI. The property is therefore still `default`
+for the recogniser that is starting, and `LONG_PRESS_MS` later our own menu
+opens on top of what it produced.
+
+That distinction is not pedantry — it rules out the call site the report
+suggests. Disarming from the long-press HANDLER, i.e. when the menu opens, runs
+a full 500 ms after the property was read. The disarm belongs at the TOP of the
+gesture, in the door, which is the earliest moment JavaScript hears about the
+touch at all.
+
+### `disarmMessageSelection()` deliberately does not touch the selection
+
+The shape proposed was `getSelection()?.removeAllRanges()` plus the class
+removal. The range half is dropped. Every caller reaches the disarm only past
+its own `isCollapsed` stand-down, so there is no range left to drop; what a
+`removeAllRanges()` would still reach is a CARET, including one the compose
+field owns. That is the blur/focus/selection interaction #1106 and #79 paid
+for, and re-entering it for a mutation with no established need is a bad trade.
+The verb removes the class and detaches the watcher, and nothing else.
+
+### Rejected: re-removing `-webkit-user-select: none` from `html.is-ios`
+
+The second direction that was on the table. It is aimed at the wrong property.
+The callout is `-webkit-touch-callout`, and `is-selecting` re-enables THAT on
+`.scrollback`; dropping the `user-select` kill would leave the stale
+`-webkit-touch-callout: default` exactly where it is, so the reported frame
+survives the change. It also carries a blast radius the defect does not need —
+the blanket `user-select` kill is load-bearing for #508 (`<select>`
+tap-to-open), #589 (admin panes), #250 (`.nick-clickable`) and the
+`.scrollback-invite-join` re-exclude, each written as a re-enable against it.
+The report's own body says the cause is not a missing suppression.
+
+### One latch, one watcher
+
+Found on the way through, in the same add/remove pair: `selectMessageText`
+added a `selectionchange` listener on EVERY call and only the one that FIRED
+ever detached itself, so a session that selected repeatedly accumulated them on
+the document. The module now holds the detach and arms through it, which is
+also what lets the doors reach a disarm from outside the closure that armed it.
+
+### The desktop door is not mouse-only
+
+`bindMessageContextMenu` takes the same disarm. `lib/platform.ts` puts `is-ios`
+on iPadOS in desktop-mode (the `Mac` UA + `maxTouchPoints > 0` clause), where a
+trackpad's secondary click arrives as `contextmenu` — so a door that opens the
+menu without ending the latch keeps the defect alive on that hardware. Its
+selection stand-down moved ABOVE the inline-control exclude so the disarm sits
+ahead of both: the latch is a document-level fact and the callout it lifts
+covers the whole scrollback, so a press handed straight back to the browser
+still ends it. Both guards are side-effect-free early returns, so the order was
+free, and the two doors now read the same.
+
+### What is NOT measured
+
+The disarm is proven in jsdom: the class goes at touch-down and at right-click,
+the watcher is detached, exactly one watcher survives repeated `Select…`, and
+the live-selection carve-out still stands down. Four mutants, four kills, each
+by the test written for it — removing the disarm from either door, moving it
+ahead of the stand-down, and restoring the watcher stack.
+
+What jsdom cannot show is the half that matters on the device: that WebKit
+re-reads `-webkit-touch-callout` after `touchstart` and therefore suppresses
+its own callout for the gesture already in flight. jsdom has no CSS engine and
+Playwright webkit does not render iOS selection UI — the same limit #1067 and
+`default.css` already declare for this property, and the reason no e2e arm was
+written rather than a hollow one. The frame is device evidence for the symptom;
+the cure is reasoned from the platform contract and verified only down to the
+class.
