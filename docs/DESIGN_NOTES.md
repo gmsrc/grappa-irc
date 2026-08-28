@@ -43183,5 +43183,80 @@ click this entry turns on. That proof is not in this change — the jsdom tests
 dispatch the sequence rather than provoke it, so they pin the CURE's contract
 and not the platform behaviour that makes it necessary.
 
-Applied to `BanlistModal` and `ModeModal`, the two the issue names. Fourteen
-other scrims carry the same `onClick={close}` shape and are untouched here.
+### The defect is a CLASS, and this fixes two of it — deliberately
+
+Sixteen production components mount a scrim that dismisses on a bare click.
+Measured, not estimated, over `cicchetto/src`:
+
+```
+for f in $(grep -rl "modal-backdrop" --include='*.tsx' . | grep -v __tests__); do
+  grep -A3 "modal-backdrop" "$f" | grep -q "onClick=" && echo "$f"
+done            # → 16 files
+```
+
+`ArchiveModal`, `BanlistModal`, `ConfirmModal`, `DeleteAccountModal`,
+`LinksModal`, `ModeModal`, `NamesModal`, `PrivacyModal`, `RecoverModal`,
+`RegistrationWizardModal`, `ServerReplyModal`, `ServiceModal`,
+`ShareSessionModal`, `TopicBar`, `UmodeModal`, `WhoModal`. Every one of them
+is dismissable by a click it never saw the press for; only the two that the
+issue names are cured here.
+
+**So the tree now carries two patterns, and that is a decision rather than an
+oversight.** CLAUDE.md's own "total consistency or nothing" says half-migrated
+is worse than untouched, and the cost is accepted with that read in view: the
+sweep is a CLASS change and this is a bug fix, and folding sixteen components
+into it would leave a reviewer unable to tell the cure from the sweep.
+
+The sweep is the right end state, and it is not free. Three existing suites
+assert today that a bare click dismisses — `ArchiveModal.test.tsx`,
+`ConfirmModal.test.tsx`, `DeleteAccountModal.test.tsx`, each firing
+`fireEvent.click(backdrop)` with no press before it. Those are not collateral;
+each is a decision about what its scrim should do, and they are owed one at a
+time rather than in the tail of somebody else's cure. (`MediaViewerModal`,
+`SettingsDrawer` and `UserContextMenu` also click a backdrop in their tests
+and are NOT in the sixteen — their scrims are a different shape, `role=button`
+or a drawer. An earlier count of "four" here was mine and was wrong; the
+tighter measure above is what stands.)
+
+### A real engine was asked, and it answered — after the first instrument lied
+
+`e2e/tests/issue1831-tap-send-modal-survives.spec.ts` puts the question to a
+browser instead of to jsdom, as a discriminating PAIR: the same `/banlist`, in
+the same window, sent once with ENTER and once by TAPPING the send button.
+Enter synthesises no click and is green on both sides of the cure; the tap is
+the arm the defect owns. Everything but the GESTURE is held fixed.
+
+Measured on `chromium-pixel-touch`, against the PRE-CURE code, recording every
+event at the document in capture phase:
+
+```
+pointerdown -> polygon              (the send button's arrow glyph)
+touchstart  -> polygon
+pointerup   -> polygon
+mousedown   -> div.modal-backdrop   <- the scrim, mounted during pointerup
+mouseup     -> div.modal-backdrop
+click       -> div.modal-backdrop
+banlist modal count: 0
+```
+
+The press lands on the button and the click lands on the SCRIM. The pair then
+reads pre-cure **Enter ✓ / tap ✘** (rc=1) and post-cure **✓ ✓** (rc=0), so the
+spec is a regression pin and not a mirror.
+
+🔴 **The first instrument was the wrong one, and it produced a green that
+meant nothing.** This was run first on `webkit-iphone-15`, the config's
+existing touch project, and BOTH arms passed with the cure removed. The same
+probe explains why: there a `tap()` dispatches `pointerdown / touchstart /
+pointerup` and stops — no touchend, no mousedown, no mouseup, **no click at
+all**. Playwright's injected touch produces no compat mouse events on that
+engine, so a question about what a synthesised click hits is unanswerable
+there and goes green whatever the code does. **A green from an instrument that
+cannot express the defect is not weak evidence, it is none** — and had the
+run stopped at "2 passed" it would have been reported as the cure being
+unnecessary. Hence the third project, `grep: /@touch/`-scoped so it does not
+re-run the suite, with the desktop project's `grepInvert` widened to match.
+
+Platform limit, stated rather than buried: the reported device is Android
+**Firefox** and this is Blink. Playwright's firefox does not support touch
+emulation, so Gecko is not reachable from this harness. What is established is
+that an engine does this, and which gesture does it — not that Gecko does.

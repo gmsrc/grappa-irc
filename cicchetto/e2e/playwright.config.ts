@@ -72,7 +72,30 @@ export default defineConfig({
       // `@webkit` run on the desktop project. Without this gate,
       // `@webkit`-tagged specs (BUG7 + variants) attempt `tap()` on a
       // non-touch context and throw "The page does not support tap".
-      grepInvert: /@webkit/,
+      grepInvert: /@webkit|@touch/,
+    },
+    {
+      // issue 1831 — the ONLY project whose touch produces the compat mouse
+      // events a real tap produces. Measured, because it is the whole reason
+      // this project exists: on `webkit-iphone-15` a `tap()` dispatches
+      // `pointerdown / touchstart / pointerup` and STOPS — no touchend, no
+      // mousedown/mouseup, no click at all — so a spec about what a
+      // synthesised click hits is unanswerable there and goes green whatever
+      // the code does. On chromium + touch the same tap dispatches all six,
+      // and the click hit-tests against the layout as it stands THEN.
+      //
+      // Also the closer engine family to the reported device (Android), though
+      // that device runs Gecko and this is Blink — see the spec header.
+      //
+      // `grep: /@touch/` keeps it to the specs that need it; without that it
+      // would re-run the whole suite on a third project.
+      name: "chromium-pixel-touch",
+      use: {
+        ...devices["Pixel 7"],
+        // Same self-signed nginx-test cert story as the desktop project.
+        launchOptions: { args: ["--ignore-certificate-errors"] },
+      },
+      grep: /@touch/,
     },
     {
       name: "webkit-iphone-15",
