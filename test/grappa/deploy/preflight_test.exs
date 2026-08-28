@@ -1242,6 +1242,7 @@ defmodule Grappa.Deploy.PreflightTest do
       20260813074128_add_provider_to_push_subscriptions
       20260820174126_add_label_to_push_subscriptions
       20260822170037_add_tls_verify_to_network_servers
+      20260828230305_add_profile_fields_to_network_credentials
     )
 
     test "every migration on disk classifies, and the HOT set is exactly the pinned one" do
