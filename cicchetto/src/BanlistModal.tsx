@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, Show } from "solid-js";
+import { createBackdropDismiss } from "./lib/backdropDismiss";
 import { banlistCardBySlug } from "./lib/banlistCard";
 import { banlistModalState, closeBanlistModal, openBanlistModal } from "./lib/banlistModal";
 import { type BanMaskForm, buildBanMask } from "./lib/banMask";
@@ -188,6 +189,11 @@ const BanlistModal: Component = () => {
   // Overlay refcount so the covered pane freezes + #232 shared Esc-to-close.
   createOverlayLock(() => banlistModalState() !== null, ".banlist-modal", closeBanlistModal);
 
+  // issue 1831 — the scrim dismisses on the press it began, not on any click
+  // that happens to land on it. See lib/backdropDismiss.ts for the tap that
+  // used to close this modal in the same gesture that opened it.
+  const backdropDismiss = createBackdropDismiss(closeBanlistModal);
+
   return (
     <Show when={target()}>
       {(t) => (
@@ -195,7 +201,8 @@ const BanlistModal: Component = () => {
         // biome-ignore lint/a11y/noStaticElementInteractions: backdrop is non-interactive scrim
         <div
           class="modal-backdrop modal-backdrop-viewport banlist-modal-backdrop"
-          onClick={closeBanlistModal}
+          onPointerDown={backdropDismiss.onPointerDown}
+          onClick={backdropDismiss.onClick}
         >
           {/* biome-ignore lint/a11y/useKeyWithClickEvents: inner dialog onClick only stops backdrop-click propagation; Esc closes via the shared overlay stack */}
           <div

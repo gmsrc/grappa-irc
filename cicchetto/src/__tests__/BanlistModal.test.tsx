@@ -41,7 +41,7 @@ vi.mock("../lib/networks", () => ({
 
 import BanlistModal from "../BanlistModal";
 import { setBanlistBundle } from "../lib/banlistCard";
-import { closeBanlistModal, openBanlistModal } from "../lib/banlistModal";
+import { banlistModalState, closeBanlistModal, openBanlistModal } from "../lib/banlistModal";
 
 const BUNDLE = {
   network: "bahamut",
@@ -202,5 +202,62 @@ describe("BanlistModal", () => {
     const modal = screen.getByTestId("banlist-modal");
     expect(modal.textContent).not.toContain("*!*@banned.host");
     expect(modal.textContent).toContain("Loading");
+  });
+
+  // issue 1831 — a modal opened SYNCHRONOUSLY from a compose-line submit
+  // mounts its backdrop under the finger before the browser has dispatched
+  // the tap's synthesised `click`. `banlistCommand` reaches
+  // `openBanlistModal` with no `await` ahead of it, so the backdrop exists by
+  // the time the compat mouse events are hit-tested; they hit-test against
+  // the NEW layout, land on the backdrop, and the dismiss fires in the same
+  // gesture that opened it. Symptom: "the modal is opened and does not
+  // appear". The send button's own click swallow (#925/#1059) cannot help —
+  // it only guards clicks that still reach the BUTTON, and this one does not.
+  //
+  // The cure is the doctrine #925 already applied to that button: activation
+  // rides the POINTER, not the click. A dismiss that never saw the press
+  // which began the interaction is not a dismiss. Structural, not a timing
+  // guard — #1059 already ruled that deferring by a frame "makes the guard
+  // timing-dependent, which is the shape of the bug, not of its remedy".
+  describe("backdrop dismiss is armed by the press, not by the click (issue 1831)", () => {
+    const backdropIn = (container: HTMLElement): HTMLElement => {
+      const el = container.querySelector<HTMLElement>(".banlist-modal-backdrop");
+      if (el === null) throw new Error("no banlist backdrop rendered");
+      return el;
+    };
+
+    it("ignores a click the backdrop never received a pointerdown for", () => {
+      setBanlistBundle("bahamut", BUNDLE);
+      openBanlistModal("bahamut", "#bofh", "b");
+      const { container } = render(() => <BanlistModal />);
+
+      fireEvent.click(backdropIn(container));
+
+      expect(banlistModalState()).not.toBeNull();
+      expect(screen.queryByTestId("banlist-modal")).not.toBeNull();
+    });
+
+    it("still dismisses on a press and release that both land on the backdrop", () => {
+      setBanlistBundle("bahamut", BUNDLE);
+      openBanlistModal("bahamut", "#bofh", "b");
+      const { container } = render(() => <BanlistModal />);
+
+      const backdrop = backdropIn(container);
+      fireEvent.pointerDown(backdrop);
+      fireEvent.click(backdrop);
+
+      expect(banlistModalState()).toBeNull();
+    });
+
+    it("a press that starts INSIDE the dialog does not dismiss on release", () => {
+      setBanlistBundle("bahamut", BUNDLE);
+      openBanlistModal("bahamut", "#bofh", "b");
+      const { container } = render(() => <BanlistModal />);
+
+      fireEvent.pointerDown(screen.getByTestId("banlist-modal"));
+      fireEvent.click(backdropIn(container));
+
+      expect(banlistModalState()).not.toBeNull();
+    });
   });
 });

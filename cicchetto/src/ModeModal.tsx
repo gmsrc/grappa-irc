@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, Show } from "solid-js";
+import { createBackdropDismiss } from "./lib/backdropDismiss";
 import { ownHoldsChannelEditorSigil } from "./lib/channelEditPerm";
 import { channelKey } from "./lib/channelKey";
 import { type AvailableMode, availableModes, sanitizeModeParam } from "./lib/channelModes";
@@ -208,6 +209,12 @@ const ModeModal: Component = () => {
   // close verb the × / backdrop use).
   createOverlayLock(() => modeModalState() !== null, ".mode-modal", closeModeModal);
 
+  // issue 1831 — the scrim dismisses on the press it began, not on any click
+  // that happens to land on it. Bare `/mode` and the TopicBar modes button
+  // call the SAME `openModeModal`; only the first mounted this scrim under a
+  // finger whose synthesised click had not been dispatched yet.
+  const backdropDismiss = createBackdropDismiss(closeModeModal);
+
   return (
     <Show when={target()} keyed>
       {(t) => (
@@ -215,7 +222,8 @@ const ModeModal: Component = () => {
         // biome-ignore lint/a11y/noStaticElementInteractions: backdrop is non-interactive scrim
         <div
           class="modal-backdrop modal-backdrop-viewport mode-modal-backdrop"
-          onClick={closeModeModal}
+          onPointerDown={backdropDismiss.onPointerDown}
+          onClick={backdropDismiss.onClick}
         >
           {/* biome-ignore lint/a11y/useKeyWithClickEvents: inner dialog onClick only stops backdrop-click propagation; Esc closes via the shared overlay stack */}
           <div

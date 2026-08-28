@@ -43100,3 +43100,88 @@ immediately — "never pause" written that way pauses every channel the instant
 it blurs. The kill has to be a branch that never arms the window. Both #1848
 arms would catch that mutant; both were also confirmed to die when the flag is
 flipped back on, so neither is a mirror.
+<!-- entry #1831b -->
+
+---
+
+## 2026-08-28 — #1831b: a backdrop dismiss rides the press, not the click
+
+The device probes on issue 1831 killed all three candidates in the issue body
+and left one state standing: **the modal is opened and does not appear.**
+`/dio` prints `unknown command` in the installed PWA, so the compose error
+banner is visible there; `banlistCommand`'s three failure arms each return an
+`{error}`, so an error would have been seen; none was, therefore the handler
+ran to its end and called `openBanlistModal`.
+
+### The mechanism
+
+`banlistCommand` and `modeViewCommand` are `async`, but neither has an `await`
+ahead of its `open*Modal` call, and neither does the `submit` chain that
+reaches them from the compose form. An async function runs synchronously to
+its first `await`, so **the backdrop is in the DOM before the browser has
+dispatched the tap's compat mouse events.** Those are synthesised after the
+touch ENDS and hit-tested against the layout as it stands then — the scrim,
+which is `position: fixed; top: 0` with `height: var(--viewport-height)`, i.e.
+covering the keyboard-aware visible region the send button sits in. The click
+lands on the backdrop, whose `onClick` was `close*Modal`, and the modal is
+dismissed by the same gesture that opened it.
+
+The send button cannot defend against this, and the reason is worth keeping:
+its click swallow (#925/#1059) guards a click that still reaches the BUTTON.
+This one does not — the target moved out from under it while the finger was
+down. That is also why the TopicBar modes button works while bare `/mode`
+does not, calling the very same `openModeModal`: there the synthesised click
+is consumed by the button that was pressed, because no scrim mounted over it.
+
+### The cure, and why not a timer
+
+`lib/backdropDismiss.ts` — `createBackdropDismiss(close)` returns the
+`onPointerDown`/`onClick` pair a scrim spreads onto itself. The press arms;
+the click dismisses only if it completes an interaction the backdrop itself
+began. A ghost click carries no press on the scrim, so it cannot dismiss.
+
+This is #925's doctrine applied to the dismissal half: **activation rides the
+POINTER, not the click.** A frame's deferral was available and is deliberately
+not what shipped — #1059 already ruled on that shape for the twin problem on
+the button, "it makes the guard timing-dependent, which is the shape of the
+bug, not of its remedy". Press-arming is structural and holds at any timing.
+
+### What the mutants settled, including one that changed the code
+
+Three mutations, scoped to the two suites (34 tests):
+
+| mutant | result |
+|---|---|
+| `armed = true` (drop the pointerdown target test) | **2 failed** — load-bearing |
+| dismiss without consulting `armed` | **4 failed**, exactly the pre-cure red |
+| drop `&& e.target === e.currentTarget` from the click | **34/34 still green** |
+
+The third **survived**, so the clause came out rather than acquiring a test
+written to justify it. Measuring why it survived is the useful part: the
+arming already subsumes it, since an inner click can only arrive having been
+preceded by an inner press, which disarmed. The target test is needed on the
+POINTERDOWN and only there — a dialog stops the click from bubbling but not
+the pointerdown, so a press inside the modal does reach the scrim's handler
+and must disarm it. Untestable defensive code is the shape that hides the
+next bug; the asymmetry is now a comment instead of a dead conjunct.
+
+### What this does NOT explain, and is not claimed to
+
+The reporter says the same commands work in a normal browser tab on the same
+device. **This mechanism is touch-specific, not standalone-specific**, so on
+its own it predicts both surfaces failing. Nobody has established that the
+same GESTURE was used on both (an on-screen Enter is a keydown and synthesises
+no click at all, and would work on either surface). The asymmetry is therefore
+an open residual, not something the cure accounts for.
+
+`(display-mode: standalone)` remains non-emulable in Playwright — measured
+against `playwright-core@1.62.1`'s `emulateMedia`, which accepts exactly
+`{colorScheme, contrast, forcedColors, media, reducedMotion}`, with
+`colorScheme` as the positive control. The touch axis, unlike the standalone
+one, IS reachable locally: a real browser with `hasTouch` synthesises the
+click this entry turns on. That proof is not in this change — the jsdom tests
+dispatch the sequence rather than provoke it, so they pin the CURE's contract
+and not the platform behaviour that makes it necessary.
+
+Applied to `BanlistModal` and `ModeModal`, the two the issue names. Fourteen
+other scrims carry the same `onClick={close}` shape and are untouched here.

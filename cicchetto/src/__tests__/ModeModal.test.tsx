@@ -49,7 +49,7 @@ vi.mock("../lib/api", () => ({
 }));
 
 import { DEFAULT_ISUPPORT, seedIsupport } from "../lib/isupport";
-import { closeModeModal, openModeModal } from "../lib/modeModal";
+import { closeModeModal, modeModalState, openModeModal } from "../lib/modeModal";
 import ModeModal from "../ModeModal";
 
 const KEY = "bahamut #bofh";
@@ -256,6 +256,59 @@ describe("ModeModal", () => {
       expect(getByText("sekret")).toBeTruthy();
       expect(queryByTestId("mode-param-input-k")).toBeNull();
       expect(queryByTestId("mode-param-set-k")).toBeNull();
+    });
+  });
+
+  // issue 1831 — same defect, same cure as BanlistModal: bare `/mode` reaches
+  // `openModeModal` with no `await` ahead of it, so the backdrop is mounted
+  // before the tap's synthesised `click` is hit-tested and that click dismisses
+  // the modal the same gesture opened. This is ALSO the pair the reporter's
+  // own observation splits: the TopicBar modes button calls the very same
+  // `openModeModal` and works, because there the synthesised click is consumed
+  // by the button it was pressed on — the difference is the press target, not
+  // the modal.
+  describe("backdrop dismiss is armed by the press, not by the click (issue 1831)", () => {
+    const backdropIn = (container: HTMLElement): HTMLElement => {
+      const el = container.querySelector<HTMLElement>(".mode-modal-backdrop");
+      if (el === null) throw new Error("no mode backdrop rendered");
+      return el;
+    };
+
+    const openOne = (): void => {
+      mockModes[KEY] = { modes: ["n", "t"], params: {} };
+      mockMembers[KEY] = [{ nick: "vjt-grappa", modes: ["@"] }];
+      openModeModal("bahamut", "#bofh");
+    };
+
+    it("ignores a click the backdrop never received a pointerdown for", () => {
+      openOne();
+      const { container, queryByTestId } = render(() => <ModeModal />);
+
+      fireEvent.click(backdropIn(container));
+
+      expect(modeModalState()).not.toBeNull();
+      expect(queryByTestId("mode-modal")).not.toBeNull();
+    });
+
+    it("still dismisses on a press and release that both land on the backdrop", () => {
+      openOne();
+      const { container } = render(() => <ModeModal />);
+
+      const backdrop = backdropIn(container);
+      fireEvent.pointerDown(backdrop);
+      fireEvent.click(backdrop);
+
+      expect(modeModalState()).toBeNull();
+    });
+
+    it("a press that starts INSIDE the dialog does not dismiss on release", () => {
+      openOne();
+      const { container, getByTestId } = render(() => <ModeModal />);
+
+      fireEvent.pointerDown(getByTestId("mode-modal"));
+      fireEvent.click(backdropIn(container));
+
+      expect(modeModalState()).not.toBeNull();
     });
   });
 });
