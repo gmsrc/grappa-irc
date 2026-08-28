@@ -728,6 +728,126 @@ defmodule GrappaWeb.NetworksControllerTest do
     end
   end
 
+  describe "PATCH /networks/:network_id/profile (KVIrc-style CTCP USERINFO profile)" do
+    test "user edits profile fields → 200 + persisted + wire shape", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-prof-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-prof-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}/profile", %{
+          age: "30",
+          gender: "nonbinary",
+          location: "Italy",
+          languages: "it, en",
+          custom: "here for the vibes"
+        })
+
+      body = json_response(conn, 200)
+      assert body["age"] == "30"
+      assert body["gender"] == "nonbinary"
+      assert body["location"] == "Italy"
+      assert body["languages"] == "it, en"
+      assert body["custom"] == "here for the vibes"
+
+      {:ok, cred} = Credentials.get_credential(vjt, network)
+      assert cred.profile_age == "30"
+      assert cred.profile_gender == :nonbinary
+      assert cred.profile_location == "Italy"
+    end
+
+    test "a blank field clears it", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-profclr-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-profclr-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn = conn |> put_bearer(session.id) |> put_req_header("content-type", "application/json")
+      conn |> patch("/networks/#{slug}/profile", %{age: "30"}) |> json_response(200)
+      body = conn |> patch("/networks/#{slug}/profile", %{age: ""}) |> json_response(200)
+
+      assert body["age"] == nil
+    end
+
+    test "rejects an unrecognised gender with 422", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-profbad-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-profbad-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}/profile", %{gender: "robot"})
+
+      assert json_response(conn, 422)
+    end
+
+    test "rejects a CRLF-injected field with 422", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-profcrlf-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-profcrlf-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}/profile", %{custom: "evil\r\nQUIT"})
+
+      assert json_response(conn, 422)
+    end
+
+    test "404 when the caller holds no credential on the network (authz)", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-profauthz-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-profauthz-#{u()}"
+      {:ok, _} = Networks.find_or_create_network(%{slug: slug})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}/profile", %{age: "30"})
+
+      assert json_response(conn, 404)
+    end
+
+    test "broadcasts the new snapshot on the subject's settings-bridge topic", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-profbcast-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-profbcast-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Grappa.PubSub.Topic.user_settings(Grappa.Subject.label({:user, vjt.name}))
+        )
+
+      conn
+      |> put_bearer(session.id)
+      |> put_req_header("content-type", "application/json")
+      |> patch("/networks/#{slug}/profile", %{age: "30", gender: "female"})
+      |> json_response(200)
+
+      network_id = network.id
+
+      assert_receive {:credential_profile_changed, ^network_id,
+                      %{age: "30", gender: :female, location: nil, languages: nil, custom: nil}}
+    end
+  end
+
   describe "PUT /networks/:network_id/password (#124)" do
     # The cure for the split brain: one field, one stored secret. Every test
     # here asserts through `Credential.recover_secret/1` rather than the column,

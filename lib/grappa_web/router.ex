@@ -516,6 +516,13 @@ defmodule GrappaWeb.Router do
     # allowlist — no proxy change.
     patch "/identity", NetworksController, :identity
 
+    # KVIrc-style CTCP USERINFO profile (age/gender/location/languages/
+    # custom) for BOTH subjects. Sibling of `/identity` rather than a key
+    # on it — unlike identity, this never bounces the live upstream
+    # connection (see `NetworksController.profile/2` doc). Same
+    # ResolveNetwork pipeline (ownership) + no proxy change.
+    patch "/profile", NetworksController, :profile
+
     # #189 — on-connect perform list editor (raw IRC lines run SERVER-side
     # at 001, before the built-in identify + autojoin). Rides the same
     # ResolveNetwork pipeline (ownership) + the `networks` nginx allowlist

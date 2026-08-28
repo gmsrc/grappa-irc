@@ -40,6 +40,11 @@ defmodule Grappa.Networks.Wire do
           connection_state: Credential.connection_state(),
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
+          age: String.t() | nil,
+          gender: Credential.gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -121,6 +126,16 @@ defmodule Grappa.Networks.Wire do
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
           connection: connection_info() | nil,
+          # KVIrc-style CTCP USERINFO profile — carried here (mirroring
+          # `:ident`/`:realname` above, #211 phase 7's own precedent) so
+          # cic's per-network profile editor (`PATCH /networks/:id/profile`)
+          # can seed its inputs from the `GET /networks` rows, for BOTH
+          # subjects, the same way the identity editor already does.
+          age: String.t() | nil,
+          gender: Credential.gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -164,6 +179,16 @@ defmodule Grappa.Networks.Wire do
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
           connection: connection_info() | nil,
+          # KVIrc-style CTCP USERINFO profile — carried here (mirroring
+          # `:ident`/`:realname` above, #211 phase 7's own precedent) so
+          # cic's per-network profile editor (`PATCH /networks/:id/profile`)
+          # can seed its inputs from the `GET /networks` rows, for BOTH
+          # subjects, the same way the identity editor already does.
+          age: String.t() | nil,
+          gender: Credential.gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -318,6 +343,16 @@ defmodule Grappa.Networks.Wire do
       connection_state: c.connection_state,
       connection_state_reason: c.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(c.connection_state_changed_at),
+      # KVIrc-style CTCP USERINFO profile — additive, snake_case, no
+      # `protocol_version` bump needed (CLAUDE.md's additive-only wire
+      # contract). Un-prefixed on the wire (the `profile_` prefix is a
+      # storage-column concern); `PATCH /networks/:id/profile` accepts
+      # the same un-prefixed keys back.
+      age: c.profile_age,
+      gender: c.profile_gender,
+      location: c.profile_location,
+      languages: c.profile_languages,
+      custom: c.profile_custom,
       inserted_at: DateTime.to_iso8601(c.inserted_at),
       updated_at: DateTime.to_iso8601(c.updated_at)
     }
@@ -357,6 +392,11 @@ defmodule Grappa.Networks.Wire do
       connection_state_reason: cred.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
       connection: connection_json(connection),
+      age: cred.profile_age,
+      gender: cred.profile_gender,
+      location: cred.profile_location,
+      languages: cred.profile_languages,
+      custom: cred.profile_custom,
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }
@@ -401,6 +441,11 @@ defmodule Grappa.Networks.Wire do
       connection_state_reason: cred.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
       connection: connection_json(connection),
+      age: cred.profile_age,
+      gender: cred.profile_gender,
+      location: cred.profile_location,
+      languages: cred.profile_languages,
+      custom: cred.profile_custom,
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }

@@ -38,6 +38,7 @@ defmodule Grappa.Networks.Credentials do
   alias Grappa.Ecto.Like
   alias Grappa.IRC.Identifier
   alias Grappa.Networks.{Credential, Network}
+  alias Grappa.PubSub.Topic
   alias Grappa.{Repo, Session}
 
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment).
@@ -737,6 +738,64 @@ defmodule Grappa.Networks.Credentials do
     end
   rescue
     Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @doc """
+  Per-network PROFILE edit (age/gender/location/languages/custom) on a
+  `(subject, network)` credential. Backs `PATCH /networks/:network_id/profile`
+  for BOTH subjects. Takes the already-resolved `%Credential{}` (ownership
+  asserted by the caller, same contract as `update_credential_identity/2`).
+
+  Unlike identity, a profile edit does NOT bounce the upstream connection —
+  these fields never ride the IRC handshake, they only feed `EventRouter`'s
+  CTCP USERINFO auto-reply. So instead of a reconnect, a successful write
+  broadcasts the new snapshot on the subject's settings-bridge topic
+  (`Grappa.PubSub.Topic.user_settings/1` — the same bridge
+  `Grappa.UserSettings` uses to live-retune the auto-away debounce) so any
+  live `Session.Server` for this subject can fold the new fields into its
+  in-memory state without restarting. The topic is subject-scoped (not
+  network-scoped), so `Session.Server`'s `handle_info({:credential_profile_changed,
+  network_id, _}, state)` clause filters on `network_id` itself.
+  """
+  @spec update_credential_profile(Credential.t(), map()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_credential_profile(%Credential{} = credential, attrs) when is_map(attrs) do
+    case credential |> Credential.profile_changeset(attrs) |> Repo.update() do
+      {:ok, updated} ->
+        updated = Repo.preload(updated, :network)
+        :ok = broadcast_profile_change(updated)
+        {:ok, updated}
+
+      {:error, _} = err ->
+        err
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @spec broadcast_profile_change(Credential.t()) :: :ok
+  defp broadcast_profile_change(%Credential{network_id: network_id} = cred) do
+    :ok =
+      Phoenix.PubSub.broadcast(
+        Grappa.PubSub,
+        Topic.user_settings(subject_label_for(cred)),
+        {:credential_profile_changed, network_id, Credential.profile_snapshot(cred)}
+      )
+  end
+
+  # Derives the `Grappa.Subject.label/1` string from a resolved credential's
+  # subject XOR, preloading `:user` on demand (the caller only guarantees
+  # `:network` is preloaded). A visitor's label is the raw `visitor_id` —
+  # no preload needed, mirroring `Grappa.Subject.label({:visitor, id})`'s
+  # own contract.
+  @spec subject_label_for(Credential.t()) :: String.t()
+  defp subject_label_for(%Credential{user_id: user_id} = cred) when is_binary(user_id) do
+    %{user: user} = Repo.preload(cred, :user)
+    Grappa.Subject.label({:user, user.name})
+  end
+
+  defp subject_label_for(%Credential{visitor_id: visitor_id}) when is_binary(visitor_id) do
+    Grappa.Subject.label({:visitor, visitor_id})
   end
 
   @doc """

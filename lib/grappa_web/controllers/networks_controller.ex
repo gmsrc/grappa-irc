@@ -207,6 +207,36 @@ defmodule GrappaWeb.NetworksController do
   end
 
   @doc """
+  `PATCH /networks/:network_id/profile` — the KVIrc-style CTCP USERINFO
+  profile (age/gender/location/languages/a free custom field), per
+  `(subject, network)` for BOTH subjects. Unlike `/identity`, this never
+  bounces the live session: these fields don't ride the IRC handshake,
+  they only feed `Grappa.Session.EventRouter`'s CTCP USERINFO auto-reply
+  — see `Credentials.update_credential_profile/2` for how a live session
+  picks up the change without reconnecting.
+
+  Body: `{age?, gender?, location?, languages?, custom?}` — all optional
+  strings; `gender` must be one of `Credential.genders/0` (`male`,
+  `female`, `nonbinary`) or blank (`""`) to clear. 200 with the updated
+  credential; 422 on validation (CRLF injection, over the byte cap, an
+  unrecognised gender); 404 if the credential vanished; 401 without a
+  Bearer.
+  """
+  @spec profile(Plug.Conn.t(), map()) ::
+          Plug.Conn.t()
+          | {:error, :bad_request | :not_found | Ecto.Changeset.t()}
+  def profile(conn, params) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, attrs} <- parse_profile_attrs(params),
+         {:ok, credential} <- fetch_credential(subject, network),
+         {:ok, updated_cred} <- Credentials.update_credential_profile(credential, attrs) do
+      render(conn, :update, credential: updated_cred)
+    end
+  end
+
+  @doc """
   `PUT /networks/:network_id/password` — #124: the per-network PASSWORD field,
   for BOTH subjects. One field, one stored secret.
 
@@ -483,6 +513,45 @@ defmodule GrappaWeb.NetworksController do
           :error -> {:cont, {:ok, acc}}
         end
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # PATCH /networks/:network_id/profile helpers
+  # ---------------------------------------------------------------------------
+
+  # Whitelist the 5 profile fields, mapping the un-prefixed wire keys
+  # (`age`/`gender`/`location`/`languages`/`custom`, matching what
+  # `credential_to_json/1` emits) onto the schema's `profile_*` atoms. Same
+  # omit-vs-blank contract as `parse_identity_attrs/1`: an omitted key is
+  # left out (no clobber), a present `""` is a deliberate clear.
+  @spec parse_profile_attrs(map()) ::
+          {:ok,
+           %{
+             optional(:profile_age) => String.t(),
+             optional(:profile_gender) => String.t(),
+             optional(:profile_location) => String.t(),
+             optional(:profile_languages) => String.t(),
+             optional(:profile_custom) => String.t()
+           }}
+          | {:error, :bad_request}
+  defp parse_profile_attrs(params) do
+    Enum.reduce_while(
+      [
+        {"age", :profile_age},
+        {"gender", :profile_gender},
+        {"location", :profile_location},
+        {"languages", :profile_languages},
+        {"custom", :profile_custom}
+      ],
+      {:ok, %{}},
+      fn {string_key, atom_key}, {:ok, acc} ->
+        case Map.fetch(params, string_key) do
+          {:ok, v} when is_binary(v) -> {:cont, {:ok, Map.put(acc, atom_key, v)}}
+          {:ok, _} -> {:halt, {:error, :bad_request}}
+          :error -> {:cont, {:ok, acc}}
+        end
+      end
+    )
   end
 
   # Web-layer reconnect wrapper (NEVER the Networks context — Boundary
