@@ -20,6 +20,7 @@ import {
   IRCIDENTIFIER_CASEMAPPING,
   LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD,
   NETWORKS_CREDENTIAL_CONNECTION_STATE,
+  NETWORKS_CREDENTIAL_GENDER,
   NETWORKS_CREDENTIALS_ADMIN_WIRE_SESSION_ACTION,
   NETWORKS_CREDENTIALS_ADMIN_WIRE_SPAWN_ERROR,
   NETWORKS_NETWORK_SERVICES_FLAVOR,
@@ -600,6 +601,9 @@ export const S_NetworksCredentialConnectionState = {
   e: [...NETWORKS_CREDENTIAL_CONNECTION_STATE],
 } as const;
 
+// Grappa.Networks.Credential.gender/0
+export const S_NetworksCredentialGender = { e: [...NETWORKS_CREDENTIAL_GENDER] } as const;
+
 // Grappa.Networks.Credentials.AdminWire.live_state_json/0
 export const S_NetworksCredentialsAdminWireLiveStateJson = {
   o: {
@@ -759,6 +763,11 @@ export const S_NetworksWireCredentialJson = {
     connection_state: S_NetworksCredentialConnectionState,
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
+    age: { u: ["s", "z"] },
+    gender: { u: [S_NetworksCredentialGender, "z"] },
+    location: { u: ["s", "z"] },
+    languages: { u: ["s", "z"] },
+    custom: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
   },
@@ -786,6 +795,11 @@ export const S_NetworksWireNetworkWithNickJson = {
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
     connection: { u: [S_NetworksWireConnectionInfo, "z"] },
+    age: { u: ["s", "z"] },
+    gender: { u: [S_NetworksCredentialGender, "z"] },
+    location: { u: ["s", "z"] },
+    languages: { u: ["s", "z"] },
+    custom: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
   },
@@ -805,6 +819,11 @@ export const S_NetworksWireVisitorNetworkWithNickJson = {
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
     connection: { u: [S_NetworksWireConnectionInfo, "z"] },
+    age: { u: ["s", "z"] },
+    gender: { u: [S_NetworksCredentialGender, "z"] },
+    location: { u: ["s", "z"] },
+    languages: { u: ["s", "z"] },
+    custom: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
   },

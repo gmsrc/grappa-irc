@@ -32,7 +32,7 @@ import { formatDuration } from "./lib/duration";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { errorMessage, friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
-import { deleteAccountBody, updateIdentity, updateNetworkPassword } from "./lib/lifecycle";
+import { deleteAccountBody, updateIdentity, updateNetworkPassword, updateProfile } from "./lib/lifecycle";
 import { networks, user } from "./lib/networks";
 import { mirrorNotificationPrefs, notificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
@@ -293,6 +293,20 @@ const SettingsDrawer: Component<Props> = (props) => {
   // call sites.
   const [identityArmed, setIdentityArmed] = createSignal(false);
 
+  // KVIrc-style CTCP USERINFO profile (age/gender/location/languages/a free
+  // custom field). Targets the SAME selected network the identity editor
+  // above does — no separate picker. Unlike identity, saving does NOT
+  // reconnect (these fields never ride the IRC handshake), so there's no
+  // two-tap confirm here — a plain save.
+  const [profileAge, setProfileAge] = createSignal("");
+  const [profileGender, setProfileGender] = createSignal("");
+  const [profileLocation, setProfileLocation] = createSignal("");
+  const [profileLanguages, setProfileLanguages] = createSignal("");
+  const [profileCustom, setProfileCustom] = createSignal("");
+  const [profileSaving, setProfileSaving] = createSignal(false);
+  const [profileError, setProfileError] = createSignal<string | null>(null);
+  const [profileSaved, setProfileSaved] = createSignal(false);
+
   // #124 — the per-network PASSWORD field. Its own signals and its own save,
   // NOT folded into the identity form above: the password is write-only and
   // leave-blank-to-keep, while the identity fields round-trip and treat a
@@ -335,8 +349,41 @@ const SettingsDrawer: Component<Props> = (props) => {
       setIdentityArmed(false);
       setIdentitySaved(false);
       setIdentityError(null);
+      setProfileAge(net.age ?? "");
+      setProfileGender(net.gender ?? "");
+      setProfileLocation(net.location ?? "");
+      setProfileLanguages(net.languages ?? "");
+      setProfileCustom(net.custom ?? "");
+      setProfileSaved(false);
+      setProfileError(null);
     }),
   );
+
+  const onSaveProfile = async () => {
+    setProfileError(null);
+    setProfileSaved(false);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    setProfileSaving(true);
+    try {
+      // Send all 5 fields; a blank one clears it (same "editor owns the
+      // full value including clear" contract as identity above).
+      await updateProfile(net.slug, {
+        age: profileAge(),
+        gender: profileGender(),
+        location: profileLocation(),
+        languages: profileLanguages(),
+        custom: profileCustom(),
+      });
+      setProfileSaved(true);
+    } catch (err) {
+      setProfileError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't save profile. Try again.",
+      );
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   const onSaveIdentity = async () => {
     setIdentityArmed(false);
@@ -1379,6 +1426,108 @@ const SettingsDrawer: Component<Props> = (props) => {
                   <Show when={identitySaved()}>
                     <p class="settings-identity-ok" data-testid="settings-identity-ok">
                       Identity applied.
+                    </p>
+                  </Show>
+                </div>
+              </div>
+
+              {/* KVIrc-style CTCP USERINFO profile (age/gender/location/
+                languages/a free custom field), per network — targets the
+                same selected network the identity card above does. Unlike
+                identity, saving does NOT reconnect: these fields never ride
+                the IRC handshake, they only feed the server's CTCP
+                USERINFO auto-reply — so a plain save, no two-tap confirm. */}
+              <div
+                class="settings-section settings-section-card"
+                data-testid="settings-section-profile"
+              >
+                <h4 class="settings-section-heading">profile</h4>
+                <div class="settings-identity" data-testid="settings-profile">
+                  <label for="settings-profile-age">Age</label>
+                  <input
+                    id="settings-profile-age"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileAge()}
+                    onInput={(e) => setProfileAge(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-profile-gender">Gender</label>
+                  <select
+                    id="settings-profile-gender"
+                    data-testid="settings-profile-gender"
+                    value={profileGender()}
+                    onChange={(e) => setProfileGender(e.currentTarget.value)}
+                  >
+                    <option value="">unset</option>
+                    <option value="male">male</option>
+                    <option value="female">female</option>
+                    <option value="nonbinary">non-binary</option>
+                  </select>
+
+                  <label for="settings-profile-location">Location</label>
+                  <input
+                    id="settings-profile-location"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileLocation()}
+                    onInput={(e) => setProfileLocation(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-profile-languages">Languages</label>
+                  <input
+                    id="settings-profile-languages"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileLanguages()}
+                    onInput={(e) => setProfileLanguages(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-profile-custom">Custom</label>
+                  <input
+                    id="settings-profile-custom"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileCustom()}
+                    onInput={(e) => setProfileCustom(e.currentTarget.value)}
+                  />
+                  <p class="settings-identity-hint">
+                    Shown to anyone who sends you a CTCP USERINFO query. Leave a field blank to
+                    clear it.
+                  </p>
+
+                  <button
+                    type="button"
+                    class="settings-identity-apply"
+                    data-testid="settings-profile-apply"
+                    disabled={profileSaving()}
+                    onClick={() => void onSaveProfile()}
+                  >
+                    {profileSaving() ? "saving…" : "save profile"}
+                  </button>
+
+                  <Show when={profileError()}>
+                    {(msg) => (
+                      <p
+                        role="alert"
+                        class="settings-identity-error"
+                        data-testid="settings-profile-error"
+                      >
+                        {msg()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={profileSaved()}>
+                    <p class="settings-identity-ok" data-testid="settings-profile-ok">
+                      Profile saved.
                     </p>
                   </Show>
                 </div>

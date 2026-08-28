@@ -2802,6 +2802,34 @@ export async function updateNetworkIdentity(
   return narrowCredentialResponse(await res.json());
 }
 
+// KVIrc-style CTCP USERINFO profile (age/gender/location/languages/a free
+// custom field), per (subject, network) for BOTH subjects
+// (`PATCH /networks/:slug/profile`). Unlike identity, this never bounces
+// the live upstream connection — see `NetworksController.profile/2` doc.
+// All fields optional; a present `""` clears that field. Returns the
+// updated credential JSON. 422 on validation (CRLF injection, over the
+// byte cap, an unrecognised gender); 404 if the caller holds no
+// credential on the network.
+export async function updateNetworkProfile(
+  token: string,
+  networkSlug: string,
+  fields: {
+    age?: string;
+    gender?: string;
+    location?: string;
+    languages?: string;
+    custom?: string;
+  },
+): Promise<CredentialJson> {
+  const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/profile`, {
+    method: "PATCH",
+    headers: buildHeaders(token),
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as CredentialJson;
+}
+
 // #189 — per-network on-connect perform list. `perform_list` is the raw
 // command list (one IRC line per line; null when unset); `oper_pass_set`
 // reports whether the WRITE-ONLY `$oper_pass` secret is stored — the secret
