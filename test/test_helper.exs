@@ -25,7 +25,7 @@ Ecto.Adapters.SQL.Sandbox.mode(Grappa.Repo, :manual)
 # test that arms would race `:ets.new` across async tests — hence here.
 Grappa.Repo.BusyRetry.ensure_fault_table()
 Mox.defmock(Grappa.Admission.CaptchaMock, for: Grappa.Admission.Captcha)
-Mox.defmock(Grappa.Themes.ImageFetcherMock, for: Grappa.Themes.ImageFetcher)
+Mox.defmock(Grappa.Net.ImageFetcherMock, for: Grappa.Net.ImageFetcher)
 # #543 INC-5 — source-alias platform adapter + the hardened command seam.
 # `SourceAliasMock` stands in for a FreeBSD/Linux/Disabled adapter in the
 # ref-count manager tests; `HardenedCmdMock` stands in for the shell-out so

@@ -312,7 +312,7 @@ config :grappa, Grappa.ChannelDirectory,
 # (default `Grappa.Net.Ssrf`, read via compile_env in ImageFetcher.Req) is the
 # rebind-safe resolver seam — test.exs swaps in a loopback-permitting resolver
 # so Bypass is reachable while private ranges stay blocked.
-config :grappa, :themes, image_fetcher: Grappa.Themes.ImageFetcher.Req
+config :grappa, :themes, image_fetcher: Grappa.Net.ImageFetcher.Req
 
 # #543 INC-5 — source-alias platform adapter selection. `substrate` selects
 # the adapter (`:jail` → FreeBSD, `:linux` → AnyIP no-op, `:docker` →
@@ -541,6 +541,9 @@ config :logger, :console,
     # per-upload across the reaper + GET surface.
     :upload_id,
     :slug,
+    # M3b — peer-avatar reaper failure log lines carry the cached row's
+    # id, mirroring the upload_id/slug pair above for the sibling cache.
+    :peer_avatar_id,
     # Numeric severity (CP13 server-window cluster): :ok for 1xx/2xx/3xx,
     # :error for 4xx/5xx — rides the :notice persist for routed numerics
     # so log lines are color-greppable. Mirrors Scrollback.Meta.@known_keys
