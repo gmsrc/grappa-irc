@@ -370,6 +370,100 @@ defmodule GrappaWeb.UserSettingsControllerTest do
     end
   end
 
+  describe "GET /me/settings/show-peer-profiles — auth gating" do
+    test "401 without bearer", %{conn: conn} do
+      conn = get(conn, "/me/settings/show-peer-profiles")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 + false for an unset visitor (visitor-parity)", %{conn: conn} do
+      {_, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/me/settings/show-peer-profiles")
+
+      assert json_response(conn, 200) == %{"show_peer_profiles" => false}
+    end
+  end
+
+  describe "GET /me/settings/show-peer-profiles — happy path" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "returns false when never persisted", %{conn: conn} do
+      conn = get(conn, "/me/settings/show-peer-profiles")
+      assert json_response(conn, 200) == %{"show_peer_profiles" => false}
+    end
+
+    test "reflects the most-recent PUT", %{conn: conn, user: user} do
+      {:ok, _} = UserSettings.put_show_peer_profiles({:user, user.id}, true)
+
+      conn = get(conn, "/me/settings/show-peer-profiles")
+      assert json_response(conn, 200) == %{"show_peer_profiles" => true}
+    end
+  end
+
+  describe "PUT /me/settings/show-peer-profiles — auth gating" do
+    test "401 without bearer", %{conn: conn} do
+      conn = put(conn, "/me/settings/show-peer-profiles", %{"show_peer_profiles" => true})
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 + persisted for a visitor (visitor-parity)", %{conn: conn} do
+      {visitor, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/show-peer-profiles", %{"show_peer_profiles" => true})
+
+      assert json_response(conn, 200) == %{"show_peer_profiles" => true}
+      assert UserSettings.get_show_peer_profiles({:visitor, visitor.id}) == true
+    end
+  end
+
+  describe "PUT /me/settings/show-peer-profiles — happy path" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "200 + persisted for true", %{conn: conn, user: user} do
+      conn = put(conn, "/me/settings/show-peer-profiles", %{"show_peer_profiles" => true})
+      assert json_response(conn, 200) == %{"show_peer_profiles" => true}
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == true
+    end
+
+    test "200 + cleared back to false", %{conn: conn, user: user} do
+      {:ok, _} = UserSettings.put_show_peer_profiles({:user, user.id}, true)
+
+      conn = put(conn, "/me/settings/show-peer-profiles", %{"show_peer_profiles" => false})
+      assert json_response(conn, 200) == %{"show_peer_profiles" => false}
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == false
+    end
+  end
+
+  describe "PUT /me/settings/show-peer-profiles — validation" do
+    setup %{conn: conn} do
+      {_, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id)}
+    end
+
+    test "400 when body is missing the key entirely", %{conn: conn} do
+      conn = put(conn, "/me/settings/show-peer-profiles", %{})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+
+    test "400 when value is not a boolean", %{conn: conn} do
+      conn = put(conn, "/me/settings/show-peer-profiles", %{"show_peer_profiles" => "yes"})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+  end
+
   describe "upload_ttl_seconds — key isolation" do
     setup %{conn: conn} do
       {user, session} = user_and_session()

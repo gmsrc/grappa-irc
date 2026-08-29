@@ -401,6 +401,13 @@ defmodule GrappaWeb.Router do
     get "/me/settings/upload-ttl-seconds", UserSettingsController, :show_upload_ttl_seconds
     put "/me/settings/upload-ttl-seconds", UserSettingsController, :update_upload_ttl_seconds
 
+    # M2 — opt-in to grappa querying OTHER users' CTCP USERINFO profile
+    # (the gender badge's source). Default false; no live-broadcast bridge
+    # (see `Grappa.UserSettings.get_show_peer_profiles/1` doc) — a live
+    # session picks it up on its next (re)spawn.
+    get "/me/settings/show-peer-profiles", UserSettingsController, :show_show_peer_profiles
+    put "/me/settings/show-peer-profiles", UserSettingsController, :update_show_peer_profiles
+
     # #348 — the WS-disconnect -> upstream AWAY grace period, per subject.
     # ONE scalar carries three states: `null` = no preference (the
     # server-wide default applies), `0` = OFF (no timer is ever armed),
