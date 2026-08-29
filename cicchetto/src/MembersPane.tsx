@@ -4,7 +4,7 @@ import { channelKey } from "./lib/channelKey";
 import { getColoredNicklist } from "./lib/colorNicklist";
 import { casemappingForNetwork } from "./lib/isupport";
 import { memberSigil } from "./lib/memberSigil";
-import { type MemberEntry, membersByChannel, sortMembers } from "./lib/members";
+import { type MemberEntry, type MemberGender, membersByChannel, sortMembers } from "./lib/members";
 import { networkBySlug, networks, user } from "./lib/networks";
 import { nickEquals } from "./lib/nickEquals";
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
@@ -79,6 +79,23 @@ const tierClass = (modes: string[]): string => {
 const sigilToPrefix = (modes: string[]): PrefixGlyph => {
   const sigil = memberSigil(modes);
   return sigil === " " ? "" : sigil;
+};
+
+// M2 — the gender badge glyph, or "" when unknown/unset (no badge
+// rendered). ♂/♀ are the long-standing symbols; ⚧ is the widely-
+// recognised transgender/non-binary glyph, used here for :nonbinary.
+// Swappable in one place if a different glyph set is ever wanted.
+const genderGlyph = (gender: MemberGender | null | undefined): string => {
+  switch (gender) {
+    case "male":
+      return "♂";
+    case "female":
+      return "♀";
+    case "nonbinary":
+      return "⚧";
+    default:
+      return "";
+  }
 };
 
 type MenuFor = { nick: string; x: number; y: number } | null;
@@ -191,6 +208,12 @@ const MembersPane: Component<Props> = (props) => {
                       prefix={sigilToPrefix(m.modes)}
                       noColor={!getColoredNicklist()}
                     />
+                    {/* M2 — gender badge, text content (not CSS ::before)
+                        matching the mode-prefix convention above; renders
+                        nothing when unknown/unset. */}
+                    <Show when={genderGlyph(m.gender)}>
+                      {(glyph) => <span class="member-gender">{glyph()}</span>}
+                    </Show>
                   </button>
                 </li>
               )}

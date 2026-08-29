@@ -1156,6 +1156,7 @@ export type SessionWireServerReplyPayload = {
 export type SessionWireMember = {
   nick: string;
   modes: string[];
+  gender?: "male" | "female" | "nonbinary" | null;
 };
 
 export type SessionWireMembersIndexPayload = {

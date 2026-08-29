@@ -1105,7 +1105,14 @@ export const S_SessionWireLusersBundlePayload = {
 } as const;
 
 // Grappa.Session.Wire.member/0
-export const S_SessionWireMember = { o: { nick: "s", modes: { a: "s" } } } as const;
+export const S_SessionWireMember = {
+  o: {
+    nick: "s",
+    modes: { a: "s" },
+    gender: { u: [{ l: "male" }, { l: "female" }, { l: "nonbinary" }, "z"] },
+  },
+  q: ["gender"],
+} as const;
 
 // Grappa.Session.Wire.members_index_payload/0
 export const S_SessionWireMembersIndexPayload = {

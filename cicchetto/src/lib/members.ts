@@ -31,7 +31,7 @@ import { nickEquals } from "./nickEquals";
 // bearer. Logout / rotation flushes it via the identityScopedStore
 // reset (dup-A3 close).
 
-export type { ChannelMembers, MemberEntry } from "./memberTypes";
+export type { ChannelMembers, MemberEntry, MemberGender } from "./memberTypes";
 
 const exports_ = identityScopedStore((onIdentityChange) => {
   const [membersByChannel, setMembersByChannel] = createSignal<Record<ChannelKey, ChannelMembers>>(

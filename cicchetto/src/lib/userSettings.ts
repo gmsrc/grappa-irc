@@ -386,3 +386,38 @@ export async function putDisplayPrefs(
   if (!res.ok) throw await readError(res, false);
   return (await res.json()) as DisplayPrefsResponse;
 }
+
+// ---------------------------------------------------------------------------
+// show_peer_profiles — M2. Opt-in to grappa querying OTHER users' CTCP
+// USERINFO profile (the member-list gender badge's source). Default
+// `false`. No live-broadcast bridge — a live session picks the change up
+// on its next (re)spawn, so there's no cross-device sync signal to mirror
+// here beyond a normal re-fetch on drawer open.
+// ---------------------------------------------------------------------------
+
+export type ShowPeerProfilesResponse = {
+  show_peer_profiles: boolean;
+};
+
+export async function getShowPeerProfiles(token: string): Promise<boolean> {
+  const res = await fetch("/me/settings/show-peer-profiles", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw await readError(res);
+  const body = (await res.json()) as ShowPeerProfilesResponse;
+  return body.show_peer_profiles;
+}
+
+export async function putShowPeerProfiles(token: string, enabled: boolean): Promise<boolean> {
+  const res = await fetch("/me/settings/show-peer-profiles", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ show_peer_profiles: enabled }),
+  });
+  if (!res.ok) throw await readError(res);
+  const body = (await res.json()) as ShowPeerProfilesResponse;
+  return body.show_peer_profiles;
+}

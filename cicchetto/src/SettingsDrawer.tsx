@@ -37,6 +37,11 @@ import { networks, user } from "./lib/networks";
 import { mirrorNotificationPrefs, notificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
 import {
+  loadShowPeerProfiles,
+  saveShowPeerProfiles,
+  showPeerProfilesValue,
+} from "./lib/peerProfiles";
+import {
   deletePushSubscription,
   deviceRows,
   disablePush,
@@ -152,6 +157,10 @@ const SettingsDrawer: Component<Props> = (props) => {
   // which is why it is a signal and not derived from the stored value
   // alone.
   const [autoAwaySavingError, setAutoAwaySavingError] = createSignal<string | null>(null);
+  // M2 — the peer-profiles opt-in. Boolean, no custom-value mode.
+  const [showPeerProfilesSavingError, setShowPeerProfilesSavingError] = createSignal<
+    string | null
+  >(null);
   const [autoAwayCustomMode, setAutoAwayCustomMode] = createSignal(false);
   const [autoAwayCustomDraft, setAutoAwayCustomDraft] = createSignal("");
   // #228, #251 — source-bind (vhost) selection. Server owns the allow-set +
@@ -510,6 +519,9 @@ const SettingsDrawer: Component<Props> = (props) => {
       // #348 — same reason: the auto-away control must show what the
       // server stored, not a client-side guess.
       void loadAutoAwayDebounce(t);
+      // M2 — same reason: the peer-profiles toggle must show the
+      // subject's actual opt-in, not a client-side guess.
+      void loadShowPeerProfiles(t);
       // #228, #251 — load the source-bind (vhost) view so the widget
       // reflects the server's allow-set + current selection.
       void loadVhostSettings(t);
@@ -813,6 +825,21 @@ const SettingsDrawer: Component<Props> = (props) => {
       await saveAutoAwayDebounce(t, seconds);
     } catch (err) {
       setAutoAwaySavingError(err instanceof Error ? err.message : "save_failed");
+    }
+  };
+
+  // M2 — persist the peer-profiles opt-in. Flipping this ON does not
+  // retroactively query anyone already in a joined channel — it only
+  // gates the lazy query for nicks seen from here on.
+  const onShowPeerProfilesChange = async (e: Event) => {
+    const enabled = (e.currentTarget as HTMLInputElement).checked;
+    const t = token();
+    if (t === null) return;
+    setShowPeerProfilesSavingError(null);
+    try {
+      await saveShowPeerProfiles(t, enabled);
+    } catch (err) {
+      setShowPeerProfilesSavingError(err instanceof Error ? err.message : "save_failed");
     }
   };
 
@@ -1717,6 +1744,37 @@ const SettingsDrawer: Component<Props> = (props) => {
               <Show when={autoAwaySavingError() !== null}>
                 <p class="auto-away-error" role="alert" data-testid="auto-away-error">
                   {autoAwaySavingError()}
+                </p>
+              </Show>
+            </fieldset>
+
+            {/* M2 — opt-in to grappa querying other people's CTCP USERINFO
+                profile (the member-list gender badge's source). Off by
+                default: nobody gets an outbound CTCP query from this
+                bouncer just for existing in a shared channel. */}
+            <fieldset class="show-peer-profiles-fieldset">
+              <legend>peer profiles</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={showPeerProfilesValue()}
+                  onChange={(e) => {
+                    void onShowPeerProfilesChange(e);
+                  }}
+                  data-testid="show-peer-profiles-toggle"
+                />
+                show other people's profile info (gender badge)
+              </label>
+              <p class="settings-section-blurb" data-testid="show-peer-profiles-hint">
+                When on, grappa asks other users' clients for their public
+                CTCP USERINFO profile the first time you see them in a
+                channel, and shows a gender badge next to their name when
+                they answer. This sends a small extra message to each new
+                person you meet — off by default.
+              </p>
+              <Show when={showPeerProfilesSavingError() !== null}>
+                <p class="show-peer-profiles-error" role="alert" data-testid="show-peer-profiles-error">
+                  {showPeerProfilesSavingError()}
                 </p>
               </Show>
             </fieldset>
