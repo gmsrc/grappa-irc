@@ -68,6 +68,7 @@ defmodule Grappa.Networks.Credential do
   alias Grappa.{EncryptedBinary, Subject}
   alias Grappa.IRC.{AuthFSM, Identifier, Identity}
   alias Grappa.Networks.Network
+  alias Grappa.Uploads.Upload
   alias Grappa.Visitors.Visitor
 
   # The atom literal stays here (Ecto.Enum needs a compile-time literal for
@@ -232,6 +233,8 @@ defmodule Grappa.Networks.Credential do
           profile_location: String.t() | nil,
           profile_languages: String.t() | nil,
           profile_custom: String.t() | nil,
+          avatar_upload_id: Ecto.UUID.t() | nil,
+          avatar_upload: Upload.t() | Ecto.Association.NotLoaded.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -348,6 +351,18 @@ defmodule Grappa.Networks.Credential do
     field :profile_location, :string
     field :profile_languages, :string
     field :profile_custom, :string
+
+    # M3a — the per-(subject, network) avatar: a `belongs_to` onto a
+    # PERMANENT `Grappa.Uploads.Upload` row (`expires_at: nil`, so the
+    # Reaper's TTL sweep never touches it — unlike an ordinary
+    # scrollback-image upload). Ecto's `belongs_to` auto-defines the
+    # `avatar_upload_id` FK field; NOT redeclared separately above.
+    # `on_delete: :nilify_all` at the DB level (migration) means a
+    # credential never dangles on a hard-deleted upload row — it just
+    # loses its avatar. `Credentials.set_avatar/4`/`clear_avatar/1` are
+    # the only writers; nothing here casts it directly (it's never raw
+    # user input — see those functions' moduledocs for why).
+    belongs_to :avatar_upload, Upload, type: :binary_id
 
     timestamps(type: :utc_datetime_usec)
   end

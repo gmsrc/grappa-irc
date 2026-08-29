@@ -86,6 +86,7 @@ defmodule Grappa.Uploads do
   @slug_regex ~r/\A[a-z2-7]{26}\z/
 
   @storage_root_key {__MODULE__, :storage_root}
+  @base_url_key {__MODULE__, :base_url}
 
   @doc """
   Boot-time storage-root injection. Called once from the application
@@ -108,6 +109,35 @@ defmodule Grappa.Uploads do
   """
   @spec storage_root() :: Path.t()
   def storage_root, do: :persistent_term.get(@storage_root_key)
+
+  @doc """
+  M3a — boot-time public base URL injection (e.g. `GrappaWeb.Endpoint.url()`,
+  seeded once from `application.ex` `start/2` — the same documented
+  boot boundary as `boot/1` above, CLAUDE.md "non-process DI-seams").
+
+  Exists because `public_url/2` below needs an ABSOLUTE URL — it feeds
+  the CTCP AVATAR reply (`Grappa.Session.EventRouter`), plain text sent
+  to an arbitrary remote IRC client with no origin context of its own,
+  unlike the JSON wire response (where cic resolves a relative path
+  against its own same-origin fetch fine). A `Grappa.Networks`/
+  `Grappa.Session` CONTEXT reaching into `GrappaWeb.Endpoint` directly
+  would cross the web/context boundary this codebase otherwise keeps
+  clean (no `Grappa.*` module outside `application.ex` touches
+  `GrappaWeb.Endpoint` — verified before adding this). Idempotent;
+  later calls overwrite.
+  """
+  @spec boot_base_url(String.t()) :: :ok
+  def boot_base_url(url) when is_binary(url) do
+    :persistent_term.put(@base_url_key, url)
+    :ok
+  end
+
+  @doc """
+  Read the configured public base URL. Raises if `boot_base_url/1`
+  hasn't run — any caller that reaches this without prior boot is a bug.
+  """
+  @spec base_url() :: String.t()
+  def base_url, do: :persistent_term.get(@base_url_key)
 
   @type create_attrs :: %{
           required(:subject) => Subject.t(),
@@ -153,6 +183,26 @@ defmodule Grappa.Uploads do
   """
   @spec ext_for(term()) :: {:ok, String.t()} | :error
   defdelegate ext_for(mime), to: __MODULE__.MimeExt
+
+  @doc """
+  M3a — the absolute public URL for a stored upload
+  (`<base_url>/uploads/<slug>.<ext>`, #418's type-carrying extension).
+  Moved here (from what used to be `UploadsController`'s private
+  `public_url/2`) so a non-web caller — `Grappa.Networks.Wire.avatar_url/1`,
+  which needs the SAME absolute shape for the CTCP AVATAR reply — has one
+  place to get it, instead of a second hand-rolled copy. `UploadsController`
+  now delegates here too. An unmapped MIME degrades to an extensionless
+  URL, matching the pre-move behaviour exactly.
+  """
+  @spec public_url(String.t(), String.t()) :: String.t()
+  def public_url(slug, mime) when is_binary(slug) and is_binary(mime) do
+    base = base_url() <> "/uploads/" <> slug
+
+    case ext_for(mime) do
+      {:ok, ext} -> base <> "." <> ext
+      :error -> base
+    end
+  end
 
   @doc """
   Split a client-declared content type into `{mime, charset}`, the

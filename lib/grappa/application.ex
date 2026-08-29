@@ -468,6 +468,21 @@ defmodule Grappa.Application do
         # loops (the flag stays `true` from the last successful boot,
         # but Repo + ETS checks in the controller catch the wedge).
         :ok = Grappa.Health.mark_ready()
+
+        # M3a: the absolute base URL a stored upload's public URL is
+        # built against (`Grappa.Uploads.public_url/2`) — needed by
+        # `Grappa.Networks.Wire.avatar_url/1` for the CTCP AVATAR
+        # reply, which (unlike the JSON wire response) goes out over
+        # IRC to an arbitrary remote client with no origin of its own
+        # to resolve a relative path against. Seeded HERE, after
+        # `Supervisor.start_link/2` returns, not alongside the other
+        # `boot/1` calls above `children` is built: `Endpoint.url/0`
+        # reads a `:persistent_term` Phoenix itself populates only once
+        # the `GrappaWeb.Endpoint` CHILD has actually started — calling
+        # it earlier (measured) crashes boot with "could not find
+        # persistent term for endpoint GrappaWeb.Endpoint."
+        :ok = Grappa.Uploads.boot_base_url(GrappaWeb.Endpoint.url())
+
         result
 
       other ->
