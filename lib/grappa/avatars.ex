@@ -42,7 +42,7 @@ defmodule Grappa.Avatars do
   + byte cap. Duplicating that as a second SSRF implementation for
   avatars would be exactly the "same problem, two solutions" CLAUDE.md
   rejects — this module calls the SAME configured module (`Application.
-  compile_env(:grappa, [:themes, :image_fetcher], ...)`), so a test can
+  get_env(:grappa, :themes)[:image_fetcher]`, read at boot), so a test can
   swap in `Grappa.Net.ImageFetcherMock` for BOTH features with one
   seam. The one thing this module adds ON TOP, because a peer-declared
   URL is materially more adversarial than a URL an authenticated user
@@ -70,6 +70,7 @@ defmodule Grappa.Avatars do
   import Ecto.Query
 
   alias Grappa.Avatars.PeerAvatar
+  alias Grappa.Net.ImageFetcher
   alias Grappa.Repo
   alias Grappa.Uploads.MetadataStrip
 
@@ -79,6 +80,7 @@ defmodule Grappa.Avatars do
   @slug_regex ~r/\A[a-z2-7]{26}\z/
 
   @storage_root_key {__MODULE__, :storage_root}
+  @fetcher_key {__MODULE__, :image_fetcher}
 
   # A cached peer avatar is a speculative, stale-tolerant preview — not
   # a permanent asset. A few days balances "don't re-fetch on every
@@ -93,17 +95,38 @@ defmodule Grappa.Avatars do
   @global_cap_bytes 200 * 1024 * 1024
   @max_fetch_bytes 2 * 1024 * 1024
 
-  @fetcher Application.compile_env(:grappa, [:themes, :image_fetcher], Grappa.Net.ImageFetcher.Req)
-
-  @doc "Boot-time storage-root injection — mirrors `Grappa.Uploads.boot/1`."
+  @doc """
+  Boot-time injection — mirrors `Grappa.Uploads.boot/1` for the storage
+  root, and `Themes.BackgroundImage.boot/0` for the image-fetcher DI
+  seam (#364 J/cross-module-S2): the fetcher is read from
+  `config :grappa, :themes` ONCE here and stashed in `:persistent_term`
+  for lock-free runtime reads, never per call.
+  """
   @spec boot(Path.t()) :: :ok
   def boot(path) when is_binary(path) do
+    fetcher =
+      :grappa
+      |> Application.get_env(:themes, [])
+      |> Keyword.get(:image_fetcher, ImageFetcher.Req)
+
+    :persistent_term.put(@fetcher_key, fetcher)
     :persistent_term.put(@storage_root_key, path)
     :ok
   end
 
   @spec storage_root() :: Path.t()
   def storage_root, do: :persistent_term.get(@storage_root_key)
+
+  # DI seam read at BOOT into `:persistent_term` by `boot/1` and resolved
+  # lock-free here — the SAME `config :grappa, :themes` key
+  # `Themes.BackgroundImage` reads, so one Mox seam covers both features.
+  # The config value stays a module atom read from env — never a
+  # `compile_env` module attribute — or the runtime-generated mock
+  # (`Grappa.Net.ImageFetcherMock`, defined in `test_helper.exs`) becomes
+  # a compile-time "module not available" warning, which
+  # `--warnings-as-errors` turns into a red build. `get/2` defaults to the
+  # real impl, degrading gracefully before `boot/1` runs.
+  defp fetcher, do: :persistent_term.get(@fetcher_key, ImageFetcher.Req)
 
   @doc """
   Fetch `url` (a peer's CTCP AVATAR reply) for `(network_id, nick_key)`
@@ -127,7 +150,7 @@ defmodule Grappa.Avatars do
   def fetch_and_cache(network_id, nick_key, url)
       when is_integer(network_id) and is_binary(nick_key) and is_binary(url) do
     with :ok <- check_global_cap(),
-         {:ok, bytes, content_type} <- @fetcher.fetch(url),
+         {:ok, bytes, content_type} <- fetcher().fetch(url),
          :ok <- check_fetch_size(bytes),
          :ok <- sniff_image_mime(bytes, content_type),
          {:ok, stripped} <- MetadataStrip.run(bytes, content_type),
@@ -175,7 +198,7 @@ defmodule Grappa.Avatars do
   end
 
   # Real magic-byte signatures, not the claimed `Content-Type` header —
-  # `@fetcher` already allowlisted the header, but a peer-declared URL is
+  # The fetcher already allowlisted the header, but a peer-declared URL is
   # adversarial enough to warrant checking the bytes actually ARE what
   # they claim to be before they reach exiftool/disk.
   @spec sniff_image_mime(binary(), String.t()) :: :ok | {:error, :content_mismatch}

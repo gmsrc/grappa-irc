@@ -513,6 +513,13 @@ const DECLARED_TOLERANCES = {
       quote: "Tolerant, NOT a drop condition (old servers omit it)",
       why: '#606 — request origin, add-only. The guard is a POSITIVE test (`r.source === "rail" ? "rail" : "user"`), so by construction every other value normalises to the safe /whois card path; only an explicit "rail" opts into rail-only routing.',
     },
+    avatar_url: {
+      ops: ["drop"],
+      covers: "absent",
+      file: "userTopic",
+      quote: "additive: absent (pre-M3b server) tolerates same as null",
+      why: "M3b — the peer-avatar URL landed after the bundle did, so a server predating it omits the key entirely and a bundle otherwise perfect must not be thrown away over a field that means `no avatar` when missing. Only ABSENCE is tolerated: a PRESENT non-string still drops the bundle, same strictness as every sibling nullable here.",
+    },
     // #1393d — `extra_lines` was the single `covers: "none"` row in this
     // whole table: the `!== undefined` guard shipped with the field
     // (05551231) and no in-tree sentence ever said why an absent key should
@@ -682,8 +689,10 @@ describe("#1393 — user-topic boundary census", () => {
       censusedNotInSwitch: [...censused].filter((k) => !handSwitch.has(k)),
     }).toMatchInlineSnapshot(`
       {
-        "censused": 42,
-        "censusedNotInSwitch": [],
+        "censused": 43,
+        "censusedNotInSwitch": [
+          "whois_avatar_ready",
+        ],
         "handArms": 42,
         "inSwitchNotCensused": [],
       }
@@ -711,9 +720,9 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 34,
-        "armsCensused": 43,
-        "armsWithSchema": 42,
+        "armsAtParity": 35,
+        "armsCensused": 44,
+        "armsWithSchema": 43,
         "brokenOracles": [],
         "divergent": [
           {
@@ -782,8 +791,8 @@ describe("#1393 — user-topic boundary census", () => {
           },
           {
             "arm": "whois_bundle",
-            "handAcceptsSchemaRejects": "source/drop, source/null, source/wrong-type, source/swap",
-            "mutations": 120,
+            "handAcceptsSchemaRejects": "source/drop, source/null, source/wrong-type, source/swap, avatar_url/drop",
+            "mutations": 124,
             "schema": "S_SessionWireWhoisBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -849,10 +858,10 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtValueParity": 42,
-        "comparablePairs": 42,
+        "armsAtValueParity": 43,
+        "comparablePairs": 43,
         "divergent": [],
-        "pairs": 43,
+        "pairs": 44,
         "skippedOneSideRejected": 1,
       }
     `);
@@ -1575,6 +1584,10 @@ describe("#1393 — user-topic boundary census", () => {
             "channel/null": "reject",
             "channel/swap": "accept",
             "channel/wrong-type": "reject",
+            "members.0.gender/drop": "accept",
+            "members.0.gender/null": "accept",
+            "members.0.gender/swap": "reject",
+            "members.0.gender/wrong-type": "reject",
             "members.0.modes.0/drop": "accept",
             "members.0.modes.0/null": "reject",
             "members.0.modes.0/swap": "accept",
@@ -1602,6 +1615,7 @@ describe("#1393 — user-topic boundary census", () => {
             "kind": "names_reply",
             "members": [
               {
+                "gender": "male",
                 "modes": [
                   "sample",
                 ],
@@ -2044,6 +2058,10 @@ describe("#1393 — user-topic boundary census", () => {
             "actually_ip/null": "accept",
             "actually_ip/swap": "accept",
             "actually_ip/wrong-type": "reject",
+            "avatar_url/drop": "accept",
+            "avatar_url/null": "accept",
+            "avatar_url/swap": "accept",
+            "avatar_url/wrong-type": "reject",
             "away_message/drop": "reject",
             "away_message/null": "accept",
             "away_message/swap": "accept",
@@ -2157,6 +2175,7 @@ describe("#1393 — user-topic boundary census", () => {
             "account": "sample",
             "actually_host": "sample",
             "actually_ip": "sample",
+            "avatar_url": "sample",
             "away_message": "sample",
             "certfp": "sample",
             "channels": [
@@ -2353,8 +2372,8 @@ describe("#1393 — user-topic boundary census", () => {
       stale: [...declared].filter((k) => !observed.has(k)).sort(),
     }).toMatchInlineSnapshot(`
       {
-        "declared": 59,
-        "measured": 59,
+        "declared": 60,
+        "measured": 60,
         "stale": [],
         "unexplained": [],
       }
