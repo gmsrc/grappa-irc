@@ -1261,6 +1261,19 @@ defmodule Grappa.Session.Server do
         Topic.user_settings(opts.subject_label)
       )
 
+    # M3b — and to this NETWORK's peer-avatar-cache bridge, so a fetch
+    # that completes off-mailbox (`Grappa.Avatars.fetch_and_cache/3`,
+    # running in a detached `Grappa.TaskSupervisor` task) can fold its
+    # result into `state.peer_profile_cache` and push an incremental
+    # WHOIS-card update, even when the fetch finishes after the 318 that
+    # closed the bundle. Keyed by network_id (not subject_label) — see
+    # `Topic.peer_avatar_cache/1`'s moduledoc for why.
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Grappa.PubSub,
+        Topic.peer_avatar_cache(state.network_id)
+      )
+
     emit_lifecycle(:spawned, state)
 
     # #498 — seed the cheap live-nick copy with the initial (configured)
@@ -3040,6 +3053,35 @@ defmodule Grappa.Session.Server do
     {:noreply, %{state | avatar_url: avatar_url}}
   end
 
+  # M3b — a peer avatar fetch (`Grappa.Avatars.fetch_and_cache/3`) landed
+  # off this GenServer's mailbox, in a detached `Grappa.TaskSupervisor`
+  # task. Fold the resulting slug into `peer_profile_cache` and push an
+  # incremental wire event on the user topic — the fetch routinely
+  # completes AFTER a `/whois` already closed its bundle (318 fires
+  # immediately; the HTTP round-trip does not), so a currently-open
+  # WHOIS card would otherwise never learn the avatar arrived without
+  # the operator re-running `/whois`. cic patches the event into an
+  # already-open card by nick match and ignores it otherwise — no
+  # server-side "is a card open" tracking needed.
+  def handle_info({:peer_avatar_ready, network_id, _, _}, %{network_id: other} = state)
+      when network_id != other do
+    {:noreply, state}
+  end
+
+  def handle_info({:peer_avatar_ready, network_id, nick_key, slug}, %{network_id: network_id} = state) do
+    cache = Map.get(state, :peer_profile_cache, %{})
+    existing = Map.get(cache, nick_key, %{})
+    new_cache = Map.put(cache, nick_key, Map.put(existing, :avatar_slug, slug))
+
+    :ok =
+      Grappa.PubSub.broadcast_event(
+        Topic.user(state.subject_label),
+        SessionWire.whois_avatar_ready(state.network_slug, nick_key, peer_avatar_route(state, slug))
+      )
+
+    {:noreply, %{state | peer_profile_cache: new_cache}}
+  end
+
   # Linked Client crashed abnormally. Record a backoff failure (so the
   # next respawn waits longer) then propagate the stop. The Backoff call
   # is synchronous (HIGH-15 cast→call flip): the dying Server's
@@ -3857,6 +3899,40 @@ defmodule Grappa.Session.Server do
   @spec session_casemapping(t()) :: Identifier.casemapping()
   defp session_casemapping(state),
     do: ISupport.casemapping(Map.get(state, :isupport, ISupport.default()))
+
+  # M3b — the authenticated, same-origin serving path a browser fetches
+  # a cached peer avatar from — NEVER the raw third-party URL the peer's
+  # CTCP AVATAR reply carried. Relative (no `base_url()` needed, unlike
+  # `Grappa.Uploads.public_url/2`'s CTCP-reply use case): this only ever
+  # reaches the browser over the already-authenticated wire, never IRC.
+  @spec peer_avatar_route(t(), String.t()) :: String.t()
+  defp peer_avatar_route(state, slug) do
+    "/networks/#{state.network_id}/peer_avatar/#{slug}"
+  end
+
+  # M3b — resolves a WHOIS target's cached avatar URL, if any. Checks
+  # THIS session's in-memory `peer_profile_cache` first (cheap, no DB
+  # hit, populated by M2/M3b's own lazy query); falls back to
+  # `Grappa.Avatars.get/2` (a DIFFERENT session on this network, or a
+  # prior restart of this one, may have already cached this peer). `nil`
+  # when neither has it — the common case for a target never seen in a
+  # shared channel, or a fetch still in flight.
+  @spec whois_target_avatar_url(t(), String.t()) :: String.t() | nil
+  defp whois_target_avatar_url(state, target) do
+    nick_key = fold_key(state, target)
+    cache = Map.get(state, :peer_profile_cache, %{})
+
+    case Map.get(Map.get(cache, nick_key, %{}), :avatar_slug) do
+      slug when is_binary(slug) ->
+        peer_avatar_route(state, slug)
+
+      _ ->
+        case Grappa.Avatars.get(state.network_id, nick_key) do
+          nil -> nil
+          row -> peer_avatar_route(state, row.slug)
+        end
+    end
+  end
 
   # Existing behavior — persist scrollback row, broadcast on per-channel
   # PubSub topic, send the wire line. Reply carries the persisted row.
@@ -5838,11 +5914,17 @@ defmodule Grappa.Session.Server do
   # — NOT persisted in scrollback. cic's `whoisCard.ts` keys by network
   # and replaces on each new bundle.
   defp apply_effects([{:whois_bundle, target, accum, reply_to} | rest], state) do
+    # M3b — synchronous cache-hit path: a peer avatar already cached
+    # (from an earlier M2/M3b lazy query on this or a prior WHOIS) is
+    # available immediately; the async-fetch-completes-later path is
+    # `handle_info({:peer_avatar_ready, ...})` above.
+    avatar_url = whois_target_avatar_url(state, target)
+
     :ok =
       Broadcaster.to_requester(
         state,
         reply_to,
-        SessionWire.whois_bundle(state.network_slug, target, accum)
+        SessionWire.whois_bundle(state.network_slug, target, accum, avatar_url)
       )
 
     apply_effects(rest, state)

@@ -100,6 +100,7 @@ defmodule Grappa.Session.Wire do
           | :away_confirmed
           | :mentions_bundle
           | :whois_bundle
+          | :whois_avatar_ready
           | :peer_away
           | :invite_ack
           | :lusers_bundle
@@ -627,7 +628,16 @@ defmodule Grappa.Session.Wire do
           secure: boolean(),
           secure_cipher: String.t() | nil,
           certfp: String.t() | nil,
-          extra_lines: [whois_extra_line()] | nil
+          extra_lines: [whois_extra_line()] | nil,
+          # M3b — the AUTHENTICATED, same-origin serving path for this
+          # peer's cached avatar (`/networks/:id/peer_avatar/:slug`) —
+          # NEVER the raw third-party URL their CTCP AVATAR reply
+          # carried (see `docs/DESIGN_NOTES.md` #1280). `nil` when no
+          # avatar is cached yet (never queried, still fetching, or the
+          # peer never answered) — a LATER `whois_avatar_ready` event on
+          # the same user topic (`SessionWire.whois_avatar_ready/3`)
+          # patches an open card if the fetch completes afterward.
+          avatar_url: String.t() | nil
         }
 
   @typedoc """
@@ -1530,9 +1540,11 @@ defmodule Grappa.Session.Wire do
   # `defstruct`, next to the data: `source` still defaults to `:user`, the
   # flags to `false`, `channels` / `extra_lines` to nil (a `null` on the wire,
   # which is NOT the same value as `[]`). Duplication removed, not moved.
-  @spec whois_bundle(String.t(), String.t(), WhoisAccum.t()) :: whois_bundle_payload()
-  def whois_bundle(network_slug, target, %WhoisAccum{} = accum)
-      when is_binary(network_slug) and is_binary(target) do
+  @spec whois_bundle(String.t(), String.t(), WhoisAccum.t(), String.t() | nil) ::
+          whois_bundle_payload()
+  def whois_bundle(network_slug, target, %WhoisAccum{} = accum, avatar_url)
+      when is_binary(network_slug) and is_binary(target) and
+             (is_binary(avatar_url) or is_nil(avatar_url)) do
     %{
       kind: :whois_bundle,
       network: network_slug,
@@ -1571,8 +1583,33 @@ defmodule Grappa.Session.Wire do
       certfp: accum.certfp,
       # #221 — extra_lines are prepended LIFO by whois_extra_line_fold for
       # O(1) fold; reverse here so cic sees them in arrival (wire) order.
-      extra_lines: reverse_extra_lines(accum.extra_lines)
+      extra_lines: reverse_extra_lines(accum.extra_lines),
+      avatar_url: avatar_url
     }
+  end
+
+  @typedoc """
+  M3b — incremental WHOIS-card patch: a peer's avatar fetch
+  (`Grappa.Avatars.fetch_and_cache/3`) completed AFTER the `whois_bundle`
+  that would have carried it was already sent (318 fires immediately;
+  the async HTTP fetch routinely does not). Broadcast on the SAME
+  `Topic.user/1` the bundle itself uses; cic's `whoisCard.ts` patches
+  the `avatar_url` field of an already-open card for this `(network,
+  nick)` and is a silent no-op if no matching card is open — this event
+  carries no other WHOIS data, it is not a substitute bundle.
+  """
+  @type whois_avatar_ready_payload :: %{
+          kind: :whois_avatar_ready,
+          network: String.t(),
+          nick: String.t(),
+          avatar_url: String.t()
+        }
+
+  @doc "Builds the `whois_avatar_ready` incremental WHOIS-card patch — see the typedoc above."
+  @spec whois_avatar_ready(String.t(), String.t(), String.t()) :: whois_avatar_ready_payload()
+  def whois_avatar_ready(network_slug, nick, avatar_url)
+      when is_binary(network_slug) and is_binary(nick) and is_binary(avatar_url) do
+    %{kind: :whois_avatar_ready, network: network_slug, nick: nick, avatar_url: avatar_url}
   end
 
   @spec reverse_extra_lines([whois_extra_line()] | nil) :: [whois_extra_line()] | nil

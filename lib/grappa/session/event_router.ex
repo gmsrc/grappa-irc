@@ -248,7 +248,17 @@ defmodule Grappa.Session.EventRouter do
   statically depend on `Networks` (the reverse edge already exists), so
   the 3-atom closed set is duplicated here, not shared.
   """
-  @type peer_profile_entry :: %{gender: :male | :female | :nonbinary | nil}
+  @type peer_profile_entry :: %{
+          gender: :male | :female | :nonbinary | nil,
+          # M3b — `nil` = never queried/no reply yet, `:pending` = a fetch
+          # is in flight (`Grappa.Avatars.fetch_and_cache/3`, dispatched
+          # off `Grappa.TaskSupervisor`), a binary = the cached slug once
+          # the fetch lands. Each field's OWN presence (not the entry's
+          # presence as a whole, once there are two independently-queried
+          # fields sharing one entry) is what a query-dedup check tests —
+          # see `maybe_query_userinfo/2` / `maybe_query_avatar/2`.
+          avatar_slug: String.t() | :pending | nil
+        }
 
   @typedoc """
   M2 — network-wide, per-session cache of peer profile info, keyed by
@@ -649,17 +659,17 @@ defmodule Grappa.Session.EventRouter do
         prefix_userhost(msg)
       )
 
-    # M2 — a peer joining a channel we're in is a "first seen this
-    # session" moment worth a lazy CTCP USERINFO query (opt-in +
-    # rate-limited + cache-deduped inside the helper). Self-JOIN never
-    # queries itself — `maybe_query_userinfo/2` also no-ops on that, but
-    # skipping the call for our own nick avoids the pointless cache/rate
-    # limiter touch.
+    # M2/M3b — a peer joining a channel we're in is a "first seen this
+    # session" moment worth a lazy CTCP USERINFO + AVATAR query (opt-in +
+    # rate-limited + cache-deduped inside the helpers). Self-JOIN never
+    # queries itself — `maybe_query_peer_profile/2` also no-ops on that,
+    # but skipping the call for our own nick avoids the pointless
+    # cache/rate limiter touch.
     {state2, query_effects} =
       if nick_eq?(sender, state.nick) do
         {state, []}
       else
-        maybe_query_userinfo(state, sender)
+        maybe_query_peer_profile(state, sender)
       end
 
     # CP15 B1: self-JOIN echo promotes the per-channel window to :joined.
@@ -1097,7 +1107,7 @@ defmodule Grappa.Session.EventRouter do
         if nick_eq?(nick, acc_state.nick) do
           {acc_state, acc_effects}
         else
-          {next_state, effects} = maybe_query_userinfo(acc_state, nick)
+          {next_state, effects} = maybe_query_peer_profile(acc_state, nick)
           {next_state, acc_effects ++ effects}
         end
       end)
@@ -2598,7 +2608,10 @@ defmodule Grappa.Session.EventRouter do
     # `ctcp_meta/1` (no separate silent-bookkeeping path). The ONLY thing
     # M2 adds is a side-effect extraction of `Gender=` into
     # `peer_profile_cache`, alongside the unchanged persist.
-    state2 = maybe_capture_peer_userinfo(state, sender, body)
+    state2 =
+      state
+      |> maybe_capture_peer_userinfo(sender, body)
+      |> maybe_capture_peer_avatar(sender, body)
 
     {state3, eff} =
       build_persist(
@@ -3281,15 +3294,28 @@ defmodule Grappa.Session.EventRouter do
             state
 
           gender ->
-            nick_key = normalize_nick(sender, casemapping(state))
-            cache = Map.get(state, :peer_profile_cache, %{})
-            existing = Map.get(cache, nick_key, %{gender: nil})
-            %{state | peer_profile_cache: Map.put(cache, nick_key, %{existing | gender: gender})}
+            put_peer_profile_field(state, sender, :gender, gender)
         end
 
       _ ->
         state
     end
+  end
+
+  # Shared read-modify-write for one field of one nick's
+  # `peer_profile_cache` entry. `Map.put/3` (not the `%{map | k: v}`
+  # struct-update syntax the pre-M3b USERINFO code used) DELIBERATELY —
+  # M3b added a second, independently-queried field (`avatar_slug`) to
+  # the same per-nick entry, so an entry may exist with only ONE of the
+  # two keys set (e.g. an avatar query landed before any USERINFO query
+  # did); `%{map | k: v}` raises `KeyError` on a missing key, `Map.put/3`
+  # does not.
+  @spec put_peer_profile_field(state(), String.t(), :gender | :avatar_slug, term()) :: state()
+  defp put_peer_profile_field(state, nick, field, value) do
+    nick_key = normalize_nick(nick, casemapping(state))
+    cache = Map.get(state, :peer_profile_cache, %{})
+    existing = Map.get(cache, nick_key, %{})
+    %{state | peer_profile_cache: Map.put(cache, nick_key, Map.put(existing, field, value))}
   end
 
   # KVIrc's own USERINFO-reply parser does exactly this: a case-
@@ -3337,13 +3363,27 @@ defmodule Grappa.Session.EventRouter do
   # branch. On a successful take, the nick is marked as queried in
   # `peer_profile_cache` BEFORE the reply (if any) arrives — see the
   # `peer_profile_cache` typedoc for why eager marking is required.
+  # M3b — combines the two independent lazy peer-profile queries (USERINFO
+  # gender, AVATAR image) behind ONE call so the JOIN/353 call sites don't
+  # each have to know both exist. Each half is independently opted-in/
+  # rate-limited/cache-deduped; a caller just wants "ask what we can, cheaply."
+  @spec maybe_query_peer_profile(state(), String.t()) :: {state(), [effect()]}
+  defp maybe_query_peer_profile(state, nick) do
+    {state2, userinfo_effects} = maybe_query_userinfo(state, nick)
+    {state3, avatar_effects} = maybe_query_avatar(state2, nick)
+    {state3, userinfo_effects ++ avatar_effects}
+  end
+
   @spec maybe_query_userinfo(state(), String.t()) :: {state(), [effect()]}
   defp maybe_query_userinfo(state, nick) do
     if Map.get(state, :show_peer_profiles, false) do
       nick_key = normalize_nick(nick, casemapping(state))
       cache = Map.get(state, :peer_profile_cache, %{})
 
-      if Map.has_key?(cache, nick_key) do
+      # M3b: dedup on the GENDER field specifically, not entry presence —
+      # an entry may already exist because `maybe_query_avatar/2` queried
+      # this same nick first.
+      if Map.has_key?(Map.get(cache, nick_key, %{}), :gender) do
         {state, []}
       else
         take_userinfo_query_token(state, nick, nick_key, cache)
@@ -3363,11 +3403,124 @@ defmodule Grappa.Session.EventRouter do
            @userinfo_query_refill_per_sec
          ) do
       :ok ->
-        new_cache = Map.put(cache, nick_key, %{gender: nil})
+        existing = Map.get(cache, nick_key, %{})
+        new_cache = Map.put(cache, nick_key, Map.put(existing, :gender, nil))
         {%{state | peer_profile_cache: new_cache}, [{:reply, "PRIVMSG #{nick} :\x01USERINFO\x01"}]}
 
       {:error, :rate_limited} ->
         {state, []}
+    end
+  end
+
+  # M3b — sibling of `@userinfo_query_bucket`, its OWN namespace and MUCH
+  # more conservative numbers: an avatar reply triggers a real outbound
+  # HTTP fetch (`Grappa.Avatars.fetch_and_cache/3`), not just a one-line
+  # CTCP text reply — a burst of these is a real bandwidth/disk cost, not
+  # just a wire-chat cost.
+  @avatar_query_bucket :peer_profile_avatar_query
+  @avatar_query_capacity 5
+  @avatar_query_refill_per_sec 0.1
+
+  @doc false
+  @spec maybe_query_avatar(state(), String.t()) :: {state(), [effect()]}
+  defp maybe_query_avatar(state, nick) do
+    if Map.get(state, :show_peer_profiles, false) do
+      nick_key = normalize_nick(nick, casemapping(state))
+      cache = Map.get(state, :peer_profile_cache, %{})
+
+      if Map.has_key?(Map.get(cache, nick_key, %{}), :avatar_slug) do
+        {state, []}
+      else
+        take_avatar_query_token(state, nick, nick_key, cache)
+      end
+    else
+      {state, []}
+    end
+  end
+
+  @spec take_avatar_query_token(state(), String.t(), String.t(), peer_profile_cache()) ::
+          {state(), [effect()]}
+  defp take_avatar_query_token(state, nick, nick_key, cache) do
+    case TokenBucket.take(
+           @avatar_query_bucket,
+           {state.subject, state.network_id},
+           @avatar_query_capacity,
+           @avatar_query_refill_per_sec
+         ) do
+      :ok ->
+        existing = Map.get(cache, nick_key, %{})
+        new_cache = Map.put(cache, nick_key, Map.put(existing, :avatar_slug, nil))
+        {%{state | peer_profile_cache: new_cache}, [{:reply, "PRIVMSG #{nick} :\x01AVATAR\x01"}]}
+
+      {:error, :rate_limited} ->
+        {state, []}
+    end
+  end
+
+  # M3b — side-effect extraction for an inbound CTCP AVATAR reply: an
+  # `http(s)://` URL dispatches a detached, SSRF-hardened fetch
+  # (`Grappa.Avatars.fetch_and_cache/3`, off `Grappa.TaskSupervisor` —
+  # never inline, it's a blocking HTTP round-trip); anything else (no
+  # URL, a bare filename — the legacy DCC offer this codebase never
+  # implements) is silently dropped. Marks `avatar_slug: :pending`
+  # BEFORE the fetch completes so a second reply (channel + private, or
+  # a repeat) doesn't dispatch a second fetch for the same nick.
+  @spec maybe_capture_peer_avatar(state(), String.t(), binary()) :: state()
+  defp maybe_capture_peer_avatar(state, sender, body) do
+    case CTCP.verb_args(body) do
+      {"AVATAR", args} ->
+        case extract_avatar_url(args) do
+          nil ->
+            state
+
+          url ->
+            dispatch_avatar_fetch(state, sender, url)
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp dispatch_avatar_fetch(state, sender, url) do
+    nick_key = normalize_nick(sender, casemapping(state))
+    cache = Map.get(state, :peer_profile_cache, %{})
+    entry = Map.get(cache, nick_key, %{})
+
+    if is_nil(Map.get(entry, :avatar_slug)) do
+      network_id = state.network_id
+
+      _ =
+        Task.Supervisor.start_child(Grappa.TaskSupervisor, fn ->
+          Grappa.Avatars.fetch_and_cache(network_id, nick_key, url)
+        end)
+
+      put_peer_profile_field(state, sender, :avatar_slug, :pending)
+    else
+      state
+    end
+  end
+
+  # An `http://`/`https://` absolute URL only — the CTCP AVATAR
+  # convention's OTHER reply shape (a bare local filename, meant to be
+  # fetched via DCC) is refused outright: grappa never implements DCC
+  # (see `docs/DESIGN_NOTES.md` #1280 — an always-on multi-user bouncer
+  # has no business accepting inbound P2P connections from arbitrary IRC
+  # nicks). `args` is the CTCP reply's whole remainder — KVIrc's own
+  # `AVATAR <file> [<size>]` shape means a trailing size may follow the
+  # URL; only the first token is the URL.
+  @spec extract_avatar_url(String.t()) :: String.t() | nil
+  defp extract_avatar_url(args) when is_binary(args) do
+    case args |> String.trim() |> String.split(" ", parts: 2) do
+      [url | _] when url != "" ->
+        if String.starts_with?(url, "http://") or String.starts_with?(url, "https://") do
+          url
+        else
+          nil
+        end
+
+      _ ->
+        nil
     end
   end
 

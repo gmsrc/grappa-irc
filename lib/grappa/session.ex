@@ -72,6 +72,11 @@ defmodule Grappa.Session do
   use Boundary,
     top_level?: true,
     deps: [
+      # M3b — `EventRouter.maybe_query_avatar/2` dispatches
+      # `Avatars.fetch_and_cache/3` inside a detached
+      # `Task.Supervisor.start_child`; `Session.Server` reads
+      # `Avatars.get/2` to seed `whois_bundle`'s `avatar_url` synchronously.
+      Grappa.Avatars,
       Grappa.ChannelDirectory,
       Grappa.IRC,
       Grappa.Log,

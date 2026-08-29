@@ -51,6 +51,7 @@ defmodule GrappaWeb.NetworksController do
   use GrappaWeb, :controller
 
   alias Grappa.Accounts.User
+  alias Grappa.Avatars
   alias Grappa.IRC.Identifier
   alias Grappa.{Networks, ServerSettings, Session, Uploads}
   alias Grappa.Networks.{Credential, Credentials, SessionPlan}
@@ -304,6 +305,45 @@ defmodule GrappaWeb.NetworksController do
       render(conn, :update, credential: updated_cred)
     end
   end
+
+  @doc """
+  `GET /networks/:network_id/peer_avatar/:slug` — M3b: serves a cached
+  PEER avatar's sanitized bytes. Deliberately NOT the public, unauth'd
+  `GET /uploads/:slug` shape — a peer's declared CTCP AVATAR URL is
+  untrusted content grappa fetched on their behalf, never something the
+  operator's own user chose to publish, so it stays behind the SAME
+  `:authn` + `:resolve_network` gate every other `/networks/:network_id/*`
+  route already has (ownership: any live credential on this network).
+
+  200 with the image bytes; 404 for a bad slug, a missing/expired row,
+  or a row whose file went missing (no oracle — same collapse
+  `UploadsController.show/2` uses); 401 without a Bearer; 403/404 (via
+  `:resolve_network`) for a network the caller has no credential on.
+
+  `path` comes from `Avatars.storage_path/1`, which validates the slug
+  against `^[a-z2-7]{26}$` before joining it — same guard
+  `Uploads.storage_path/2` gives `UploadsController.show/2`'s identical
+  shape. `bytes` is sanitized file content, not attacker-supplied HTML —
+  Sobelow can't follow either provenance across the module boundary.
+  """
+  @sobelow_skip ["Traversal.FileModule", "XSS.SendResp"]
+  @spec peer_avatar(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def peer_avatar(conn, %{"slug" => slug}) when is_binary(slug) do
+    with {:ok, row} <- Avatars.get_by_slug(slug),
+         path = Avatars.storage_path(row.slug),
+         {:ok, bytes} <- File.read(path) do
+      conn
+      |> put_resp_header("content-type", row.mime)
+      |> put_resp_header("x-content-type-options", "nosniff")
+      |> put_resp_header("cache-control", "private, max-age=3600")
+      |> send_resp(200, bytes)
+    else
+      _ ->
+        conn |> put_status(:not_found) |> json(%{error: "not_found"})
+    end
+  end
+
+  def peer_avatar(conn, _), do: conn |> put_status(:not_found) |> json(%{error: "not_found"})
 
   @doc """
   `PUT /networks/:network_id/password` — #124: the per-network PASSWORD field,

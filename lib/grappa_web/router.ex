@@ -536,6 +536,14 @@ defmodule GrappaWeb.Router do
     put "/avatar", NetworksController, :avatar
     delete "/avatar", NetworksController, :delete_avatar
 
+    # M3b — authenticated serving route for a cached PEER avatar
+    # (`Grappa.Avatars`, keyed by `(network, folded nick)`). Deliberately
+    # NOT the public `/uploads/:slug` shape — see
+    # `NetworksController.peer_avatar/2` doc. Same ResolveNetwork
+    # pipeline (ownership: any live credential on this network can view
+    # any peer avatar cached for it).
+    get "/peer_avatar/:slug", NetworksController, :peer_avatar
+
     # #189 — on-connect perform list editor (raw IRC lines run SERVER-side
     # at 001, before the built-in identify + autojoin). Rides the same
     # ResolveNetwork pipeline (ownership) + the `networks` nginx allowlist

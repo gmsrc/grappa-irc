@@ -257,6 +257,27 @@ defmodule Grappa.PubSub.Topic do
   end
 
   @doc """
+  Builds the peer-avatar-cache bridge topic (M3b).
+
+  Third instance of the `ws_presence/1` shape: an internal grappa-side
+  fan-out from `Grappa.Avatars.fetch_and_cache/3` (running in a detached
+  `Grappa.TaskSupervisor` task, off any single session's mailbox) to
+  EVERY live `Session.Server` on this network, so a peer-avatar fetch
+  that completes after a `/whois` already closed its bundle can still
+  push an incremental update to an open WHOIS card. Keyed by
+  `network_id` (an integer, not a subject label) because the fetch has
+  no subject of its own — it's triggered by whichever session first saw
+  the peer, but the result is useful to every subject with a live
+  session on that network. Raw Elixir terms, like `user_settings/1` —
+  never subscribable by an external WS client, excluded from `parse/1`/
+  `valid?/1` for the same reason.
+  """
+  @spec peer_avatar_cache(integer()) :: t()
+  def peer_avatar_cache(network_id) when is_integer(network_id) do
+    "grappa:peer_avatar_cache:" <> Integer.to_string(network_id)
+  end
+
+  @doc """
   Decodes a topic string back into its tagged-tuple form.
 
   Returns `{:ok, parsed}` for any of the three documented shapes,

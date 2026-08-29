@@ -808,7 +808,7 @@ defmodule Grappa.Session.WireTest do
         channels: ["@#italia", "+#grappa"]
       }
 
-      payload = Wire.whois_bundle("azzurra", "alice", accum)
+      payload = Wire.whois_bundle("azzurra", "alice", accum, nil)
 
       assert payload == %{
                kind: :whois_bundle,
@@ -849,12 +849,13 @@ defmodule Grappa.Session.WireTest do
                secure: false,
                secure_cipher: nil,
                certfp: nil,
-               extra_lines: nil
+               extra_lines: nil,
+               avatar_url: nil
              }
     end
 
     test "tolerates an empty accum (no numerics fired before 318) — every field nil; is_operator false" do
-      payload = Wire.whois_bundle("azzurra", "ghost", %WhoisAccum{})
+      payload = Wire.whois_bundle("azzurra", "ghost", %WhoisAccum{}, nil)
 
       assert payload == %{
                kind: :whois_bundle,
@@ -891,7 +892,8 @@ defmodule Grappa.Session.WireTest do
                secure: false,
                secure_cipher: nil,
                certfp: nil,
-               extra_lines: nil
+               extra_lines: nil,
+               avatar_url: nil
              }
     end
 
@@ -906,7 +908,7 @@ defmodule Grappa.Session.WireTest do
         extra_lines: [%{numeric: 320, text: "is a volunteer staff member"}]
       }
 
-      payload = Wire.whois_bundle("libera", "alice", accum)
+      payload = Wire.whois_bundle("libera", "alice", accum, nil)
 
       assert payload.account == "AliceAccount"
       assert payload.secure == true
@@ -921,7 +923,7 @@ defmodule Grappa.Session.WireTest do
     # verbatim. :rail is the query-rail auto-fetch; anything else defaults to
     # :user (proven by the two exact-map tests above, which prime no :source).
     test "projects the accum :source (rail auto-fetch) into the wire shape" do
-      payload = Wire.whois_bundle("azzurra", "alice", %WhoisAccum{source: :rail})
+      payload = Wire.whois_bundle("azzurra", "alice", %WhoisAccum{source: :rail}, nil)
       assert payload.source == :rail
     end
   end
@@ -1200,7 +1202,7 @@ defmodule Grappa.Session.WireTest do
         Wire.kicked("net", "#c", "by", "r"),
         Wire.away_confirmed("net", :present),
         Wire.mentions_bundle("net", "from", "to", nil, []),
-        Wire.whois_bundle("net", "alice", %WhoisAccum{}),
+        Wire.whois_bundle("net", "alice", %WhoisAccum{}, nil),
         Wire.peer_away("net", "alice", "Gone fishing"),
         Wire.invite_ack("net", "#italia", "alice"),
         Wire.lusers_bundle("net", %LusersAccum{}),

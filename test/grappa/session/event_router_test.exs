@@ -737,6 +737,71 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.peer_profile_cache == %{}
     end
 
+    # M3b — CTCP AVATAR reply parsing. `dispatch_avatar_fetch/3` starts a
+    # REAL `Task.Supervisor.start_child(Grappa.TaskSupervisor, ...)` on a
+    # valid URL (the app's full supervision tree is up under `mix test`),
+    # so these assert on the SYNCHRONOUS state transition
+    # (`peer_profile_cache` marked `:pending`) — the async fetch's own
+    # SSRF/cap/sniff/strip behavior is `Grappa.AvatarsTest`'s job, not
+    # this file's; asserting on ITS outcome here would need cross-process
+    # Mox wiring for no real coverage gain.
+    test "a CTCP AVATAR reply with an http(s) URL marks the cache :pending and dispatches a fetch" do
+      state = base_state()
+      body = <<0x01, "AVATAR http://peer.example/av.png", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, [{:persist, :notice, _}]} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{"alice" => %{avatar_slug: :pending}}
+    end
+
+    test "a CTCP AVATAR reply accepts https too" do
+      state = base_state()
+      body = <<0x01, "AVATAR https://peer.example/av.png", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{"alice" => %{avatar_slug: :pending}}
+    end
+
+    test "a CTCP AVATAR reply with a bare filename (the legacy DCC offer) is refused, never dispatched" do
+      state = base_state()
+      body = <<0x01, "AVATAR myface.png 4096", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      # No fetch ever starts for a non-http(s) URL — grappa never
+      # implements DCC (docs/DESIGN_NOTES.md #1280).
+      assert new_state.peer_profile_cache == %{}
+    end
+
+    test "a CTCP AVATAR reply with a non-http scheme (e.g. file://) is refused" do
+      state = base_state()
+      body = <<0x01, "AVATAR file:///etc/passwd", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{}
+    end
+
+    test "a second CTCP AVATAR reply while a fetch is already :pending does not re-dispatch" do
+      state = base_state(%{peer_profile_cache: %{"alice" => %{avatar_slug: :pending}}})
+      body = <<0x01, "AVATAR http://peer.example/second.png", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      # Untouched — still :pending, not clobbered by a second query reply.
+      assert new_state.peer_profile_cache == %{"alice" => %{avatar_slug: :pending}}
+    end
+
+    test "a second CTCP AVATAR reply for an already-cached (real slug) nick does not re-dispatch" do
+      state = base_state(%{peer_profile_cache: %{"alice" => %{avatar_slug: "existingslug"}}})
+      body = <<0x01, "AVATAR http://peer.example/second.png", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{"alice" => %{avatar_slug: "existingslug"}}
+    end
+
     test "a plain NOTICE from a regular nick lands in that peer's window when it is OPEN" do
       # #546 answered the question this test was parked on. It used to read
       # "still lands in that peer's window" with `base_state()` and the note
@@ -2180,8 +2245,11 @@ defmodule Grappa.Session.EventRouterTest do
       assert {:cont, new_state, effects} = EventRouter.route(m, state)
 
       assert Enum.any?(effects, &match?({:reply, "PRIVMSG alice :\x01USERINFO\x01"}, &1))
+      # M3b — the AVATAR query is a second, independent lazy query fired
+      # alongside USERINFO for the same "first seen this session" nick.
+      assert Enum.any?(effects, &match?({:reply, "PRIVMSG alice :\x01AVATAR\x01"}, &1))
       # Marked eagerly so a second sighting this session never re-queries.
-      assert new_state.peer_profile_cache == %{"alice" => %{gender: nil}}
+      assert new_state.peer_profile_cache == %{"alice" => %{gender: nil, avatar_slug: nil}}
     end
 
     test "JOIN-other, opted out (default), never queries" do
@@ -2199,7 +2267,10 @@ defmodule Grappa.Session.EventRouterTest do
           network_id: 90_003,
           show_peer_profiles: true,
           members: %{"#italia" => %{"vjt" => []}},
-          peer_profile_cache: %{"alice" => %{gender: :female}}
+          # M3b — both fields must already be present to count as
+          # "fully known": either one missing still triggers ITS OWN
+          # lazy query (the two are independently deduped).
+          peer_profile_cache: %{"alice" => %{gender: :female, avatar_slug: "existingslug"}}
         })
 
       m = msg(:join, ["#italia"], {:nick, "alice", "u", "h"})
@@ -2207,7 +2278,7 @@ defmodule Grappa.Session.EventRouterTest do
       assert {:cont, new_state, effects} = EventRouter.route(m, state)
       refute Enum.any?(effects, &match?({:reply, _}, &1))
       # Untouched — a real answer isn't clobbered by a re-trigger no-op.
-      assert new_state.peer_profile_cache == %{"alice" => %{gender: :female}}
+      assert new_state.peer_profile_cache == %{"alice" => %{gender: :female, avatar_slug: "existingslug"}}
     end
 
     test "JOIN-self, opted in, never queries itself" do
@@ -5025,7 +5096,7 @@ defmodule Grappa.Session.EventRouterTest do
       end_msg = msg({:numeric, 318}, ["vjt", "alice", "End of /WHOIS list"])
       {:cont, _, [{:whois_bundle, target, accum, _}]} = EventRouter.route(end_msg, final_state)
 
-      payload = Wire.whois_bundle("test-net", target, accum)
+      payload = Wire.whois_bundle("test-net", target, accum, nil)
 
       assert payload.kind == :whois_bundle
       assert payload.using_ssl == true
@@ -5050,7 +5121,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "wire payload defaults all P-0a booleans to false when accum is empty" do
-      payload = Wire.whois_bundle("test-net", "ghost", %WhoisAccum{})
+      payload = Wire.whois_bundle("test-net", "ghost", %WhoisAccum{}, nil)
 
       assert payload.using_ssl == false
       assert payload.is_registered == false
@@ -5433,7 +5504,7 @@ defmodule Grappa.Session.EventRouterTest do
       end_msg = msg({:numeric, 318}, ["vjt", "alice", "End of /WHOIS list"], {:server, "irc.libera.chat"})
 
       {:cont, _, [{:whois_bundle, target, accum, _}]} = EventRouter.route(end_msg, final_state)
-      payload = Wire.whois_bundle("libera", target, accum)
+      payload = Wire.whois_bundle("libera", target, accum, nil)
 
       assert payload.account == "AliceAccount"
       assert payload.secure == true
@@ -5515,7 +5586,7 @@ defmodule Grappa.Session.EventRouterTest do
       m318 = msg({:numeric, 318}, ["vjt", "alice", "End of /WHOIS list"], {:server, "irc.libera.chat"})
       {:cont, _, [{:whois_bundle, "alice", accum, _}]} = EventRouter.route(m318, s2)
 
-      payload = Wire.whois_bundle("libera", "alice", accum)
+      payload = Wire.whois_bundle("libera", "alice", accum, nil)
 
       assert payload.extra_lines == [
                %{numeric: 617, text: "first line"},
