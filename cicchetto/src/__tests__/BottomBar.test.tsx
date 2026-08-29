@@ -24,6 +24,9 @@ const pseudoRowsMock = vi.hoisted(() =>
 );
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: () => [
     { id: 1, slug: "freenode", inserted_at: "", updated_at: "" },
     { id: 2, slug: "libera", inserted_at: "", updated_at: "" },

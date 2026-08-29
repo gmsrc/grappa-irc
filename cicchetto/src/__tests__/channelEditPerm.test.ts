@@ -26,7 +26,10 @@ vi.mock("../lib/networks", () => {
     inserted_at: "x",
   }));
   const networkBySlug = (slug: string) => networks()?.find((n) => n.slug === slug);
-  return { networks, user, networkBySlug };
+  const networkIdBySlug = (slug: string) => networkBySlug(slug)?.id;
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  return { networks, user, networkBySlug, networkIdBySlug };
 });
 
 // ownNickForNetwork resolves the per-network IRC nick — return the seeded

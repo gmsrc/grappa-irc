@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import LusersCard from "./LusersCard";
 import { isContentKind, ownNickForNetwork, type ScrollbackMessage } from "./lib/api";
+import { casemappingForSlug } from "./lib/casemapping";
 import { acceptInvite, confirmJoinChannel } from "./lib/channelJoin";
 import { channelKey, decodeChannelKey } from "./lib/channelKey";
 import { statusmsgDescription } from "./lib/channelModes";
@@ -714,11 +715,12 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
   // event, not a frozen send, so the current grade is the correct glyph.
   const prefixFor = (nick: string): "@" | "%" | "+" | "" => {
     if (!msg.channel) return "";
-    if (isContentKind(msg.kind) && nickEquals(nick, msg.sender)) {
+    const casemapping = casemappingForSlug(handlers.networkSlug);
+    if (isContentKind(msg.kind) && nickEquals(nick, msg.sender, casemapping)) {
       return snapshotSenderPrefix(msg.meta);
     }
     const key = channelKey(handlers.networkSlug, msg.channel);
-    return senderPrefix(membersByChannel()[key], nick);
+    return senderPrefix(membersByChannel()[key], nick, casemapping);
   };
 
   // C7.6: sender button for content kinds — left-click (→ query) or
@@ -1415,7 +1417,10 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (!nick) return [];
     const members = membersByChannel()[key()];
     if (!members) return [];
-    return members.find((m) => nickEquals(m.nick, nick))?.modes ?? [];
+    return (
+      members.find((m) => nickEquals(m.nick, nick, casemappingForSlug(props.networkSlug)))?.modes ??
+      []
+    );
   };
 
   // C7.6: left-click a nick → open query window + switch focus.
@@ -1537,6 +1542,10 @@ const ScrollbackPane: Component<Props> = (props) => {
     // `/part → /join` cycle. `isOwnPresenceEvent` is the shared
     // single-source predicate (see lib/ownPresenceEvent.ts).
     const ownNick = userNick();
+    // #1861 — resolved ONCE for the whole projection: the fold is a property
+    // of the network, not of a row, and the two predicates below plus the
+    // own-JOIN anchor scan all have to agree on it.
+    const casemapping = casemappingForSlug(props.networkSlug);
     const unreadCount =
       cursor !== null && sessionTop !== null
         ? msgs.filter(
@@ -1544,7 +1553,7 @@ const ScrollbackPane: Component<Props> = (props) => {
               m.id > cursor &&
               m.id <= sessionTop &&
               !isOperatorActionEcho(m) &&
-              !isOwnPresenceEvent(m, ownNick),
+              !isOwnPresenceEvent(m, ownNick, casemapping),
           ).length
         : 0;
     // #947 — the LABEL, which is not always the count above. `unreadCount`
@@ -1598,7 +1607,7 @@ const ScrollbackPane: Component<Props> = (props) => {
         msg.id > cursor &&
         msg.id <= sessionTop &&
         !isOperatorActionEcho(msg) &&
-        !isOwnPresenceEvent(msg, ownNick)
+        !isOwnPresenceEvent(msg, ownNick, casemapping)
       ) {
         result.push({ type: "unread-marker", count: unreadLabel, id: "unread-marker" });
         markerInjected = true;
@@ -1681,7 +1690,7 @@ const ScrollbackPane: Component<Props> = (props) => {
         for (const m of allMsgs) {
           if (
             m.kind === "join" &&
-            nickEquals(m.sender, ownNick) &&
+            nickEquals(m.sender, ownNick, casemapping) &&
             (anchor === null ||
               m.server_time > anchor.server_time ||
               (m.server_time === anchor.server_time && m.id > anchor.id))
@@ -1742,7 +1751,8 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (autoFocusedJoins.has(key())) return false;
     const msgs = messages();
     if (!msgs) return false;
-    return msgs.some((m) => m.kind === "join" && nickEquals(m.sender, nick));
+    const casemapping = casemappingForSlug(props.networkSlug);
+    return msgs.some((m) => m.kind === "join" && nickEquals(m.sender, nick, casemapping));
   });
 
   // UX-3 Z3 R4 — actual-overflow gate. CSS-only fix is impossible:

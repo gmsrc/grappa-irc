@@ -1142,13 +1142,18 @@ describe("subscribe — WS join effect", () => {
       // matters. Assert the call count includes the privmsg too.
       expect(members.applyPresenceEvent).toHaveBeenCalledTimes(7);
       const key = channelKey("freenode", "#grappa");
+      // #1861 — the third argument is the network's fold, which the store
+      // cannot resolve for itself (it is ChannelKey-keyed). `freenode` is
+      // unseeded here, so it is the `:ascii` default.
       expect(members.applyPresenceEvent).toHaveBeenCalledWith(
         key,
         expect.objectContaining({ id: 10, kind: "join" }),
+        "ascii",
       );
       expect(members.applyPresenceEvent).toHaveBeenCalledWith(
         key,
         expect.objectContaining({ id: 14, kind: "mode" }),
+        "ascii",
       );
     });
 

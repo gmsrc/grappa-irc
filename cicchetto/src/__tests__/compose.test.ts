@@ -270,6 +270,9 @@ const isupportMock = vi.hoisted(() => ({
   listModesQueryable: ["b", "z"],
   chanmodesA: ["b", "z"],
   chantypes: ["#", "&", "+", "!"] as readonly string[],
+  // #1861 — the network's advertised CASEMAPPING, which tab-completion now
+  // folds by. Default `"ascii"`: bahamut/Azzurra, all of production.
+  casemapping: "ascii" as "ascii" | "rfc1459" | "rfc1459_strict",
 }));
 vi.mock("../lib/isupport", () => ({
   isupportForNetwork: () => ({
@@ -286,6 +289,8 @@ vi.mock("../lib/isupport", () => ({
   // network. Mocked alongside the mode set so a test can narrow the class
   // (see the CHANTYPES describe below) instead of assuming the RFC one.
   chantypesForNetwork: () => isupportMock.chantypes,
+  // #1861 — and which fold it applies to identifiers, for tab-completion.
+  casemappingForNetwork: () => isupportMock.casemapping,
 }));
 
 vi.mock("../lib/modeModal", () => ({
@@ -332,6 +337,11 @@ beforeEach(() => {
   // wipe localStorage gets or one test's draft seeds the next one's boot.
   sessionStorage.clear();
   vi.clearAllMocks();
+  // #1861 — the hoisted isupport mock is a module-lifetime object, so a test
+  // that switches the network's fold would leak it into every test after it.
+  // Reset to the production posture (bahamut/Azzurra) here; the rfc1459 tests
+  // opt in explicitly.
+  isupportMock.casemapping = "ascii";
 });
 
 describe("compose draft state", () => {
@@ -2967,16 +2977,51 @@ describe("compose tabComplete (members-only, irssi-exact)", () => {
     expect(compose.tabComplete(k, "al", 2, true)).toBeNull();
   });
 
-  it("folds case (not the bracket range) on the prefix match (#525)", async () => {
+  it("folds case (not the bracket range) on the prefix match, on :ascii (#525)", async () => {
     // #525 CASEMAPPING=ascii: `[` is NOT folded, so a member `Foo[1]` and
     // the typed `foo[` are the SAME nick (case-only) and completion
     // matches on the common `nick[away]` shape. A brace `foo{` is a
     // DIFFERENT nick — but since #1003 it still REACHES `Foo[1]` on the
     // decoration level, behind the literals; see the cousin test below.
+    isupportMock.casemapping = "ascii";
     await setMembers(["Foo[1]"]);
     const compose = await import("../lib/compose");
     const r = compose.tabComplete(k, "foo[", 4, true);
     expect(r?.newInput).toBe("Foo[1]: ");
+  });
+
+  // #1861 — the SAME question, keyed per casemapping rather than globally.
+  // On `:ascii` the literal level must NOT match `foo{` against `Foo[1]`
+  // (the #525 posture, and the reason the loose decoration level exists at
+  // all); on `:rfc1459` the two spellings are one nick, so the LITERAL level
+  // matches and the completion no longer depends on #1003's fallback.
+  it("does NOT literal-match a brace prefix against a bracket member on :ascii (#525)", async () => {
+    isupportMock.casemapping = "ascii";
+    // Two members: the bracket twin, plus a decoration-free nick that the
+    // loose level would ALSO reach. A literal match would return `Foo[1]`
+    // first; the loose level orders alphabetically, so seeing `Foo[1]` here
+    // does not by itself prove which level matched — assert the fold table
+    // through `normalizeNick`, which is the thing under test.
+    const { normalizeNick } = await import("../lib/nickEquals");
+    expect(normalizeNick("Foo[1]", "ascii")).toBe("foo[1]");
+    expect(normalizeNick("foo{1}", "ascii")).toBe("foo{1}");
+    await setMembers(["Foo[1]"]);
+    const compose = await import("../lib/compose");
+    // Reaches it anyway, via the #1003 decoration level — behind literals.
+    expect(compose.tabComplete(k, "foo{", 4, true)?.newInput).toBe("Foo[1]: ");
+  });
+
+  it("literal-matches a brace prefix against a bracket member on :rfc1459 (#1861)", async () => {
+    isupportMock.casemapping = "rfc1459";
+    const { normalizeNick } = await import("../lib/nickEquals");
+    expect(normalizeNick("Foo[1]", "rfc1459")).toBe("foo{1}");
+    expect(normalizeNick("foo{1}", "rfc1459")).toBe("foo{1}");
+    // `_zzz_` strips to `zzz` and so is NOT reachable from the `foo{` prefix
+    // on either level; it is here only to keep the candidate list from being
+    // a single element, so "the one member came back" cannot pass vacuously.
+    await setMembers(["Foo[1]", "_zzz_"]);
+    const compose = await import("../lib/compose");
+    expect(compose.tabComplete(k, "foo{", 4, true)?.newInput).toBe("Foo[1]: ");
   });
 
   it("appends ': ' at line start", async () => {
@@ -6284,6 +6329,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "api.ownNickForNetwork({"kind":"user","id":1,"slug":"freenode","inserted_at":"","updated_at":""}, {"kind":"user","name":"vjt"})",
             "networks.networkBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.user()",
           ],

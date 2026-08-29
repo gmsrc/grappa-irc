@@ -23,7 +23,12 @@ vi.mock("../lib/api", () => ({
     patchNetworkMock(t, slug, body),
 }));
 vi.mock("../lib/auth", () => ({ token: () => tokenMock() }));
-vi.mock("../lib/networks", () => ({ networks: () => networksMock() }));
+vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
+  networks: () => networksMock(),
+}));
 
 import { reconnectConnectedNetworks } from "../lib/reconnect";
 

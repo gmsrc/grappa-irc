@@ -8,31 +8,31 @@ const m = (entries: Record<string, string[]>): ChannelMembers =>
 describe("applyModeString", () => {
   it("+o grants @ to a target nick", () => {
     const before = m({ alice: [] });
-    const after = applyModeString(before, "+o", ["alice"]);
+    const after = applyModeString(before, "+o", ["alice"], "ascii");
     expect(after).toEqual([{ nick: "alice", modes: ["@"] }]);
   });
 
   it("+v grants + to a target nick", () => {
     const before = m({ bob: [] });
-    const after = applyModeString(before, "+v", ["bob"]);
+    const after = applyModeString(before, "+v", ["bob"], "ascii");
     expect(after).toEqual([{ nick: "bob", modes: ["+"] }]);
   });
 
   it("+h grants % to a target nick (bucket J — halfop)", () => {
     const before = m({ carol: [] });
-    const after = applyModeString(before, "+h", ["carol"]);
+    const after = applyModeString(before, "+h", ["carol"], "ascii");
     expect(after).toEqual([{ nick: "carol", modes: ["%"] }]);
   });
 
   it("-h revokes % from a target nick (bucket J — halfop)", () => {
     const before = m({ carol: ["%"] });
-    const after = applyModeString(before, "-h", ["carol"]);
+    const after = applyModeString(before, "-h", ["carol"], "ascii");
     expect(after).toEqual([{ nick: "carol", modes: [] }]);
   });
 
   it("+ohv pairs three args by position: alice@, bob%, carol+ (bucket J — halfop)", () => {
     const before = m({ alice: [], bob: [], carol: [] });
-    const after = applyModeString(before, "+ohv", ["alice", "bob", "carol"]);
+    const after = applyModeString(before, "+ohv", ["alice", "bob", "carol"], "ascii");
     expect(after).toEqual([
       { nick: "alice", modes: ["@"] },
       { nick: "bob", modes: ["%"] },
@@ -42,13 +42,13 @@ describe("applyModeString", () => {
 
   it("-o revokes @ from a target nick", () => {
     const before = m({ alice: ["@"] });
-    const after = applyModeString(before, "-o", ["alice"]);
+    const after = applyModeString(before, "-o", ["alice"], "ascii");
     expect(after).toEqual([{ nick: "alice", modes: [] }]);
   });
 
   it("+ov pairs args by position: alice gets @, bob gets +", () => {
     const before = m({ alice: [], bob: [] });
-    const after = applyModeString(before, "+ov", ["alice", "bob"]);
+    const after = applyModeString(before, "+ov", ["alice", "bob"], "ascii");
     expect(after).toEqual([
       { nick: "alice", modes: ["@"] },
       { nick: "bob", modes: ["+"] },
@@ -57,7 +57,7 @@ describe("applyModeString", () => {
 
   it("preserves unrelated members + their existing modes", () => {
     const before = m({ alice: [], bob: ["+"], carol: ["@"] });
-    const after = applyModeString(before, "+o", ["alice"]);
+    const after = applyModeString(before, "+o", ["alice"], "ascii");
     expect(after).toEqual([
       { nick: "alice", modes: ["@"] },
       { nick: "bob", modes: ["+"] },
@@ -67,19 +67,19 @@ describe("applyModeString", () => {
 
   it("ignores non-(ov) mode chars (e.g. +n channel-modes have no per-user effect)", () => {
     const before = m({ alice: ["@"] });
-    const after = applyModeString(before, "+n", []);
+    const after = applyModeString(before, "+n", [], "ascii");
     expect(after).toEqual(before);
   });
 
   it("unknown target nick is a no-op (defensive)", () => {
     const before = m({ alice: [] });
-    const after = applyModeString(before, "+o", ["nonexistent"]);
+    const after = applyModeString(before, "+o", ["nonexistent"], "ascii");
     expect(after).toEqual([{ nick: "alice", modes: [] }]);
   });
 
   it("toggles the same mode without duplication", () => {
     const before = m({ alice: ["@"] });
-    const after = applyModeString(before, "+o", ["alice"]); // already op
+    const after = applyModeString(before, "+o", ["alice"], "ascii"); // already op
     expect(after).toEqual([{ nick: "alice", modes: ["@"] }]);
   });
 
@@ -88,7 +88,7 @@ describe("applyModeString", () => {
   // store row; pre-fix bare `===` silently dropped the mode change.
   it("matches the target nick case-insensitively", () => {
     const before = m({ Alice: [] });
-    const after = applyModeString(before, "+o", ["alice"]);
+    const after = applyModeString(before, "+o", ["alice"], "ascii");
     expect(after).toEqual([{ nick: "Alice", modes: ["@"] }]);
   });
 });

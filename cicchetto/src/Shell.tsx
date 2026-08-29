@@ -32,6 +32,7 @@ import { channelKey } from "./lib/channelKey";
 import { getDraft, tabComplete } from "./lib/compose";
 import { appendToCompose } from "./lib/composeAppend";
 import { placeCaretInView } from "./lib/composeCaret";
+import { casemappingForNetwork } from "./lib/isupport";
 import { install, registerHandlers, uninstall } from "./lib/keybindings";
 import { loadLastFocused } from "./lib/lastFocusedChannel";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
@@ -568,7 +569,9 @@ const Shell: Component = () => {
       const net = networkBySlug(slug);
       if (net) {
         const qs = queryWindowsByNetwork()[net.id] ?? [];
-        const match = qs.find((q) => nickEquals(q.targetNick, saved.channelName));
+        const match = qs.find((q) =>
+          nickEquals(q.targetNick, saved.channelName, casemappingForNetwork(net.id)),
+        );
         if (match !== undefined) {
           setSelectedChannel({
             networkSlug: slug,

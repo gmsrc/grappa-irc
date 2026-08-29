@@ -1,5 +1,6 @@
 import { createEffect, untrack } from "solid-js";
 import { dropUpload } from "./dropUpload";
+import { casemappingForNetwork } from "./isupport";
 import { loadLastFocused } from "./lastFocusedChannel";
 import { moduleRoot } from "./moduleRoot";
 import { channelsBySlug, networkBySlug, user } from "./networks";
@@ -177,7 +178,9 @@ function liveSources(userId: string): ShareDestinationSources {
     queryExists: (slug, nick) => {
       const net = networkBySlug(slug);
       if (net === undefined) return false;
-      return (queryWindowsByNetwork()[net.id] ?? []).some((q) => nickEquals(q.targetNick, nick));
+      return (queryWindowsByNetwork()[net.id] ?? []).some((q) =>
+        nickEquals(q.targetNick, nick, casemappingForNetwork(net.id)),
+      );
     },
   };
 }

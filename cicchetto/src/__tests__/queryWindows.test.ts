@@ -126,17 +126,59 @@ describe("queryWindows state", () => {
     expect(socket.pushOpenQueryWindow).toHaveBeenCalledWith(1, "dave");
   });
 
-  // #525 — dedup folds CASE only (server keys on canonical_nick/1 =
-  // CASEMAPPING=ascii). `Foo[1]` and `foo{1}` are DISTINCT windows, so a
-  // second open on the brace twin is NOT a dup and DOES round-trip.
-  it("openQueryWindowState does NOT dedup a bracket-vs-brace nick (#525)", async () => {
+  // #525/#1861 — the bracket-vs-brace pair is keyed PER CASEMAPPING, not
+  // globally. On `:ascii` (bahamut/Azzurra, all of production) the ircd
+  // keeps `Foo[1]` and `foo{1}` apart and so must cic; on `:rfc1459`
+  // (solanum/Rizon) they are ONE person and the second open is a dup.
+  // Weakening the `:ascii` half instead of splitting it would break Azzurra.
+  it("openQueryWindowState does NOT dedup a bracket-vs-brace nick on :ascii (#525)", async () => {
     const socket = await import("../lib/socket");
+    const { DEFAULT_ISUPPORT, seedIsupport } = await import("../lib/isupport");
     const { setQueryWindowsByNetwork, openQueryWindowState } = await import("../lib/queryWindows");
+    seedIsupport(1, { ...DEFAULT_ISUPPORT, casemapping: "ascii" });
     setQueryWindowsByNetwork({
       1: [{ targetNick: "Foo[1]", openedAt: "2026-05-04T10:00:00Z" }],
     });
     openQueryWindowState(1, "foo{1}", "2026-05-04T12:00:00Z");
     expect(socket.pushOpenQueryWindow).toHaveBeenCalledWith(1, "foo{1}");
+  });
+
+  it("openQueryWindowState DOES dedup a bracket-vs-brace nick on :rfc1459 (#1861)", async () => {
+    const socket = await import("../lib/socket");
+    const { DEFAULT_ISUPPORT, seedIsupport } = await import("../lib/isupport");
+    const { setQueryWindowsByNetwork, openQueryWindowState } = await import("../lib/queryWindows");
+    seedIsupport(1, { ...DEFAULT_ISUPPORT, casemapping: "rfc1459" });
+    setQueryWindowsByNetwork({
+      1: [{ targetNick: "[EWG]-L0VE", openedAt: "2026-05-04T10:00:00Z" }],
+    });
+    openQueryWindowState(1, "{ewg}-l0ve", "2026-05-04T12:00:00Z");
+    expect(socket.pushOpenQueryWindow).not.toHaveBeenCalled();
+  });
+
+  // The per-network scoping is the point: an rfc1459 seed on network 2 must
+  // not soften network 1's `:ascii` fold.
+  it("the rfc1459 fold does not leak across networks (#1861)", async () => {
+    const socket = await import("../lib/socket");
+    const { DEFAULT_ISUPPORT, seedIsupport } = await import("../lib/isupport");
+    const { setQueryWindowsByNetwork, openQueryWindowState } = await import("../lib/queryWindows");
+    seedIsupport(2, { ...DEFAULT_ISUPPORT, casemapping: "rfc1459" });
+    setQueryWindowsByNetwork({
+      1: [{ targetNick: "Foo[1]", openedAt: "2026-05-04T10:00:00Z" }],
+    });
+    openQueryWindowState(1, "foo{1}", "2026-05-04T12:00:00Z");
+    expect(socket.pushOpenQueryWindow).toHaveBeenCalledWith(1, "foo{1}");
+  });
+
+  // An unseeded network (no 005 yet) folds `:ascii` — the server's own
+  // pre-005 default, and the narrower fold, so a guess merges nobody.
+  it("an unseeded network folds :ascii (#1861)", async () => {
+    const socket = await import("../lib/socket");
+    const { setQueryWindowsByNetwork, openQueryWindowState } = await import("../lib/queryWindows");
+    setQueryWindowsByNetwork({
+      7: [{ targetNick: "Foo[1]", openedAt: "2026-05-04T10:00:00Z" }],
+    });
+    openQueryWindowState(7, "foo{1}", "2026-05-04T12:00:00Z");
+    expect(socket.pushOpenQueryWindow).toHaveBeenCalledWith(7, "foo{1}");
   });
 
   // Nick case-sensitivity fix (post-U): canonicalQueryNick resolves
@@ -156,8 +198,10 @@ describe("queryWindows state", () => {
       expect(canonicalQueryNick(1, "grappa")).toBe("grappa");
     });
 
-    it("resolves case-only; a bracket-vs-brace nick is a DISTINCT window (#525)", async () => {
+    it("on :ascii resolves case-only; bracket-vs-brace is a DISTINCT window (#525)", async () => {
+      const { DEFAULT_ISUPPORT, seedIsupport } = await import("../lib/isupport");
       const { setQueryWindowsByNetwork, canonicalQueryNick } = await import("../lib/queryWindows");
+      seedIsupport(1, { ...DEFAULT_ISUPPORT, casemapping: "ascii" });
       setQueryWindowsByNetwork({
         1: [{ targetNick: "Foo[1]", openedAt: "2026-05-04T10:00:00Z" }],
       });
@@ -166,6 +210,21 @@ describe("queryWindows state", () => {
       // `foo{1}` is a DIFFERENT nick to the ircd (CASEMAPPING=ascii) — no
       // window matches, so the input is returned unchanged.
       expect(canonicalQueryNick(1, "foo{1}")).toBe("foo{1}");
+    });
+
+    it("on :rfc1459 resolves the brace twin onto the stored bracket casing (#1861)", async () => {
+      const { DEFAULT_ISUPPORT, seedIsupport } = await import("../lib/isupport");
+      const { setQueryWindowsByNetwork, canonicalQueryNick } = await import("../lib/queryWindows");
+      seedIsupport(1, { ...DEFAULT_ISUPPORT, casemapping: "rfc1459" });
+      setQueryWindowsByNetwork({
+        1: [{ targetNick: "[EWG]-L0VE", openedAt: "2026-05-04T10:00:00Z" }],
+      });
+      // The reported symptom: the incoming DM spells the peer `{ewg}-l0ve`,
+      // the open window spells it `[EWG]-L0VE`, and on Rizon they are one
+      // person — so the focus resolves onto the existing window instead of
+      // keying a second, dead one.
+      expect(canonicalQueryNick(1, "{ewg}-l0ve")).toBe("[EWG]-L0VE");
+      expect(canonicalQueryNick(1, "[ewg]-l0ve")).toBe("[EWG]-L0VE");
     });
 
     it("returns the input unchanged when no window matches", async () => {

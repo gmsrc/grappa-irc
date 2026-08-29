@@ -10,6 +10,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { casemappingForSlug } from "./lib/casemapping";
 import { friendlyError } from "./lib/friendlyError";
 import { identifiedForNetwork } from "./lib/identity";
 import { networkBySlug, networkIdBySlug } from "./lib/networks";
@@ -120,7 +121,10 @@ const RegistrationWizardModal: Component = () => {
           const s = st();
           const nick = template()?.servicesNick ?? "NickServ";
           return serviceMirrorRows(s.networkSlug, nick).filter(
-            (m) => m.id > s.stepSinceId && m.kind === "notice" && nickEquals(m.sender, nick),
+            (m) =>
+              m.id > s.stepSinceId &&
+              m.kind === "notice" &&
+              nickEquals(m.sender, nick, casemappingForSlug(s.networkSlug)),
           );
         };
 

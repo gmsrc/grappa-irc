@@ -43,6 +43,9 @@ vi.mock("../lib/ctcpQuery", () => ({
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: vi.fn(() => [{ id: 42, slug: "freenode", inserted_at: "x", updated_at: "y" }]),
 }));
 

@@ -30,10 +30,16 @@ vi.mock("../lib/channelEditPerm", () => ({
 // switcher renders; the single-list case gets its own test.
 const isupportMock = vi.hoisted(() => ({ listModesQueryable: ["b", "e", "I"] }));
 vi.mock("../lib/isupport", () => ({
+  // #1861 — the nick fold is per-network now; the store-reading half
+  // lives here. `"ascii"` is the production posture (bahamut/Azzurra).
+  casemappingForNetwork: () => "ascii" as const,
   isupportForNetwork: () => ({ listModesQueryable: isupportMock.listModesQueryable }),
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: vi.fn(() => [
     { id: 1, slug: "bahamut", nick: "vjt", inserted_at: "x", updated_at: "y" },
   ]),

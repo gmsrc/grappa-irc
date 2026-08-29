@@ -23,6 +23,9 @@ const networksMock = vi.fn<() => unknown>(() => undefined);
 const channelsBySlugMock = vi.fn<() => unknown>(() => undefined);
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   user: () => userMock(),
   networks: () => networksMock(),
   channelsBySlug: () => channelsBySlugMock(),

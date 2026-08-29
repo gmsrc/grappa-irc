@@ -64,16 +64,20 @@ describe("members.applyPresenceEvent", () => {
 
     members.seedFromTest(key, [{ nick: "vjt", modes: ["@"] }]);
 
-    members.applyPresenceEvent(key, {
-      id: 1,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "join",
-      sender: "alice",
-      body: null,
-      meta: {},
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "join",
+        sender: "alice",
+        body: null,
+        meta: {},
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([
       { nick: "vjt", modes: ["@"] },
@@ -90,16 +94,20 @@ describe("members.applyPresenceEvent", () => {
       { nick: "alice", modes: [] },
     ]);
 
-    members.applyPresenceEvent(key, {
-      id: 2,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "part",
-      sender: "alice",
-      body: null,
-      meta: {},
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "part",
+        sender: "alice",
+        body: null,
+        meta: {},
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([{ nick: "vjt", modes: ["@"] }]);
   });
@@ -113,16 +121,20 @@ describe("members.applyPresenceEvent", () => {
       { nick: "alice", modes: [] },
     ]);
 
-    members.applyPresenceEvent(key, {
-      id: 3,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "quit",
-      sender: "alice",
-      body: "bye",
-      meta: {},
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 3,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "quit",
+        sender: "alice",
+        body: "bye",
+        meta: {},
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([{ nick: "vjt", modes: ["@"] }]);
   });
@@ -133,16 +145,20 @@ describe("members.applyPresenceEvent", () => {
 
     members.seedFromTest(key, [{ nick: "alice", modes: ["@"] }]);
 
-    members.applyPresenceEvent(key, {
-      id: 4,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "nick_change",
-      sender: "alice",
-      body: null,
-      meta: { new_nick: "alice_" },
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 4,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "nick_change",
+        sender: "alice",
+        body: null,
+        meta: { new_nick: "alice_" },
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([{ nick: "alice_", modes: ["@"] }]);
   });
@@ -156,16 +172,20 @@ describe("members.applyPresenceEvent", () => {
       { nick: "alice", modes: [] },
     ]);
 
-    members.applyPresenceEvent(key, {
-      id: 5,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "kick",
-      sender: "vjt",
-      body: "behave",
-      meta: { target: "alice" },
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 5,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "kick",
+        sender: "vjt",
+        body: "behave",
+        meta: { target: "alice" },
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([{ nick: "vjt", modes: ["@"] }]);
   });
@@ -179,16 +199,20 @@ describe("members.applyPresenceEvent", () => {
       { nick: "bob", modes: [] },
     ]);
 
-    members.applyPresenceEvent(key, {
-      id: 6,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "mode",
-      sender: "vjt",
-      body: null,
-      meta: { modes: "+ov", args: ["alice", "bob"] },
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 6,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "mode",
+        sender: "vjt",
+        body: null,
+        meta: { modes: "+ov", args: ["alice", "bob"] },
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([
       { nick: "alice", modes: ["@"] },
@@ -202,16 +226,20 @@ describe("members.applyPresenceEvent", () => {
 
     members.seedFromTest(key, [{ nick: "vjt", modes: ["@"] }]);
 
-    members.applyPresenceEvent(key, {
-      id: 7,
-      network: "freenode",
-      channel: "#grappa",
-      server_time: 0,
-      kind: "privmsg",
-      sender: "alice",
-      body: "hi",
-      meta: {},
-    });
+    members.applyPresenceEvent(
+      key,
+      {
+        id: 7,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 0,
+        kind: "privmsg",
+        sender: "alice",
+        body: "hi",
+        meta: {},
+      },
+      "ascii",
+    );
 
     expect(members.membersByChannel()[key]).toEqual([{ nick: "vjt", modes: ["@"] }]);
   });
@@ -231,16 +259,20 @@ describe("members.applyPresenceEvent", () => {
       // JOIN with original casing.
       members.seedFromTest(key, [{ nick: "Alice", modes: [] }]);
 
-      members.applyPresenceEvent(key, {
-        id: 100,
-        network: "freenode",
-        channel: "#grappa",
-        server_time: 0,
-        kind: "part",
-        sender: "alice", // lower-case PART
-        body: null,
-        meta: {},
-      });
+      members.applyPresenceEvent(
+        key,
+        {
+          id: 100,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: 0,
+          kind: "part",
+          sender: "alice", // lower-case PART
+          body: null,
+          meta: {},
+        },
+        "ascii",
+      );
 
       // Pre-fix: ["Alice"] (phantom). Post-fix: [].
       expect(members.membersByChannel()[key]).toEqual([]);
@@ -252,16 +284,20 @@ describe("members.applyPresenceEvent", () => {
 
       members.seedFromTest(key, [{ nick: "Bob", modes: ["@"] }]);
 
-      members.applyPresenceEvent(key, {
-        id: 101,
-        network: "freenode",
-        channel: "#grappa",
-        server_time: 0,
-        kind: "quit",
-        sender: "BOB",
-        body: "bye",
-        meta: {},
-      });
+      members.applyPresenceEvent(
+        key,
+        {
+          id: 101,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: 0,
+          kind: "quit",
+          sender: "BOB",
+          body: "bye",
+          meta: {},
+        },
+        "ascii",
+      );
 
       expect(members.membersByChannel()[key]).toEqual([]);
     });
@@ -275,16 +311,20 @@ describe("members.applyPresenceEvent", () => {
         { nick: "Alice", modes: [] },
       ]);
 
-      members.applyPresenceEvent(key, {
-        id: 102,
-        network: "freenode",
-        channel: "#grappa",
-        server_time: 0,
-        kind: "kick",
-        sender: "vjt",
-        body: "behave",
-        meta: { target: "alice" }, // lower-case
-      });
+      members.applyPresenceEvent(
+        key,
+        {
+          id: 102,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: 0,
+          kind: "kick",
+          sender: "vjt",
+          body: "behave",
+          meta: { target: "alice" }, // lower-case
+        },
+        "ascii",
+      );
 
       expect(members.membersByChannel()[key]).toEqual([{ nick: "vjt", modes: ["@"] }]);
     });
@@ -295,16 +335,20 @@ describe("members.applyPresenceEvent", () => {
 
       members.seedFromTest(key, [{ nick: "Alice", modes: ["+"] }]);
 
-      members.applyPresenceEvent(key, {
-        id: 103,
-        network: "freenode",
-        channel: "#grappa",
-        server_time: 0,
-        kind: "nick_change",
-        sender: "alice",
-        body: null,
-        meta: { new_nick: "Alyssa" },
-      });
+      members.applyPresenceEvent(
+        key,
+        {
+          id: 103,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: 0,
+          kind: "nick_change",
+          sender: "alice",
+          body: null,
+          meta: { new_nick: "Alyssa" },
+        },
+        "ascii",
+      );
 
       expect(members.membersByChannel()[key]).toEqual([{ nick: "Alyssa", modes: ["+"] }]);
     });
@@ -318,16 +362,20 @@ describe("members.applyPresenceEvent", () => {
 
       // A racy JOIN echo arrives lower-cased — the dedup must catch it
       // (otherwise we get two rows for the same person).
-      members.applyPresenceEvent(key, {
-        id: 104,
-        network: "freenode",
-        channel: "#grappa",
-        server_time: 0,
-        kind: "join",
-        sender: "alice",
-        body: null,
-        meta: {},
-      });
+      members.applyPresenceEvent(
+        key,
+        {
+          id: 104,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: 0,
+          kind: "join",
+          sender: "alice",
+          body: null,
+          meta: {},
+        },
+        "ascii",
+      );
 
       expect(members.membersByChannel()[key]).toEqual([{ nick: "Alice", modes: [] }]);
     });

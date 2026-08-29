@@ -60,10 +60,11 @@ export type IsupportEntry = {
   // to the RFC 2812 class, so a network that omits the token behaves
   // exactly as the open-coded literals did.
   chantypes: string[];
-  // #1255 — how the ircd folds identifiers. cic still folds ASCII-only
-  // (`nickEquals.asciiFold`, pinned to the server's #525 posture); this
-  // carries the per-network fact that used to die at ingress, so a
-  // divergence on an rfc1459 network is at least KNOWABLE client-side.
+  // #1255 — how the ircd folds identifiers. #1861 gave it a consumer:
+  // `casemappingForNetwork` below feeds `normalizeNick`/`nickEquals`, so a
+  // nick KEY now folds the way THIS network folds it instead of ASCII
+  // everywhere. (The channel-key fold in `channelKey.ts` is still
+  // ASCII-only — see the survivor list in `nickEquals.ts`.)
   casemapping: Casemapping;
   // #1255 — advertised cap per type-A (list) mode letter, e.g.
   // `{b: 100, e: 100, I: 100}`. Empty when the network advertised none:
@@ -193,6 +194,22 @@ export function chantypesForNetwork(networkId: number | null): readonly string[]
 export function prefixForNetwork(networkId: number | null): Record<string, string> {
   if (networkId === null) return DEFAULT_ISUPPORT.prefix;
   return isupportForNetwork(networkId).prefix;
+}
+
+/**
+ * How this network folds identifiers (#1861), or the bahamut/Azzurra
+ * default `"ascii"` for an unseeded network / a null id. Sibling of
+ * `chantypesForNetwork` — the store-reading half of the nick fold, whose
+ * pure half is `normalizeNick`/`nickEquals` in `nickEquals.ts`.
+ *
+ * `"ascii"` is the honest default here, unlike `frameBudgetBaseForNetwork`'s
+ * `null`: it is what `Grappa.Session.ISupport.default/0` uses pre-005, it
+ * is what every production network advertises, and it is the NARROWER fold
+ * — guessing it merges no identity the ircd keeps apart.
+ */
+export function casemappingForNetwork(networkId: number | null): Casemapping {
+  if (networkId === null) return DEFAULT_ISUPPORT.casemapping;
+  return isupportForNetwork(networkId).casemapping;
 }
 
 /**

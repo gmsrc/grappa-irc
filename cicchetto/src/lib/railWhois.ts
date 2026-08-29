@@ -1,5 +1,6 @@
 import { createSignal, untrack } from "solid-js";
 import type { WhoisBundle } from "./api";
+import { casemappingForSlug } from "./casemapping";
 import { identityScopedStore } from "./identityScopedStore";
 import { networkIdBySlug } from "./networks";
 import { normalizeNick } from "./nickEquals";
@@ -116,7 +117,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // when the bundle lands or is refreshed. Case-folded (#525) so `Alice`
   // and `alice` share one cache entry, matching the ircd + server fold.
   const railWhoisFor = (slug: string, nick: string): WhoisBundle | undefined =>
-    byNick()[slug]?.[normalizeNick(nick)]?.bundle ?? undefined;
+    byNick()[slug]?.[normalizeNick(nick, casemappingForSlug(slug))]?.bundle ?? undefined;
 
   // Called by `RailContext` when the query card comes ON SCREEN (#782), which
   // is the ONLY caller. A nick we already know short-circuits FOREVER (no
@@ -129,7 +130,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // (vjt has been told this twice and wants the on-screen fetch regardless;
   // it is the argument for never asking MORE than once, not for not asking.)
   const requestRailWhois = (slug: string, nick: string): void => {
-    const key = normalizeNick(nick);
+    const key = normalizeNick(nick, casemappingForSlug(slug));
     const now = Date.now();
     const entry = untrack(() => byNick()[slug]?.[key]);
     if (entry) {
@@ -158,7 +159,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // retry window governs when the rail may ask again. Origin routing is the
   // caller's job in `userTopic.ts`, off the server-marked `source`.
   const ingestRailWhois = (slug: string, target: string, bundle: WhoisBundle): void => {
-    const key = normalizeNick(target);
+    const key = normalizeNick(target, casemappingForSlug(slug));
     put(slug, key, { at: Date.now(), bundle });
   };
 
@@ -184,8 +185,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // Merge rule mirrors `renameReadCursorChannel`: an entry already under the
   // new nick wins (it is the fresher observation of that identity).
   const renameRailWhois = (slug: string, oldNick: string, newNick: string): void => {
-    const oldKey = normalizeNick(oldNick);
-    const newKey = normalizeNick(newNick);
+    const casemapping = casemappingForSlug(slug);
+    const oldKey = normalizeNick(oldNick, casemapping);
+    const newKey = normalizeNick(newNick, casemapping);
     if (oldKey === newKey) return;
     setByNick((prev) => {
       const net = prev[slug];

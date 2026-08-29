@@ -26,7 +26,12 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/windowState", () => ({ windowStateByChannel: () => state.ws }));
-vi.mock("../lib/networks", () => ({ channelsBySlug: () => state.cbs }));
+vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
+  channelsBySlug: () => state.cbs,
+}));
 vi.mock("../lib/queryWindows", () => ({ queryWindowsByNetwork: () => state.qw }));
 // The form factor is an environment boundary (matchMedia); mocking the
 // signal is what lets one jsdom run exercise both navs.

@@ -8,6 +8,7 @@ import { applyAutoAwayDebounceFromWire } from "./autoAway";
 import { setAwayState } from "./awayStatus";
 import { setBanlistBundle } from "./banlistCard";
 import { setServerBundleHash, setServerBundleVersion } from "./bundleHash";
+import { casemappingForSlug } from "./casemapping";
 import { onDirectoryComplete, onDirectoryFailed, onDirectoryProgress } from "./channelDirectory";
 import { channelKey } from "./channelKey";
 import { diagPush } from "./diagLog";
@@ -138,12 +139,14 @@ import { validate } from "./wireValidate";
 // #606 — is the rail currently showing the query whose partner is `target`
 // on `network`? Used to decide whether a `source: user` whois_bundle (an
 // operator /whois) should ALSO refresh the rail card. `nickEquals` folds
-// (#525) so a case-shift still matches. Read outside any reactive scope
+// (#525/#1861) so a case-shift still matches. Read outside any reactive scope
 // (a channel event callback), so this is a plain current-value read.
 function railIsShowingNick(network: string, target: string): boolean {
   const sel = selectedChannel();
   return (
-    sel?.kind === "query" && sel.networkSlug === network && nickEquals(sel.channelName, target)
+    sel?.kind === "query" &&
+    sel.networkSlug === network &&
+    nickEquals(sel.channelName, target, casemappingForSlug(network))
   );
 }
 

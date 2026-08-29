@@ -9,6 +9,7 @@ import {
   visibleArchiveForNetwork,
 } from "./lib/archive";
 import { token } from "./lib/auth";
+import { casemappingForSlug } from "./lib/casemapping";
 import { type ChannelKey, channelKey } from "./lib/channelKey";
 import { mentionCounts } from "./lib/mentions";
 import { networks } from "./lib/networks";
@@ -76,7 +77,7 @@ const ArchiveModal: Component = () => {
   // the window. Own self-PART events no longer appear here either, because
   // #532 A drops them from the server `events` count.
   const unreadKey = (slug: string, target: string): ChannelKey =>
-    channelKey(slug, normalizeNick(target));
+    channelKey(slug, normalizeNick(target, casemappingForSlug(slug)));
 
   const close = () => {
     setArchiveModalOpen(false);

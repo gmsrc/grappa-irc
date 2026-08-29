@@ -25,6 +25,9 @@ let mockUser: { kind: "user" | "visitor"; [k: string]: unknown } | null = {
 };
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: () => [
     {
       // Bucket F H4: Network is now a discriminated union; the Sidebar

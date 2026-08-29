@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 // keyed by network id (ISUPPORT is per-network, not per-channel).
 
 import {
+  casemappingForNetwork,
   DEFAULT_ISUPPORT,
   frameBudgetBaseForNetwork,
   type IsupportEntry,
@@ -126,10 +127,9 @@ describe("isupport widening (#1255)", () => {
   });
 
   it("carries a network whose fold is NOT ascii", () => {
-    // solanum/Libera advertise rfc1459, where `foo[1]` and `foo{1}` are the
-    // SAME identity. cic cannot act on that yet — `asciiFold` is one fold,
-    // pinned to the server's #525 posture — but the fact now reaches the
-    // client instead of being dropped at ingress.
+    // solanum/Libera/Rizon advertise rfc1459, where `foo[1]` and `foo{1}` are
+    // the SAME identity. Since #1861 cic ACTS on it: `casemappingForNetwork`
+    // below feeds `normalizeNick`/`nickEquals`.
     const entry = isupportEntryFromWire({ ...WIRE_PAYLOAD, casemapping: "rfc1459" });
     expect(entry.casemapping).toBe("rfc1459");
   });
@@ -145,6 +145,26 @@ describe("isupport widening (#1255)", () => {
     expect(entry.nicklen).toBeNull();
     expect(entry.channellen).toBeNull();
     expect(entry.topiclen).toBeNull();
+  });
+
+  // #1861 — the store-reading half of the nick fold. Sibling of
+  // `chantypesForNetwork`, and the ONLY door the fold call sites use.
+  it("casemappingForNetwork reports the seeded fold, per network", () => {
+    seedIsupport(41, isupportEntryFromWire({ ...WIRE_PAYLOAD, casemapping: "rfc1459" }));
+    seedIsupport(42, isupportEntryFromWire({ ...WIRE_PAYLOAD, casemapping: "rfc1459_strict" }));
+    seedIsupport(43, isupportEntryFromWire({ ...WIRE_PAYLOAD, casemapping: "ascii" }));
+
+    expect(casemappingForNetwork(41)).toBe("rfc1459");
+    expect(casemappingForNetwork(42)).toBe("rfc1459_strict");
+    expect(casemappingForNetwork(43)).toBe("ascii");
+  });
+
+  it("casemappingForNetwork defaults to ascii for an unseeded network and a null id", () => {
+    // The narrower fold on both misses: pre-005, a parked session, or no
+    // active network at all. Guessing `ascii` merges no identity the ircd
+    // keeps apart, which is why it is the safe default in BOTH directions.
+    expect(casemappingForNetwork(44)).toBe("ascii");
+    expect(casemappingForNetwork(null)).toBe("ascii");
   });
 
   it("seeds the widened facts per network, keeping networks independent", () => {

@@ -1,5 +1,6 @@
 import { ownNickForNetwork } from "../api";
 import { openBanlistModal } from "../banlistModal";
+import { casemappingForSlug } from "../casemapping";
 import { isChannelName } from "../chantypes";
 import { type IsupportEntry, isupportForNetwork } from "../isupport";
 import { openModeModal } from "../modeModal";
@@ -140,13 +141,13 @@ export const umodeViewCommand: CommandHandler<"umode-view"> = async (_cmd, ctx) 
  * there is no viewer for another user's). Resolve via `ownNickForNetwork`
  * (visitor → me.nick; user → per-credential net.nick) — the same canonical
  * resolver the /whois self-default uses; `nickEquals` for the
- * case-insensitive compare (ASCII, #121/#525). A non-self target is a friendly
+ * case-insensitive compare (per-network fold, #121/#525/#1861). A non-self target is a friendly
  * error rather than a phantom modal.
  */
 export const umodeTargetViewCommand: CommandHandler<"umode-target-view"> = async (cmd, ctx) => {
   const net = networkBySlug(ctx.networkSlug);
   const own = net ? ownNickForNetwork(net, user()) : null;
-  if (own && nickEquals(cmd.target, own)) {
+  if (own && nickEquals(cmd.target, own, casemappingForSlug(ctx.networkSlug))) {
     openUmodeModal(ctx.networkSlug);
     return { ok: true };
   }

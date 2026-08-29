@@ -47,7 +47,10 @@ vi.mock("../lib/networks", () => {
     inserted_at: "x",
   }));
   const networkBySlug = (slug: string) => networks()?.find((n) => n.slug === slug);
-  return { networks, user, networkBySlug };
+  const networkIdBySlug = (slug: string) => networkBySlug(slug)?.id;
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  return { networks, user, networkBySlug, networkIdBySlug };
 });
 
 // UserContextMenu is mounted by MembersPane on right-click; stub it so

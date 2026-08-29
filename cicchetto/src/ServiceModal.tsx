@@ -1,4 +1,5 @@
 import { type Component, createEffect, createSignal, For, Show } from "solid-js";
+import { casemappingForSlug } from "./lib/casemapping";
 import { friendlyError } from "./lib/friendlyError";
 import { nickEquals } from "./lib/nickEquals";
 import { createOverlayLock } from "./lib/overlayScrollLock";
@@ -57,7 +58,10 @@ const ServiceModal: Component = () => {
         // NOTICEs append and appear here whichever window they land in.
         const lines = () =>
           serviceMirrorRows(st.networkSlug, st.service).filter(
-            (m) => m.id > st.sinceId && m.kind === "notice" && nickEquals(m.sender, st.service),
+            (m) =>
+              m.id > st.sinceId &&
+              m.kind === "notice" &&
+              nickEquals(m.sender, st.service, casemappingForSlug(st.networkSlug)),
           );
 
         const send = (): void => {

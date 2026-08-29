@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { type ArchiveEntry, listArchive } from "./api";
 import { token } from "./auth";
 import { identityScopedStore } from "./identityScopedStore";
+import { casemappingForNetwork } from "./isupport";
 import { channelsBySlug } from "./networks";
 import { normalizeNick } from "./nickEquals";
 import { navPseudoChannelsForNetwork } from "./pseudoChannels";
@@ -152,20 +153,28 @@ export const setArchiveModalOpen = exports_.setArchiveModalOpen;
 export function visibleArchiveForNetwork(slug: string, networkId: number): ArchiveEntry[] {
   const entries = archivedBySlug()[slug] ?? [];
   if (entries.length === 0) return entries;
-  // #372: fold every comparison key under ASCII casemapping (`normalizeNick`
-  // — the single client mirror of the server fold, A-Z only; #525). A
-  // service that replied as `DebugServ` archives under that casing while
-  // the open window is `debugserv`; a raw `Set.has` would leave the
-  // archived split visible. Folding both sides collapses the casing so an
-  // active window suppresses its archived variant. Idempotent on channel
-  // names (already server-canonical) and ASCII-only (non-ASCII case
-  // variants stay distinct, matching the ircd + the server's fold).
-  const liveChannels = new Set((channelsBySlug()?.[slug] ?? []).map((c) => normalizeNick(c.name)));
+  // #372: fold every comparison key with `normalizeNick` — the single client
+  // mirror of the server fold. A service that replied as `DebugServ` archives
+  // under that casing while the open window is `debugserv`; a raw `Set.has`
+  // would leave the archived split visible. Folding both sides collapses the
+  // casing so an active window suppresses its archived variant. Idempotent on
+  // channel names (already server-canonical) and never Unicode-folding
+  // (non-ASCII case variants stay distinct, matching the ircd).
+  //
+  // #1861: the fold is this NETWORK's. Every key here comes from cic's own
+  // state, so both sides of each compare move together; on `:ascii` (all of
+  // production) the behaviour is byte-for-byte what #372 shipped.
+  const casemapping = casemappingForNetwork(networkId);
+  const liveChannels = new Set(
+    (channelsBySlug()?.[slug] ?? []).map((c) => normalizeNick(c.name, casemapping)),
+  );
   const liveQueries = new Set(
-    (queryWindowsByNetwork()[networkId] ?? []).map((qw) => normalizeNick(qw.targetNick)),
+    (queryWindowsByNetwork()[networkId] ?? []).map((qw) =>
+      normalizeNick(qw.targetNick, casemapping),
+    ),
   );
   // Reuse the ONE shared pseudo-row projection — folding its names
-  // (ASCII, #372/#525) for the archive's own compare. See the block comment
+  // (#372/#525/#1861) for the archive's own compare. See the block comment
   // above for why this MUST NOT re-derive from raw windowState.
   //
   // #402: subtract what the nav of THIS form factor actually draws, not the
@@ -174,10 +183,10 @@ export function visibleArchiveForNetwork(slug: string, networkId: number): Archi
   // there left the window with no surface at all. `navPseudoChannelsForNetwork`
   // owns that narrowing for the navs too, so the two cannot drift.
   const pseudoNames = new Set(
-    navPseudoChannelsForNetwork(slug, networkId).map((row) => normalizeNick(row.name)),
+    navPseudoChannelsForNetwork(slug, networkId).map((row) => normalizeNick(row.name, casemapping)),
   );
   return entries.filter((entry) => {
-    const folded = normalizeNick(entry.target);
+    const folded = normalizeNick(entry.target, casemapping);
     if (pseudoNames.has(folded)) return false;
     if (entry.kind === "channel") return !liveChannels.has(folded);
     return !liveQueries.has(folded);

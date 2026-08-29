@@ -1,3 +1,4 @@
+import type { Casemapping } from "./isupport";
 import type { ChannelMembers } from "./memberTypes";
 import { nickEquals } from "./nickEquals";
 
@@ -27,6 +28,7 @@ export function applyModeString(
   members: ChannelMembers,
   modeStr: string,
   args: readonly string[],
+  casemapping: Casemapping,
 ): ChannelMembers {
   if (modeStr.length === 0) return members;
 
@@ -63,7 +65,7 @@ export function applyModeString(
       // Pre-fix bare `===` would silently no-op a MODE event whose target
       // arg arrived in a different casing than the JOIN/NAMES that
       // populated the members store.
-      if (!nickEquals(entry.nick, target)) return entry;
+      if (!nickEquals(entry.nick, target, casemapping)) return entry;
       const has = entry.modes.includes(prefix);
       if (sign === "+" && has) return entry;
       if (sign === "-" && !has) return entry;

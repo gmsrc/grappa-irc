@@ -18,6 +18,9 @@ vi.mock("../lib/api", () => ({
 // filter. Default mocks return empty live sets; per-test overrides
 // thread the active windows in via `vi.doMock` + `vi.resetModules`.
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   channelsBySlug: () => ({}),
 }));
 

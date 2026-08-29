@@ -2,6 +2,7 @@ import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { ownNickForNetwork } from "./lib/api";
 import { channelKey } from "./lib/channelKey";
 import { getColoredNicklist } from "./lib/colorNicklist";
+import { casemappingForNetwork } from "./lib/isupport";
 import { memberSigil } from "./lib/memberSigil";
 import { type MemberEntry, membersByChannel, sortMembers } from "./lib/members";
 import { networkBySlug, networks, user } from "./lib/networks";
@@ -123,7 +124,7 @@ const MembersPane: Component<Props> = (props) => {
     if (!net) return [];
     const nick = ownNickForNetwork(net, me);
     if (!nick) return [];
-    const entry = list().find((m) => nickEquals(m.nick, nick));
+    const entry = list().find((m) => nickEquals(m.nick, nick, casemappingForNetwork(net.id)));
     return entry?.modes ?? [];
   };
 

@@ -1,9 +1,10 @@
 import { createSignal } from "solid-js";
+import { casemappingForSlug } from "./casemapping";
 import { identityScopedStore } from "./identityScopedStore";
 import { normalizeNick } from "./nickEquals";
 
 // P-0b — peer-away ephemeral store. Holds at most one away message per
-// (network slug, peer-nick lowercased) pair. Populated by the
+// (network slug, peer-nick folded under this network's CASEMAPPING) pair. Populated by the
 // `peer_away` push event on the user-level Phoenix Channel topic
 // (broadcast by Session.Server's apply_effects arm when a standalone
 // 301 RPL_AWAY arrives — i.e. the operator /msg'd a peer who is away
@@ -32,7 +33,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => setPeerAwayBySlug({}));
 
   const setPeerAway = (networkSlug: string, peer: string, message: string): void => {
-    const peerKey = normalizeNick(peer);
+    const peerKey = normalizeNick(peer, casemappingForSlug(networkSlug));
     setPeerAwayBySlug((prev) => ({
       ...prev,
       [networkSlug]: { ...(prev[networkSlug] ?? {}), [peerKey]: message },
@@ -40,7 +41,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   };
 
   const dismissPeerAway = (networkSlug: string, peer: string): void => {
-    const peerKey = normalizeNick(peer);
+    const peerKey = normalizeNick(peer, casemappingForSlug(networkSlug));
     setPeerAwayBySlug((prev) => {
       const networkEntries = prev[networkSlug];
       if (!networkEntries || !(peerKey in networkEntries)) return prev;

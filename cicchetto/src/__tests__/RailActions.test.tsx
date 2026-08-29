@@ -52,6 +52,9 @@ vi.mock("../lib/notificationPrefs", () => ({
 
 const adminHolder = { value: false };
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   isAdmin: () => adminHolder.value,
   // #986 — pulled in transitively by lib/lifecycle (updateIdentity refetches
   // /me). Unused by the rail, but a named import must resolve.

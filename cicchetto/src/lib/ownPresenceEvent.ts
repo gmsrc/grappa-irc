@@ -26,6 +26,7 @@
 // two surfaces.
 
 import type { ScrollbackMessage } from "./api";
+import type { Casemapping } from "./isupport";
 import { nickEquals } from "./nickEquals";
 
 const PRESENCE_KINDS = new Set<ScrollbackMessage["kind"]>([
@@ -37,8 +38,12 @@ const PRESENCE_KINDS = new Set<ScrollbackMessage["kind"]>([
   "kick",
 ]);
 
-export const isOwnPresenceEvent = (message: ScrollbackMessage, ownNick: string | null): boolean => {
+export const isOwnPresenceEvent = (
+  message: ScrollbackMessage,
+  ownNick: string | null,
+  casemapping: Casemapping,
+): boolean => {
   if (ownNick === null) return false;
   if (!PRESENCE_KINDS.has(message.kind)) return false;
-  return nickEquals(message.sender, ownNick);
+  return nickEquals(message.sender, ownNick, casemapping);
 };

@@ -1,4 +1,5 @@
 import { createSignal, untrack } from "solid-js";
+import { casemappingForNetwork } from "./isupport";
 import { moduleRoot } from "./moduleRoot";
 import { nickEquals } from "./nickEquals";
 import { pushCloseQueryWindow, pushOpenQueryWindow } from "./socket";
@@ -65,8 +66,23 @@ const exports = moduleRoot(() => {
    * local mutation (cic NEVER originates state).
    *
    * Skips the server round-trip when the window is already open
-   * (case-insensitive dedup) — server-side upsert is a no-op in that
-   * case anyway and would broadcast a redundant identical list.
+   * (case-insensitive dedup, per this network's CASEMAPPING) —
+   * server-side upsert is a no-op in that case anyway and would
+   * broadcast a redundant identical list.
+   *
+   * #1861 — the dedup folds the way THIS network folds. On `:ascii`
+   * (bahamut/Azzurra) that is unchanged: `Foo[1]` and `foo{1}` stay two
+   * windows because the ircd keeps them two people. On `:rfc1459`
+   * (solanum, Rizon) `[EWG]-L0VE` and `{ewg}-l0ve` are ONE person and now
+   * resolve onto one row instead of pushing a second `open`.
+   *
+   * ⚠️ The SERVER's uniqueness is still ASCII: the partial unique indexes
+   * are on `(subject, network_id, lower(target_nick))`, and SQLite's
+   * `lower()` cannot express the bracket fold. So this gate is what keeps
+   * the duplicate from being created through the cic door; a second row
+   * arriving from anywhere else (an older client, a direct API call, rows
+   * already in the table) is still possible until that index question is
+   * decided — see the issue 1861 discussion of the storage shape.
    *
    * `openedAt` is unused now that state is server-derived; kept in
    * the signature for caller compatibility (UserContextMenu /
@@ -79,7 +95,8 @@ const exports = moduleRoot(() => {
    */
   const openQueryWindowState = (networkId: number, targetNick: string, _openedAt: string): void => {
     const existing = untrack(queryWindowsByNetwork)[networkId] ?? [];
-    const alreadyOpen = existing.some((w) => nickEquals(w.targetNick, targetNick));
+    const casemapping = casemappingForNetwork(networkId);
+    const alreadyOpen = existing.some((w) => nickEquals(w.targetNick, targetNick, casemapping));
     if (alreadyOpen) return;
     pushOpenQueryWindow(networkId, targetNick);
   };
@@ -88,13 +105,13 @@ const exports = moduleRoot(() => {
    * Returns the canonical casing for `nick` if a query window for it is
    * already open on `networkId`, otherwise returns `nick` unchanged.
    *
-   * IRC nicks are case-insensitive (CASEMAPPING=ascii, #121/#525); the
-   * server-side `Grappa.QueryWindows` row is unique on `(subject,
-   * network_id, lower(target_nick))` and the stored `target_nick`
-   * preserves the first-opened casing. cic mirrors that via `nickEquals`
-   * (the shared ASCII fold, A-Z only — `[ ] \ ~` untouched): the row's
-   * `targetNick` value is the canonical casing for sidebar/scrollback
-   * ChannelKey derivation.
+   * IRC nicks are case-insensitive (#121/#525); the server-side
+   * `Grappa.QueryWindows` row is unique on `(subject, network_id,
+   * lower(target_nick))` and the stored `target_nick` preserves the
+   * first-opened casing. cic matches via `nickEquals` under this
+   * network's CASEMAPPING (#1861): `A-Z` everywhere, plus `[ ] \ ~` →
+   * `{ } | ^` on an rfc1459 network. The row's `targetNick` value is the
+   * canonical casing for sidebar/scrollback ChannelKey derivation.
    *
    * Without this helper, typing `/q GRAPPA` when a `grappa` window
    * already exists would `setSelectedChannel({channelName: "GRAPPA"})`,
@@ -109,7 +126,9 @@ const exports = moduleRoot(() => {
    */
   const canonicalQueryNick = (networkId: number, nick: string): string => {
     const existing = untrack(queryWindowsByNetwork)[networkId] ?? [];
-    const match = existing.find((w) => nickEquals(w.targetNick, nick));
+    const match = existing.find((w) =>
+      nickEquals(w.targetNick, nick, casemappingForNetwork(networkId)),
+    );
     return match ? match.targetNick : nick;
   };
 

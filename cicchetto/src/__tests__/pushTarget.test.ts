@@ -19,6 +19,9 @@ vi.mock("../lib/selection", () => ({
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: vi.fn(() => [{ id: 1, slug: "libera", kind: "user", connection_state: "connected" }]),
   channelsBySlug: vi.fn(() => ({
     libera: [{ id: 10, name: "#sniffo" }],

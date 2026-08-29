@@ -1,3 +1,4 @@
+import type { Casemapping } from "./isupport";
 import type { ChannelMembers } from "./memberTypes";
 import { asciiFold, nickEquals } from "./nickEquals";
 
@@ -93,6 +94,14 @@ export const NICK_PALETTE_SIZE = 32;
 // djb2 hash, classic 5381 seed + 33 multiplier. Folded modulo
 // NICK_PALETTE_SIZE at the boundary; intermediate keeps full 32-bit
 // width via Math.imul to avoid sign-bit weirdness from `* 33`.
+//
+// #1861 — deliberately still `asciiFold`, NOT the per-network
+// `normalizeNick`. This is a palette hash, not an identity key: on an
+// rfc1459 network `Foo[1]` and `foo{1}` are one person and get two
+// colours, which is cosmetic. Making it network-aware would need the
+// network id at every render site and would re-colour existing rows
+// (the `ux-5-bc2-nick-render` e2e spec pins `djb2(asciiFold(nick))`),
+// for no identity correctness. See the survivor list in `nickEquals.ts`.
 export const nickColorIndex = (nick: string): number => {
   const folded = asciiFold(nick);
   let hash = 5381;
@@ -114,9 +123,10 @@ export const nickColorVar = (nick: string): string => `var(--nick-color-${nickCo
 export const senderPrefix = (
   members: ChannelMembers | undefined,
   nick: string,
+  casemapping: Casemapping,
 ): "@" | "%" | "+" | "" => {
   if (!members) return "";
-  const entry = members.find((m) => nickEquals(m.nick, nick));
+  const entry = members.find((m) => nickEquals(m.nick, nick, casemapping));
   if (!entry) return "";
   if (entry.modes.includes("@")) return "@";
   if (entry.modes.includes("%")) return "%";

@@ -1,8 +1,10 @@
 import { createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { isContentKind, ownNickForNetwork } from "./api";
 import { token } from "./auth";
+import { casemappingForSlug } from "./casemapping";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { identityScopedStore } from "./identityScopedStore";
+import { casemappingForNetwork } from "./isupport";
 import { saveLastFocused } from "./lastFocusedChannel";
 import { membersByChannel } from "./members";
 import { evictFromMru, pickLiveMru, recordFocus } from "./mru";
@@ -239,7 +241,8 @@ const exports = identityScopedStore((onIdentityChange) => {
       const net = networkBySlug(slug);
       if (net) {
         const qs = qwbn[net.id] ?? [];
-        if (qs.some((q) => nickEquals(q.targetNick, name))) return true;
+        const casemapping = casemappingForNetwork(net.id);
+        if (qs.some((q) => nickEquals(q.targetNick, name, casemapping))) return true;
       }
       return false;
     };
@@ -256,7 +259,8 @@ const exports = identityScopedStore((onIdentityChange) => {
         const net = networkBySlug(slug);
         if (net) {
           const qs = qwbn[net.id] ?? [];
-          const match = qs.find((q) => nickEquals(q.targetNick, name));
+          const casemapping = casemappingForNetwork(net.id);
+          const match = qs.find((q) => nickEquals(q.targetNick, name, casemapping));
           if (match !== undefined) {
             return { networkSlug: slug, channelName: match.targetNick, kind: "query" };
           }
@@ -308,7 +312,8 @@ const exports = identityScopedStore((onIdentityChange) => {
         const net = networkBySlug(sel.networkSlug);
         if (net) {
           const qs = queryWindowsByNetwork()[net.id] ?? [];
-          if (qs.some((q) => nickEquals(q.targetNick, sel.channelName))) return true;
+          const casemapping = casemappingForNetwork(net.id);
+          if (qs.some((q) => nickEquals(q.targetNick, sel.channelName, casemapping))) return true;
         }
         return false;
       }
@@ -463,7 +468,8 @@ const exports = identityScopedStore((onIdentityChange) => {
       // window where own content is legitimate payload — a note-to-self —
       // so it is NOT excluded there (#396). Mirrors the server self-window
       // carve-out in `Scrollback.exclude_own_authored/3`.
-      const isSelfWindow = nickEquals(decoded.name, ownNick);
+      const casemapping = casemappingForNetwork(net?.id ?? null);
+      const isSelfWindow = nickEquals(decoded.name, ownNick, casemapping);
 
       let msgs = 0;
       let evts = 0;
@@ -479,12 +485,12 @@ const exports = identityScopedStore((onIdentityChange) => {
           // outside the self-window it must not inflate the badge (the
           // content-row twin of the #532 A own-presence exclusion, mirrored
           // server-side in `Scrollback.exclude_own_authored/3`). `sender` is
-          // compared via the ASCII nick fold (#372 `nickEquals`) — display
-          // stays raw, the MATCH folds. Belt-and-braces over the optimistic
+          // compared via the network's nick fold (#372/#1861 `nickEquals`) —
+          // display stays raw, the MATCH folds. Belt-and-braces over the optimistic
           // send-time cursor advance (scrollback.ts), which has gaps (the #50
           // empty-pane gate; a cross-device / out-of-order cursor landing
           // below your own line).
-          if (!isSelfWindow && nickEquals(row.sender, ownNick)) continue;
+          if (!isSelfWindow && nickEquals(row.sender, ownNick, casemapping)) continue;
           msgs++;
         } else {
           evts++;
@@ -865,7 +871,8 @@ const exports = identityScopedStore((onIdentityChange) => {
       const net = networkBySlug(sel.networkSlug);
       if (!net) return false;
       const queries = qwbn[net.id] ?? [];
-      return queries.some((q) => nickEquals(q.targetNick, sel.channelName));
+      const casemapping = casemappingForNetwork(net.id);
+      return queries.some((q) => nickEquals(q.targetNick, sel.channelName, casemapping));
     })();
 
     const wasLive = lastSeenLive.get(selKey) ?? false;
@@ -918,16 +925,16 @@ const exports = identityScopedStore((onIdentityChange) => {
   // no-such-nick. Per-device, cic-owned focus (mirrors members.ts renaming
   // a member); the window LIST itself stays server-authoritative
   // (`query_windows_list`). No-op unless the CURRENT selection is the
-  // (slug, oldNick) query. `nickEquals` (ASCII fold, A-Z only; #121/#525)
-  // so a case-shift casing still matches; caller (subscribe.ts) only invokes this for a genuine
-  // rename (old ≢ new).
+  // (slug, oldNick) query. `nickEquals` under this network's CASEMAPPING
+  // (#121/#525/#1861) so a case-shift casing still matches; caller
+  // (subscribe.ts) only invokes this for a genuine rename (old ≢ new).
   const followQueryNick = (slug: string, oldNick: string, newNick: string): void => {
     const sel = untrack(selectedChannel);
     if (
       sel !== null &&
       sel.kind === "query" &&
       sel.networkSlug === slug &&
-      nickEquals(sel.channelName, oldNick)
+      nickEquals(sel.channelName, oldNick, casemappingForSlug(slug))
     ) {
       setSelectedChannel({ networkSlug: slug, channelName: newNick, kind: "query" });
     }

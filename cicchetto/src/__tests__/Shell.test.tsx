@@ -140,6 +140,9 @@ vi.mock("@solidjs/router", () => ({
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: () => [{ id: 1, slug: "freenode", nick: "vjt", inserted_at: "", updated_at: "" }],
   channelsBySlug: () => channelsHolder.current,
   user: () => userHolder.current,

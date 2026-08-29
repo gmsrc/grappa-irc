@@ -152,6 +152,11 @@ vi.mock("../lib/networks", async () => {
   const [refetchVersion, setRefetchVersion] = createSignal(0);
   networksHolder.bump = () => setRefetchVersion((v) => v + 1);
   return {
+    // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+    // through this map, so the mock has to carry it. No id is needed here:
+    // an undefined lookup resolves to the `:ascii` default, which is what
+    // every assertion in this file already assumed.
+    networkIdBySlug: () => undefined,
     user: () => meHolder.current,
     // #211 phase 7 — the identity editor + delete-confirm read the visitor's
     // network rows (anchor nick + per-network ident/realname seed). Stub a

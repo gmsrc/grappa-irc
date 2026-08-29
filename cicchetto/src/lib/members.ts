@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import type { ScrollbackMessage } from "./api";
 import type { ChannelKey } from "./channelKey";
 import { identityScopedStore } from "./identityScopedStore";
+import type { Casemapping } from "./isupport";
 import type { ChannelMembers } from "./memberTypes";
 import { applyModeString } from "./modeApply";
 import { nickEquals } from "./nickEquals";
@@ -48,7 +49,15 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     setMembersByChannel((prev) => ({ ...prev, [key]: list }));
   };
 
-  const applyPresenceEvent = (key: ChannelKey, msg: ScrollbackMessage): void => {
+  // #1861 — the casemapping is passed IN rather than resolved here: this
+  // store is keyed by ChannelKey and never learns a network id, and the
+  // dispatcher (`subscribe.ts`) already holds the network. Same
+  // fact-as-data shape `chantypes.ts` uses for CHANTYPES=.
+  const applyPresenceEvent = (
+    key: ChannelKey,
+    msg: ScrollbackMessage,
+    casemapping: Casemapping,
+  ): void => {
     setMembersByChannel((prev) => {
       const current = prev[key] ?? [];
 
@@ -57,19 +66,19 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // Skip if already present (out-of-order JOIN after 353 NAMES).
           // Case-insensitive (RFC 2812 §2.2) — server may emit JOIN with
           // differently-cased nick than the prior NAMES snapshot.
-          if (current.some((m) => nickEquals(m.nick, msg.sender))) return prev;
+          if (current.some((m) => nickEquals(m.nick, msg.sender, casemapping))) return prev;
           return { ...prev, [key]: [...current, { nick: msg.sender, modes: [] }] };
         }
         case "part":
         case "quit": {
-          const next = current.filter((m) => !nickEquals(m.nick, msg.sender));
+          const next = current.filter((m) => !nickEquals(m.nick, msg.sender, casemapping));
           if (next.length === current.length) return prev;
           return { ...prev, [key]: next };
         }
         case "kick": {
           const target = typeof msg.meta.target === "string" ? msg.meta.target : null;
           if (!target) return prev;
-          const next = current.filter((m) => !nickEquals(m.nick, target));
+          const next = current.filter((m) => !nickEquals(m.nick, target, casemapping));
           if (next.length === current.length) return prev;
           return { ...prev, [key]: next };
         }
@@ -77,7 +86,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           const newNick = typeof msg.meta.new_nick === "string" ? msg.meta.new_nick : null;
           if (!newNick) return prev;
           const next = current.map((m) =>
-            nickEquals(m.nick, msg.sender) ? { ...m, nick: newNick } : m,
+            nickEquals(m.nick, msg.sender, casemapping) ? { ...m, nick: newNick } : m,
           );
           return { ...prev, [key]: next };
         }
@@ -87,7 +96,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
             ? (msg.meta.args.filter((a) => typeof a === "string") as string[])
             : [];
           if (!modes) return prev;
-          const next = applyModeString(current, modes, args);
+          const next = applyModeString(current, modes, args, casemapping);
           return { ...prev, [key]: next };
         }
         case "privmsg":

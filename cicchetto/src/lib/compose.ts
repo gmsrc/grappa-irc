@@ -2,6 +2,7 @@ import { createEffect, createSignal, on } from "solid-js";
 import { aliases } from "./aliasList";
 import { ownNickForNetwork } from "./api";
 import { token } from "./auth";
+import { casemappingForSlug } from "./casemapping";
 import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
 import { isChannelName } from "./chantypes";
 import type { CommandContext, DispatchOutcome, SubmitResult } from "./commands/context";
@@ -79,7 +80,7 @@ import { joinedChannelsOnNetwork } from "./joinedChannels";
 import { membersByChannel } from "./members";
 import { splitMessageLines } from "./messageLines";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
-import { asciiFold } from "./nickEquals";
+import { normalizeNick } from "./nickEquals";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 // #1225 — the seam sends a PRIVMSG to the window OR relays a NOTICE/CTCP to a
@@ -102,11 +103,11 @@ const sigilsFor = (slug: string): readonly string[] =>
 
 // #1003 — IRC nicks wear decoration (`_omino_`, `bob^`, `gio-vanni`), so
 // Tab must reach `_omino_` from the bare `omi`. Deliberately NOT taught to
-// `asciiFold`: that helper is protocol IDENTITY (the cic mirror of
-// `Grappa.IRC.Identifier.canonical_nick/1`, shared with nickColor /
-// notifyWatch / channelKey / pingCorrelation), and folding `_` there would
-// make `foo` and `f_o_o` the SAME person for highlight, colour and
-// presence. This one is local to the completion matcher, where a wrong
+// `normalizeNick`/`asciiFold`: those are protocol IDENTITY (the cic mirror
+// of `Grappa.IRC.Identifier.canonical_target/1` and `/2`, shared with
+// nickColor / notifyWatch / channelKey / pingCorrelation), and folding `_`
+// there would make `foo` and `f_o_o` the SAME person for highlight, colour
+// and presence. This one is local to the completion matcher, where a wrong
 // guess costs a second Tab, not an identity merge.
 const stripNickDecoration = (s: string): string => s.replace(/[[\]\\`_^{|}-]/g, "");
 
@@ -1345,7 +1346,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // #1255 — completing a CHANNEL vs a NICK is decided by this network's
     // advertised sigils, not the RFC class: on a `CHANTYPES=#` network a
     // `&foo` token completes against members, not channels.
-    const tabSigils = sigilsFor(decodeChannelKey(key)?.slug ?? "");
+    const tabSlug = decodeChannelKey(key)?.slug ?? "";
+    const tabSigils = sigilsFor(tabSlug);
+    // #1861 — the same per-network resolution for the nick fold. A key that
+    // does not decode leaves the slug empty, which resolves to `:ascii`.
+    const tabCasemapping = casemappingForSlug(tabSlug);
 
     const continuing =
       tabCycle !== null &&
@@ -1373,21 +1378,24 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       typedWord = input.slice(start, cursor);
       if (typedWord.length === 0) return null;
       anchorStart = start;
-      // ASCII fold (not a bare toLowerCase) so `Foo` completes a member
-      // `foo` — bahamut is CASEMAPPING=ascii (#525), folding `A-Z` ONLY.
-      // `[ ] \ ~` are NOT folded, so for IDENTITY `foo{` and `Foo[1]` stay
-      // DISTINCT nicks. toLowerCase is avoided because it Unicode-over-folds
-      // non-ASCII (`CAFÉ`→`café`), not the brackets. Mirror of
-      // `Grappa.IRC.Identifier.canonical_nick/1`.
+      // Fold with the NETWORK's casemapping (not a bare toLowerCase) so
+      // `Foo` completes a member `foo`. On bahamut (`CASEMAPPING=ascii`,
+      // #525) that folds `A-Z` ONLY: `[ ] \ ~` are NOT folded, so for
+      // IDENTITY `foo{` and `Foo[1]` stay DISTINCT nicks. On an rfc1459
+      // network (#1861) they are the SAME nick and the literal level says
+      // so. toLowerCase is avoided because it Unicode-over-folds non-ASCII
+      // (`CAFÉ`→`café`), not the brackets. Mirror of
+      // `Grappa.IRC.Identifier.canonical_target/2`.
       //
       // Careful, this is only HALF the completion rule (#1003): the second
-      // level below counts `{ | }` as decoration alongside `[ ] \`, so
-      // `foo{<TAB>` CAN reach `Foo[1]` — strictly BEHIND every literal
-      // match, never displacing one. That is not an identity merge and does
-      // not soften #525: nothing here is a key, and what gets inserted is
-      // always the real nick. Keep both halves stated — a reader who sees
-      // only this paragraph will "fix" the second level as a leftover.
-      prefix = asciiFold(typedWord);
+      // level below counts `{ | }` as decoration alongside `[ ] \`, so on
+      // an `:ascii` network `foo{<TAB>` CAN still reach `Foo[1]` — strictly
+      // BEHIND every literal match, never displacing one. That is not an
+      // identity merge and does not soften #525: nothing here is a key, and
+      // what gets inserted is always the real nick. Keep both halves stated
+      // — a reader who sees only this paragraph will "fix" the second level
+      // as a leftover.
+      prefix = normalizeNick(typedWord, tabCasemapping);
       // ": " only when the word is the first token on the line — and only
       // for a NICK. A channel is a topic of conversation, never an
       // addressee, so `#chan: ` would be wrong at line start (#30).
@@ -1403,7 +1411,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       ? joinedChannelsOnNetwork(key)
       : (membersByChannel()[key] ?? []).map((m) => m.nick);
     const byName = (a: string, b: string) => a.localeCompare(b);
-    const literal = candidates.filter((c) => asciiFold(c).startsWith(prefix)).sort(byName);
+    const literal = candidates
+      .filter((c) => normalizeNick(c, tabCasemapping).startsWith(prefix))
+      .sort(byName);
     // Second level (#1003), nicks only: the same prefix test with the
     // decoration removed from BOTH sides. It runs AFTER the literal
     // matches — the order IS the behaviour, so with `omino` and `_oMiNo_`
@@ -1418,7 +1428,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         : candidates
             .filter(
               (c) =>
-                !literal.includes(c) && stripNickDecoration(asciiFold(c)).startsWith(looseWord),
+                !literal.includes(c) &&
+                stripNickDecoration(normalizeNick(c, tabCasemapping)).startsWith(looseWord),
             )
             .sort(byName);
     const matches = [...literal, ...loose];

@@ -81,7 +81,15 @@ export function shouldNotify(
   // on every outgoing message that happens to contain their nick. The server
   // has had this step since #532 C (`triggers.ex` `own_row?/2`); this port
   // did not, and the shared fixture had no row that could see the gap.
-  if (nickEquals(message.sender, ownNick)) return false;
+  //
+  // #1861 — pinned to `"ascii"`, deliberately. This whole predicate is a
+  // faithful transcription of the SERVER's `Push.Triggers`, and every fold
+  // over there is the arity-1 `Identifier.canonical_target/1` (`own_row?/2`,
+  // `dm?/2`, the two allow-lists). Folding harder here than the server folds
+  // would make cic's in-app notification decision disagree with the push the
+  // server actually sends on an rfc1459 network. When the server's triggers
+  // become network-aware, this moves WITH them, not before.
+  if (nickEquals(message.sender, ownNick, "ascii")) return false;
 
   // Fold BOTH sides, mirroring the server's `dm?/2`. The `channel` KEY is
   // folded at the persist boundary (`Message.canonicalize_channel/1`, #537)

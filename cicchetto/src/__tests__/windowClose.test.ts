@@ -50,6 +50,9 @@ vi.mock(import("../lib/auth"), async (importOriginal) => {
 
 const mockNetworks: { kind: string; slug: string }[] = [];
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networks: () => mockNetworks,
 }));
 

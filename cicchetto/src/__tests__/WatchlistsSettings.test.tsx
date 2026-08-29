@@ -23,7 +23,12 @@ vi.mock("../lib/api", () => ({
 
 vi.mock("../lib/auth", () => ({ token: () => "tok" }));
 
-vi.mock("../lib/networks", () => ({ networks: () => networksData }));
+vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
+  networks: () => networksData,
+}));
 
 vi.mock("../lib/notifyWatch", () => ({
   watchByNetwork: () => watchData,

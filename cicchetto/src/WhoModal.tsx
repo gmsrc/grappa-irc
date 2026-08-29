@@ -1,5 +1,6 @@
 import { type Component, For, Show } from "solid-js";
 import type { WhoUser } from "./lib/api";
+import { casemappingForSlug } from "./lib/casemapping";
 import { channelKey } from "./lib/channelKey";
 import { memberSigil } from "./lib/memberSigil";
 import { membersByChannel } from "./lib/members";
@@ -112,7 +113,7 @@ const rosterMembership = (
 ): Membership | null | undefined => {
   const list = membersByChannel()[channelKey(slug, channel)];
   if (list === undefined) return undefined;
-  const member = list.find((m) => nickEquals(m.nick, nick));
+  const member = list.find((m) => nickEquals(m.nick, nick, casemappingForSlug(slug)));
   if (member === undefined) return undefined;
   const sigil = memberSigil(member.modes);
   return sigil === " " ? null : sigil;

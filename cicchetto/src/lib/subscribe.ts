@@ -4,11 +4,12 @@ import { assertNever, type ChannelEvent, listMembers, ownNickForNetwork } from "
 import { socketUserName, token } from "./auth";
 import { incrementBadge, setBadge } from "./badge";
 import { playBeep } from "./beep";
+import { casemappingForSlug } from "./casemapping";
 import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
 import { dropChannelTopicState, seedModes, seedTopic } from "./channelTopic";
 import { isDocumentVisible } from "./documentVisibility";
 import { highlightPatterns } from "./highlightList";
-import { isupportEntryFromWire, seedIsupport } from "./isupport";
+import { casemappingForNetwork, isupportEntryFromWire, seedIsupport } from "./isupport";
 import { applyPresenceEvent, seedMembers } from "./members";
 import { setServerMention } from "./mentions";
 import { moduleRoot } from "./moduleRoot";
@@ -381,7 +382,8 @@ moduleRoot(() => {
     // by kind: presence kinds (join/part/quit/nick_change/mode/kick)
     // mutate the per-channel member list; content kinds are no-ops
     // there. Dispatching every event keeps routing local to members.ts.
-    applyPresenceEvent(key, message);
+    const casemapping = casemappingForSlug(slug);
+    applyPresenceEvent(key, message, casemapping);
 
     // BUG5b / CP29 R-6: own-action presence events (join/part/quit/
     // nick_change/mode/kick from own nick) must never bump unread — the
@@ -399,7 +401,7 @@ moduleRoot(() => {
     // gate for the mention bump path (own /me to a channel that
     // contains your nick mustn't beep / badge yourself) and the early-
     // return short-circuits the dm-listener auto-open logic below.
-    if (isOwnPresenceEvent(message, ownNick)) return;
+    if (isOwnPresenceEvent(message, ownNick, casemapping)) return;
 
     // Server-numeric-derived NOTICE: routed to the window the operator's
     // own action targeted (e.g. /msg <nick> → ERR_NOSUCHNICK 401, persisted
@@ -649,7 +651,9 @@ moduleRoot(() => {
           // BUG5a: own PART → drop the windowState entry. Selection
           // redirection is owned by the close-watcher in selection.ts
           // (UX-4-E), which fires off the channels_changed broadcast.
-          const ownPart = message.kind === "part" && nickEquals(message.sender, ownNick);
+          const casemapping = casemappingForSlug(slug);
+          const ownPart =
+            message.kind === "part" && nickEquals(message.sender, ownNick, casemapping);
           if (ownPart) {
             // CP15 B5: own-PART projects to absence in the windowState
             // map. Server intentionally does NOT broadcast `kind:
@@ -672,7 +676,13 @@ moduleRoot(() => {
           // above, the #372/#373 nick migration below, and every non-presence
           // kind. `shouldDrop` is false for our own nick and for
           // nick_change/mode by construction.
-          if (!presencePause.shouldDrop(key, message.kind, nickEquals(message.sender, ownNick))) {
+          if (
+            !presencePause.shouldDrop(
+              key,
+              message.kind,
+              nickEquals(message.sender, ownNick, casemapping),
+            )
+          ) {
             routeMessage(slug, key, name, message, ownNick);
           }
 
@@ -687,13 +697,14 @@ moduleRoot(() => {
           // idempotent no-ops when nothing matches (a plain member rename
           // with no query window). Own self-rename (sender == ownNick) is
           // skipped — own nick rides own_nick_changed, not a query window.
-          if (message.kind === "nick_change" && !nickEquals(message.sender, ownNick)) {
+          if (message.kind === "nick_change" && !nickEquals(message.sender, ownNick, casemapping)) {
             const newNick =
               typeof message.meta.new_nick === "string" ? message.meta.new_nick : null;
-            // Guard genuine rename: a case-only shift (old ≡ new under
-            // the ASCII fold, #121/#525) needs no key move (canonicalQueryNick already resolves
-            // casing) and the server row stays put (`:noop`).
-            if (newNick !== null && !nickEquals(message.sender, newNick)) {
+            // Guard genuine rename: a case-only shift (old ≡ new under this
+            // network's fold, #121/#525/#1861) needs no key move
+            // (canonicalQueryNick already resolves casing) and the server row
+            // stays put (`:noop`).
+            if (newNick !== null && !nickEquals(message.sender, newNick, casemapping)) {
               // The scrollback + cursor caches are keyed by the query
               // window's STORED casing, which can differ from the NICK
               // line's sender casing (#372: window opened `guest`, peer is
@@ -859,7 +870,10 @@ moduleRoot(() => {
             routeMessage(slug, senderKey, peer, message, ownNick);
             return;
           }
-          if (message.kind === "notice" && !nickEquals(message.sender, ownNick)) {
+          if (
+            message.kind === "notice" &&
+            !nickEquals(message.sender, ownNick, casemappingForNetwork(networkId))
+          ) {
             // Peer-to-peer NOTICE on the own-nick topic — i.e. landed at
             // `channel == ownNick` because the sender targeted our nick
             // directly. CP23 cluster `code-reload` shipped the canonical
@@ -1181,7 +1195,7 @@ moduleRoot(() => {
     const net = nets.find((n) => n.slug === slug);
     if (!net) return Promise.resolve();
     const ownNick = ownNickForSlug(slug);
-    if (nickEquals(target, ownNick)) return Promise.resolve();
+    if (nickEquals(target, ownNick, casemappingForSlug(slug))) return Promise.resolve();
     const key = channelKey(slug, target);
     const pending = queryJoinAcks.get(key);
     if (pending) return pending;

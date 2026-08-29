@@ -1,4 +1,5 @@
 import { type Component, Show } from "solid-js";
+import { casemappingForSlug } from "./lib/casemapping";
 import { normalizeNick } from "./lib/nickEquals";
 import { dismissPeerAway, peerAwayBySlug } from "./lib/peerAway";
 import NickText from "./NickText";
@@ -24,7 +25,7 @@ export type Props = {
 
 const PeerAwayBanner: Component<Props> = (props) => {
   const message = (): string | undefined => {
-    const peerKey = normalizeNick(props.peer);
+    const peerKey = normalizeNick(props.peer, casemappingForSlug(props.networkSlug));
     return peerAwayBySlug()[props.networkSlug]?.[peerKey];
   };
 

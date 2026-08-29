@@ -34,6 +34,9 @@ let mockFramePreview: { messages: number; remainingBytes: number | null } | null
 let mockFrameBudgetBase: number | null = 393;
 
 vi.mock("../lib/isupport", () => ({
+  // #1861 — the nick fold is per-network now; the store-reading half
+  // lives here. `"ascii"` is the production posture (bahamut/Azzurra).
+  casemappingForNetwork: () => "ascii" as const,
   frameBudgetBaseForNetwork: () => mockFrameBudgetBase,
 }));
 
@@ -94,6 +97,9 @@ vi.mock("../lib/windowState", () => ({
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   // Bucket F H4: ComposeBox narrows on `kind === "user"` before
   // reading connection_state. Tests exercise the user branch (the
   // greyed cascade only applies to user subjects' credential rows;

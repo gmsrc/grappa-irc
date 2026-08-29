@@ -1,7 +1,7 @@
 import { ownNickForNetwork } from "./api";
 import type { ChannelKey } from "./channelKey";
 import { editorSigils } from "./channelModes";
-import { isupportForNetwork } from "./isupport";
+import { casemappingForNetwork, isupportForNetwork } from "./isupport";
 import { membersByChannel } from "./members";
 import { networkBySlug, user } from "./networks";
 import { nickEquals } from "./nickEquals";
@@ -41,7 +41,9 @@ export function ownHoldsChannelEditorSigil(
   if (!net || !me) return false;
   const nick = ownNickForNetwork(net, me);
   if (!nick) return false;
-  const entry = (membersByChannel()[key] ?? []).find((m) => nickEquals(m.nick, nick));
+  const entry = (membersByChannel()[key] ?? []).find((m) =>
+    nickEquals(m.nick, nick, casemappingForNetwork(networkId)),
+  );
   const modes = entry?.modes ?? [];
   const editors = editorSigils(isupportForNetwork(networkId));
   return modes.some((m) => editors.has(m));

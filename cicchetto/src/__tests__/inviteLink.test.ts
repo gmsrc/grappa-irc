@@ -26,6 +26,9 @@ vi.mock("../lib/channelJoin", () => ({
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
+  // through this map, so the mock has to carry it.
+  networkIdBySlug: () => undefined,
   networkBySlug: vi.fn((slug: string) =>
     slug === "azzurra" ? { id: 1, slug: "azzurra", kind: "user" } : undefined,
   ),
