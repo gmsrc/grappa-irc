@@ -495,7 +495,24 @@ defmodule Grappa.Application do
         # the `GrappaWeb.Endpoint` CHILD has actually started — calling
         # it earlier (measured) crashes boot with "could not find
         # persistent term for endpoint GrappaWeb.Endpoint."
-        :ok = Grappa.Uploads.boot_base_url(GrappaWeb.Endpoint.url())
+        #
+        # Guarded on the SAME flag `endpoint_child/0` reads: when
+        # `:start_endpoint` is false there is no Endpoint child, so
+        # Phoenix never writes that `:persistent_term` and `url/0`
+        # raises the very error the paragraph above describes — which
+        # is what the one-shot `grappa.*` mix tasks
+        # (`Mix.Tasks.Grappa.Boot.start_app_silent/0`) and the
+        # integration testnet boot hit, measured. Skipping the seed
+        # there is correct rather than merely tolerable: `base_url/0`
+        # feeds `Uploads.public_url/2`, reached only from the CTCP
+        # AVATAR reply on a live IRC session, and a node with no HTTP
+        # surface runs no sessions (`:start_bootstrap` is off in the
+        # same breath). It stays a raise, not a nil, so a caller that
+        # DOES reach it on such a node is a contract violation and says
+        # so.
+        if Application.get_env(:grappa, :start_endpoint, true) do
+          :ok = Grappa.Uploads.boot_base_url(GrappaWeb.Endpoint.url())
+        end
 
         result
 
