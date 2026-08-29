@@ -293,6 +293,10 @@ defmodule Grappa.Session do
           # KVIrc-style CTCP USERINFO profile — BOTH subjects (unlike away).
           # Kept in sync with the `Grappa.Session.Server.init_opts/0` twin.
           optional(:restored_profile) => Server.profile(),
+          # M3a — the credential's own avatar, absolute URL or nil. Same
+          # both-subjects, kept-in-sync-with-the-Server-twin shape as
+          # `:restored_profile` above.
+          optional(:restored_avatar_url) => String.t() | nil,
           # M2 — the subject's `show_peer_profiles` opt-in (peer CTCP
           # USERINFO/AVATAR queries), resolved at the spawn boundary below
           # exactly like `auto_away_debounce_ms`. Kept in sync with the

@@ -409,6 +409,11 @@ defmodule Grappa.Session.Server do
           # (unlike away, this isn't user-only). Omitted opt boots an
           # all-nil profile (`empty_profile/0`).
           optional(:restored_profile) => profile(),
+          # M3a — the credential's own avatar, absolute URL (already
+          # `nil`-safe: `Grappa.Networks.Wire.avatar_url/1` returns `nil`
+          # when unset). Same both-subjects, omitted-boots-nil shape as
+          # `:restored_profile` above.
+          optional(:restored_avatar_url) => String.t() | nil,
           optional(:query_window_open?) => EventRouter.query_window_open?(),
           optional(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
@@ -564,6 +569,7 @@ defmodule Grappa.Session.Server do
           recover_settle_timer: reference() | nil,
           away_state: AwayState.t(),
           profile: profile(),
+          avatar_url: String.t() | nil,
           auto_away_timer: reference() | nil,
           # #671 — the auto-away debounce window (ms), injected from
           # `start_session/3` (the subject's #348 preference over the
@@ -1129,6 +1135,10 @@ defmodule Grappa.Session.Server do
       # seam that doesn't set it). Updated in place, without a
       # reconnect, on `{:credential_profile_changed, network_id, _}`.
       profile: Map.get(opts, :restored_profile, empty_profile()),
+      # M3a — boots from the plan's `:restored_avatar_url` (nil when
+      # omitted or unset), updated live on `{:credential_avatar_changed,
+      # ...}` — same shape as `profile` above.
+      avatar_url: Map.get(opts, :restored_avatar_url),
       auto_away_timer: nil,
       # #671 — debounce window from the spawn boundary
       # (`start_session/3`); an explicit opt still wins so a unit test can
@@ -3014,6 +3024,20 @@ defmodule Grappa.Session.Server do
 
   def handle_info({:credential_profile_changed, network_id, fields}, %{network_id: network_id} = state) do
     {:noreply, %{state | profile: fields}}
+  end
+
+  # M3a — same shape as `:credential_profile_changed` above: a live edit
+  # via `PUT`/`DELETE /networks/:id/avatar` broadcasts on the same
+  # subject-scoped `user_settings` bridge topic, and `state.avatar_url`
+  # updates in place for the next inbound CTCP AVATAR reply — no
+  # reconnect (the avatar never rides the IRC handshake).
+  def handle_info({:credential_avatar_changed, network_id, _}, %{network_id: other} = state)
+      when network_id != other do
+    {:noreply, state}
+  end
+
+  def handle_info({:credential_avatar_changed, network_id, avatar_url}, %{network_id: network_id} = state) do
+    {:noreply, %{state | avatar_url: avatar_url}}
   end
 
   # Linked Client crashed abnormally. Record a backoff failure (so the

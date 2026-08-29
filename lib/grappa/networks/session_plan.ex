@@ -372,7 +372,14 @@ defmodule Grappa.Networks.SessionPlan do
       # topic instead (`Credentials.update_credential_profile/2`), so this
       # is a boot-time snapshot only, not a persister closure like
       # `away_persister`.
-      restored_profile: Credential.profile_snapshot(cred)
+      restored_profile: Credential.profile_snapshot(cred),
+      # M3a — same boot-time-snapshot posture as `:restored_profile`
+      # above; a live edit updates `state.avatar_url` in place via the
+      # same `user_settings` bridge topic
+      # (`Credentials.set_avatar/3`/`clear_avatar/1`). `:avatar_upload`
+      # is preloaded defensively here (this plan-build path doesn't
+      # otherwise touch it) rather than assumed already-loaded on `cred`.
+      restored_avatar_url: Networks.Wire.avatar_url(Repo.preload(cred, :avatar_upload))
     }
   end
 

@@ -576,6 +576,14 @@ defmodule Grappa.Session.EventRouter do
         # dispatch clause.
         ctcp_userinfo_reply(msg, target, state)
 
+      {"AVATAR", _} ->
+        # M3a — the KVIrc-era CTCP AVATAR convention, URL-only (never
+        # DCC — see `docs/DESIGN_NOTES.md`). Own function for the same
+        # reason USERINFO/PING are; also the one CTCP reply arm that
+        # may choose NOT to reply (unset avatar has no useful answer —
+        # see the function doc).
+        ctcp_avatar_reply(msg, target, state)
+
       _ ->
         # Non-VERSION, non-PING CTCP (ACTION handled below; TIME /
         # SOURCE / FINGER not implemented yet) — delegate to the generic
@@ -3164,6 +3172,45 @@ defmodule Grappa.Session.EventRouter do
         dm_channel,
         sender,
         "CTCP USERINFO query → #{info}",
+        sender_meta(msg)
+      )
+
+    {:cont, state2, [{:reply, reply}, persist_eff]}
+  end
+
+  # M3a — KVIrc-era CTCP AVATAR: unlike USERINFO, an UNSET avatar gets
+  # NO reply at all — there's no useful answer ("no avatar" isn't
+  # information the querying client can act on the way an empty
+  # USERINFO string is still a legitimate "nothing configured" answer),
+  # matching KVIrc's own
+  # `KviOption_boolIgnoreChannelAvatarRequestsWhenNoAvatarSet` gate,
+  # simplified to always-on (no separate toggle for this MVP). URL-only
+  # by construction: `state.avatar_url` is always an absolute
+  # `Grappa.Uploads.public_url/2` HTTP(S) URL or `nil` — never a bare
+  # filename, so there is no DCC branch to accidentally trigger here or
+  # on the receiving KVIrc/mIRC client (see `docs/DESIGN_NOTES.md`).
+  @spec ctcp_avatar_reply(Message.t(), String.t(), state()) ::
+          {:cont, state(), [effect()]}
+  defp ctcp_avatar_reply(_, _, %{avatar_url: nil} = state) do
+    {:cont, state, []}
+  end
+
+  defp ctcp_avatar_reply(msg, target, state) do
+    sender = Message.sender_nick(msg)
+    reply = "NOTICE #{sender} :\x01AVATAR #{state.avatar_url}\x01"
+
+    dm_channel =
+      if nick_eq?(target, state.nick),
+        do: state.nick,
+        else: Identifier.canonical_target(target, casemapping(state))
+
+    {state2, persist_eff} =
+      build_persist(
+        state,
+        :notice,
+        dm_channel,
+        sender,
+        "CTCP AVATAR query → #{state.avatar_url}",
         sender_meta(msg)
       )
 
