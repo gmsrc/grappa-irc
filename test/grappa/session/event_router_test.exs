@@ -633,6 +633,32 @@ defmodule Grappa.Session.EventRouterTest do
       end
     end
 
+    test "PRIVMSG carrying CTCP AVATAR query replies with the URL when one is set" do
+      state = base_state(%{avatar_url: "https://grappa.example/uploads/abc123.png"})
+
+      body = <<0x01, "AVATAR", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:reply, line}, {:persist, :notice, attrs}]} =
+               EventRouter.route(m, state)
+
+      assert IO.iodata_to_binary(line) ==
+               "NOTICE alice :\x01AVATAR https://grappa.example/uploads/abc123.png\x01"
+
+      assert attrs.channel == "vjt"
+      assert attrs.sender == "alice"
+      assert attrs.body == "CTCP AVATAR query → https://grappa.example/uploads/abc123.png"
+    end
+
+    test "PRIVMSG carrying CTCP AVATAR query gets NO reply when unset (unlike USERINFO)" do
+      state = base_state(%{avatar_url: nil})
+
+      body = <<0x01, "AVATAR", 0x01>>
+      m = msg(:privmsg, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, ^state, []} = EventRouter.route(m, state)
+    end
+
     test "a CTCP-framed NOTICE lands on $server and mints no query window" do
       state = base_state()
 

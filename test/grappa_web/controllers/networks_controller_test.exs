@@ -848,6 +848,135 @@ defmodule GrappaWeb.NetworksControllerTest do
     end
   end
 
+  describe "PUT /networks/:network_id/avatar (M3a)" do
+    # ConnTest map-params bypass Plug.Parsers, so a %Plug.Upload{} built by
+    # hand exercises the controller's own validation path directly — same
+    # convention as `UploadsControllerTest.upload_fixture/3`. Real image
+    # bytes for the happy path (MetadataStrip fail-closes on garbage).
+    defp avatar_fixture(filename, content_type, bytes) do
+      path =
+        Path.join(System.tmp_dir!(), "avatar_fixture_#{System.unique_integer([:positive])}")
+
+      File.write!(path, bytes)
+      %Plug.Upload{path: path, filename: filename, content_type: content_type}
+    end
+
+    test "user uploads an avatar → 200 + absolute avatar_url + permanent upload row",
+         %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatar-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-avatar-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      upload = avatar_fixture("me.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+
+      conn = conn |> put_bearer(session.id) |> put("/networks/#{slug}/avatar", %{"file" => upload})
+
+      body = json_response(conn, 200)
+      assert is_binary(body["avatar_url"])
+      assert body["avatar_url"] =~ "/uploads/"
+
+      {:ok, cred} = Credentials.get_credential(vjt, network)
+      cred_with_avatar = Repo.preload(cred, :avatar_upload)
+      assert %Grappa.Uploads.Upload{expires_at: nil} = cred_with_avatar.avatar_upload
+    end
+
+    test "replacing an avatar retires the old upload row (unlinked + soft-deleted)",
+         %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatarreplace-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-avatarreplace-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn = put_bearer(conn, session.id)
+
+      first_upload = avatar_fixture("first.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+      conn |> put("/networks/#{slug}/avatar", %{"file" => first_upload}) |> json_response(200)
+
+      {:ok, cred_after_first} = Credentials.get_credential(vjt, network)
+      first_upload_id = cred_after_first.avatar_upload_id
+
+      second_upload = avatar_fixture("second.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+      conn |> put("/networks/#{slug}/avatar", %{"file" => second_upload}) |> json_response(200)
+
+      {:ok, cred_after_second} = Credentials.get_credential(vjt, network)
+      assert cred_after_second.avatar_upload_id != first_upload_id
+
+      {:ok, retired} = Grappa.Uploads.get_by_id(first_upload_id)
+      assert %DateTime{} = retired.deleted_at
+    end
+
+    test "rejects a non-image MIME with 415", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatarmime-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-avatarmime-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      upload = avatar_fixture("notes.txt", "text/plain", "just text")
+
+      conn = conn |> put_bearer(session.id) |> put("/networks/#{slug}/avatar", %{"file" => upload})
+
+      assert json_response(conn, 415)
+    end
+
+    test "404 when the caller holds no credential on the network (authz)", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatarauthz-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-avatarauthz-#{u()}"
+      {:ok, _} = Networks.find_or_create_network(%{slug: slug})
+
+      upload = avatar_fixture("me.png", "image/png", Grappa.UploadFixtures.bytes(:gps_png))
+
+      conn = conn |> put_bearer(session.id) |> put("/networks/#{slug}/avatar", %{"file" => upload})
+
+      assert json_response(conn, 404)
+    end
+  end
+
+  describe "DELETE /networks/:network_id/avatar (M3a)" do
+    test "clears the avatar → 200 + avatar_url null", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatarclr-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-avatarclr-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn = put_bearer(conn, session.id)
+
+      upload =
+        %Plug.Upload{
+          path: Path.join(System.tmp_dir!(), "avatar_fixture_#{System.unique_integer([:positive])}"),
+          filename: "me.png",
+          content_type: "image/png"
+        }
+
+      File.write!(upload.path, Grappa.UploadFixtures.bytes(:gps_png))
+      conn |> put("/networks/#{slug}/avatar", %{"file" => upload}) |> json_response(200)
+
+      body = conn |> delete("/networks/#{slug}/avatar") |> json_response(200)
+      assert body["avatar_url"] == nil
+
+      {:ok, cred} = Credentials.get_credential(vjt, network)
+      assert cred.avatar_upload_id == nil
+    end
+
+    test "no-op success when there was no avatar to begin with", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatarclrnoop-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-avatarclrnoop-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "vjt-irc"})
+
+      conn = put_bearer(conn, session.id)
+
+      body = conn |> delete("/networks/#{slug}/avatar") |> json_response(200)
+      assert body["avatar_url"] == nil
+    end
+  end
+
   describe "PUT /networks/:network_id/password (#124)" do
     # The cure for the split brain: one field, one stored secret. Every test
     # here asserts through `Credential.recover_secret/1` rather than the column,
