@@ -43260,3 +43260,117 @@ Platform limit, stated rather than buried: the reported device is Android
 **Firefox** and this is Blink. Playwright's firefox does not support touch
 emulation, so Gecko is not reachable from this harness. What is established is
 that an engine does this, and which gesture does it — not that Gecko does.
+<!-- entry #1859 -->
+
+---
+
+## 2026-08-29 — #1859: the `/boot` bulk read, measured — and why the client stays on the burst
+
+The maintainer's ruling (2026-08-29) was that cic's cutover to `GET /boot`
+does not ship on the round-trip argument alone: `Scrollback.bulk_heads/4`'s
+`ROW_NUMBER() OVER (PARTITION BY ...)` trades many short statements for one
+held longer, and on a `POOL_SIZE=10` SQLite deployment that trade is not free
+by construction. Measured on a 150,050-row corpus, 50 channels, head limit
+50, through the app's own pool: **the trade does not hold, and the client was
+NOT wired.** A negative is the result the ruling asked for.
+
+The harness is `test/bench_1859.exs`, committed for the same reason
+`bench_1626.exs` is: a decision of this weight should rest on evidence
+somebody else can re-run. Eight known-answer controls gate every number —
+nothing prints if one fails, and the first run of this bench printed nothing
+because the corpus control caught a bad fixture.
+
+### The comparison the round-trip argument does not make
+
+Reading the client first changed what the arms are, so it is recorded rather
+than assumed. At cold boot cic fetches `/messages` for the **one** restored
+window (`selection.ts` -> `loadInitialScrollback`, load-once, on SELECTION);
+it does not walk the channel list. `displayPrefs.ts`'s call is a
+presence-pref reload, not a boot path. `/boot` instead returns every
+channel's head, eagerly. So the trade is not "N short statements now vs 1
+long statement now" but:
+
+| arm | what it reads | when |
+|---|---|---|
+| BOOT_TODAY | one channel's head | at boot |
+| BOOT_ENDPOINT | every channel's head | at boot |
+| LAZY_TOTAL | every channel's head | one selection at a time |
+
+### The numbers
+
+**Same work, one statement against N** (20 channels, corpus held):
+LAZY_TOTAL 40 statements / 5.04 ms wall / 2.91 ms db, against BOOT_ENDPOINT
+2 statements / 59.23 ms wall / 55.41 ms db. The single statement is **11.7x
+DEARER for identical rows** — the arms are pinned to identical per-channel id
+sets by an oracle control, so this is not one arm doing less.
+
+**What the cutover moves into the boot**: 0.28 ms today (one channel's head)
+against 59.23 ms (every channel's head) — **208x more DB work at boot**, in
+exchange for one round trip plus `N_networks`.
+
+**Under the pool the ruling names** (20 concurrent boots, `POOL_SIZE=10`):
+LAZY_TOTAL 140.92 ms wall, 1,343 ms summed pool wait, **5.46 ms** worst wait.
+BOOT_ENDPOINT 3,856 ms wall, 37,518 ms summed pool wait, **2,331 ms** worst
+wait. The long-held statement starves the pool by **427x on the worst wait**,
+which is the failure the ruling predicted by construction. A contention
+control proves the herd genuinely queued, so the lazy arm's small number is a
+measurement and not an idle system.
+
+### The part that makes it a law rather than a constant
+
+Corpus varied 6x with the channel count HELD at 20: LAZY_TOTAL grew **0.99x**
+(4.00 -> 3.97 ms, flat) and BOOT_ENDPOINT grew **4.91x** (13.24 -> 64.94 ms).
+The ratio widens 3.31x -> 5.76x -> 11.20x -> 16.36x. `fetch/7` walks
+`(network_id, channel, server_time DESC)` backwards and stops at the LIMIT;
+the `ROW_NUMBER()` must rank the whole PARTITION before `rn <= limit` can
+discard anything. So the gap is not a constant to be tuned away — it widens
+with the account, which is the complexity class #1679 exists to remove,
+pointing the wrong way.
+
+The plans, since the ruling names them:
+
+```
+-- fetch/7
+SEARCH m0 USING INDEX messages_user_id_network_id_channel_server_time_index
+         (user_id=? AND network_id=? AND channel=?)
+
+-- the ROW_NUMBER() ranking subquery inside bulk_heads/4
+CO-ROUTINE (subquery-2)
+  SEARCH m0 USING COVERING INDEX messages_user_id_network_id_channel_server_time_index
+           (user_id=? AND network_id=? AND channel=?)
+  USE TEMP B-TREE FOR LAST 2 TERMS OF ORDER BY
+SCAN (subquery-2)
+```
+
+Worse than the ruling's own wording: the temp b-tree covers the last **2**
+terms, not one.
+
+### What this does and does not settle
+
+It settles that `GET /boot` as it stands must not become cic's boot path. It
+does NOT condemn the endpoint's request-count goal, which is real and
+unmeasured here — this bench has no HTTP, so network RTT, TLS, JSON encoding
+and the proxy's `limit_req` are all absent, and every one of those costs
+falls on the burst arm. The bench is therefore biased AGAINST the cutover,
+which is why a loss measured on it is a loss and a win would only have been a
+lower bound. What a future attempt needs is a bulk shape whose cost is
+bound by the limit rather than the partition (a per-channel correlated
+seek, N index descents in one statement) — not a faster machine.
+
+`GrappaWeb.BootCostTest` stays exactly as valuable as it was and exactly as
+narrow: it pins how MANY statements, and this entry exists because a count of
+one says nothing about what the one costs.
+
+### Secondary, measured in passing, prod-relevant
+
+Replaying all 92 migrations onto a fresh DB **passes at `pool_size` 1 and 2
+and fails at 3, 4, 5 and 10**, always with `no such column:
+"max_concurrent_user_sessions"` — `20260516184555`'s `DROP COLUMN` not seeing
+`20260516154723`'s `ADD COLUMN`. Established by a 2x2 on call-shape x pool
+(the shape is not the factor) plus a sweep for the threshold; the mechanism
+(a per-connection schema view) is INFERRED, not measured.
+`Ecto.Migrator.with_repo/2` defaults to `pool_size: 2`
+(`ecto_sql/lib/ecto/migrator.ex:161`), which is what `Grappa.Release.migrate/0`
+runs, so today's deploy path sits **one step below the threshold** — not
+exposed, with no margin. It is why this bench migrates on its own
+one-connection repo before handing the file to the pool-10 one.
