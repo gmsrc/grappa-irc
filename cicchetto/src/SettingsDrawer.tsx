@@ -32,7 +32,14 @@ import { formatDuration } from "./lib/duration";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { errorMessage, friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
-import { deleteAccountBody, updateIdentity, updateNetworkPassword, updateProfile } from "./lib/lifecycle";
+import {
+  deleteAccountBody,
+  deleteAvatar,
+  updateIdentity,
+  updateNetworkPassword,
+  updateProfile,
+  uploadAvatar,
+} from "./lib/lifecycle";
 import { networks, user } from "./lib/networks";
 import { mirrorNotificationPrefs, notificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
@@ -316,6 +323,14 @@ const SettingsDrawer: Component<Props> = (props) => {
   const [profileError, setProfileError] = createSignal<string | null>(null);
   const [profileSaved, setProfileSaved] = createSignal(false);
 
+  // M3a — the own avatar, on the SAME selected network the profile editor
+  // above does. No text signal for the value itself: the current avatar is
+  // read straight off `net.avatar_url` (server-authoritative, like every
+  // other credential field here) — these signals only track the upload
+  // widget's transient in-flight state.
+  const [avatarUploading, setAvatarUploading] = createSignal(false);
+  const [avatarError, setAvatarError] = createSignal<string | null>(null);
+
   // #124 — the per-network PASSWORD field. Its own signals and its own save,
   // NOT folded into the identity form above: the password is write-only and
   // leave-blank-to-keep, while the identity fields round-trip and treat a
@@ -391,6 +406,38 @@ const SettingsDrawer: Component<Props> = (props) => {
       );
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  const onUploadAvatar = async (file: File) => {
+    setAvatarError(null);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    setAvatarUploading(true);
+    try {
+      await uploadAvatar(net.slug, file);
+    } catch (err) {
+      setAvatarError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't upload avatar. Try again.",
+      );
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
+  const onDeleteAvatar = async () => {
+    setAvatarError(null);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    setAvatarUploading(true);
+    try {
+      await deleteAvatar(net.slug);
+    } catch (err) {
+      setAvatarError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't remove avatar. Try again.",
+      );
+    } finally {
+      setAvatarUploading(false);
     }
   };
 
@@ -1556,6 +1603,75 @@ const SettingsDrawer: Component<Props> = (props) => {
                     <p class="settings-identity-ok" data-testid="settings-profile-ok">
                       Profile saved.
                     </p>
+                  </Show>
+                </div>
+              </div>
+
+              {/* M3a — the own avatar, per network. A permanent, self-hosted
+                upload (same `Grappa.Uploads` pipeline as any other embedded
+                upload, just `expires_at: nil`), served over CTCP AVATAR to
+                whoever asks and — once M3b lands — rendered in peers' WHOIS
+                cards. Never bounces the connection, like /profile above. */}
+              <div
+                class="settings-section settings-section-card"
+                data-testid="settings-section-avatar"
+              >
+                <h4 class="settings-section-heading">avatar</h4>
+                <div class="settings-identity" data-testid="settings-avatar">
+                  <Show when={selectedIdentityNetwork()?.avatar_url}>
+                    {(url) => (
+                      <img
+                        src={url()}
+                        alt="Current avatar"
+                        class="settings-avatar-preview"
+                        width={64}
+                        height={64}
+                      />
+                    )}
+                  </Show>
+
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
+                    data-testid="settings-avatar-file"
+                    disabled={avatarUploading()}
+                    onChange={(e) => {
+                      const file = e.currentTarget.files?.[0];
+                      e.currentTarget.value = "";
+                      if (file) void onUploadAvatar(file);
+                    }}
+                  />
+                  <p class="settings-identity-hint">
+                    Shown to anyone who sends you a CTCP AVATAR query.
+                  </p>
+
+                  <Show when={selectedIdentityNetwork()?.avatar_url}>
+                    <button
+                      type="button"
+                      class="settings-identity-apply"
+                      data-testid="settings-avatar-remove"
+                      disabled={avatarUploading()}
+                      onClick={() => void onDeleteAvatar()}
+                    >
+                      remove avatar
+                    </button>
+                  </Show>
+
+                  <Show when={avatarUploading()}>
+                    <p class="settings-identity-hint" data-testid="settings-avatar-uploading">
+                      uploading…
+                    </p>
+                  </Show>
+                  <Show when={avatarError()}>
+                    {(msg) => (
+                      <p
+                        role="alert"
+                        class="settings-identity-error"
+                        data-testid="settings-avatar-error"
+                      >
+                        {msg()}
+                      </p>
+                    )}
                   </Show>
                 </div>
               </div>

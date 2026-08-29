@@ -1,8 +1,10 @@
 import {
   deleteAccount as apiDeleteAccount,
+  deleteNetworkAvatar as apiDeleteNetworkAvatar,
   putNetworkPassword as apiPutNetworkPassword,
   updateNetworkIdentity as apiUpdateNetworkIdentity,
   updateNetworkProfile as apiUpdateNetworkProfile,
+  uploadNetworkAvatar as apiUploadNetworkAvatar,
 } from "./api";
 import { clearLocalAuth, getSubject, isPersistentIdentity, logout, token } from "./auth";
 import { requestConfirm } from "./confirmDialog";
@@ -214,6 +216,29 @@ export async function updateProfile(
   const t = token();
   if (t === null) return;
   await apiUpdateNetworkProfile(t, networkSlug, fields);
+  refetchUser();
+}
+
+/**
+ * uploadAvatar — M3a — sets (or replaces) the own avatar on `networkSlug`
+ * (`PUT /networks/:slug/avatar`). Same never-bounces-the-connection
+ * posture as `updateProfile` above.
+ */
+export async function uploadAvatar(networkSlug: string, file: File): Promise<void> {
+  const t = token();
+  if (t === null) return;
+  await apiUploadNetworkAvatar(t, networkSlug, file);
+  refetchUser();
+}
+
+/**
+ * deleteAvatar — M3a — clears the avatar on `networkSlug`
+ * (`DELETE /networks/:slug/avatar`).
+ */
+export async function deleteAvatar(networkSlug: string): Promise<void> {
+  const t = token();
+  if (t === null) return;
+  await apiDeleteNetworkAvatar(t, networkSlug);
   refetchUser();
 }
 

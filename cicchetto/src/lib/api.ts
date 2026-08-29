@@ -2830,6 +2830,49 @@ export async function updateNetworkProfile(
   return (await res.json()) as CredentialJson;
 }
 
+// M3a — the credential's own avatar, per (subject, network) for BOTH
+// subjects (`PUT`/`DELETE /networks/:slug/avatar`). Same
+// never-bounces-the-connection posture as `updateNetworkProfile` above.
+// Plain `fetch` + `FormData` rather than `uploadHost.ts`'s XHR
+// primitive: that module targets THIRD-PARTY hosts (litterbox, or
+// grappa's own generic `/api/uploads`) and its XHR-vs-fetch choice
+// exists for cross-origin progress events + CORS-preflight quirks —
+// neither applies to this same-origin PUT that links the upload to a
+// credential in one request. `buildHeaders` is NOT used here: it
+// force-sets `content-type: application/json`, which would stomp the
+// multipart boundary the browser sets from the `FormData` body.
+export async function uploadNetworkAvatar(
+  token: string,
+  networkSlug: string,
+  file: File,
+): Promise<CredentialJson> {
+  const body = new FormData();
+  body.append("file", file);
+
+  const headers: Record<string, string> = { "x-grappa-client-id": getOrCreateClientId() };
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/avatar`, {
+    method: "PUT",
+    headers,
+    body,
+  });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as CredentialJson;
+}
+
+export async function deleteNetworkAvatar(
+  token: string,
+  networkSlug: string,
+): Promise<CredentialJson> {
+  const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/avatar`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+  });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as CredentialJson;
+}
+
 // #189 — per-network on-connect perform list. `perform_list` is the raw
 // command list (one IRC line per line; null when unset); `oper_pass_set`
 // reports whether the WRITE-ONLY `$oper_pass` secret is stored — the secret

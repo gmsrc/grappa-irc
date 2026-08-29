@@ -761,6 +761,7 @@ export type NetworksWireCredentialJson = {
   location: string | null;
   languages: string | null;
   custom: string | null;
+  avatar_url: string | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -790,6 +791,7 @@ export type NetworksWireNetworkWithNickJson = {
   location: string | null;
   languages: string | null;
   custom: string | null;
+  avatar_url: string | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -811,6 +813,7 @@ export type NetworksWireVisitorNetworkWithNickJson = {
   location: string | null;
   languages: string | null;
   custom: string | null;
+  avatar_url: string | null;
   inserted_at: string;
   updated_at: string;
 };
