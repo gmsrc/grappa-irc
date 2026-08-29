@@ -11141,6 +11141,17 @@ button.topic-bar-windows-opener {
   flex: 0 0 auto;
 }
 
+/* M3b — small, fixed-size presence icon; deliberately capped so an
+   oddly-shaped fetched image never breaks the header's baseline flex
+   row (see docs/DESIGN_NOTES.md #1280). */
+.whois-card-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
 .whois-card-tag {
   display: inline-block;
   padding: 0 0.3rem;

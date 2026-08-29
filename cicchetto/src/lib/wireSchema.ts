@@ -1302,6 +1302,11 @@ export const S_SessionWireWhoReplyPayload = {
   o: { kind: { l: "who_reply" }, network: "s", target: "s", users: { a: S_SessionWireWhoUser } },
 } as const;
 
+// Grappa.Session.Wire.whois_avatar_ready_payload/0
+export const S_SessionWireWhoisAvatarReadyPayload = {
+  o: { kind: { l: "whois_avatar_ready" }, network: "s", nick: "s", avatar_url: "s" },
+} as const;
+
 // Grappa.Session.Wire.whois_extra_line/0
 export const S_SessionWireWhoisExtraLine = { o: { numeric: "i", text: "s" } } as const;
 
@@ -1339,6 +1344,7 @@ export const S_SessionWireWhoisBundlePayload = {
     secure_cipher: { u: ["s", "z"] },
     certfp: { u: ["s", "z"] },
     extra_lines: { u: [{ a: S_SessionWireWhoisExtraLine }, "z"] },
+    avatar_url: { u: ["s", "z"] },
   },
 } as const;
 

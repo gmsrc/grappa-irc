@@ -991,6 +991,7 @@ export const SESSION_WIRE_WIRE_EVENT_KIND = [
   "away_confirmed",
   "mentions_bundle",
   "whois_bundle",
+  "whois_avatar_ready",
   "peer_away",
   "invite_ack",
   "lusers_bundle",
@@ -1272,6 +1273,7 @@ export type SessionWireWhoisBundlePayload = {
   secure_cipher: string | null;
   certfp: string | null;
   extra_lines: SessionWireWhoisExtraLine[] | null;
+  avatar_url: string | null;
 };
 
 export type SessionWirePeerAwayPayload = {
@@ -1407,6 +1409,13 @@ export type SessionWireRecoverResultPayload = {
   reason: SessionWireRecoverReason | null;
 };
 
+export type SessionWireWhoisAvatarReadyPayload = {
+  kind: "whois_avatar_ready";
+  network: string;
+  nick: string;
+  avatar_url: string;
+};
+
 export type WireSessionEvent =
   | SessionWireChannelsChangedPayload
   | SessionWireOwnNickChangedPayload
@@ -1444,7 +1453,8 @@ export type WireSessionEvent =
   | SessionWireDirectoryFailedPayload
   | SessionWireConnectionProgressPayload
   | SessionWireRecoverProgressPayload
-  | SessionWireRecoverResultPayload;
+  | SessionWireRecoverResultPayload
+  | SessionWireWhoisAvatarReadyPayload;
 
 // === Grappa.SessionLog.Wire ===
 
