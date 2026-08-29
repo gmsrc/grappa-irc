@@ -75,7 +75,10 @@ defmodule Grappa.Uploads do
   use Boundary,
     top_level?: true,
     deps: [Grappa.Repo, Grappa.Subject, Grappa.Sys.HardenedCmd],
-    exports: [Upload]
+    # M3b — `MetadataStrip` exported so `Grappa.Avatars` can reuse the
+    # SAME EXIF/GPS privacy-strip pipeline for fetched peer avatars, not
+    # just uploaded bytes — one privacy guarantee, two doors in.
+    exports: [MetadataStrip, Upload]
 
   import Ecto.Query
 
