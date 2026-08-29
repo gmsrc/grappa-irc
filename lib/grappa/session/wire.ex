@@ -447,7 +447,11 @@ defmodule Grappa.Session.Wire do
   `:account` field) flows through ONE seam — no parallel envelopes
   to keep in lockstep.
   """
-  @type member :: %{nick: String.t(), modes: [String.t()]}
+  @type member :: %{
+          required(:nick) => String.t(),
+          required(:modes) => [String.t()],
+          optional(:gender) => :male | :female | :nonbinary | nil
+        }
 
   @typedoc """
   REST envelope returned by `GrappaWeb.MembersJSON.index/1`. Same
@@ -1288,16 +1292,21 @@ defmodule Grappa.Session.Wire do
 
   @doc """
   Renders one `Grappa.Session.member()` to the per-member wire shape.
-  Today the source `Session.member()` IS already `%{nick:, modes:}`
-  so this is an identity-shaped projection — but the function is
-  load-bearing for future shape changes: any drift in the source
-  type (struct wrapping, extra fields, atom-set tightening) requires
-  a change here AND nowhere else. CLAUDE.md "Wire conversion is
+  The function is load-bearing for future shape changes: any drift in
+  the source type (struct wrapping, extra fields, atom-set tightening)
+  requires a change here AND nowhere else. CLAUDE.md "Wire conversion is
   per-context responsibility."
+
+  M2 — `:gender` rides through unchanged (`Map.get/2`, defaults `nil`
+  when the caller didn't merge one in from `peer_profile_cache`, e.g.
+  `show_peer_profiles` off or no reply parsed yet). Same wire spelling
+  as `Grappa.Networks.Wire.credential_to_json/1`'s `gender` field — one
+  atom-via-Jason convention (`:male` → `"male"`) for gender everywhere
+  on the wire, own profile and peer badge alike.
   """
   @spec member(Grappa.Session.member()) :: member()
-  def member(%{nick: nick, modes: modes}) when is_binary(nick) and is_list(modes) do
-    %{nick: nick, modes: modes}
+  def member(%{nick: nick, modes: modes} = m) when is_binary(nick) and is_list(modes) do
+    %{nick: nick, modes: modes, gender: Map.get(m, :gender)}
   end
 
   @doc """

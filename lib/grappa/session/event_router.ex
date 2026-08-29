@@ -96,6 +96,7 @@ defmodule Grappa.Session.EventRouter do
   """
 
   alias Grappa.IRC.{CTCP, Identifier, JoinFailure, Message}
+  alias Grappa.RateLimit.TokenBucket
   alias Grappa.{Scrollback, Session}
 
   alias Grappa.Session.{
@@ -233,6 +234,32 @@ defmodule Grappa.Session.EventRouter do
   # producers, and `send_outbound/3` reports this on the drop warning: an
   # operator reading it must learn which machine failed, not which arm ran.
   @type origin :: :event_router_reply | :ghost_recovery | :recover_identity
+
+  @typedoc """
+  M2 — what THIS session has learned about a peer's CTCP USERINFO
+  profile, currently just `:gender` (M1's closed-set `Credential.gender/0`
+  values, or `nil` when no reply parsed yet). One key per peer today; a
+  future field (e.g. an avatar URL, M3b) extends this map, not a sibling
+  cache — same nick-keyed peer-info shape `userhost_cache` already is.
+
+  Gender's `:male | :female | :nonbinary` is deliberately NOT
+  `Grappa.Networks.Credential.gender()` — same Boundary rule
+  `Session.Server`'s own `profile()` type documents: `Session` must not
+  statically depend on `Networks` (the reverse edge already exists), so
+  the 3-atom closed set is duplicated here, not shared.
+  """
+  @type peer_profile_entry :: %{gender: :male | :female | :nonbinary | nil}
+
+  @typedoc """
+  M2 — network-wide, per-session cache of peer profile info, keyed by
+  **lowercased** (folded via `normalize_nick/2`) nick — same key shape as
+  `userhost_cache`. Populated by a CTCP USERINFO reply to a query WE
+  sent (never from an unsolicited reply); evicted on QUIT/PART/KICK/NICK,
+  mirroring `userhost_cache`'s lifecycle exactly. Key PRESENCE (even with
+  `gender: nil`) means "already queried this session" — see
+  `maybe_query_userinfo/2`.
+  """
+  @type peer_profile_cache :: %{(nick :: String.t()) => peer_profile_entry()}
 
   @type effect ::
           {:persist, Grappa.Scrollback.Message.kind(), persist_attrs()}
@@ -614,6 +641,19 @@ defmodule Grappa.Session.EventRouter do
         prefix_userhost(msg)
       )
 
+    # M2 — a peer joining a channel we're in is a "first seen this
+    # session" moment worth a lazy CTCP USERINFO query (opt-in +
+    # rate-limited + cache-deduped inside the helper). Self-JOIN never
+    # queries itself — `maybe_query_userinfo/2` also no-ops on that, but
+    # skipping the call for our own nick avoids the pointless cache/rate
+    # limiter touch.
+    {state2, query_effects} =
+      if nick_eq?(sender, state.nick) do
+        {state, []}
+      else
+        maybe_query_userinfo(state, sender)
+      end
+
     # CP15 B1: self-JOIN echo promotes the per-channel window to :joined.
     # Other-user JOINs land as scrollback rows only — no window-state
     # transition (the operator may already be in this channel observing).
@@ -621,10 +661,10 @@ defmodule Grappa.Session.EventRouter do
       if nick_eq?(sender, state.nick) do
         [eff, {:joined, channel}]
       else
-        [eff]
+        [eff | query_effects]
       end
 
-    {:cont, state, effects}
+    {:cont, state2, effects}
   end
 
   defp do_route(%Message{command: :part, params: [channel | rest]} = msg, state)
@@ -651,7 +691,7 @@ defmodule Grappa.Session.EventRouter do
     # nick that appears in no remaining channel. For other-user PART: the
     # parting nick is removed from this channel; evict if they appear in no
     # other channel in the (post-PART) members map.
-    {members, topics, channel_modes, userhost_cache} =
+    {members, topics, channel_modes, userhost_cache, peer_profile_cache} =
       cond do
         nick_eq?(sender, state.nick) ->
           # Collect who was in the parted channel before we drop it
@@ -660,25 +700,32 @@ defmodule Grappa.Session.EventRouter do
 
           # Evict nicks from the parted channel that no longer appear in any
           # remaining channel. We include self (state.nick) so our own entry
-          # is evicted when appropriate.
+          # is evicted when appropriate. M2: same eviction rule for
+          # peer_profile_cache — `evict_if_no_overlap/4` is value-agnostic.
           cache = Map.get(state, :userhost_cache, %{})
           new_cache = evict_if_no_overlap(parted_members, new_members, cache, casemapping(state))
 
+          profile_cache = Map.get(state, :peer_profile_cache, %{})
+          new_profile_cache = evict_if_no_overlap(parted_members, new_members, profile_cache, casemapping(state))
+
           {new_members, Map.delete(Map.get(state, :topics, %{}), normalize_channel(channel, casemapping(state))),
-           Map.delete(Map.get(state, :channel_modes, %{}), normalize_channel(channel, casemapping(state))), new_cache}
+           Map.delete(Map.get(state, :channel_modes, %{}), normalize_channel(channel, casemapping(state))), new_cache,
+           new_profile_cache}
 
         Map.has_key?(state.members, channel) ->
           new_members = Map.update!(state.members, channel, &Map.delete(&1, sender))
           cache = Map.get(state, :userhost_cache, %{})
+          profile_cache = Map.get(state, :peer_profile_cache, %{})
+          sender_key = normalize_nick(sender, casemapping(state))
 
-          new_cache =
+          {new_cache, new_profile_cache} =
             if channels_with_member(new_members, sender) == [] do
-              Map.delete(cache, normalize_nick(sender, casemapping(state)))
+              {Map.delete(cache, sender_key), Map.delete(profile_cache, sender_key)}
             else
-              cache
+              {cache, profile_cache}
             end
 
-          {new_members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), new_cache}
+          {new_members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), new_cache, new_profile_cache}
 
         true ->
           # Defensive: persist the audit row even for an unknown channel
@@ -686,7 +733,7 @@ defmodule Grappa.Session.EventRouter do
           # event if upstream re-orders relative to a JOIN we haven't
           # seen yet.
           {state.members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}),
-           Map.get(state, :userhost_cache, %{})}
+           Map.get(state, :userhost_cache, %{}), Map.get(state, :peer_profile_cache, %{})}
       end
 
     # Channel-creation cache lifecycle mirrors topics: drop on self-PART
@@ -708,7 +755,8 @@ defmodule Grappa.Session.EventRouter do
             topics: topics,
             channel_modes: channel_modes,
             channels_created: channels_created,
-            userhost_cache: userhost_cache
+            userhost_cache: userhost_cache,
+            peer_profile_cache: peer_profile_cache
         },
         :part,
         channel,
@@ -744,16 +792,25 @@ defmodule Grappa.Session.EventRouter do
     # S2.4: QUIT means the nick is gone from the network — always evict from
     # userhost_cache, even when sender has no channel overlap in members
     # (e.g. WHOIS populated the cache before a JOIN was seen, or the members
-    # map race). Eviction is unconditional: gone = gone.
-    userhost_cache = Map.delete(Map.get(state, :userhost_cache, %{}), normalize_nick(sender, casemapping(state)))
+    # map race). Eviction is unconditional: gone = gone. M2: same for
+    # peer_profile_cache — a quit nick's cached gender is stale forever.
+    sender_key = normalize_nick(sender, casemapping(state))
+    userhost_cache = Map.delete(Map.get(state, :userhost_cache, %{}), sender_key)
+    peer_profile_cache = Map.delete(Map.get(state, :peer_profile_cache, %{}), sender_key)
 
     case channels_with_member(state.members, sender) do
       [] ->
-        {:cont, %{state | userhost_cache: userhost_cache}, []}
+        {:cont, %{state | userhost_cache: userhost_cache, peer_profile_cache: peer_profile_cache}, []}
 
       channels ->
         members = remove_member_everywhere(state.members, channels, sender)
-        new_state = %{state | members: members, userhost_cache: userhost_cache}
+
+        new_state = %{
+          state
+          | members: members,
+            userhost_cache: userhost_cache,
+            peer_profile_cache: peer_profile_cache
+        }
 
         effects =
           for ch <- channels do
@@ -938,7 +995,7 @@ defmodule Grappa.Session.EventRouter do
         _ -> nil
       end
 
-    {members, topics, channel_modes, userhost_cache} =
+    {members, topics, channel_modes, userhost_cache, peer_profile_cache} =
       kick_state_update(state, channel, target)
 
     # Channel-creation cache lifecycle mirrors topics: drop on self-KICK
@@ -959,7 +1016,8 @@ defmodule Grappa.Session.EventRouter do
             topics: topics,
             channel_modes: channel_modes,
             channels_created: channels_created,
-            userhost_cache: userhost_cache
+            userhost_cache: userhost_cache,
+            peer_profile_cache: peer_profile_cache
         },
         :kick,
         channel,
@@ -1008,19 +1066,35 @@ defmodule Grappa.Session.EventRouter do
        when is_binary(channel) and is_binary(names_blob) do
     tokens = String.split(names_blob, " ", trim: true)
 
-    members =
+    {members, newly_seen_nicks} =
       case Map.fetch(state.members, channel) do
         {:ok, existing} ->
           new_entries = Map.new(tokens, &split_mode_prefix/1)
-          Map.put(state.members, channel, Map.merge(existing, new_entries))
+          # M2 — nicks this 353 line introduces that we did NOT already
+          # know about in this channel's roster. Only meaningful in this
+          # branch (an ephemeral /names on an unjoined channel below
+          # never touches state.members, so it never queries either —
+          # same gate the merge itself already applies).
+          newly_seen = new_entries |> Map.keys() |> Enum.reject(&Map.has_key?(existing, &1))
+          {Map.put(state.members, channel, Map.merge(existing, new_entries)), newly_seen}
 
         :error ->
-          state.members
+          {state.members, []}
       end
 
     state_with_members = %{state | members: members}
 
-    {:cont, names_fold(state_with_members, channel, tokens), []}
+    {state_after_queries, query_effects} =
+      Enum.reduce(newly_seen_nicks, {state_with_members, []}, fn nick, {acc_state, acc_effects} ->
+        if nick_eq?(nick, acc_state.nick) do
+          {acc_state, acc_effects}
+        else
+          {next_state, effects} = maybe_query_userinfo(acc_state, nick)
+          {next_state, acc_effects ++ effects}
+        end
+      end)
+
+    {:cont, names_fold(state_after_queries, channel, tokens), query_effects}
   end
 
   # 332 RPL_TOPIC: JOIN-time backfill — stores topic text in the topics cache.
@@ -2509,9 +2583,18 @@ defmodule Grappa.Session.EventRouter do
     # correlate a PING reply's token back to the /ping it sent (RTT synthesized
     # client-side). A non-CTCP notice (NickServ, MOTD, plain peer notice) is
     # `:none` → empty meta, so this is strictly additive.
-    {state, eff} =
+    #
+    # M2 — a CTCP USERINFO reply is ALSO a genuine, visible answer to a
+    # query the operator (indirectly) asked for, exactly like the #591
+    # PING/VERSION replies above: it stays a normal persisted row via
+    # `ctcp_meta/1` (no separate silent-bookkeeping path). The ONLY thing
+    # M2 adds is a side-effect extraction of `Gender=` into
+    # `peer_profile_cache`, alongside the unchanged persist.
+    state2 = maybe_capture_peer_userinfo(state, sender, body)
+
+    {state3, eff} =
       build_persist(
-        state,
+        state2,
         :notice,
         channel,
         sender,
@@ -2519,7 +2602,7 @@ defmodule Grappa.Session.EventRouter do
         Map.merge(ctcp_meta(body), sender_meta(msg))
       )
 
-    {:cont, state, [eff]}
+    {:cont, state3, [eff]}
   end
 
   # #221 — GENERIC unknown-WHOIS-numeric pass-through. NumericRouter marks
@@ -2738,7 +2821,7 @@ defmodule Grappa.Session.EventRouter do
   # predicate column.
   @spec kick_state_update(state(), String.t(), String.t()) ::
           {%{String.t() => %{String.t() => [String.t()]}}, %{String.t() => topic_entry()},
-           %{String.t() => channel_mode_entry()}, userhost_cache()}
+           %{String.t() => channel_mode_entry()}, userhost_cache(), peer_profile_cache()}
   defp kick_state_update(state, channel, target) do
     apply_kick_effect(kick_classification(state, channel, target), state, channel, target)
   end
@@ -2754,28 +2837,33 @@ defmodule Grappa.Session.EventRouter do
 
   @spec apply_kick_effect(:self | :other | :absent, state(), String.t(), String.t()) ::
           {%{String.t() => %{String.t() => [String.t()]}}, %{String.t() => topic_entry()},
-           %{String.t() => channel_mode_entry()}, userhost_cache()}
+           %{String.t() => channel_mode_entry()}, userhost_cache(), peer_profile_cache()}
   defp apply_kick_effect(:self, state, channel, target) do
     chan_key = normalize_channel(channel, casemapping(state))
     cache = Map.get(state, :userhost_cache, %{})
+    profile_cache = Map.get(state, :peer_profile_cache, %{})
     new_members = Map.delete(state.members, channel)
     new_cache = evict_cache_if_no_overlap(cache, new_members, target, casemapping(state))
+    new_profile_cache = evict_cache_if_no_overlap(profile_cache, new_members, target, casemapping(state))
 
     {new_members, Map.delete(Map.get(state, :topics, %{}), chan_key),
-     Map.delete(Map.get(state, :channel_modes, %{}), chan_key), new_cache}
+     Map.delete(Map.get(state, :channel_modes, %{}), chan_key), new_cache, new_profile_cache}
   end
 
   defp apply_kick_effect(:other, state, channel, target) do
     cache = Map.get(state, :userhost_cache, %{})
+    profile_cache = Map.get(state, :peer_profile_cache, %{})
     new_members = Map.update!(state.members, channel, &Map.delete(&1, target))
     new_cache = evict_cache_if_no_overlap(cache, new_members, target, casemapping(state))
+    new_profile_cache = evict_cache_if_no_overlap(profile_cache, new_members, target, casemapping(state))
 
-    {new_members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), new_cache}
+    {new_members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), new_cache, new_profile_cache}
   end
 
   defp apply_kick_effect(:absent, state, _, _) do
     cache = Map.get(state, :userhost_cache, %{})
-    {state.members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), cache}
+    profile_cache = Map.get(state, :peer_profile_cache, %{})
+    {state.members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), cache, profile_cache}
   end
 
   # The ceiling on `userhost_cache`. Chosen well above any membership a
@@ -2847,12 +2935,14 @@ defmodule Grappa.Session.EventRouter do
         do: normalize_nick(nick, casemapping)
   end
 
+  # M2: value-agnostic like `evict_if_no_overlap/4` (used by PART) — shared
+  # by both `userhost_cache` and `peer_profile_cache` call sites above.
   @spec evict_cache_if_no_overlap(
-          userhost_cache(),
+          %{String.t() => term()},
           %{String.t() => %{String.t() => [String.t()]}},
           String.t(),
           Identifier.casemapping()
-        ) :: userhost_cache()
+        ) :: %{String.t() => term()}
   defp evict_cache_if_no_overlap(cache, members_after, nick, casemapping) do
     if channels_with_member(members_after, nick) == [] do
       Map.delete(cache, normalize_nick(nick, casemapping))
@@ -3126,6 +3216,111 @@ defmodule Grappa.Session.EventRouter do
       {"ACTION", _} -> %{}
       {verb, args} -> %{ctcp_verb: verb, ctcp_args: args}
       :none -> %{}
+    end
+  end
+
+  # M2 — side-effect extraction for an inbound CTCP USERINFO reply: if
+  # `body` carries a parseable `Gender=` field, fold it into
+  # `peer_profile_cache[fold(sender)]`. A no-op (returns `state`
+  # unchanged) for any other CTCP verb, a plain non-CTCP notice, or a
+  # USERINFO reply with no recognisable Gender= — the cache is
+  # best-effort, never a parse failure surfaced to the user.
+  @spec maybe_capture_peer_userinfo(state(), String.t(), binary()) :: state()
+  defp maybe_capture_peer_userinfo(state, sender, body) do
+    case CTCP.verb_args(body) do
+      {"USERINFO", args} ->
+        case extract_userinfo_gender(args) do
+          nil ->
+            state
+
+          gender ->
+            nick_key = normalize_nick(sender, casemapping(state))
+            cache = Map.get(state, :peer_profile_cache, %{})
+            existing = Map.get(cache, nick_key, %{gender: nil})
+            %{state | peer_profile_cache: Map.put(cache, nick_key, %{existing | gender: gender})}
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  # KVIrc's own USERINFO-reply parser does exactly this: a case-
+  # insensitive substring search for "Gender=" and a single-char read
+  # right after it (KVIrc never parses Age=/Location=/Languages=/custom
+  # back into structured data either — see CLAUDE.md profile feature
+  # notes). `nil` for "no Gender= field" AND for "Gender= followed by
+  # something we don't recognise" — both are "nothing learned", not an
+  # error.
+  #
+  # Single-clause: the only caller (`maybe_capture_peer_userinfo/3`)
+  # always passes the binary `args` half of `CTCP.verb_args/1`'s
+  # `{verb, args}` tuple, so Dialyzer proves a catch-all fallback clause
+  # unreachable — removed per CLAUDE.md "Dialyzer warnings are design
+  # signals" (same posture as the retired `{:numeric, n}` clause
+  # documented elsewhere in this file).
+  @spec extract_userinfo_gender(String.t()) :: :male | :female | :nonbinary | nil
+  defp extract_userinfo_gender(args) when is_binary(args) do
+    case Regex.run(~r/Gender=([A-Za-z])/i, args) do
+      [_, "M"] -> :male
+      [_, "m"] -> :male
+      [_, "F"] -> :female
+      [_, "f"] -> :female
+      [_, "X"] -> :nonbinary
+      [_, "x"] -> :nonbinary
+      _ -> nil
+    end
+  end
+
+  # M2 — the outbound lazy-query rate limit. Unlike #340's send-flood
+  # bucket (paste-burst tolerant, ~2/sec sustained — protecting the USER
+  # from an upstream k-line), this protects a STRANGER from a channel
+  # full of new-to-us nicks all getting CTCP-queried in one 353 burst:
+  # a small burst, then a slow trickle. Keyed by `{subject, network_id}`
+  # (mirror of `Backoff.wait_ms/2`'s key shape) — its own namespace, a
+  # sibling bucket to #340's, never shared with it.
+  @userinfo_query_bucket :peer_profile_userinfo_query
+  @userinfo_query_capacity 10
+  @userinfo_query_refill_per_sec 0.5
+
+  # M2 — the lazy, opt-in, rate-limited, cache-deduped outbound CTCP
+  # USERINFO query. Returns `state` unchanged + `[]` for every "don't
+  # query" reason (opted out, already cached, bucket empty) so callers
+  # (JOIN, 353) can unconditionally merge the result without a second
+  # branch. On a successful take, the nick is marked as queried in
+  # `peer_profile_cache` BEFORE the reply (if any) arrives — see the
+  # `peer_profile_cache` typedoc for why eager marking is required.
+  @spec maybe_query_userinfo(state(), String.t()) :: {state(), [effect()]}
+  defp maybe_query_userinfo(state, nick) do
+    if Map.get(state, :show_peer_profiles, false) do
+      nick_key = normalize_nick(nick, casemapping(state))
+      cache = Map.get(state, :peer_profile_cache, %{})
+
+      if Map.has_key?(cache, nick_key) do
+        {state, []}
+      else
+        take_userinfo_query_token(state, nick, nick_key, cache)
+      end
+    else
+      {state, []}
+    end
+  end
+
+  @spec take_userinfo_query_token(state(), String.t(), String.t(), peer_profile_cache()) ::
+          {state(), [effect()]}
+  defp take_userinfo_query_token(state, nick, nick_key, cache) do
+    case TokenBucket.take(
+           @userinfo_query_bucket,
+           {state.subject, state.network_id},
+           @userinfo_query_capacity,
+           @userinfo_query_refill_per_sec
+         ) do
+      :ok ->
+        new_cache = Map.put(cache, nick_key, %{gender: nil})
+        {%{state | peer_profile_cache: new_cache}, [{:reply, "PRIVMSG #{nick} :\x01USERINFO\x01"}]}
+
+      {:error, :rate_limited} ->
+        {state, []}
     end
   end
 
@@ -3947,8 +4142,18 @@ defmodule Grappa.Session.EventRouter do
     # S2.4: NICK rename migrates the userhost entry from old_nick to new_nick.
     # user+host don't change with a nick change — only the key moves.
     userhost_cache =
-      rename_userhost_entry(
+      rename_cache_entry(
         Map.get(state, :userhost_cache, %{}),
+        old_nick,
+        new_nick,
+        casemapping(state)
+      )
+
+    # M2: same migration for the peer profile cache — a known gender
+    # follows the nick, it doesn't change with the rename.
+    peer_profile_cache =
+      rename_cache_entry(
+        Map.get(state, :peer_profile_cache, %{}),
         old_nick,
         new_nick,
         casemapping(state)
@@ -3956,9 +4161,15 @@ defmodule Grappa.Session.EventRouter do
 
     new_state =
       if nick_eq?(old_nick, state.nick) do
-        %{state | nick: new_nick, members: members, userhost_cache: userhost_cache}
+        %{
+          state
+          | nick: new_nick,
+            members: members,
+            userhost_cache: userhost_cache,
+            peer_profile_cache: peer_profile_cache
+        }
       else
-        %{state | members: members, userhost_cache: userhost_cache}
+        %{state | members: members, userhost_cache: userhost_cache, peer_profile_cache: peer_profile_cache}
       end
 
     persist_effects =
@@ -4599,31 +4810,42 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
-  # Evict userhost_cache entries for nicks that appear in no channel of
-  # `members_map` after the PART. Called for self-PART where every nick
-  # in the departed channel must be checked against the updated members.
-  @spec evict_if_no_overlap([String.t()], members(), userhost_cache(), Identifier.casemapping()) ::
-          userhost_cache()
+  # Evict entries for nicks that appear in no channel of `members_map`
+  # after the PART. Called for self-PART where every nick in the
+  # departed channel must be checked against the updated members.
+  #
+  # M2 — genuinely value-agnostic (pure key eviction by channel-overlap),
+  # so `cache` is typed as any nick-keyed map rather than pinned to
+  # `userhost_cache()`: `peer_profile_cache` reuses this SAME helper
+  # rather than a copy-pasted twin (CLAUDE.md "implement once, reuse
+  # everywhere") — both caches share the identical eviction rule.
+  @spec evict_if_no_overlap([String.t()], members(), %{String.t() => term()}, Identifier.casemapping()) ::
+          %{String.t() => term()}
   defp evict_if_no_overlap(nicks, members_map, cache, casemapping) do
     Enum.reduce(nicks, cache, fn nick, acc ->
       maybe_evict(acc, nick, channels_with_member(members_map, nick), casemapping)
     end)
   end
 
-  @spec maybe_evict(userhost_cache(), String.t(), [String.t()], Identifier.casemapping()) ::
-          userhost_cache()
+  @spec maybe_evict(%{String.t() => term()}, String.t(), [String.t()], Identifier.casemapping()) ::
+          %{String.t() => term()}
   defp maybe_evict(cache, nick, [], casemapping),
     do: Map.delete(cache, normalize_nick(nick, casemapping))
 
   defp maybe_evict(cache, _, _, _), do: cache
 
-  # Migrate a userhost_cache entry from old_nick to new_nick on a NICK rename.
-  # If old_nick is not in the cache (never seen via JOIN/WHOIS/WHO), no-op.
-  # The user+host fields are preserved — they don't change with a nick change.
-  # #537 — `casemapping` folds the cache keys network-aware.
-  @spec rename_userhost_entry(userhost_cache(), String.t(), String.t(), Identifier.casemapping()) ::
-          userhost_cache()
-  defp rename_userhost_entry(cache, old_nick, new_nick, casemapping) do
+  # Migrate a cache entry from old_nick to new_nick on a NICK rename. If
+  # old_nick is not in the cache, no-op. The entry's VALUE is preserved
+  # verbatim — user+host (userhost_cache) or gender (peer_profile_cache)
+  # don't change with a nick change, only the key does. #537 —
+  # `casemapping` folds the cache keys network-aware.
+  #
+  # M2 — shared with `peer_profile_cache` for the same reason
+  # `evict_if_no_overlap/4` is: the rename rule is identical regardless
+  # of what the cache's values mean.
+  @spec rename_cache_entry(%{String.t() => term()}, String.t(), String.t(), Identifier.casemapping()) ::
+          %{String.t() => term()}
+  defp rename_cache_entry(cache, old_nick, new_nick, casemapping) do
     old_key = normalize_nick(old_nick, casemapping)
     new_key = normalize_nick(new_nick, casemapping)
 

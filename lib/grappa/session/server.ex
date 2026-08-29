@@ -423,6 +423,12 @@ defmodule Grappa.Session.Server do
           # integration env may substitute a short window. `:disabled` is
           # the #348 OFF state — no debounce timer is ever armed.
           optional(:auto_away_debounce_ms) => non_neg_integer() | :disabled,
+          # M2 — the subject's opt-in to peer CTCP USERINFO/AVATAR queries
+          # (source of the member-list gender badge). Normally injected by
+          # `Grappa.Session.start_session/3`, mirror of the debounce opt
+          # above; omitted opt (test seam) defaults to `false` — silent
+          # unless a test explicitly opts in.
+          optional(:show_peer_profiles) => boolean(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Run at 001
           # before the built-in identify and before autojoin. The `$nickserv_pass`
@@ -467,6 +473,17 @@ defmodule Grappa.Session.Server do
           # process hot-reloaded across the field's introduction answers
           # instead of KeyError-crashing (the #216 contract).
           auto_reply_budget: AutoReplyBudget.t(),
+          # M2 — network-wide cache of what THIS session has learned about
+          # peers' CTCP USERINFO profile (currently just `:gender`), via a
+          # query WE sent. Same lifecycle as `userhost_cache` (evicted on
+          # QUIT/PART/KICK/NICK) and same key fold (`normalize_nick/2`).
+          # Presence in this map (even with `gender: nil`) means "already
+          # queried this session" — the lazy-query trigger's dedup gate.
+          peer_profile_cache: EventRouter.peer_profile_cache(),
+          # M2 — the subject's `show_peer_profiles` opt-in, resolved once
+          # at spawn (mirrors `auto_away_debounce_ms`). `false` means the
+          # lazy CTCP USERINFO/AVATAR query never fires for this session.
+          show_peer_profiles: boolean(),
           # CP15 B1 + cluster #6 extraction: per-channel window state
           # bundle (states + failure_reasons + failure_numerics +
           # kicked_meta in one struct). Sibling to `members` —
@@ -1048,6 +1065,8 @@ defmodule Grappa.Session.Server do
       channels_created: %{},
       userhost_cache: %{},
       auto_reply_budget: AutoReplyBudget.new(System.monotonic_time(:millisecond)),
+      peer_profile_cache: %{},
+      show_peer_profiles: Map.get(opts, :show_peer_profiles, false),
       window_state: WindowState.new(),
       in_flight_joins: %{},
       awaiting_invite: MapSet.new(),
@@ -2423,10 +2442,16 @@ defmodule Grappa.Session.Server do
     channel = fold_key(state, channel)
 
     if MapSet.member?(state.seeded_channels, channel) do
+      # M2 — same gender merge as the `members_seeded` broadcast
+      # (apply_effects), so `GET /members` and the WS event never
+      # disagree on the badge.
       members =
         state.members
         |> Map.get(channel, %{})
-        |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
+        |> Enum.map(fn {nick, modes} ->
+          gender = Map.get(state.peer_profile_cache, fold_key(state, nick), %{})[:gender]
+          %{nick: nick, modes: modes, gender: gender}
+        end)
         |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
       {:reply, {:ok, members}, state}
@@ -5488,9 +5513,15 @@ defmodule Grappa.Session.Server do
     # is a single signal write with no extra fetch (the race window between
     # WS subscribe and HTTP fetch is what made the old re-fetch design
     # flaky on slow JOIN sequences).
+    # M2 — merge in the cached peer gender (nil when never queried/
+    # answered, e.g. `show_peer_profiles` off) so `Wire.member/1`'s
+    # `:gender` key is populated straight from state, no extra fetch.
     members =
       members_map
-      |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
+      |> Enum.map(fn {nick, modes} ->
+        gender = Map.get(state.peer_profile_cache, fold_key(state, nick), %{})[:gender]
+        %{nick: nick, modes: modes, gender: gender}
+      end)
       |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
     # CP24 bucket E web/S8: mark channel as NAMES-seeded so
@@ -5517,9 +5548,14 @@ defmodule Grappa.Session.Server do
   # (the authoritative sidebar set) — this is a parallel VIEW, not a
   # second source of truth.
   defp apply_effects([{:names_reply, channel, roster, reply_to} | rest], state) do
+    # M2 — same gender merge as :members_seeded/list_members above: one
+    # roster shape, one badge source, no parallel view left un-merged.
     members =
       roster
-      |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
+      |> Enum.map(fn {nick, modes} ->
+        gender = Map.get(state.peer_profile_cache, fold_key(state, nick), %{})[:gender]
+        %{nick: nick, modes: modes, gender: gender}
+      end)
       |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
     :ok =

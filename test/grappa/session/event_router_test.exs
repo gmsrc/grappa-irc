@@ -47,6 +47,9 @@ defmodule Grappa.Session.EventRouterTest do
         channels_created: %{},
         channel_modes: %{},
         userhost_cache: %{},
+        # M2
+        peer_profile_cache: %{},
+        show_peer_profiles: false,
         who_pending: %{},
         # CP22 cluster B — build_persist (used by 315 RPL_ENDOFWHO route)
         # references state.network_slug to set sender on emitted :persist
@@ -656,6 +659,56 @@ defmodule Grappa.Session.EventRouterTest do
       # round trip. Rewriting it to something human-readable here would
       # make that impossible.
       assert attrs.body == body
+    end
+
+    test "a CTCP USERINFO reply NOTICE captures Gender= into peer_profile_cache" do
+      state = base_state()
+      body = <<0x01, "USERINFO Age=30; Gender=F; Location=Italy", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, [{:persist, :notice, _}]} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{"alice" => %{gender: :female}}
+    end
+
+    test "a CTCP USERINFO reply still persists the normal visible row (not silent)" do
+      state = base_state()
+      body = <<0x01, "USERINFO Gender=M", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.channel == "$server"
+      # Framing preserved verbatim, same as every other CTCP-framed NOTICE
+      # (see "a CTCP-framed NOTICE lands on $server..." above).
+      assert attrs.body == body
+    end
+
+    test "CTCP USERINFO Gender= parsing is case-insensitive for M/F/X" do
+      for {letter, expected} <- [{"m", :male}, {"F", :female}, {"x", :nonbinary}] do
+        state = base_state()
+        body = <<0x01, "USERINFO Gender=#{letter}", 0x01>>
+        m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+        assert {:cont, new_state, _} = EventRouter.route(m, state)
+        assert new_state.peer_profile_cache == %{"alice" => %{gender: expected}}
+      end
+    end
+
+    test "a CTCP USERINFO reply with no Gender= field leaves peer_profile_cache untouched" do
+      state = base_state()
+      body = <<0x01, "USERINFO Age=30; Location=Italy", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{}
+    end
+
+    test "a CTCP USERINFO reply with an unrecognised Gender= value leaves peer_profile_cache untouched" do
+      state = base_state()
+      body = <<0x01, "USERINFO Gender=Q", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{}
     end
 
     test "a plain NOTICE from a regular nick lands in that peer's window when it is OPEN" do
@@ -2083,6 +2136,61 @@ defmodule Grappa.Session.EventRouterTest do
 
       assert {:cont, _, [{:persist, :join, attrs}]} = EventRouter.route(m, state)
       assert attrs.meta == %{}
+    end
+
+    # M2 — each of these gives its own network_id so the per-(subject,
+    # network) TokenBucket starts FULL, isolated from every other test in
+    # this async file that might touch the shared default @network_id.
+    test "JOIN-other from a new peer, opted in, sends a lazy CTCP USERINFO query" do
+      state =
+        base_state(%{
+          network_id: 90_001,
+          show_peer_profiles: true,
+          members: %{"#italia" => %{"vjt" => []}}
+        })
+
+      m = msg(:join, ["#italia"], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+
+      assert Enum.any?(effects, &match?({:reply, "PRIVMSG alice :\x01USERINFO\x01"}, &1))
+      # Marked eagerly so a second sighting this session never re-queries.
+      assert new_state.peer_profile_cache == %{"alice" => %{gender: nil}}
+    end
+
+    test "JOIN-other, opted out (default), never queries" do
+      state = base_state(%{network_id: 90_002, members: %{"#italia" => %{"vjt" => []}}})
+      m = msg(:join, ["#italia"], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:reply, _}, &1))
+      assert new_state.peer_profile_cache == %{}
+    end
+
+    test "JOIN-other for an already-cached peer does not re-query" do
+      state =
+        base_state(%{
+          network_id: 90_003,
+          show_peer_profiles: true,
+          members: %{"#italia" => %{"vjt" => []}},
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:join, ["#italia"], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:reply, _}, &1))
+      # Untouched — a real answer isn't clobbered by a re-trigger no-op.
+      assert new_state.peer_profile_cache == %{"alice" => %{gender: :female}}
+    end
+
+    test "JOIN-self, opted in, never queries itself" do
+      state = base_state(%{network_id: 90_004, show_peer_profiles: true})
+      m = msg(:join, ["#italia"], {:nick, "vjt", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:reply, _}, &1))
+      assert new_state.peer_profile_cache == %{}
     end
   end
 
@@ -4243,6 +4351,90 @@ defmodule Grappa.Session.EventRouterTest do
 
       refute Map.has_key?(new_state.userhost_cache, "alice")
       assert new_state.userhost_cache["alice_new"] == %{user: "u", host: "h"}
+    end
+  end
+
+  describe "route/2 — M2 peer_profile_cache eviction (shares userhost_cache's helpers/lifecycle)" do
+    test "QUIT evicts the quitting nick from peer_profile_cache" do
+      state =
+        base_state(%{
+          members: %{"#italia" => %{"alice" => []}},
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:quit, ["bye"], {:nick, "alice", "u", "h"})
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      refute Map.has_key?(new_state.peer_profile_cache, "alice")
+    end
+
+    test "PART by other user evicts from peer_profile_cache when no other channel overlap" do
+      state =
+        base_state(%{
+          members: %{"#one" => %{"alice" => [], "vjt" => []}},
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:part, ["#one"], {:nick, "alice", "u", "h"})
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      refute Map.has_key?(new_state.peer_profile_cache, "alice")
+    end
+
+    test "PART by other user keeps peer_profile_cache entry when still sharing another channel" do
+      state =
+        base_state(%{
+          members: %{
+            "#one" => %{"alice" => [], "vjt" => []},
+            "#two" => %{"alice" => [], "vjt" => []}
+          },
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:part, ["#one"], {:nick, "alice", "u", "h"})
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      assert new_state.peer_profile_cache["alice"] == %{gender: :female}
+    end
+
+    test "self-PART evicts peer_profile_cache for nicks left behind with no remaining overlap" do
+      state =
+        base_state(%{
+          members: %{"#italia" => %{"vjt" => [], "alice" => []}},
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:part, ["#italia"], {:nick, "vjt", "u", "h"})
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      refute Map.has_key?(new_state.peer_profile_cache, "alice")
+    end
+
+    test "KICK evicts the kicked nick from peer_profile_cache when no overlap remains" do
+      state =
+        base_state(%{
+          members: %{"#italia" => %{"vjt" => [], "alice" => []}},
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:kick, ["#italia", "alice", "bye"], {:nick, "vjt", "u", "h"})
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      refute Map.has_key?(new_state.peer_profile_cache, "alice")
+    end
+
+    test "NICK rename migrates the peer_profile_cache entry old->new, preserving the gender" do
+      state =
+        base_state(%{
+          members: %{"#italia" => %{"vjt" => [], "alice" => []}},
+          peer_profile_cache: %{"alice" => %{gender: :female}}
+        })
+
+      m = msg(:nick, ["alice_new"], {:nick, "alice", "u", "h"})
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      refute Map.has_key?(new_state.peer_profile_cache, "alice")
+      assert new_state.peer_profile_cache["alice_new"] == %{gender: :female}
     end
   end
 

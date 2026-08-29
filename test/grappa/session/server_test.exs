@@ -4869,8 +4869,8 @@ defmodule Grappa.Session.ServerTest do
       # GET /members. Cicchetto seeds membersByChannel directly; no
       # second fetch needed.
       assert members == [
-               %{nick: "grappa-test", modes: ["@"]},
-               %{nick: "alice", modes: []}
+               %{nick: "grappa-test", modes: ["@"], gender: nil},
+               %{nick: "alice", modes: [], gender: nil}
              ]
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -6729,12 +6729,12 @@ defmodule Grappa.Session.ServerTest do
       # `grappa-test` is the operator's own nick (added by JOIN-self with no
       # modes); it sorts under "plain" tier alphabetically before plain_a.
       assert members == [
-               %{nick: "op_a", modes: ["@"]},
-               %{nick: "op_b", modes: ["@"]},
-               %{nick: "voice_a", modes: ["+"]},
-               %{nick: "grappa-test", modes: []},
-               %{nick: "plain_a", modes: []},
-               %{nick: "plain_b", modes: []}
+               %{nick: "op_a", modes: ["@"], gender: nil},
+               %{nick: "op_b", modes: ["@"], gender: nil},
+               %{nick: "voice_a", modes: ["+"], gender: nil},
+               %{nick: "grappa-test", modes: [], gender: nil},
+               %{nick: "plain_a", modes: [], gender: nil},
+               %{nick: "plain_b", modes: [], gender: nil}
              ]
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -11814,9 +11814,9 @@ defmodule Grappa.Session.ServerTest do
       assert net == network.slug
       # mIRC-tier sorted in apply_effects: ops (@) → voiced (+) → plain, alpha within tier.
       assert members == [
-               %{nick: "alice", modes: ["@"]},
-               %{nick: "bob", modes: ["+"]},
-               %{nick: "carol", modes: []}
+               %{nick: "alice", modes: ["@"], gender: nil},
+               %{nick: "bob", modes: ["+"], gender: nil},
+               %{nick: "carol", modes: [], gender: nil}
              ]
 
       # Ephemeral: NOT persisted — no :notice row reaches the $server window.
@@ -11872,8 +11872,8 @@ defmodule Grappa.Session.ServerTest do
                      },
                      1_500
 
-      assert %{nick: "alice", modes: ["@"]} in members
-      assert %{nick: "bob", modes: ["+"]} in members
+      assert %{nick: "alice", modes: ["@"], gender: nil} in members
+      assert %{nick: "bob", modes: ["+"], gender: nil} in members
 
       # Nothing persisted: the old 2-notice scrollback dump is gone.
       refute_receive %Phoenix.Socket.Broadcast{

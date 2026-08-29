@@ -53,9 +53,12 @@ defmodule GrappaWeb.MembersControllerTest do
 
       assert json_response(conn, 200) == %{
                "members" => [
-                 %{"nick" => "grappa-test", "modes" => ["@"]},
-                 %{"nick" => "alice", "modes" => ["+"]},
-                 %{"nick" => "bob", "modes" => []}
+                 # M2 — "gender" nil for every member here: none of them
+                 # were ever CTCP-USERINFO-queried (show_peer_profiles
+                 # defaults off), so the wire field is present-but-empty.
+                 %{"nick" => "grappa-test", "modes" => ["@"], "gender" => nil},
+                 %{"nick" => "alice", "modes" => ["+"], "gender" => nil},
+                 %{"nick" => "bob", "modes" => [], "gender" => nil}
                ]
              }
 

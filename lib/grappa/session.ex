@@ -89,6 +89,11 @@ defmodule Grappa.Session do
       Grappa.PubSub,
       Grappa.Push,
       Grappa.QueryWindows,
+      # M2 — `TokenBucket.take/4` rate-limits the lazy outbound CTCP
+      # USERINFO query (`EventRouter.maybe_query_userinfo/2`), the #340
+      # "per-(subject, network) send token bucket" use case the
+      # architecture doc already names — this is its first real caller.
+      Grappa.RateLimit,
       Grappa.Scrollback,
       # #1398 §7 — `Backoff` was an EXPORT of this boundary; it is now a leaf
       # of its own, so `Session.Server`'s four `Backoff.*` calls need it as a
@@ -111,6 +116,7 @@ defmodule Grappa.Session do
 
   alias Grappa.IRC.{AuthFSM, CTCP, Identifier}
   alias Grappa.Session.{Deps, FloodAllowance, ISupport, Server}
+  alias Grappa.UserSettings
 
   require Logger
 
@@ -186,8 +192,21 @@ defmodule Grappa.Session do
   `members_seeded` event AND the REST `/members` snapshot both
   surface — `GrappaWeb.MembersJSON` and `Grappa.Session.Wire.members_seeded/3`
   rely on it.
+
+  M2 — `:gender` is optional (absent for a peer whose CTCP USERINFO was
+  never queried/answered, e.g. `show_peer_profiles` off): the
+  `Session.Server` caller merges it in from `peer_profile_cache` before
+  building this map, `Wire.member/1` projects it through unchanged.
+  `:male | :female | :nonbinary | nil` is deliberately NOT
+  `Grappa.Networks.Credential.gender()` — same Boundary rule
+  `Session.Server.profile()` already documents (Session must not
+  statically depend on Networks).
   """
-  @type member :: %{nick: String.t(), modes: [String.t()]}
+  @type member :: %{
+          required(:nick) => String.t(),
+          required(:modes) => [String.t()],
+          optional(:gender) => :male | :female | :nonbinary | nil
+        }
 
   defguardp is_subject(s)
             when is_tuple(s) and tuple_size(s) == 2 and
@@ -274,6 +293,11 @@ defmodule Grappa.Session do
           # KVIrc-style CTCP USERINFO profile — BOTH subjects (unlike away).
           # Kept in sync with the `Grappa.Session.Server.init_opts/0` twin.
           optional(:restored_profile) => Server.profile(),
+          # M2 — the subject's `show_peer_profiles` opt-in (peer CTCP
+          # USERINFO/AVATAR queries), resolved at the spawn boundary below
+          # exactly like `auto_away_debounce_ms`. Kept in sync with the
+          # `Grappa.Session.Server.init_opts/0` twin.
+          optional(:show_peer_profiles) => boolean(),
           optional(:refresh_plan) => Server.refresh_plan_check(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Set by
@@ -316,11 +340,17 @@ defmodule Grappa.Session do
     # boot default (and `:disabled` when they switched auto-away off), so
     # a session starts on the window its user chose. A subject with no
     # preference resolves to the same boot default as before.
+    # M2 — same choke point + `put_new_lazy` posture as the debounce
+    # above: the subject's `show_peer_profiles` opt-in resolved once at
+    # spawn, a substituted opts/test value still wins.
     full_opts =
       opts
       |> Map.put(:network_id, network_id)
       |> Map.put_new_lazy(:auto_away_debounce_ms, fn ->
         Server.auto_away_debounce_for(subject)
+      end)
+      |> Map.put_new_lazy(:show_peer_profiles, fn ->
+        UserSettings.get_show_peer_profiles(subject)
       end)
 
     DynamicSupervisor.start_child(
