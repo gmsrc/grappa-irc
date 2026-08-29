@@ -39,7 +39,9 @@ defmodule Grappa.Networks.Credentials do
   alias Grappa.IRC.Identifier
   alias Grappa.Networks.{Credential, Network}
   alias Grappa.PubSub.Topic
-  alias Grappa.{Repo, Session}
+  alias Grappa.{Repo, Session, Subject}
+  alias Grappa.Uploads
+  alias Grappa.Uploads.Upload
 
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment).
   require Identifier
@@ -64,7 +66,7 @@ defmodule Grappa.Networks.Credentials do
         # the operator wire shape (which carries `network_slug`)
         # without a Repo dep at the GrappaWeb boundary. Mirrors the
         # post-insert preload on `update_credential/3`.
-        {:ok, Repo.preload(cred, :network)}
+        {:ok, Repo.preload(cred, [:network, :avatar_upload])}
 
       {:error, _} = err ->
         err
@@ -111,7 +113,7 @@ defmodule Grappa.Networks.Credentials do
           # network_slug) without a Repo dep at the GrappaWeb
           # boundary. Cost: one extra row fetch on success; cheap
           # next to the changeset round-trip.
-          {:ok, updated} -> {:ok, Repo.preload(updated, :network)}
+          {:ok, updated} -> {:ok, Repo.preload(updated, [:network, :avatar_upload])}
           {:error, _} = err -> err
         end
 
@@ -733,7 +735,7 @@ defmodule Grappa.Networks.Credentials do
       # Preload :network so the HTTP caller can render the credential wire
       # shape (which carries the network slug) without a Repo dep at the
       # GrappaWeb boundary. Mirrors `update_credential/3`.
-      {:ok, updated} -> {:ok, Repo.preload(updated, :network)}
+      {:ok, updated} -> {:ok, Repo.preload(updated, [:network, :avatar_upload])}
       {:error, _} = err -> err
     end
   rescue
@@ -762,7 +764,7 @@ defmodule Grappa.Networks.Credentials do
   def update_credential_profile(%Credential{} = credential, attrs) when is_map(attrs) do
     case credential |> Credential.profile_changeset(attrs) |> Repo.update() do
       {:ok, updated} ->
-        updated = Repo.preload(updated, :network)
+        updated = Repo.preload(updated, [:network, :avatar_upload])
         :ok = broadcast_profile_change(updated)
         {:ok, updated}
 
@@ -780,6 +782,111 @@ defmodule Grappa.Networks.Credentials do
         Grappa.PubSub,
         Topic.user_settings(subject_label_for(cred)),
         {:credential_profile_changed, network_id, Credential.profile_snapshot(cred)}
+      )
+  end
+
+  @doc """
+  M3a — sets (or replaces) `credential`'s own avatar: uploads `bytes`
+  (declared MIME `mime`) as a PERMANENT `Grappa.Uploads` row
+  (`expires_at: nil` — unlike an ordinary ephemeral scrollback-image
+  upload, so `Grappa.Uploads.Reaper`'s TTL sweep never touches it) and
+  points `avatar_upload_id` at it.
+
+  Create-then-link-then-retire, deliberately in that order: the new
+  upload is created and linked FIRST; only on that success is any PRIOR
+  avatar upload unlinked + soft-deleted. A failure at any earlier step
+  (upload rejected, concurrent unbind) leaves the OLD avatar fully
+  intact — never a user left with no avatar at all from a failed
+  replace.
+
+  Mirrors `update_credential_profile/2`'s live-broadcast shape: a
+  successful write also folds the new absolute avatar URL into any live
+  `Session.Server` for this (subject, network) via the same
+  `Topic.user_settings/1` bridge, so `EventRouter`'s CTCP AVATAR reply
+  picks it up without a session restart.
+  """
+  @spec set_avatar(Credential.t(), binary(), String.t()) ::
+          {:ok, Credential.t()} | {:error, term()}
+  def set_avatar(%Credential{} = credential, bytes, mime)
+      when is_binary(bytes) and is_binary(mime) do
+    attrs = %{subject: credential_subject(credential), mime: mime, expires_at: nil}
+
+    with {:ok, new_upload} <-
+           Uploads.create(bytes, attrs, storage_root: Uploads.storage_root()),
+         {:ok, updated} <-
+           credential |> Ecto.Changeset.change(avatar_upload_id: new_upload.id) |> Repo.update() do
+      :ok = retire_previous_avatar(credential.avatar_upload_id, new_upload.id)
+      updated = Repo.preload(updated, [:network, :avatar_upload], force: true)
+      :ok = broadcast_avatar_change(updated)
+      {:ok, updated}
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @doc """
+  M3a — clears `credential`'s avatar: retires the linked upload (if
+  any) and nils the FK. No-op success when already unset. Same
+  live-broadcast shape as `set_avatar/3`.
+  """
+  @spec clear_avatar(Credential.t()) :: {:ok, Credential.t()} | {:error, term()}
+  def clear_avatar(%Credential{avatar_upload_id: nil} = credential) do
+    {:ok, Repo.preload(credential, [:network, :avatar_upload])}
+  end
+
+  def clear_avatar(%Credential{} = credential) do
+    case credential |> Ecto.Changeset.change(avatar_upload_id: nil) |> Repo.update() do
+      {:ok, updated} ->
+        :ok = retire_previous_avatar(credential.avatar_upload_id, nil)
+        updated = Repo.preload(updated, [:network, :avatar_upload], force: true)
+        :ok = broadcast_avatar_change(updated)
+        {:ok, updated}
+
+      {:error, _} = err ->
+        err
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @spec credential_subject(Credential.t()) :: Subject.t()
+  defp credential_subject(%Credential{user_id: user_id}) when is_binary(user_id),
+    do: {:user, user_id}
+
+  defp credential_subject(%Credential{visitor_id: visitor_id}) when is_binary(visitor_id),
+    do: {:visitor, visitor_id}
+
+  # Unlinks + soft-deletes a credential's PRIOR avatar upload — mirrors
+  # `Grappa.Uploads.Reaper`'s unlink-then-soft-delete sequence exactly
+  # (an ENOENT on unlink is treated as already-gone, not an error).
+  # Called ONLY after the new state (a fresh avatar_upload_id, or nil on
+  # clear) is already committed — see `set_avatar/3`/`clear_avatar/1`.
+  # A failure here (fs error, row already gone) leaves a harmless orphan
+  # row for a future admin sweep rather than raising mid-request.
+  @spec retire_previous_avatar(Ecto.UUID.t() | nil, Ecto.UUID.t() | nil) :: :ok
+  defp retire_previous_avatar(nil, _), do: :ok
+  defp retire_previous_avatar(old_id, old_id), do: :ok
+
+  defp retire_previous_avatar(old_id, _) do
+    case Uploads.get_by_id(old_id) do
+      {:ok, %Upload{} = old_upload} ->
+        path = Uploads.storage_path(Uploads.storage_root(), old_upload.slug)
+        _ = File.rm(path)
+        _ = Uploads.soft_delete(old_upload, DateTime.utc_now())
+        :ok
+
+      {:error, :not_found} ->
+        :ok
+    end
+  end
+
+  @spec broadcast_avatar_change(Credential.t()) :: :ok
+  defp broadcast_avatar_change(%Credential{network_id: network_id} = cred) do
+    :ok =
+      Phoenix.PubSub.broadcast(
+        Grappa.PubSub,
+        Topic.user_settings(subject_label_for(cred)),
+        {:credential_avatar_changed, network_id, Grappa.Networks.Wire.avatar_url(cred)}
       )
   end
 
@@ -846,7 +953,7 @@ defmodule Grappa.Networks.Credentials do
       |> vet_nickserv_password(credential, password)
 
     case Repo.update(changeset) do
-      {:ok, updated} -> {:ok, Repo.preload(updated, :network)}
+      {:ok, updated} -> {:ok, Repo.preload(updated, [:network, :avatar_upload])}
       {:error, _} = err -> err
     end
   rescue
@@ -1106,7 +1213,7 @@ defmodule Grappa.Networks.Credentials do
       from(c in Credential,
         where: c.visitor_id == ^visitor_id,
         order_by: [asc: c.network_id],
-        preload: [network: :servers]
+        preload: [:avatar_upload, network: :servers]
       )
 
     Repo.all(query)
@@ -1193,7 +1300,7 @@ defmodule Grappa.Networks.Credentials do
                 fragment("? LIKE ? ESCAPE '\\'", Identifier.nick_fold(c.nick), ^pattern),
             order_by: [asc: c.nick, asc: c.network_id],
             limit: ^limit,
-            preload: [:network]
+            preload: [:network, :avatar_upload]
           )
 
         Repo.all(query)
@@ -1358,7 +1465,7 @@ defmodule Grappa.Networks.Credentials do
     query =
       from(c in Credential,
         where: c.user_id == ^user_id,
-        preload: [:network]
+        preload: [:network, :avatar_upload]
       )
 
     Repo.all(query)

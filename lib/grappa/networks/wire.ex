@@ -26,6 +26,7 @@ defmodule Grappa.Networks.Wire do
   """
 
   alias Grappa.Networks.{Credential, Network}
+  alias Grappa.Uploads
   alias Grappa.Wire.Time, as: WireTime
 
   @type credential_json :: %{
@@ -45,6 +46,12 @@ defmodule Grappa.Networks.Wire do
           location: String.t() | nil,
           languages: String.t() | nil,
           custom: String.t() | nil,
+          # M3a — the credential's own avatar, absolute URL (built by
+          # `Grappa.Uploads.public_url/2` off the preloaded
+          # `:avatar_upload`), `nil` when unset. Same "carried here for
+          # BOTH subjects so the settings editor can seed itself from
+          # `GET /networks`" rationale as the profile fields above.
+          avatar_url: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -136,6 +143,12 @@ defmodule Grappa.Networks.Wire do
           location: String.t() | nil,
           languages: String.t() | nil,
           custom: String.t() | nil,
+          # M3a — the credential's own avatar, absolute URL (built by
+          # `Grappa.Uploads.public_url/2` off the preloaded
+          # `:avatar_upload`), `nil` when unset. Same "carried here for
+          # BOTH subjects so the settings editor can seed itself from
+          # `GET /networks`" rationale as the profile fields above.
+          avatar_url: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -189,6 +202,12 @@ defmodule Grappa.Networks.Wire do
           location: String.t() | nil,
           languages: String.t() | nil,
           custom: String.t() | nil,
+          # M3a — the credential's own avatar, absolute URL (built by
+          # `Grappa.Uploads.public_url/2` off the preloaded
+          # `:avatar_upload`), `nil` when unset. Same "carried here for
+          # BOTH subjects so the settings editor can seed itself from
+          # `GET /networks`" rationale as the profile fields above.
+          avatar_url: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -353,10 +372,35 @@ defmodule Grappa.Networks.Wire do
       location: c.profile_location,
       languages: c.profile_languages,
       custom: c.profile_custom,
+      avatar_url: avatar_url(c),
       inserted_at: DateTime.to_iso8601(c.inserted_at),
       updated_at: DateTime.to_iso8601(c.updated_at)
     }
   end
+
+  @doc """
+  M3a — the credential's own avatar as an absolute URL
+  (`Grappa.Uploads.public_url/2` off the preloaded `:avatar_upload`),
+  or `nil` when unset. Absolute (not a bare `/uploads/...` path)
+  because the SAME value also feeds the CTCP AVATAR NOTICE reply
+  (`Grappa.Session.EventRouter`) — plain text sent to an arbitrary
+  remote IRC client with no origin of its own to resolve a relative
+  URL against — so there is exactly one avatar-URL shape everywhere,
+  not a relative one for JSON and a separately-built absolute one for
+  IRC.
+
+  `:avatar_upload` MUST be preloaded (same convention as `:network`
+  above — every context function that returns a credential for
+  rendering preloads both, see `Grappa.Networks.Credentials`). An
+  un-preloaded association reads as `Ecto.Association.NotLoaded`, not
+  `nil` — the second clause below only matches a genuinely unset FK.
+  """
+  @spec avatar_url(Credential.t()) :: String.t() | nil
+  def avatar_url(%Credential{avatar_upload: %Uploads.Upload{} = upload}) do
+    Uploads.public_url(upload.slug, upload.mime)
+  end
+
+  def avatar_url(%Credential{avatar_upload_id: nil}), do: nil
 
   @doc """
   Renders a `Networks.Network` + the credential's nick + T32
@@ -397,6 +441,7 @@ defmodule Grappa.Networks.Wire do
       location: cred.profile_location,
       languages: cred.profile_languages,
       custom: cred.profile_custom,
+      avatar_url: avatar_url(cred),
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }
@@ -446,6 +491,7 @@ defmodule Grappa.Networks.Wire do
       location: cred.profile_location,
       languages: cred.profile_languages,
       custom: cred.profile_custom,
+      avatar_url: avatar_url(cred),
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }

@@ -530,6 +530,12 @@ defmodule GrappaWeb.Router do
     # ResolveNetwork pipeline (ownership) + no proxy change.
     patch "/profile", NetworksController, :profile
 
+    # M3a — own avatar upload, sibling of `/profile` in the same sense
+    # (never bounces the live upstream connection). Same ResolveNetwork
+    # pipeline (ownership) + no proxy change.
+    put "/avatar", NetworksController, :avatar
+    delete "/avatar", NetworksController, :delete_avatar
+
     # #189 — on-connect perform list editor (raw IRC lines run SERVER-side
     # at 001, before the built-in identify + autojoin). Rides the same
     # ResolveNetwork pipeline (ownership) + the `networks` nginx allowlist

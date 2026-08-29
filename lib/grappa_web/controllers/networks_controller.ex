@@ -52,12 +52,19 @@ defmodule GrappaWeb.NetworksController do
 
   alias Grappa.Accounts.User
   alias Grappa.IRC.Identifier
-  alias Grappa.{Networks, Session}
+  alias Grappa.{Networks, ServerSettings, Session, Uploads}
   alias Grappa.Networks.{Credential, Credentials, SessionPlan}
   alias Grappa.Visitors.Visitor
   alias GrappaWeb.{NetworkSpawn, Subject}
 
   require Logger
+
+  # M3a — mirrors `GrappaWeb.UploadsController`'s exact declaration:
+  # consumed by the Sobelow analyzer (not the Elixir compiler) for the
+  # `@sobelow_skip` annotations on the avatar-upload file-read helpers
+  # below. Without this, `@sobelow_skip` would emit "module attribute
+  # set but never used" and fail `mix compile --warnings-as-errors`.
+  Module.register_attribute(__MODULE__, :sobelow_skip, accumulate: true, persist: true)
 
   @doc "`GET /networks` — list of network metadata for the bearer's subject."
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
@@ -232,6 +239,68 @@ defmodule GrappaWeb.NetworksController do
     with {:ok, attrs} <- parse_profile_attrs(params),
          {:ok, credential} <- fetch_credential(subject, network),
          {:ok, updated_cred} <- Credentials.update_credential_profile(credential, attrs) do
+      render(conn, :update, credential: updated_cred)
+    end
+  end
+
+  @doc """
+  `PUT /networks/:network_id/avatar` — M3a: uploads (or replaces) the
+  credential's own avatar, per `(subject, network)` for BOTH subjects.
+  Sibling of `/profile` in every respect that matters: it never bounces
+  the live session either (the avatar doesn't ride the IRC handshake,
+  only `Grappa.Session.EventRouter`'s CTCP AVATAR auto-reply) — see
+  `Credentials.set_avatar/3` for the live-update-without-reconnect
+  mechanism.
+
+  Multipart body: `file` — binary, required, image only. Reuses the
+  SAME MIME allowlist + per-category cap `POST /api/uploads` enforces
+  for `:image` (`GrappaWeb.UploadsController.mime_categories/0` +
+  `ServerSettings.get_upload_per_file_cap_bytes/1`) — an avatar is
+  stored via the identical `Grappa.Uploads` pipeline
+  (`MetadataStrip`-scrubbed, same MIME/size boundary checks), just
+  PERMANENT (`expires_at: nil`) instead of TTL'd, and linked to the
+  credential instead of standing alone.
+
+  200 with the updated credential (carrying the new `avatar_url`); 400
+  on a missing/unreadable file; 415 on a non-image MIME; 413 over the
+  per-file cap; 507 over the global cap; 404 if the credential
+  vanished; 401 without a Bearer.
+  """
+  @spec avatar(Plug.Conn.t(), map()) ::
+          Plug.Conn.t()
+          | {:error, :bad_request | :not_found | :unsupported_media_type | Ecto.Changeset.t()}
+  def avatar(conn, params) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, upload} <- extract_avatar_field(params),
+         {:ok, mime} <- validate_avatar_mime(upload),
+         :ok <- check_avatar_per_file_cap(upload),
+         {:ok, bytes} <- read_avatar_file(upload),
+         :ok <- Uploads.check_global_cap(byte_size(bytes), ServerSettings.get_upload_global_cap_bytes()),
+         {:ok, credential} <- fetch_credential(subject, network),
+         {:ok, updated_cred} <- Credentials.set_avatar(credential, bytes, mime) do
+      render(conn, :update, credential: updated_cred)
+    end
+  end
+
+  @doc """
+  `DELETE /networks/:network_id/avatar` — M3a: removes the credential's
+  own avatar, per `(subject, network)` for BOTH subjects. Same
+  never-bounces-the-session posture as `PUT` above.
+
+  200 with the updated credential (`avatar_url: null`) — a no-op
+  success when there was no avatar to begin with, not a 404; 404 only
+  if the credential itself vanished; 401 without a Bearer.
+  """
+  @spec delete_avatar(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :not_found | Ecto.Changeset.t()}
+  def delete_avatar(conn, _) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, credential} <- fetch_credential(subject, network),
+         {:ok, updated_cred} <- Credentials.clear_avatar(credential) do
       render(conn, :update, credential: updated_cred)
     end
   end
@@ -552,6 +621,62 @@ defmodule GrappaWeb.NetworksController do
         end
       end
     )
+  end
+
+  # ---------------------------------------------------------------------------
+  # PUT /networks/:network_id/avatar helpers
+  # ---------------------------------------------------------------------------
+
+  defp extract_avatar_field(%{"file" => %Plug.Upload{} = upload}), do: {:ok, upload}
+  defp extract_avatar_field(_), do: {:error, :bad_request}
+
+  # Avatar-scoped: only the `:image` slice of the SAME closed MIME
+  # allowlist `POST /api/uploads` enforces
+  # (`GrappaWeb.UploadsController.mime_categories/0`) — a video/document/
+  # audio upload is rejected the same way an unmapped MIME is there
+  # (415), not a second hand-rolled allowlist. No octet-stream/extension
+  # rescue here (that's specifically the audio-on-iOS workaround) — an
+  # avatar's declared Content-Type must already be a real image MIME.
+  @sobelow_skip ["Traversal.FileModule"]
+  @spec validate_avatar_mime(Plug.Upload.t()) ::
+          {:ok, String.t()} | {:error, :unsupported_media_type}
+  defp validate_avatar_mime(%Plug.Upload{content_type: ct}) when is_binary(ct) do
+    {mime, _} = Uploads.parse_content_type(ct)
+
+    case Map.fetch(GrappaWeb.UploadsController.mime_categories(), mime) do
+      {:ok, :image} -> {:ok, mime}
+      _ -> {:error, :unsupported_media_type}
+    end
+  end
+
+  defp validate_avatar_mime(_), do: {:error, :unsupported_media_type}
+
+  # Same pre-read stat-then-cap-check ordering as
+  # `UploadsController.check_per_file_cap/2` (S4: never buffer the whole
+  # temp file into the BEAM heap before the cheap cap check) — reuses
+  # the SAME `:image` cap, not a separate avatar-specific ceiling.
+  #
+  # `path` is `Plug.Upload.path`, a tmp file synthesized by
+  # `Plug.Parsers :multipart` — never user-controlled string input.
+  @sobelow_skip ["Traversal.FileModule"]
+  defp check_avatar_per_file_cap(%Plug.Upload{path: path}) do
+    cap = ServerSettings.get_upload_per_file_cap_bytes(:image)
+
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} when size <= cap -> :ok
+      {:ok, %File.Stat{}} -> {:error, {:file_too_large, cap}}
+      {:error, _} -> {:error, :bad_request}
+    end
+  end
+
+  # `path` is `Plug.Upload.path`, a tmp file synthesized by
+  # `Plug.Parsers :multipart` — never user-controlled string input.
+  @sobelow_skip ["Traversal.FileModule"]
+  defp read_avatar_file(%Plug.Upload{path: path}) do
+    case File.read(path) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, _} -> {:error, :bad_request}
+    end
   end
 
   # Web-layer reconnect wrapper (NEVER the Networks context — Boundary
