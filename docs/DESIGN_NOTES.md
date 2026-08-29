@@ -43613,3 +43613,82 @@ Playwright webkit does not render iOS selection UI — the same limit #1067 and
 written rather than a hollow one. The frame is device evidence for the symptom;
 the cure is reasoned from the platform contract and verified only down to the
 class.
+<!-- entry #1863 -->
+
+---
+
+## 2026-08-29 — #1863: an example config is a claim about the code, and three of its claims were stale
+
+`infra/nginx-tls-frontend.example.conf` is the only edge guidance a
+self-hoster gets, and it had drifted from the app it describes. Folding in
+what the production front learned meant checking every fact first, and three
+did not survive the check.
+
+### `X-Forwarded-Proto` is INERT against this codebase
+
+The file's own header said the header was *"load-bearing — Phoenix maps it
+back to scheme=https for check_origin and generated URLs"*. Neither half
+holds. Grepped over the whole tree: `force_ssl` appears in no `config/` or
+`lib/` file (its single repo hit is a sentence in this log), and there is no
+`Plug.SSL` and no `Plug.RewriteOn` anywhere — so nothing rewrites
+`conn.scheme`. The https:// links come from
+`url: [host:, scheme: "https", port: 443]` in `config/runtime.exs`, and
+`check_origin`'s canonical entry is the scheme-agnostic `"//#{phx_host}"`.
+The only `X-Forwarded-*` grappa reads is the For/Real-IP pair, through
+`GrappaWeb.Plugs.RemoteIpFromProxy`.
+
+The line is kept — it costs nothing and is what a future scheme-sensitive
+plug needs — but it is now labelled a convention. **A comment that promises
+a mechanism is worse than no comment: it survives the mechanism.** The same
+correction is applied to the `:80` `/socket` rescue, whose rationale had
+been hung on `force_ssl` bouncing the upgrade. The rescue stands on its own
+without it: a browser fails a WebSocket handshake on anything that is not
+`101` and does not chase the `Location`, so a blanket `return 301` on port
+80 is unfollowable by a reconnecting socket (#193).
+
+### The cold-boot burst is smaller than reported, and permanent
+
+The brief described cic fanning out a channel list per network **plus a
+`/messages` page per channel**. That was the shape of the #1679 incident
+(31 x `503` against a default `burst=50`, seven networks, 81+ requests
+presented — vjt's measurement on the production front, 2026-08-22). It is
+not what the client does at this tip: the #1859 entry, landed the same day
+as this one, reads `selection.ts` and records that cold boot fetches
+`/messages` for the **one** restored window and does not walk the channel
+list. What remains is `me + networks + N x channels` — still scaling with
+bound NETWORKS rather than with activity, which is the operator-facing
+point, but it is `1 + N` and not `1 + N + M`.
+
+The second correction is the one that changes the posture. The brief called
+the nginx override *"mitigation, not a fix"*, with the cure pending in
+`GET /boot`. `/boot` exists server-side (`BootController`), but the client
+cutover was **measured and rejected** in #1859 — 11.7x dearer for identical
+rows, 208x more DB work at boot. So the burst is not provisional and the
+edge guidance is not a stopgap: it is the standing advice.
+
+### The gate: `nginx -t`, with the negative control that makes it mean something
+
+No test loads this file, and there is no honest e2e for it. There IS a cheap
+real gate: wrap it in a minimal `events{} / http{}`, substitute the
+placeholders and a throwaway self-signed cert, and run `nginx -t` in a
+one-shot `nginx:alpine`. Three variants, and the last two are what make the
+first worth reporting — as-shipped **passes**; the documented uncomment path
+(zone + format in `http { }`, `limit_req` / `access_log` / the `:80`
+`/socket` block enabled) **passes**; and a negative control that moves
+`log_format` into the `server` block **fails**, with
+`"log_format" directive is not allowed here`.
+
+That third run is not decoration. `limit_req_zone` and `log_format` are
+http-context only, while this file is a pair of `server` blocks an operator
+drops into `sites-enabled/`. Shipping either directive live would hand a
+self-hoster an `[emerg]` on reload, so both are shipped commented WITH the
+context they belong in — and the control is the evidence that the warning
+is real rather than folklore.
+
+### What is NOT proven
+
+The production numbers (`rate=200r/s`, `burst=400`, 149 served req/s) are
+vjt's readings off the m42 front, reported here and not reproduced. Nothing
+in this change was exercised against a live proxy: `nginx -t` proves the
+file parses and that the uncomment path parses, and says nothing about
+whether 400 is the right burst for anybody else's deployment.
