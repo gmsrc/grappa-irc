@@ -1240,6 +1240,70 @@ defmodule Grappa.UserSettingsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # show_peer_profiles accessor (M2)
+  # ---------------------------------------------------------------------------
+
+  describe "get_show_peer_profiles/1" do
+    test "returns false when no settings row exists" do
+      fake_id = Ecto.UUID.generate()
+      assert UserSettings.get_show_peer_profiles({:user, fake_id}) == false
+    end
+
+    test "returns false when row exists but no show_peer_profiles key" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.get_or_init({:user, user.id})
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == false
+    end
+
+    test "returns false when stored value is malformed (not the true atom)" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      Repo.update!(Settings.changeset(settings, %{data: %{"show_peer_profiles" => "yes"}}))
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == false
+    end
+
+    test "returns true when opted in" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_show_peer_profiles({:user, user.id}, true)
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == true
+    end
+  end
+
+  describe "put_show_peer_profiles/2" do
+    test "persists true and reads back identically" do
+      user = user_fixture()
+      assert {:ok, %Settings{}} = UserSettings.put_show_peer_profiles({:user, user.id}, true)
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == true
+    end
+
+    test "persists false by deleting the key (clears back to default)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_show_peer_profiles({:user, user.id}, true)
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == true
+
+      assert {:ok, %Settings{}} = UserSettings.put_show_peer_profiles({:user, user.id}, false)
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == false
+    end
+
+    test "preserves other data keys (highlight_patterns)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo"])
+
+      assert {:ok, _} = UserSettings.put_show_peer_profiles({:user, user.id}, true)
+
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo"]
+      assert UserSettings.get_show_peer_profiles({:user, user.id}) == true
+    end
+
+    test "works for visitor subjects (visitor-parity)" do
+      visitor = visitor_fixture()
+      assert {:ok, _} = UserSettings.put_show_peer_profiles({:visitor, visitor.id}, true)
+      assert UserSettings.get_show_peer_profiles({:visitor, visitor.id}) == true
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # reset_for_user/1
   # ---------------------------------------------------------------------------
 
