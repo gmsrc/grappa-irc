@@ -16,6 +16,8 @@ import {
   isupportForNetwork,
   seedIsupport,
 } from "../lib/isupport";
+import { nickEquals } from "../lib/nickEquals";
+import { narrowIsupportChanged } from "../lib/wireNarrow";
 
 // A full `isupport_changed` payload, as the server builds it. Tests override
 // the one field they exercise so a new wire fact cannot be added here
@@ -175,5 +177,71 @@ describe("isupport widening (#1255)", () => {
     expect(isupportForNetwork(32).chantypes).toEqual(["#", "&", "!"]);
     // An unseeded network still gets the RFC set, not a neighbour's.
     expect(isupportForNetwork(33).chantypes).toEqual(["#", "&", "+", "!"]);
+  });
+});
+
+// #1861 — the COMPOSITION, driven from a raw wire payload rather than from
+// the store shape. Every link in the chain has its own test; this is the one
+// that fails if two of them stop composing:
+//
+//   005 CASEMAPPING=rfc1459  (measured live off the e2e solanum node,
+//                             `azzurra2` — see DESIGN_NOTES 2026-08-29)
+//     → Grappa.Session.ISupport.parse_casemapping/1   (isupport_test.exs)
+//     → the isupport_changed wire payload              (wire_test.exs)
+//     → narrowIsupportChanged                          (HERE, real narrower)
+//     → isupportEntryFromWire → seedIsupport           (HERE)
+//     → casemappingForNetwork                          (HERE)
+//     → nickEquals                                     (HERE)
+//
+// It uses the REAL narrower on a raw `Record<string, unknown>`, so a wire
+// rename or a narrowing regression reds here instead of surviving behind a
+// hand-built store entry.
+describe("isupport → nick fold composition (#1861)", () => {
+  const rawWire = (networkId: number, casemapping: string): Record<string, unknown> => ({
+    ...WIRE_PAYLOAD,
+    network_id: networkId,
+    casemapping,
+  });
+
+  it("an rfc1459 005 makes the two spellings of one nick compare EQUAL", () => {
+    const narrowed = narrowIsupportChanged(rawWire(51, "rfc1459"));
+    // Positive control: the narrower accepted the payload at all. Without
+    // this a future required-field addition would turn the whole case into a
+    // vacuous pass via the `?? DEFAULT_ISUPPORT` fallback below.
+    expect(narrowed).not.toBeNull();
+    if (narrowed === null) return;
+    expect(narrowed.casemapping).toBe("rfc1459");
+
+    seedIsupport(51, isupportEntryFromWire(narrowed));
+
+    const cm = casemappingForNetwork(51);
+    expect(cm).toBe("rfc1459");
+    // The reported pair, off a real Rizon session.
+    expect(nickEquals("[EWG]-L0VE", "{ewg}-l0ve", cm)).toBe(true);
+  });
+
+  it("an ascii 005 keeps them DISTINCT — the #525 posture, all of production", () => {
+    const narrowed = narrowIsupportChanged(rawWire(52, "ascii"));
+    expect(narrowed).not.toBeNull();
+    if (narrowed === null) return;
+
+    seedIsupport(52, isupportEntryFromWire(narrowed));
+
+    const cm = casemappingForNetwork(52);
+    expect(cm).toBe("ascii");
+    expect(nickEquals("[EWG]-L0VE", "{ewg}-l0ve", cm)).toBe(false);
+    // …while the case fold still applies, so this is not "no fold at all".
+    expect(nickEquals("[EWG]-L0VE", "[ewg]-l0ve", cm)).toBe(true);
+  });
+
+  it("a casemapping the server never models degrades to ascii, not to a throw", () => {
+    // `narrowCasemapping` is the guard; the point here is that an unknown
+    // token cannot silently widen the fold on a production network.
+    const narrowed = narrowIsupportChanged(rawWire(53, "strict-rfc7700"));
+    expect(narrowed).not.toBeNull();
+    if (narrowed === null) return;
+
+    seedIsupport(53, isupportEntryFromWire(narrowed));
+    expect(casemappingForNetwork(53)).toBe("ascii");
   });
 });

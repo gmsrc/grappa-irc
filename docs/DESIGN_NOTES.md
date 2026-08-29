@@ -43374,3 +43374,146 @@ and fails at 3, 4, 5 and 10**, always with `no such column:
 runs, so today's deploy path sits **one step below the threshold** — not
 exposed, with no margin. It is why this bench migrates on its own
 one-connection repo before handing the file to the pool-10 one.
+<!-- entry #1861 -->
+
+---
+
+## 2026-08-29 — #1861: cic folds nicks per-network; the DB half is a separate decision
+
+`CASEMAPPING=rfc1459` declares `{ } | ^` the lowercase of `[ ] \ ~`, so on
+solanum (Libera) and the plexus/hybrid Rizon runs, `[EWG]-L0VE` and
+`{ewg}-l0ve` are one person. A live Rizon session on production grappa showed
+two query windows for that one peer, side by side in the channel rail, with
+incoming traffic landing in whichever of the two matched the casing that
+arrived.
+
+### What moved: the client fold got a network
+
+`normalizeNick`/`nickEquals` did not take a network **at all** — a single
+string in, ASCII fold out — so no call site could fold per-network even when
+it held the network id. That is the shape #537 fixed server-side (axis 2,
+`canonical_target/2`) and never reached cic, which had no per-network fold to
+reach for.
+
+Two tiers now. `asciiFold` stays the plain `A-Z` byte fold, the mirror of the
+server's arity-1 `Identifier.canonical_target/1`. `normalizeNick(nick, cm)`
+and `nickEquals(a, b, cm)` mirror the arity-2 composition. The rfc1459 and
+rfc1459-strict tables are transcribed from the server's `national_byte/2`
+rather than re-derived from the RFCs, and `nickEquals.test.ts` enumerates
+them as the drift gate — the client twin of `IdentifierTest`'s pin.
+
+On `:ascii` the two tiers are byte-for-byte identical, so bahamut/Azzurra —
+all of production — is untouched. **The #525 posture was SPLIT, not
+weakened**: the tests that pinned `Foo[1]` ≠ `foo{1}` as universal now pin it
+per casemapping, `:ascii` unchanged and `:rfc1459` collapsing. Softening the
+ascii half would have merged two identities the ircd keeps apart on every
+network we actually run.
+
+The casemapping is a REQUIRED parameter, never defaulted. A silent `"ascii"`
+fallback would let a call site that forgot the network look correct on Azzurra
+and fork on Rizon, which is the bug being replaced. Store-reading sites resolve
+through `casemappingForNetwork` (`isupport.ts`, sibling of
+`chantypesForNetwork`) or `casemappingForSlug` (the new `casemapping.ts`, for
+cic's slug-keyed half); the pure modules — `modeApply`, `ownPresenceEvent`,
+`members`, `nickColor` — take it as DATA, the shape `chantypes.ts` already
+uses for `CHANTYPES=`.
+
+### Five `asciiFold` sites deliberately did not move
+
+The rule is not "fold harder everywhere". A site keeps the ASCII tier when the
+OTHER side of its comparison is a key some other component already folded
+ASCII — folding harder on one end only forks what agrees today.
+
+  * `pushTriggers` — a faithful transcription of `Grappa.Push.Triggers`, where
+    every fold (`own_row?/2`, `dm?/2`, both allow-lists) is the arity-1 one.
+    Pinned with a literal `"ascii"` and a comment saying it moves WITH the
+    server, not before it.
+  * `notifyWatch` — the presence map keys arrive server-folded; `presenceFor`
+    must reproduce the server's fold, not a better one.
+  * `nickColor` — a palette hash, not an identity key. Two spellings of one
+    rfc1459 identity get two colours; that is cosmetic, and an e2e pins
+    `djb2(asciiFold(nick))`.
+  * `channelKey` / `pingCorrelation` — the same class of remaining gap on the
+    CHANNEL axis, which this slice does not open. `channelKey` is the real one:
+    the server DOES normalise channel/DM keys per-network at ingress, so cic's
+    ASCII `canonicalChannel` is a genuine divergence on rfc1459. Threading a
+    casemapping through every `channelKey(slug, name)` is a second pass of the
+    same size, and half of it is worse than none.
+
+The list lives in `nickEquals.ts` so a reader who greps `asciiFold`, finds
+survivors, and reaches for a "cleanup" finds the reason first.
+
+### What did NOT move, and why it is a decision rather than an omission
+
+**`QueryWindows` stays on the arity-1 fold, and moving it is not free.** The
+tempting change — swap `Identifier.canonical_target/1` for `/2` in `close/4`,
+`exists?/3` and `window_query/3` — is a REGRESSION, not a partial fix. Every
+one of those folds a parameter that is then compared against
+`Identifier.nick_fold/1`, which is SQL `lower()`. Measured, not argued:
+
+```
+sqlite> select lower('[EWG]-L0VE'), lower('{ewg}-l0ve'),
+   ...>        (lower('[EWG]-L0VE') = lower('{ewg}-l0ve'));
+[ewg]-l0ve|{ewg}-l0ve|0
+```
+
+(positive control in the same statement: `lower('ABC') = 'abc'`.)
+
+`lower()` cannot express the bracket fold, so an arity-2 parameter fold against
+an ASCII column fold MISSES: `close(subject, net, "[EWG]-L0VE")` would stop
+finding the row it closes today. The two partial unique expression indexes on
+`(<subject_id>, network_id, lower(target_nick))` are the same story from the
+write side — under `lower()` the two spellings are two keys, so **the database
+itself happily stores both rows**.
+
+Which means the client fold above is **necessary and not sufficient**, and the
+distinction is worth stating precisely rather than rounding off:
+
+  * it closes the door where **cic** was about to mint the second row — a
+    second `/query` or nick-click on the twin spelling while the first window
+    is open (`openQueryWindowState`), and the focus resolution that used to
+    key a dead window (`canonicalQueryNick`);
+  * it does NOT close the door where the **server** mints it.
+    `Session.Server.maybe_open_query_window/2` (#422) auto-opens a window on
+    every inbound DM, keyed by the peer's RAW `dm_with`, idempotent only under
+    the ASCII index. Query the brace twin first, let the peer speak, and the
+    server holds two rows and broadcasts both — and cic renders what the
+    server sends, because cic never originates state.
+
+Closing that half needs a decision the slice was not authorised to take: a
+stored folded-key column written by the app, versus a per-network fold applied
+before insert. Both drag a migration, and both run into the byte-pinned index
+invariant (index expression, `conflict_target/1` fragment and `nick_fold/1`
+must stay character-identical or SQLite stops using the index). Merging the
+duplicate rows that already exist depends on the same decision. Carried back
+as a proposal.
+
+### The rfc1459 e2e: reachable, and what is still unproven
+
+**Measured rather than assumed, in both directions.** The e2e testnet DOES
+carry an rfc1459 network: the `azzurra2` node is solanum (#221), and a raw
+probe of its 005 returns
+
+```
+:solanum2.azzurra2.chat 005 probe1 CHANLIMIT=#&:50 PREFIX=(ov)@+ ...
+    NETWORK=azzurra2 STATUSMSG=@+ CASEMAPPING=rfc1459 NICKLEN=31 ...
+```
+
+with 001 RPL_WELCOME captured in the same session as the positive control. So
+"no rfc1459 e2e is possible" would have been false.
+
+No browser e2e was written all the same, and the reason is that the thing an
+e2e would pin end-to-end is the FULL symptom, which cannot go green while the
+server half above is undecided — an honest spec of the reported bug would be
+RED, and a spec narrowed to the half that IS fixed pins what the per-casemapping
+vitest pins, at the cost of a new isolated seed subject on `azzurra2` (a second
+blast radius on top of a 61-file client pass).
+
+What that leaves unproven is one composition, and it is named rather than
+waved at: no test drives a real solanum 005 through the live socket into cic's
+fold. Every LINK has one — `parse_casemapping/1` (`isupport_test.exs`), the
+wire payload (`wire_test.exs`), the fold table (`identifier_test.exs`), and
+now the cic side end to end from a RAW wire payload through the real
+`narrowIsupportChanged` → `isupportEntryFromWire` → `seedIsupport` →
+`casemappingForNetwork` → `nickEquals` (`isupport.test.ts`). What is untested
+is the wire between them, on a live rfc1459 session.
