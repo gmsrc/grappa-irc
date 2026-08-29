@@ -118,6 +118,7 @@ import type {
   CicWireBundleHashPayload,
   MeJSONMeJson,
   NetworksCredentialAuthMethod,
+  NetworksCredentialGender,
   NetworksWireConnectionStateEvent,
   NotifyWireNotifyListPayload,
   QueryWindowsWireWindowsListPayload,
@@ -297,6 +298,16 @@ export type _Assert_CredentialJson = Assert<
       connection_state: ConnectionState;
       connection_state_reason: string | null;
       connection_state_changed_at: string | null;
+      // M2/M3 — the per-network profile (CTCP USERINFO) and the operator's
+      // own avatar. Every field is nullable: a credential bound before the
+      // profile existed carries none of them, and an operator who fills in
+      // one leaves the rest null.
+      age: string | null;
+      gender: NetworksCredentialGender | null;
+      location: string | null;
+      languages: string | null;
+      custom: string | null;
+      avatar_url: string | null;
       inserted_at: string;
       updated_at: string;
     }

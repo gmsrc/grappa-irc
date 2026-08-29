@@ -54,6 +54,7 @@ import type {
   LiveIntrospectionAdminWireT,
   NetworksAdminWireT,
   NetworksCredentialConnectionState,
+  NetworksCredentialGender,
   NetworksCredentialsAdminWireSessionAction,
   NetworksCredentialsAdminWireSpawnError,
   NetworksCredentialsAdminWireT,
@@ -86,6 +87,7 @@ import type {
   SessionWireNamesReplyPayload,
   SessionWireServerReplyPayload,
   SessionWireServerReplySource,
+  SessionWireWhoisAvatarReadyPayload,
   SessionWireWhoisBundlePayload,
   SessionWireWhoisExtraLine,
   SessionWireWhoReplyPayload,
@@ -535,6 +537,16 @@ export type RawNetwork = {
   // mid-rollout servers that predate it; `tagNetwork` defaults a missing
   // value to null (→ the server-info rail shows no connection card).
   connection?: ConnectionInfo | null;
+  // M2/M3 — the per-network profile (CTCP USERINFO) plus the operator's own
+  // avatar. Optional on the raw type for the same reason as every field
+  // above: a server predating them sends none, and `tagNetwork` defaults
+  // each to null rather than dropping an otherwise valid row.
+  age?: string | null;
+  gender?: NetworksCredentialGender | null;
+  location?: string | null;
+  languages?: string | null;
+  custom?: string | null;
+  avatar_url?: string | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -581,6 +593,12 @@ export function tagNetwork(raw: RawNetwork): Network | null {
     connection_state_changed_at: raw.connection_state_changed_at ?? null,
     connection: raw.connection ?? null,
     services_flavor: raw.services_flavor ?? null,
+    age: raw.age ?? null,
+    gender: raw.gender ?? null,
+    location: raw.location ?? null,
+    languages: raw.languages ?? null,
+    custom: raw.custom ?? null,
+    avatar_url: raw.avatar_url ?? null,
     inserted_at: raw.inserted_at,
     updated_at: raw.updated_at,
   };
@@ -1170,6 +1188,11 @@ export type WireUserEvent =
       network: HomeNetworkRow;
     }
   | ({ kind: "whois_bundle" } & WhoisBundle)
+  // M3b — the peer-avatar fetch is a detached task, so it can finish after
+  // the `whois_bundle` it belongs to has already been pushed. This arm is
+  // the incremental patch for that case: same `(network, nick)` key, one
+  // field. Carries the generated shape verbatim — cic widens nothing here.
+  | SessionWireWhoisAvatarReadyPayload
   | ({ kind: "names_reply" } & NamesReply)
   | ({ kind: "who_reply" } & WhoReply)
   | ({ kind: "server_reply" } & ServerReply)

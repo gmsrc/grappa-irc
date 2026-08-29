@@ -57,6 +57,12 @@ const net: Network = {
     registered: true,
     connected_at: "2026-07-31T08:00:00.000Z",
   },
+  age: null,
+  gender: null,
+  location: null,
+  languages: null,
+  custom: null,
+  avatar_url: null,
   inserted_at: "2026-07-01T00:00:00.000Z",
   updated_at: "2026-07-01T00:00:00.000Z",
 };

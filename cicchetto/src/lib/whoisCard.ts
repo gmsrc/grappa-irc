@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import type { WhoisBundle } from "./api";
+import { casemappingForSlug } from "./casemapping";
 import { identityScopedStore } from "./identityScopedStore";
 import { nickEquals } from "./nickEquals";
 
@@ -45,7 +46,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const patchWhoisAvatarUrl = (networkSlug: string, nick: string, avatarUrl: string): void => {
     setWhoisCardBySlug((prev) => {
       const current = prev[networkSlug];
-      if (!current || !nickEquals(current.target, nick)) return prev;
+      // #537 — the nick compare is network-aware: the card is keyed by
+      // slug, so the fold comes from THAT network's 005, never a bare ASCII
+      // one (on an rfc1459 network `foo[1]` and `foo{1}` are ONE nick).
+      if (!current || !nickEquals(current.target, nick, casemappingForSlug(networkSlug)))
+        return prev;
       return { ...prev, [networkSlug]: { ...current, avatar_url: avatarUrl } };
     });
   };

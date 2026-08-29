@@ -45,6 +45,7 @@ const baseBundle: WhoisBundle = {
   secure_cipher: null,
   certfp: null,
   extra_lines: null,
+  avatar_url: null,
 };
 
 const renderCard = (overrides: Partial<WhoisBundle> = {}, onDismiss?: () => void) =>

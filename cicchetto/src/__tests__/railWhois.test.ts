@@ -79,6 +79,7 @@ const bundle = (target: string): WhoisBundle => ({
   secure_cipher: null,
   certfp: null,
   extra_lines: null,
+  avatar_url: null,
 });
 
 // What the server emits for a nick nobody holds: the accumulator drained by

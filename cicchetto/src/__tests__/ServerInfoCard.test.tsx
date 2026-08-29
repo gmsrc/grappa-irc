@@ -38,6 +38,12 @@ const baseNet: Network = {
   connection_state_reason: null,
   connection_state_changed_at: new Date(now - 10 * 86400 * 1000).toISOString(),
   connection: baseConn,
+  age: null,
+  gender: null,
+  location: null,
+  languages: null,
+  custom: null,
+  avatar_url: null,
   inserted_at: "2026-07-01T00:00:00.000Z",
   updated_at: "2026-07-01T00:00:00.000Z",
 };

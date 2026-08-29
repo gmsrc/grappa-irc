@@ -6339,6 +6339,7 @@ describe("ScrollbackPane", () => {
       secure_cipher: null,
       certfp: null,
       extra_lines: null,
+      avatar_url: null,
     };
 
     afterEach(() => {

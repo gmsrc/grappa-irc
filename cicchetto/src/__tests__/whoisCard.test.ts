@@ -44,6 +44,7 @@ const bundle = (target: string): WhoisBundle => ({
   secure_cipher: null,
   certfp: null,
   extra_lines: null,
+  avatar_url: null,
 });
 
 beforeEach(() => {
