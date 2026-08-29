@@ -47,6 +47,14 @@ defmodule Grappa.AvatarsTest do
     assert Avatars.get(ctx.network_id, "spoofer") == nil
   end
 
+  test "fetch_and_cache/3 rejects a fetch over the per-entry byte cap even though the shared fetcher allowed it", ctx do
+    oversized = String.duplicate("a", 2 * 1024 * 1024 + 1)
+    expect(Grappa.Net.ImageFetcherMock, :fetch, fn _ -> {:ok, oversized, "image/png"} end)
+
+    assert :ok = Avatars.fetch_and_cache(ctx.network_id, "toobig", "http://peer.example/huge.png")
+    assert Avatars.get(ctx.network_id, "toobig") == nil
+  end
+
   test "fetch_and_cache/3 swallows a fetcher SSRF block without raising or storing anything", ctx do
     expect(Grappa.Net.ImageFetcherMock, :fetch, fn _ -> {:error, :ssrf_blocked} end)
 
