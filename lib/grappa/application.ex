@@ -26,6 +26,10 @@ defmodule Grappa.Application do
       Grappa.ShareTokens,
       Grappa.Uploads,
       Grappa.Uploads.Reaper,
+      # M3b — start/2 calls Avatars.boot/1 (storage-root DI-seam, mirrors
+      # Uploads.boot/1 above) and supervises Avatars.Reaper.
+      Grappa.Avatars,
+      Grappa.Avatars.Reaper,
       Grappa.Vault,
       # #1404 — start/2 calls Vhosts.boot/1 to seed the deployment's
       # source-mapping key, the same boot-time DI-seam shape as the
@@ -61,6 +65,11 @@ defmodule Grappa.Application do
     # runtime. Boot-time read of `Application.get_env/2` is the
     # CLAUDE.md-designated boundary (mirrors Admission.Config.boot/0).
     :ok = Grappa.Uploads.boot(uploads_storage_root())
+
+    # M3b — same boot-time :persistent_term seeding for the peer-avatar
+    # cache's storage root (a separate directory/context from uploads —
+    # see `Grappa.Avatars` moduledoc).
+    :ok = Grappa.Avatars.boot(peer_avatars_storage_root())
 
     # H16 (REV-D 2026-05-22): pin the VAPID public key in
     # `:persistent_term` so PushVapidController reads lock-free per
@@ -438,6 +447,11 @@ defmodule Grappa.Application do
           # only").
           {Grappa.Uploads.Reaper, storage_root: uploads_storage_root(), interval_ms: reaper_interval_ms()},
 
+          # M3b — sibling sweep for the peer-avatar cache. Same "why after
+          # Endpoint" rationale as Uploads.Reaper above (the serving route
+          # must be reachable before sweeps start removing rows/files).
+          {Grappa.Avatars.Reaper, storage_root: peer_avatars_storage_root(), interval_ms: reaper_interval_ms()},
+
           # #223: auth-session housekeeping GC. Sibling of Visitors.Reaper
           # / Uploads.Reaper — a THIRD domain (Accounts) gets its OWN
           # periodic sweep rather than folding into an unrelated reaper
@@ -555,6 +569,11 @@ defmodule Grappa.Application do
   # reads from `:persistent_term`.
   defp uploads_storage_root do
     Application.fetch_env!(:grappa, :uploads_storage_root)
+  end
+
+  # M3b — mirrors `uploads_storage_root/0` for the peer-avatar cache.
+  defp peer_avatars_storage_root do
+    Application.fetch_env!(:grappa, :peer_avatars_storage_root)
   end
 
   # #893: the shared tick cadence of the three ambient sweepers

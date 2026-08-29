@@ -76,6 +76,8 @@ services:
       # prod when it is unset or still the sentinel. Threat model: .env.example.
       RELEASE_COOKIE: ${RELEASE_COOKIE:-grappa-dev-cookie-do-not-use-in-prod}
       UPLOADS_STORAGE_ROOT: ${UPLOADS_STORAGE_ROOT:-/app/runtime/uploads}
+      # M3b — sibling of UPLOADS_STORAGE_ROOT, see .env.example.
+      PEER_AVATARS_STORAGE_ROOT: ${PEER_AVATARS_STORAGE_ROOT:-/app/runtime/peer_avatars}
       # The built SPA dist the BEAM self-serves (Plug.Static + history
       # fallback). Same dir the cicchetto-build service writes (#399).
       #
