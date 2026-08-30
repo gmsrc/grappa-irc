@@ -44262,3 +44262,60 @@ inside the gate together, nothing selection-related may remain on
 scrollback `user-select: text` outside the latch. That last one is the
 defect itself stated as a rule. `hoverGatedBlocks` was generalised to
 `mediaGatedBlocks` rather than copied.
+<!-- entry #1877 -->
+
+---
+
+## 2026-08-30 — #1877: the boot-failure buttons name what they restart, and that copy cannot live in the #411 SSOT
+
+`BootErrorBoundary`'s recovery screen (#717) offered `Retry` and `Reload`.
+The two do genuinely different things — `Retry` is three fetches with the
+bundle untouched (`refetchUser` / `refetchNetworks` / `refetchChannels`, then
+`reset()`), `Reload` throws the running app away, onto a fresh bundle via
+`requestBundleRefreshNow("user")` when an `ApiError` proves the server
+answered and onto the same one otherwise — but both words read as "try again"
+to anyone who has not read the file. A self-hoster who hit the screen on iOS
+reported not knowing which to press.
+
+They are now `Retry loading` and `Restart app` (`Restarting…` in flight).
+Each names its OBJECT: the load, or the app. Neither shares a word with the
+other, which is what a scanning reader gets, and `Restart app` is honest for
+both of the reload branches because both of them do restart it.
+
+**The distinction goes in the LABEL, not in a line of copy under each
+button.** The issue offered either shape. Two reasons for this one. The
+screen is deliberately bare — it is a recovery affordance and #687 owns the
+staged boot log, so every element added here is a step toward the second
+screen that issue exists to avoid, and a label costs none. And the ACCESSIBLE
+NAME is what the reporter's platform reads out when focus lands on the
+control: a sibling paragraph is announced separately or not at all unless it
+is wired through `aria-describedby`, which is machinery bought to leave the
+button itself still saying "try again". The situational advice such a line
+would have carried ("press this one if the network came back") is in the
+ORDER instead — primary first, the muted fallback second, which the
+`.boot-failure-reload` rule already encodes. That rule's comment now names the
+two by ROLE rather than by label, since the labels have been renamed once and
+a comment citing a string is the thing that rots.
+
+**It does NOT go through `friendlyApiError`, and the issue's suggestion that
+it should is the one thing here that was measured and declined.** That
+module's contract is `friendlyApiError(err: ApiError): string` — a switch over
+`ErrorTokensRestErrorToken`, the GENERATED closed union of the server's REST
+error tokens, with `assertNever` in the default arm making exhaustiveness a
+`tsc` failure. A button label has no wire token to key on, so hosting it there
+means a second, un-keyed export inside a module whose entire point is
+token → copy totality. The strings stay where `Could not load Grappa.`
+already lives: inline in the component that renders them.
+`lib/homeSessionCopy.ts` is the precedent for extracting cic copy into a
+module, and it earns that by being a pure function over server-supplied data
+with a test of its own — two static labels are neither.
+
+**Coverage.** Pinned in `BootErrorBoundary.test.tsx` as the accessible name
+of each button, which is the property under repair, and separately for the
+in-flight label on the `ApiError`-purge branch — the one that can sit for ~2 s
+waiting on `controllerchange`, and previously had no assertion on its text at
+all. No e2e spec asserts anything on this screen: `grep` over
+`cicchetto/e2e/` finds no `boot-failure` testid, no `Could not load Grappa.`,
+and every `Retry`/`Reload` hit in the suite is prose in a comment about a page
+reload. Nothing was updated there because there is nothing there, and a
+Playwright spec was not fabricated for a copy change.
