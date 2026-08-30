@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { coarsePointerBlocks, themeCss } from "./helpers/themeCss";
+import {
+  coarsePointerBlocks,
+  hoverGatedBlocks,
+  mediaGatedBlocks,
+  themeCss,
+} from "./helpers/themeCss";
 
 // #1869 — the selection/callout policy is TOUCH behaviour, not iOS behaviour.
 //
@@ -155,5 +160,34 @@ describe("#1869 — the touch selection policy is gated on pointer, not on iOS",
   it("leaves #250's desktop declarations intact outside the gate", () => {
     expect(stripped).toMatch(/^\.nick-clickable\s*\{[^}]*user-select:\s*text/m);
     expect(stripped).toMatch(/^\.channel-clickable\s*\{[^}]*user-select:\s*text/m);
+  });
+});
+
+// The scan #1869 generalised out of `hoverGatedBlocks`, tested where it was
+// generalised. Its ONE precondition used to be documentation only.
+describe("mediaGatedBlocks — the shared media-gate scan", () => {
+  // Without `g`, `exec` ignores the `lastIndex` the loop advances and restarts
+  // at 0 forever: the helper HANGS instead of failing, and a hung vitest names
+  // no caller. A throw is the difference between a diagnosable misuse and a
+  // timeout somebody bisects by hand.
+  it("refuses an opener without the g flag instead of scanning forever", () => {
+    expect(() => mediaGatedBlocks(/@media\s*\(\s*pointer\s*:\s*coarse\s*\)\s*\{/, "no-g")).toThrow(
+      /g flag/,
+    );
+  });
+
+  // The positive control for the guard: the same pattern WITH `g` must still
+  // return the gate, or the throw above would be indistinguishable from a
+  // helper that rejects everything.
+  it("accepts the same opener once it carries g", () => {
+    expect(
+      mediaGatedBlocks(/@media\s*\(\s*pointer\s*:\s*coarse\s*\)\s*\{/g, "coarse"),
+    ).toHaveLength(coarsePointerBlocks().length);
+  });
+
+  // And the pre-existing caller is unchanged by the generalisation — the
+  // wrapper still finds the hover gate it found before #1869 touched this.
+  it("leaves hoverGatedBlocks finding its own gate", () => {
+    expect(hoverGatedBlocks().length).toBeGreaterThan(0);
   });
 });

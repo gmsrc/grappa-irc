@@ -171,7 +171,10 @@ export function nestedRuleBodies(selector: string): string[] {
  * selector can neither satisfy nor trip an assertion about it.
  *
  * `opener` must carry the `g` flag — the scan advances `lastIndex` past each
- * matched block to find the next one.
+ * matched block to find the next one. ENFORCED rather than documented: without
+ * `g`, `exec` ignores `lastIndex` and restarts at 0, so `match` is never null
+ * and the loop below never ends. A shared test helper must not answer a
+ * misuse with a hang — a thrown error names the caller, a hang names nothing.
  *
  * Throws when the sheet carries no such gate at all, for the same reason
  * `ruleBody` throws on an absent rule: a test asking "is this rule gated?"
@@ -183,6 +186,11 @@ export function nestedRuleBodies(selector: string): string[] {
  * sheet wrong.
  */
 export function mediaGatedBlocks(opener: RegExp, label: string): string[] {
+  if (!opener.global) {
+    throw new Error(
+      `mediaGatedBlocks(${label}): opener must carry the g flag or the scan never terminates`,
+    );
+  }
   const stripped = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: string[] = [];
   let match = opener.exec(stripped);
