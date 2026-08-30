@@ -37,7 +37,42 @@ import { CTCP_DELIMITER, stripCtcpAction } from "./ctcpAction";
 const CTCP_ACTION_ENVELOPE_BYTES =
   utf8ByteLength(`${CTCP_DELIMITER}ACTION `) + utf8ByteLength(CTCP_DELIMITER);
 
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// #1870 — resolved on FIRST USE, never at import. `Intl.Segmenter` landed in
+// Firefox 125; on 115 ESR the constructor is absent, and this used to be a
+// top-level `new`. `ComposeBox` imports this module, so the `TypeError` fired
+// while the main bundle was still EVALUATING and React never mounted: a frame
+// counter cost the whole app a white page. The build target (`es2022`) cannot
+// catch that — `Intl.Segmenter` is a LIBRARY feature, not syntax, so no
+// transpile step ever looks at it.
+//
+// `undefined` is "not asked yet" and `null` is "asked, absent": one feature
+// test per page, and no ICU segmenter built for a session that never
+// overflows a frame.
+let graphemeSegmenter: Intl.Segmenter | null | undefined;
+
+/**
+ * `body` split into the units the chunker charges bytes for — extended
+ * grapheme clusters where the platform can segment, CODE POINTS where it
+ * cannot.
+ *
+ * The fallback keeps surrogate pairs whole (that is what `Array.from`
+ * iterates) and is deliberately wrong about exactly two things: a combining
+ * sequence and a ZWJ emoji cluster can be counted as several units and so
+ * reported as splitting across frames. That is a cost this mirror is allowed
+ * to pay — it moves an ADVISORY number, never a byte, because the split that
+ * reaches the wire is still `LineSplit`'s — and only on a browser whose own
+ * `Intl` cannot do better anyway.
+ */
+function graphemesOf(body: string): string[] {
+  if (graphemeSegmenter === undefined) {
+    graphemeSegmenter =
+      typeof Intl.Segmenter === "function"
+        ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+        : null;
+  }
+  if (graphemeSegmenter === null) return Array.from(body);
+  return [...graphemeSegmenter.segment(body)].map((s) => s.segment);
+}
 
 /**
  * Bytes `s` occupies once UTF-8 encoded — what IRC framing counts, as opposed
@@ -132,7 +167,7 @@ export function framePreview(bodies: readonly string[], budget: number): FramePr
 // boundary and the overflowing grapheme is RE-READ against the carry-over,
 // which may already leave no room for it.
 function chunkCount(body: string, budget: number): number {
-  const graphemes = [...graphemeSegmenter.segment(body)].map((s) => s.segment);
+  const graphemes = graphemesOf(body);
   let chunks = 0;
   let current: string[] = [];
   let size = 0;

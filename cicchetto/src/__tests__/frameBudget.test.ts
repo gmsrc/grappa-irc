@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { frameBudgetForTarget, frameCount, framePreview, utf8ByteLength } from "../lib/frameBudget";
 
 // #1108 — the compose box warns, BEFORE sending, that the draft no longer
@@ -160,5 +160,114 @@ describe("frameBudget — framePreview", () => {
 
   it("reports nothing to send for an empty draft", () => {
     expect(framePreview([], 10)).toEqual({ messages: 0, remainingBytes: null });
+  });
+});
+
+// #1870 — `Intl.Segmenter` landed in Firefox 125, and this module used to
+// construct one at TOP LEVEL. `ComposeBox` imports `frameBudgetForTarget`, so
+// on Firefox 115 ESR the `TypeError` fired while the main bundle was still
+// evaluating: nothing mounted, and a frame counter cost the whole app a WHITE
+// PAGE. The build target (`es2022`, vite.config.ts) cannot catch that —
+// `Intl.Segmenter` is a LIBRARY feature, not syntax, so no transpile step
+// ever looks at it.
+//
+// Two properties, deliberately separate: the module must EVALUATE where the
+// API is absent, and its one segmenting call site must still answer a
+// defensible number.
+//
+// ⚠️ What these tests do NOT prove: that Firefox 115 renders the page. There
+// is no FF115 here and Playwright ships no build of it, so the white page
+// itself stays a diagnosis from the stack trace in the report, never an
+// observation. What is pinned is the code-level property that diagnosis
+// names, in the only runtime this repo has.
+describe("frameBudget — where Intl.Segmenter is absent (#1870)", () => {
+  const realSegmenter = Intl.Segmenter;
+
+  // The pairs where the fallback and the segmenter DISAGREE, stated together
+  // so the price of the fallback is one table rather than a claim: a code
+  // point is not a grapheme, and these are the two ways that shows.
+  const divergences = [
+    {
+      what: "a combining sequence",
+      // "e" + U+0301 is ONE 3-byte grapheme, so at a 2-byte budget the
+      // segmenter emits it whole as its own oversized frame; the fallback
+      // sees a 1-byte "e" and a 2-byte mark and breaks between them.
+      // Written as an ESCAPE, never as a literal: an editor that stores the
+      // precomposed U+00E9 instead makes this 2 bytes, which fits the budget
+      // whole — both paths would then answer 1 and agree for the wrong reason.
+      body: "e\u0301",
+      budget: 2,
+      withSegmenter: 1,
+      fallback: 2,
+    },
+    {
+      what: "a ZWJ emoji cluster",
+      // 25 bytes, ONE grapheme — and seven code points (four emoji, three
+      // joiners), which at a 4-byte budget is seven frames.
+      body: "👩‍👩‍👧‍👦",
+      budget: 4,
+      withSegmenter: 1,
+      fallback: 7,
+    },
+  ] as const;
+
+  afterEach(() => {
+    Object.defineProperty(Intl, "Segmenter", {
+      value: realSegmenter,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+    vi.resetModules();
+  });
+
+  // A module instance that has NEVER seen the constructor — the state an
+  // FF115 tab boots in, as opposed to one that lost it half way through.
+  async function importWithoutSegmenter() {
+    vi.resetModules();
+    Reflect.deleteProperty(Intl, "Segmenter");
+    // The removal is the premise of every assertion below: if the property
+    // were not configurable, these tests would pass while measuring the
+    // segmenter path.
+    expect(Intl.Segmenter).toBeUndefined();
+    return import("../lib/frameBudget");
+  }
+
+  it("evaluates instead of throwing while the bundle is loading", async () => {
+    const module = await importWithoutSegmenter();
+    expect(typeof module.frameCount).toBe("function");
+  });
+
+  it("keeps a surrogate pair whole in the fallback split", async () => {
+    const { frameCount: countWithout } = await importWithoutSegmenter();
+    // `Array.from` iterates CODE POINTS, so each 4-byte pizza stays one unit
+    // and two of them at a 4-byte budget are two frames — the same answer the
+    // segmenter gives. A UTF-16 unit walk would see four 3-byte lone
+    // surrogates and report FOUR, which is what this case exists to reject.
+    expect(countWithout("🍕🍕", 4)).toBe(2);
+    expect(frameCount("🍕🍕", 4)).toBe(2);
+  });
+
+  for (const example of divergences) {
+    it(`splits ${example.what} the segmenter would have kept whole`, async () => {
+      const { frameCount: countWithout } = await importWithoutSegmenter();
+      // DECLARED WRONG, deliberately. It costs an advisory COUNT and never a
+      // byte — the split that reaches the wire is still the server's — and
+      // only on a browser that cannot segment at all. The alternative was
+      // shipping no number there, or no app at all.
+      expect(countWithout(example.body, example.budget)).toBe(example.fallback);
+      expect(example.fallback).not.toBe(example.withSegmenter);
+    });
+  }
+
+  it("is byte-for-byte unchanged where the segmenter exists", async () => {
+    vi.resetModules();
+    // Positive control: this arm is only meaningful while the constructor is
+    // really there, and `afterEach` above is what put it back.
+    expect(typeof Intl.Segmenter).toBe("function");
+    const { frameCount: countWith } = await import("../lib/frameBudget");
+    for (const example of divergences) {
+      expect(countWith(example.body, example.budget)).toBe(example.withSegmenter);
+    }
   });
 });
