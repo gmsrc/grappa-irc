@@ -164,19 +164,26 @@ export function nestedRuleBodies(selector: string): string[] {
 }
 
 /**
- * The body of every `@media (hover: hover)` block, brace-MATCHED rather than
- * regex-captured: such a block contains whole rules, and the `[^{}]` classes
- * the helpers above rely on cannot span a nested brace. Comments stripped,
- * same as the rest of this module, so prose naming a selector can neither
- * satisfy nor trip an assertion about it.
+ * The body of every `@media` block whose prelude `opener` matches,
+ * brace-MATCHED rather than regex-captured: such a block contains whole rules,
+ * and the `[^{}]` classes the helpers above rely on cannot span a nested brace.
+ * Comments stripped, same as the rest of this module, so prose naming a
+ * selector can neither satisfy nor trip an assertion about it.
+ *
+ * `opener` must carry the `g` flag — the scan advances `lastIndex` past each
+ * matched block to find the next one.
  *
  * Throws when the sheet carries no such gate at all, for the same reason
  * `ruleBody` throws on an absent rule: a test asking "is this rule gated?"
- * must not pass because the GATE vanished.
+ * must not pass because the GATE vanished. `label` is what that error names.
+ *
+ * Generalised out of `hoverGatedBlocks` when #1869 needed the identical scan
+ * for `(pointer: coarse)` (CLAUDE.md "implement once, reuse everywhere") — a
+ * second copy of the depth counter is a second place to get an unbalanced
+ * sheet wrong.
  */
-export function hoverGatedBlocks(): string[] {
+export function mediaGatedBlocks(opener: RegExp, label: string): string[] {
   const stripped = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
-  const opener = /@media\s*\(\s*hover\s*:\s*hover\s*\)\s*\{/g;
   const out: string[] = [];
   let match = opener.exec(stripped);
   while (match !== null) {
@@ -189,13 +196,29 @@ export function hoverGatedBlocks(): string[] {
       else if (ch === "}") depth -= 1;
       i += 1;
     }
-    if (depth !== 0) throw new Error("unbalanced @media (hover: hover) block in default.css");
+    if (depth !== 0) throw new Error(`unbalanced ${label} block in default.css`);
     out.push(stripped.slice(start, i - 1));
     opener.lastIndex = i;
     match = opener.exec(stripped);
   }
-  if (out.length === 0) throw new Error("no @media (hover: hover) gate found in default.css");
+  if (out.length === 0) throw new Error(`no ${label} gate found in default.css`);
   return out;
+}
+
+/** The body of every `@media (hover: hover)` block. See `mediaGatedBlocks`. */
+export function hoverGatedBlocks(): string[] {
+  return mediaGatedBlocks(/@media\s*\(\s*hover\s*:\s*hover\s*\)\s*\{/g, "@media (hover: hover)");
+}
+
+/**
+ * The body of every `@media (pointer: coarse)` block — where #1869 put the
+ * touch selection/callout policy. See `mediaGatedBlocks`.
+ */
+export function coarsePointerBlocks(): string[] {
+  return mediaGatedBlocks(
+    /@media\s*\(\s*pointer\s*:\s*coarse\s*\)\s*\{/g,
+    "@media (pointer: coarse)",
+  );
 }
 
 export function ruleBody(selector: string): string {
