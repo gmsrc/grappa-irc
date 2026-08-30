@@ -109,7 +109,7 @@ type Probe = {
 
 test.setTimeout(90_000);
 
-test("@webkit #1702 — the lock screen is told the track, the station and the artwork", async ({
+test("@webkit @touch #1702 — the lock screen is told the track, the station and the artwork", async ({
   page,
 }) => {
   await page.addInitScript(

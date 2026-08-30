@@ -153,7 +153,9 @@ async function joinChannelWhenReady(token: string, slug: string, channel: string
   throw new Error(`joinChannelWhenReady: ${slug}/${channel} never became joinable (last: ${last})`);
 }
 
-test("@webkit #260 — the network header carries the sticky-left CSS contract", async ({ page }) => {
+test("@webkit @touch #260 — the network header carries the sticky-left CSS contract", async ({
+  page,
+}) => {
   // Deterministic, isolated anchor: the computed style the browser
   // consults to pin the header. Seeded vjt has ONE network → one header;
   // read-only (no JOINs), so no shared-stack poisoning.
@@ -188,7 +190,7 @@ test("@webkit #260 — the network header carries the sticky-left CSS contract",
   expect(contract.background).toBe(contract.barBackground);
 });
 
-test("@webkit #260 — the sticky header pins under scroll and the next network displaces it", async ({
+test("@webkit @touch #260 — the sticky header pins under scroll and the next network displaces it", async ({
   page,
 }) => {
   // Two full connect chains + several JOINs across two live upstreams —

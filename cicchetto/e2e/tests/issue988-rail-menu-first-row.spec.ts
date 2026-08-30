@@ -228,7 +228,7 @@ async function reportReadings(
 
 test.setTimeout(120_000);
 
-test("@webkit #988 — the actions menu opens with `home` visible at every viewport height", async ({
+test("@webkit @touch #988 — the actions menu opens with `home` visible at every viewport height", async ({
   page,
 }, testInfo) => {
   const vjt = specUser();
@@ -271,7 +271,7 @@ test("@webkit #988 — the actions menu opens with `home` visible at every viewp
   ).toBe(true);
 });
 
-test("@webkit #988 — `home` stays visible at XXL text with the viewport at its shortest", async ({
+test("@webkit @touch #988 — `home` stays visible at XXL text with the viewport at its shortest", async ({
   page,
 }, testInfo) => {
   const vjt = specUser();

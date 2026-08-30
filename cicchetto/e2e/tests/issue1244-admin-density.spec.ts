@@ -163,7 +163,7 @@ for (const width of [393, 440]) {
     // only come from the width under test.
     test.use({ viewport: { width, height: 956 } });
 
-    test(`#1244 @webkit at ${width}px a card field is one row while its value is short`, async ({
+    test(`#1244 @webkit @touch at ${width}px a card field is one row while its value is short`, async ({
       page,
     }) => {
       const admin = getSeededAdmin();
@@ -231,7 +231,7 @@ for (const width of [393, 440]) {
       }
     });
 
-    test(`#1244 @webkit at ${width}px a panel fact is one row while its value is short`, async ({
+    test(`#1244 @webkit @touch at ${width}px a panel fact is one row while its value is short`, async ({
       page,
     }) => {
       const admin = getSeededAdmin();
@@ -312,7 +312,7 @@ for (const width of [393, 440]) {
 test.describe("#1244 the nesting around a record card", () => {
   test.use({ viewport: { width: 440, height: 956 } });
 
-  test("#1244 @webkit a record card sits inside one frame, not three", async ({ page }) => {
+  test("#1244 @webkit @touch a record card sits inside one frame, not three", async ({ page }) => {
     const admin = getSeededAdmin();
     const visitor = await mintVisitor(`frame1244-${Date.now()}`);
 

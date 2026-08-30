@@ -91,7 +91,7 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 
-  test("@webkit #253 — a scrolled-up reader keeps their scrollTop when the keyboard opens", async ({
+  test("@webkit @touch #253 — a scrolled-up reader keeps their scrollTop when the keyboard opens", async ({
     page,
   }) => {
     test.slow();
@@ -169,7 +169,7 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
     expect(Math.abs(during - before.top)).toBeLessThanOrEqual(5);
   });
 
-  test("@webkit #253 — an at-bottom reader stays pinned to the tail when the keyboard opens", async ({
+  test("@webkit @touch #253 — an at-bottom reader stays pinned to the tail when the keyboard opens", async ({
     page,
   }) => {
     test.slow();

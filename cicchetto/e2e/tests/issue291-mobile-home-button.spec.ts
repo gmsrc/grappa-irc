@@ -46,7 +46,9 @@ test.describe("#291 — home launcher in the rail actions drawer", () => {
     await setAdminFlag(admin.token, vjtUserId, false);
   });
 
-  test("@webkit home launcher: all rail buttons ≥44px, tap returns to home", async ({ page }) => {
+  test("@webkit @touch home launcher: all rail buttons ≥44px, tap returns to home", async ({
+    page,
+  }) => {
     const admin = getSeededAdmin();
     await setAdminFlag(admin.token, vjtUserId, true);
 

@@ -37,6 +37,13 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const LINK_URL = `https://example.com/issue350-${Date.now()}`;
 const MESSAGE_BODY = `tap target: ${LINK_URL}`;
 
+// 🔴 NO `@touch` — iOS-BOUND, and issue 1878's exception list missed it.
+// `keepKeyboard.handleMouseDown` opens with `if (!isIos()) return`
+// (`src/lib/keepKeyboard.ts`), so off Safari the whole mechanism is inert and
+// `md.defaultPrevented` is false: MEASURED red on `chromium-pixel-touch`
+// during the 1878 retag. The census that built that list grepped for the
+// `html.is-ios` CSS class and this spec exercises the JS gate instead, which
+// is why it read as portable. The Android twin is separate test code.
 test("@webkit iOS — a short tap on a scrollback link keeps the keyboard (mousedown focus-shift prevented, compose stays focused)", async ({
   page,
 }) => {

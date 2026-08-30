@@ -101,7 +101,7 @@ async function setViewportVarsNoResize(page: Page, px: number): Promise<void> {
     .toBe(`${px}px`);
 }
 
-test("@webkit #285 reopen — .scrollback base is fail-open pan-y and the lock gate re-measures on a container height change with NO resize event", async ({
+test("@webkit @touch #285 reopen — .scrollback base is fail-open pan-y and the lock gate re-measures on a container height change with NO resize event", async ({
   page,
 }) => {
   const admin = getSeededAdmin();

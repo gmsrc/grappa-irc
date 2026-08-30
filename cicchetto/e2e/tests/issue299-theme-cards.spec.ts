@@ -71,7 +71,7 @@ async function reopenGalleryDesktop(page: PWPage): Promise<void> {
 }
 
 test.describe("#299 — theme cards (tap-select + progressive disclosure)", () => {
-  test("@webkit tapping a card reveals exactly one ≥44px action row", async ({ page }) => {
+  test("@webkit @touch tapping a card reveals exactly one ≥44px action row", async ({ page }) => {
     await loginAs(page, specUser());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();

@@ -107,7 +107,7 @@ function isRound(borderRadius: string, width: number): boolean {
   return Number.parseFloat(first) >= width / 2 - 1;
 }
 
-test("#264 @webkit — mobile next-active button is a keyboard-safe circle (≥44px, corner badge)", async ({
+test("#264 @webkit @touch — mobile next-active button is a keyboard-safe circle (≥44px, corner badge)", async ({
   page,
 }) => {
   const vjt = specUser();

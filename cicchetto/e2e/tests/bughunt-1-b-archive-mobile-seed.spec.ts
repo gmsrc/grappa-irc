@@ -42,7 +42,9 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
-test("@webkit BUGHUNT-1 B — mobile rail archive shows the row on expand", async ({ page }) => {
+test("@webkit @touch BUGHUNT-1 B — mobile rail archive shows the row on expand", async ({
+  page,
+}) => {
   const vjt = specUser();
   await loginAs(page, vjt);
 

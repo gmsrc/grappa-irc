@@ -37,7 +37,7 @@ const MESSAGE_BODY = `BUG7-M6-ios: DM own-msg @ ${crypto.randomUUID().slice(0, 8
 // in lockstep by hand — same as issue168 / issue580).
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
-test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input", async ({
+test("@webkit @touch BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input", async ({
   page,
 }) => {
   const vjt = specUser();

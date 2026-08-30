@@ -97,7 +97,7 @@ async function findRulePadding(
   }, selector);
 }
 
-test("@webkit UX-3 BIS — .shell.shell-mobile carries safe-area inset; bars do NOT", async ({
+test("@webkit @touch UX-3 BIS — .shell.shell-mobile carries safe-area inset; bars do NOT", async ({
   page,
 }) => {
   const vjt = specUser();

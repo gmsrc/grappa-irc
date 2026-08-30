@@ -124,7 +124,7 @@ test.afterEach(async () => {
 });
 
 test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
-  test("@webkit — both buttons coexist without overlap, same size, and next-active stays constant relative to the message container across keyboard open", async ({
+  test("@webkit @touch — both buttons coexist without overlap, same size, and next-active stays constant relative to the message container across keyboard open", async ({
     page,
   }) => {
     const vjt = specUser();
@@ -256,7 +256,7 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
     }
   });
 
-  test("@webkit — badge is BLUE (normal class) when the next target is a plain channel message", async ({
+  test("@webkit @touch — badge is BLUE (normal class) when the next target is a plain channel message", async ({
     page,
   }) => {
     const vjt = specUser();
@@ -293,7 +293,7 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
     }
   });
 
-  test("@webkit — badge is RED (priority class) when the next target carries a mention", async ({
+  test("@webkit @touch — badge is RED (priority class) when the next target carries a mention", async ({
     page,
   }) => {
     const vjt = specUser();

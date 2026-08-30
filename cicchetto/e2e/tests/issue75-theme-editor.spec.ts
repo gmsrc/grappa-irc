@@ -200,7 +200,7 @@ test.describe("#75 — theme editor (producer path)", () => {
     await expect.poll(() => readAccent(page), { timeout: 5_000 }).toBe(accentPreOpen);
   });
 
-  test("@webkit editor opens + live-previews + cancels on mobile", async ({ page }) => {
+  test("@webkit @touch editor opens + live-previews + cancels on mobile", async ({ page }) => {
     await loginAs(page, specUser());
     await openThemesGalleryMobile(page);
 
@@ -241,7 +241,7 @@ test.describe("#75 — theme editor (producer path)", () => {
     await page.getByTestId("theme-editor-cancel-btn").click();
   });
 
-  test("@webkit #963 — font select is legible on the iPhone leg too", async ({ page }) => {
+  test("@webkit @touch #963 — font select is legible on the iPhone leg too", async ({ page }) => {
     await loginAs(page, specUser());
     await openThemesGalleryMobile(page);
 

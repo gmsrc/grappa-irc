@@ -259,7 +259,7 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     await expect(page.getByTestId("admin-pane")).toBeVisible({ timeout: 5_000 });
   }
 
-  test("@webkit admin on mobile — no surface can be panned sideways", async ({ page }) => {
+  test("@webkit @touch admin on mobile — no surface can be panned sideways", async ({ page }) => {
     const admin = getSeededAdmin();
     const visitor = await mintVisitor(`ux6g-${Date.now()}`);
     let vhostId: number | null = null;
@@ -353,7 +353,7 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     }
   });
 
-  test("@webkit admin on mobile — the pane still permits pan-x", async ({ page }) => {
+  test("@webkit @touch admin on mobile — the pane still permits pan-x", async ({ page }) => {
     await openAdminPane(page);
 
     // Kept from the original fix and deliberately NOT deleted along with
@@ -394,7 +394,9 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
   // wrap` stops being one row. Neither is visible to the width oracle
   // above: the first because a `hidden` box is not in its scope, the
   // second because a wrapped strip does not overflow.
-  test("@webkit admin on mobile — the tab strip is one row, and it pans", async ({ page }) => {
+  test("@webkit @touch admin on mobile — the tab strip is one row, and it pans", async ({
+    page,
+  }) => {
     await openAdminPane(page);
 
     const strip = await page.getByTestId("admin-pane").evaluate((pane) => {
@@ -438,7 +440,7 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     ).toBeGreaterThan(strip.clientW + 1);
   });
 
-  test("@webkit admin on mobile — vertical scroll inside the pane still works", async ({
+  test("@webkit @touch admin on mobile — vertical scroll inside the pane still works", async ({
     page,
   }) => {
     await openAdminPane(page);
@@ -454,7 +456,7 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     expect(paneTouch, "admin-pane touch-action must allow pan-x").toMatch(/pan-x/);
   });
 
-  test("@webkit admin on mobile — opening a row's detail does not move the row", async ({
+  test("@webkit @touch admin on mobile — opening a row's detail does not move the row", async ({
     page,
   }) => {
     await openAdminPane(page);

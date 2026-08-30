@@ -65,7 +65,7 @@ test.beforeEach(async () => {
 });
 
 test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands at bottom", () => {
-  test("@webkit tap scroll-to-bottom, bounce to empty query and back, lands at bottom", async ({
+  test("@webkit @touch tap scroll-to-bottom, bounce to empty query and back, lands at bottom", async ({
     page,
   }) => {
     const vjt = specUser();

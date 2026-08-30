@@ -134,7 +134,9 @@ test.describe("#605 server-window rail width cap", () => {
 test.describe("#605 server-window rail width cap (webkit)", () => {
   test.use({ viewport: IPAD_PRO_11_PORTRAIT, isMobile: false, hasTouch: false });
 
-  test("@webkit a long connection.server can't starve the centre on WebKit", async ({ page }) => {
+  test("@webkit @touch a long connection.server can't starve the centre on WebKit", async ({
+    page,
+  }) => {
     await assertServerRailCapped(page);
   });
 });

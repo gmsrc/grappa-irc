@@ -182,7 +182,7 @@ test.describe("issue #230 (mobile) — touch-drag-down loads older history when 
     expect(await scrollbackLines(page).count()).toBe(initialCount);
   });
 
-  test("@webkit issue230 mobile — underfilled .scrollback is touch-action: none + overscroll-behavior: contain", async ({
+  test("@webkit @touch issue230 mobile — underfilled .scrollback is touch-action: none + overscroll-behavior: contain", async ({
     page,
   }) => {
     const vjt = specUser();

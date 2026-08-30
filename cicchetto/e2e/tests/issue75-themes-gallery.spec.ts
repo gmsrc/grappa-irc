@@ -40,7 +40,7 @@ async function openThemesSubPage(page: import("@playwright/test").Page): Promise
 }
 
 test.describe("#75 — themes gallery consumer flow", () => {
-  test("@webkit 🎨 launcher opens the themes sub-page with the built-in gallery", async ({
+  test("@webkit @touch 🎨 launcher opens the themes sub-page with the built-in gallery", async ({
     page,
   }) => {
     const vjt = specUser();
@@ -65,7 +65,7 @@ test.describe("#75 — themes gallery consumer flow", () => {
     await expect(page.locator(".theme-card-name").filter({ hasText: /^sux$/ })).toBeVisible();
   });
 
-  test("@webkit tapping a card flips --bg live and persists across reload via the server", async ({
+  test("@webkit @touch tapping a card flips --bg live and persists across reload via the server", async ({
     page,
   }) => {
     const vjt = specUser();

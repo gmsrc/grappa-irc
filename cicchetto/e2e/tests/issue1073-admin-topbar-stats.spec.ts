@@ -92,7 +92,7 @@ test("#1073 the admin bar carries live stats, on one line, in the shared band", 
   await expect(pane.locator(".topic-bar [data-testid$='-refresh']")).toHaveCount(0);
 });
 
-test("#1073 @webkit on a phone the stats keep the ☰ at the far end", async ({ page }) => {
+test("#1073 @webkit @touch on a phone the stats keep the ☰ at the far end", async ({ page }) => {
   await adminLogin(page, getSeededAdmin());
   const pane = await openAdminConsole(page);
 

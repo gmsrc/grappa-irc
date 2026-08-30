@@ -164,7 +164,7 @@ async function assertCardCloseWinsItsCorner(page: PWPage): Promise<void> {
   }
 }
 
-test("@webkit #1051 — with no background theme the card's ✕ is the topmost element at its own coordinates", async ({
+test("@webkit @touch #1051 — with no background theme the card's ✕ is the topmost element at its own coordinates", async ({
   page,
 }) => {
   await loginAs(page, specUser());
@@ -177,7 +177,7 @@ test("@webkit #1051 — with no background theme the card's ✕ is the topmost e
   await assertCardCloseWinsItsCorner(page);
 });
 
-test("@webkit #1051 — with a background theme active the card's ✕ still wins its own corner", async ({
+test("@webkit @touch #1051 — with a background theme active the card's ✕ still wins its own corner", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -216,7 +216,7 @@ test("@webkit #1051 — with a background theme active the card's ✕ still wins
 // also swaps declares exactly the 27 colour vars the custom payload overrides,
 // so the flip is inert on everything except the layer under test; PHASE A
 // measures that rather than asserting it.
-test("@webkit #1051 — the wallpaper still paints, and still paints behind the conversation", async ({
+test("@webkit @touch #1051 — the wallpaper still paints, and still paints behind the conversation", async ({
   page,
 }) => {
   const vjt = specUser();

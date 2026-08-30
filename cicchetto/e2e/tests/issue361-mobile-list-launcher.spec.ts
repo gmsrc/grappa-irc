@@ -33,7 +33,7 @@ const MIN_TAP_TARGET_PX = 44;
 test.setTimeout(60_000);
 
 test.describe("#361 — rooms launcher in the rail actions drawer", () => {
-  test("@webkit rooms launcher: ≥44px, leads the rail after home, tap opens the $list directory", async ({
+  test("@webkit @touch rooms launcher: ≥44px, leads the rail after home, tap opens the $list directory", async ({
     page,
   }) => {
     const vjt = specUser();

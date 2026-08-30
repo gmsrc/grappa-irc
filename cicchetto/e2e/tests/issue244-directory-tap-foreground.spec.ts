@@ -148,7 +148,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
     }
   });
 
-  test("MOBILE @webkit — tapping an unjoined /list row foregrounds its window (BottomBar branch)", async ({
+  test("MOBILE @webkit @touch — tapping an unjoined /list row foregrounds its window (BottomBar branch)", async ({
     page,
   }) => {
     const vjt = specUser();

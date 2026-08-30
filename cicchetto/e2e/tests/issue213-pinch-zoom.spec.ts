@@ -330,7 +330,7 @@ test("#1805 — a real one-finger drag moves the visible portion of the zoomed i
   expect(Math.abs(after.dy + after.scrollTop)).toBeLessThan(2);
 });
 
-test("@webkit #1805 — the zoomable modal image and its scroller declare the pan (iPhone 15)", async ({
+test("@webkit @touch #1805 — the zoomable modal image and its scroller declare the pan (iPhone 15)", async ({
   page,
 }) => {
   test.slow();
@@ -356,7 +356,7 @@ test("@webkit #1805 — the zoomable modal image and its scroller declare the pa
   expect(style.overscroll).toBe("contain");
 });
 
-test("@webkit #1805 — zooming creates a real scrollable area, and scrolling moves the picture (iPhone 15)", async ({
+test("@webkit @touch #1805 — zooming creates a real scrollable area, and scrolling moves the picture (iPhone 15)", async ({
   page,
 }) => {
   test.slow();

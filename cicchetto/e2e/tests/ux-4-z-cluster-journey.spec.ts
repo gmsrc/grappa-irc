@@ -135,7 +135,7 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
-test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fallback + *serv route + members sort + scroll-on-activate + settings + upload-TTL persistence + admin window (parity matrix)", async ({
+test("@webkit @touch UX-4-Z cluster — case-fix + home + sidebar collapse + close-fallback + *serv route + members sort + scroll-on-activate + settings + upload-TTL persistence + admin window (parity matrix)", async ({
   page,
   context,
 }) => {

@@ -48,7 +48,7 @@ async function userRowKey(page: Page): Promise<string> {
   return testId.replace("admin-session-row-", "");
 }
 
-test("#1157 @webkit a phone gives the row's verbs one control, and it is the menu", async ({
+test("#1157 @webkit @touch a phone gives the row's verbs one control, and it is the menu", async ({
   page,
 }) => {
   await adminLogin(page, getSeededAdmin());
@@ -66,7 +66,7 @@ test("#1157 @webkit a phone gives the row's verbs one control, and it is the men
   await expect(page.getByTestId(`admin-session-terminate-${key}`)).toHaveCount(0);
 });
 
-test("#1157 @webkit the dropdown arms a verb rather than running it", async ({ page }) => {
+test("#1157 @webkit @touch the dropdown arms a verb rather than running it", async ({ page }) => {
   await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
   const key = await userRowKey(page);

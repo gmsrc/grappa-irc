@@ -133,7 +133,7 @@ test.describe("#405 fresh non-admin account first-login journey", () => {
 // Mobile-webkit smoke (@webkit → iPhone-15 project). The empty-networks
 // home + the user-vs-guest branch render on the mobile layout too, where
 // chromium/jsdom are blind to mobile CSS (feedback_cicchetto_browser_smoke).
-test.describe("#405 fresh account @webkit mobile", () => {
+test.describe("#405 fresh account @webkit @touch mobile", () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("cic.installChoice", "browser");

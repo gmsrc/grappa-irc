@@ -64,7 +64,7 @@ async function computedTouchAction(page: import("@playwright/test").Page, select
   });
 }
 
-test("@webkit ux-5-bo — settings drawer asserts touch-action: pan-y + overscroll-behavior: contain", async ({
+test("@webkit @touch ux-5-bo — settings drawer asserts touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -89,7 +89,7 @@ test("@webkit ux-5-bo — settings drawer asserts touch-action: pan-y + overscro
   expect(styles.overscrollBehaviorY).toBe("contain");
 });
 
-test("@webkit ux-5-bo — settings drawer has an internal scroll authority (overflow-y: auto precondition)", async ({
+test("@webkit @touch ux-5-bo — settings drawer has an internal scroll authority (overflow-y: auto precondition)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -117,7 +117,7 @@ test("@webkit ux-5-bo — settings drawer has an internal scroll authority (over
   expect(drawerScroll).toBeGreaterThan(0);
 });
 
-test("@webkit ux-5-bo — archive modal asserts touch-action: pan-y + overscroll-behavior: contain", async ({
+test("@webkit @touch ux-5-bo — archive modal asserts touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -151,7 +151,7 @@ test("@webkit ux-5-bo — archive modal asserts touch-action: pan-y + overscroll
   expect(styles.overscrollBehaviorY).toBe("contain");
 });
 
-test("@webkit ux-5-bo — home pane asserts touch-action: pan-y (same .shell-mobile trap)", async ({
+test("@webkit @touch ux-5-bo — home pane asserts touch-action: pan-y (same .shell-mobile trap)", async ({
   page,
 }) => {
   const vjt = specUser();

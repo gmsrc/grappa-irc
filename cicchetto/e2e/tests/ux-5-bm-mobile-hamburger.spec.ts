@@ -75,7 +75,7 @@ test("ux-5-bm desktop — members aside carries the RailActions drawer", async (
   );
 });
 
-test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer hosts settings+archive launchers; mutex enforced", async ({
+test("@webkit @touch ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer hosts settings+archive launchers; mutex enforced", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -161,7 +161,7 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
 // mutex test). The `toggleMembersPanel` close-siblings arm itself is
 // pinned at the unit level by `src/__tests__/mobilePanel.test.ts`.
 
-test("@webkit ux-5-bm mobile-non-channel — home keeps its own ☰ door to the rail", async ({
+test("@webkit @touch ux-5-bm mobile-non-channel — home keeps its own ☰ door to the rail", async ({
   page,
 }) => {
   const vjt = specUser();

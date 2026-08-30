@@ -56,7 +56,7 @@ test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () 
     await setAdminFlag(admin.token, vjtUserId, false);
   });
 
-  test("@webkit admin on mobile — rail actions drawer hosts admin button; tap opens AdminPane", async ({
+  test("@webkit @touch admin on mobile — rail actions drawer hosts admin button; tap opens AdminPane", async ({
     page,
   }) => {
     const admin = getSeededAdmin();
@@ -101,7 +101,7 @@ test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () 
     await expect(pane.getByRole("heading", { name: /admin console/i })).toBeVisible();
   });
 
-  test("@webkit non-admin on mobile — rail actions drawer hides the admin button", async ({
+  test("@webkit @touch non-admin on mobile — rail actions drawer hides the admin button", async ({
     page,
   }) => {
     // No promote: vjt stays non-admin for this arm. Per the gate

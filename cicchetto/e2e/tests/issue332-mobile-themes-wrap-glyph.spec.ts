@@ -51,7 +51,9 @@ const THEMES_GLYPH = "\u{1F3A8}"; // 🎨 — the themes launcher glyph
 test.setTimeout(60_000);
 
 test.describe("#332/#473 — rail themes launcher: full-width labelled row + deep-link + ⚙️ cog emoji", () => {
-  test("@webkit themes launcher deep-links to the themes gallery sub-page", async ({ page }) => {
+  test("@webkit @touch themes launcher deep-links to the themes gallery sub-page", async ({
+    page,
+  }) => {
     await loginAs(page, specUser());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
@@ -73,7 +75,7 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
     await expect(page.getByTestId("theme-gallery")).toBeVisible({ timeout: 5_000 });
   });
 
-  test("@webkit themes launcher is a full-width row showing both its glyph and 'themes' label", async ({
+  test("@webkit @touch themes launcher is a full-width row showing both its glyph and 'themes' label", async ({
     page,
   }) => {
     await loginAs(page, specUser());
@@ -121,7 +123,9 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
     expect(btnBox.width).toBeGreaterThanOrEqual(railBox.width * 0.8);
   });
 
-  test("@webkit settings cog renders the ⚙️ emoji, not the bare ⚙ glyph", async ({ page }) => {
+  test("@webkit @touch settings cog renders the ⚙️ emoji, not the bare ⚙ glyph", async ({
+    page,
+  }) => {
     await loginAs(page, specUser());
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();

@@ -116,7 +116,7 @@ test.describe("#243 — re-tap active channel jumps scrollback to bottom", () =>
     await scrollUpThenRetapLandsAtBottom(page);
   });
 
-  test("@webkit mobile: re-tapping the active bottom-bar entry jumps to the newest message", async ({
+  test("@webkit @touch mobile: re-tapping the active bottom-bar entry jumps to the newest message", async ({
     page,
   }) => {
     await scrollUpThenRetapLandsAtBottom(page);

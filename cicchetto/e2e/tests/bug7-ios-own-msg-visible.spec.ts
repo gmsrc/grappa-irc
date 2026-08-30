@@ -54,7 +54,7 @@ const MESSAGE_BODY = `BUG7-ios: own-msg visibility @ ${crypto.randomUUID().slice
 // in lockstep by hand — same as issue168 / issue580).
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
-test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({
+test("@webkit @touch BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({
   page,
 }) => {
   const vjt = specUser();

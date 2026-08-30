@@ -102,7 +102,7 @@ test("#962 — settings nav rows keep their content height when the drawer overf
   await assertRowsKeepTheirContentHeight(page);
 });
 
-test("@webkit #962 — settings nav rows keep their content height when the drawer overflows (iPhone)", async ({
+test("@webkit @touch #962 — settings nav rows keep their content height when the drawer overflows (iPhone)", async ({
   page,
 }) => {
   await seedXxlFontSize(page);

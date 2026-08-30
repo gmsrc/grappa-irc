@@ -263,7 +263,7 @@ test("issue123 — nested-scroll handoff: native scroll owns the drag until the 
   await expect(ta).toHaveValue(sent, { timeout: 2_000 });
 });
 
-test("@webkit issue123 — compose textarea is touch-action: pan-y + overscroll-behavior: contain", async ({
+test("@webkit @touch issue123 — compose textarea is touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");

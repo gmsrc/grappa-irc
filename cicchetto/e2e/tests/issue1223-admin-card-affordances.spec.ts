@@ -92,6 +92,20 @@ async function boxOf(locator: Locator, what: string): Promise<Box> {
   return box;
 }
 
+// 🔴 NO `@touch`, and UNLIKE its three siblings in this file — this is the one
+// entry issue 1878 could not port and could not explain. MEASURED on
+// `chromium-pixel-touch`: `touchscreen.tap(383, 413.66)` on the 412x839
+// viewport, aimed at the heading's dead space exactly as below, comes back
+// with the `confirmDetach` modal ("Switch account") open and NO
+// `admin-session-detail-*` in the DOM at all. Green on `webkit-iphone-15`,
+// where the same coordinates open the row.
+//
+// The mechanism is NOT established and is deliberately not guessed at here.
+// It has the SHAPE of the #1831 class — chromium's tap synthesises the compat
+// mouse events and hit-tests the click against the layout as it stands at
+// RELEASE, which webkit never produces at all — but that was not measured for
+// this spec. If it is that, the red is a product defect on Android and not a
+// harness one, so the tag is withheld rather than the spec weakened.
 test("#1223 @webkit on a phone the whole card heading opens the row, not just the nick", async ({
   page,
 }) => {
@@ -205,7 +219,7 @@ test("#1223 on a wide panel the facts stay two columns", async ({ page }) => {
 // panel — rather than a check that a particular selector is hidden: that is
 // the property vjt read off the screen, and it survives the next tab growing
 // a column.
-test("#1223 @webkit on a phone no field is on the card and in the panel at once", async ({
+test("#1223 @webkit @touch on a phone no field is on the card and in the panel at once", async ({
   page,
 }) => {
   const admin = getSeededAdmin();
@@ -255,7 +269,7 @@ test("#1223 @webkit on a phone no field is on the card and in the panel at once"
 // answers "is it big enough", which invites a threshold argument, while vjt
 // reported empty space at the edges and the honest claim is that there is
 // none of it.
-test("#1223 @webkit on a phone the detail panel spans its table, with no gutters", async ({
+test("#1223 @webkit @touch on a phone the detail panel spans its table, with no gutters", async ({
   page,
 }) => {
   const admin = getSeededAdmin();
@@ -319,7 +333,7 @@ test("#1223 @webkit on a phone the detail panel spans its table, with no gutters
 // so a token on two lines reports two distinct `top`s. Pseudo-elements are
 // not in the DOM and cannot be ranged, which is exactly right here: the
 // label track is not part of the value.
-test("#1223 @webkit on a phone no panel value is broken mid-token", async ({ page }) => {
+test("#1223 @webkit @touch on a phone no panel value is broken mid-token", async ({ page }) => {
   const admin = getSeededAdmin();
   const visitor = await mintVisitor(`token1223-${Date.now()}`);
 

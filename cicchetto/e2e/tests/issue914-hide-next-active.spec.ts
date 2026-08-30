@@ -94,7 +94,7 @@ test("desktop: the toggle hides the button and Alt+A STILL jumps", async ({ page
   }
 });
 
-test("@webkit mobile: the same toggle hides the overlay placement", async ({ page }) => {
+test("@webkit @touch mobile: the same toggle hides the overlay placement", async ({ page }) => {
   const vjt = specUser();
   const peerNick = "act914-m";
   await loginAs(page, vjt);

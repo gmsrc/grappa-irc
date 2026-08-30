@@ -71,7 +71,7 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
   await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toBeVisible();
 });
 
-test("@webkit ux-5-a mobile — exactly ONE visible hamburger (TopicBar members) on channel; ZERO on home", async ({
+test("@webkit @touch ux-5-a mobile — exactly ONE visible hamburger (TopicBar members) on channel; ZERO on home", async ({
   page,
 }) => {
   const vjt = specUser();

@@ -66,7 +66,7 @@ test("#255 — desktop .sidebar-close aligns touch-action to the sidebar's pan-y
   expect(ta).toBe("pan-y");
 });
 
-test("#255 @webkit — mobile .bottom-bar-close aligns touch-action to the bottom-bar's pan-x axis", async ({
+test("#255 @webkit @touch — mobile .bottom-bar-close aligns touch-action to the bottom-bar's pan-x axis", async ({
   page,
 }) => {
   const vjt = specUser();

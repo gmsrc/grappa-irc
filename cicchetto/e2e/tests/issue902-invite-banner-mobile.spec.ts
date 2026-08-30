@@ -72,7 +72,7 @@ test.afterEach(async () => {
   }
 });
 
-test("@webkit #902 — an inbound INVITE reaches a phone via the banner, not the BottomBar", async ({
+test("@webkit @touch #902 — an inbound INVITE reaches a phone via the banner, not the BottomBar", async ({
   page,
 }) => {
   const vjt = specUser();

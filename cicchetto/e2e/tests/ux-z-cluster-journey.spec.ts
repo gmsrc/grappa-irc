@@ -61,7 +61,7 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
-test("@webkit UX-Z cluster — Dynamic Island clearance + RailActions archive + delete (registered class)", async ({
+test("@webkit @touch UX-Z cluster — Dynamic Island clearance + RailActions archive + delete (registered class)", async ({
   page,
 }) => {
   const vjt = specUser();

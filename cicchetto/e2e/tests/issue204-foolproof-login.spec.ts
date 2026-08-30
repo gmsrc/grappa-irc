@@ -153,7 +153,7 @@ test.describe("#204 foolproof login", () => {
 // condition (3) is iPad/mobile-first tap targets; this verifies the
 // main-form view + Advanced disclosure actually render + tap on a real
 // mobile WebKit viewport, where chromium/jsdom are blind to mobile CSS.
-test.describe("#204 foolproof login @webkit mobile", () => {
+test.describe("#204 foolproof login @webkit @touch mobile", () => {
   test("main-form view renders and Advanced reveals realname/ident on iPhone", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("cic.installChoice", "browser");

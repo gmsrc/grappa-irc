@@ -601,7 +601,7 @@ test("#1658 — the rows follow the finger and the slot rides above them, at eve
   }
 });
 
-test("@webkit #1658 — WebKit carries the rows AND keeps the slot off them (iPhone 15)", async ({
+test("@webkit @touch #1658 — WebKit carries the rows AND keeps the slot off them (iPhone 15)", async ({
   page,
 }) => {
   test.slow();
@@ -665,7 +665,7 @@ test("@webkit #1658 — WebKit carries the rows AND keeps the slot off them (iPh
   }
 });
 
-test("@webkit #1445 — the directory list refuses its own overscroll and declares its one pan axis (iPhone 15)", async ({
+test("@webkit @touch #1445 — the directory list refuses its own overscroll and declares its one pan axis (iPhone 15)", async ({
   page,
 }) => {
   test.slow();

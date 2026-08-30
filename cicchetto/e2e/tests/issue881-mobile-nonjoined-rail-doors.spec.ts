@@ -67,7 +67,7 @@ test.afterEach(async () => {
   await partChannel(vjt.token, NETWORK_SLUG, GATED_CHANNEL).catch(() => {});
 });
 
-test("@webkit #881 — a non-joined channel window keeps every rail door, and still no members list", async ({
+test("@webkit @touch #881 — a non-joined channel window keeps every rail door, and still no members list", async ({
   page,
 }) => {
   const vjt = specUser();

@@ -60,7 +60,9 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
-test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", async ({ page }) => {
+test("@webkit @touch iOS-Z cluster — viewport + safe-area + close× + font-size", async ({
+  page,
+}) => {
   const vjt = specUser();
   await loginAs(page, vjt);
 

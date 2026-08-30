@@ -116,7 +116,7 @@ test("#984 — a tall query WHOIS card keeps the rail launcher reachable", async
   }
 });
 
-test("@webkit #984 — the query rail scroller carries pan-y, and so does its subtree", async ({
+test("@webkit @touch #984 — the query rail scroller carries pan-y, and so does its subtree", async ({
   page,
 }) => {
   const vjt = specUser();

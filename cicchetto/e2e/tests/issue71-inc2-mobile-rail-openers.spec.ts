@@ -27,7 +27,7 @@ const OPENER_GLYPH = "\u{2630}"; // ☰ — identical glyph in both openers (pal
 test.setTimeout(60_000);
 
 test.describe("#71 INC-2 — mobile rail openers (Opt A)", () => {
-  test("@webkit non-channel (home): ☰ rail opener → drawer → cog opens settings", async ({
+  test("@webkit @touch non-channel (home): ☰ rail opener → drawer → cog opens settings", async ({
     page,
   }) => {
     const vjt = specUser();
@@ -57,7 +57,7 @@ test.describe("#71 INC-2 — mobile rail openers (Opt A)", () => {
     await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
   });
 
-  test("@webkit channel: TopicBar ☰ opens the SAME drawer + cog (ONE drawer, ONE glyph)", async ({
+  test("@webkit @touch channel: TopicBar ☰ opens the SAME drawer + cog (ONE drawer, ONE glyph)", async ({
     page,
   }) => {
     const vjt = specUser();

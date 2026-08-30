@@ -114,7 +114,7 @@ test("desktop: Alt+A / button jumps DM (tier 0) before channel (tier 1), then au
   }
 });
 
-test("@webkit mobile: bottom-bar affordance jumps DM before channel, then auto-hides", async ({
+test("@webkit @touch mobile: bottom-bar affordance jumps DM before channel, then auto-hides", async ({
   page,
 }) => {
   const vjt = specUser();

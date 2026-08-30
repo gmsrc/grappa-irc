@@ -112,7 +112,7 @@ test("desktop: #265 next-active count includes the message (DM) window, excludes
   }
 });
 
-test("@webkit mobile: #265 bottom-bar next-active count excludes the event-only channel", async ({
+test("@webkit @touch mobile: #265 bottom-bar next-active count excludes the event-only channel", async ({
   page,
 }) => {
   const vjt = specUser();

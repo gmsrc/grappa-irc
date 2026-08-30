@@ -46,7 +46,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(90_000);
 
-test("@webkit #985 — a mobile query window spends no band on the ☰, and the float stays legible and reachable", async ({
+test("@webkit @touch #985 — a mobile query window spends no band on the ☰, and the float stays legible and reachable", async ({
   page,
 }) => {
   const vjt = specUser();

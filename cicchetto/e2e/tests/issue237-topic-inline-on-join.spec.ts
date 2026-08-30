@@ -89,7 +89,7 @@ test("#237 — full channel topic prints inline in scrollback on join and on cha
   await topicInlineOnJoinAndChange(page);
 });
 
-test("#237 @webkit — full channel topic prints inline on the mobile viewport too", async ({
+test("#237 @webkit @touch — full channel topic prints inline on the mobile viewport too", async ({
   page,
 }) => {
   await topicInlineOnJoinAndChange(page);

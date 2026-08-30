@@ -4,7 +4,7 @@
 //
 // ## What lies, and why documenting it would not have been enough
 //
-// The suite runs `workers: 1`, `fullyParallel: false`, two projects. Exactly
+// The suite runs `workers: 1`, `fullyParallel: false`, three projects. Exactly
 // one test per worker pays the browser launch; every later test in that
 // worker runs against an already-running browser. So "did this test pay the
 // cold start?" is an INPUT to the test — decided by filename sort order plus

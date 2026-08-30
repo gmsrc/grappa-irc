@@ -96,7 +96,7 @@ async function readDeclaredHeight(
   );
 }
 
-test("@webkit ux-5-bv — .shell-members reads var(--viewport-height) with 100dvh fallback", async ({
+test("@webkit @touch ux-5-bv — .shell-members reads var(--viewport-height) with 100dvh fallback", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -108,7 +108,7 @@ test("@webkit ux-5-bv — .shell-members reads var(--viewport-height) with 100dv
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .settings-drawer reads var(--viewport-height) with 100dvh fallback", async ({
+test("@webkit @touch ux-5-bv — .settings-drawer reads var(--viewport-height) with 100dvh fallback", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -120,7 +120,7 @@ test("@webkit ux-5-bv — .settings-drawer reads var(--viewport-height) with 100
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .archive-modal caps max-height to var(--viewport-height)", async ({
+test("@webkit @touch ux-5-bv — .archive-modal caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -132,7 +132,7 @@ test("@webkit ux-5-bv — .archive-modal caps max-height to var(--viewport-heigh
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .image-upload-modal caps max-height to var(--viewport-height)", async ({
+test("@webkit @touch ux-5-bv — .image-upload-modal caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -144,7 +144,9 @@ test("@webkit ux-5-bv — .image-upload-modal caps max-height to var(--viewport-
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .home-pane caps max-height to var(--viewport-height)", async ({ page }) => {
+test("@webkit @touch ux-5-bv — .home-pane caps max-height to var(--viewport-height)", async ({
+  page,
+}) => {
   const vjt = specUser();
   await loginAs(page, vjt);
 
@@ -154,7 +156,7 @@ test("@webkit ux-5-bv — .home-pane caps max-height to var(--viewport-height)",
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .admin-pane caps max-height to var(--viewport-height)", async ({
+test("@webkit @touch ux-5-bv — .admin-pane caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -166,7 +168,7 @@ test("@webkit ux-5-bv — .admin-pane caps max-height to var(--viewport-height)"
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .admin-tab-panel caps max-height to var(--viewport-height)", async ({
+test("@webkit @touch ux-5-bv — .admin-tab-panel caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -178,7 +180,7 @@ test("@webkit ux-5-bv — .admin-tab-panel caps max-height to var(--viewport-hei
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — mobile members drawer auto-closes when operator taps a member nick", async ({
+test("@webkit @touch ux-5-bv — mobile members drawer auto-closes when operator taps a member nick", async ({
   page,
 }) => {
   const vjt = specUser();

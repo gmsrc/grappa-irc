@@ -215,7 +215,7 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
     await expect(page.locator(".topic-bar")).toContainText(CHANNEL, { timeout: 5_000 });
   });
 
-  test("@webkit mobile — drawer hosts every labelled button; PART → rail archive → grouped modal row", async ({
+  test("@webkit @touch mobile — drawer hosts every labelled button; PART → rail archive → grouped modal row", async ({
     page,
   }) => {
     const vjt = specUser();

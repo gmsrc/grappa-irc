@@ -55,7 +55,7 @@ async function computedTouchAction(page: import("@playwright/test").Page, select
   });
 }
 
-test("@webkit ux-6-a — mobile members pane (the actual scroller) asserts touch-action: pan-y + overscroll-behavior: contain", async ({
+test("@webkit @touch ux-6-a — mobile members pane (the actual scroller) asserts touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -80,7 +80,7 @@ test("@webkit ux-6-a — mobile members pane (the actual scroller) asserts touch
   expect(styles.overscrollBehaviorY).toBe("contain");
 });
 
-test("@webkit ux-6-a — opening members drawer adds html.overlay-open; closing removes it", async ({
+test("@webkit @touch ux-6-a — opening members drawer adds html.overlay-open; closing removes it", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -105,7 +105,7 @@ test("@webkit ux-6-a — opening members drawer adds html.overlay-open; closing 
   await expect.poll(hasOverlayClass).toBe(false);
 });
 
-test("@webkit ux-6-a — html.overlay-open suspends root touch-action so gesture-escalation can't reach installScrollPin", async ({
+test("@webkit @touch ux-6-a — html.overlay-open suspends root touch-action so gesture-escalation can't reach installScrollPin", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -148,7 +148,7 @@ test("@webkit ux-6-a — html.overlay-open suspends root touch-action so gesture
   await page.evaluate(() => document.documentElement.classList.remove("overlay-open"));
 });
 
-test("@webkit ux-6-a v2 — descendants of .members-pane share the scroller's touch-action: pan-y (universal-selector carve-out)", async ({
+test("@webkit @touch ux-6-a v2 — descendants of .members-pane share the scroller's touch-action: pan-y (universal-selector carve-out)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -189,7 +189,7 @@ test("@webkit ux-6-a v2 — descendants of .members-pane share the scroller's to
   expect(ulTouchAction).toBe("pan-y");
 });
 
-test("@webkit ux-6-a v2 — members-pane nick-text renders with no inline color (sigil keeps mode color)", async ({
+test("@webkit @touch ux-6-a v2 — members-pane nick-text renders with no inline color (sigil keeps mode color)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -221,7 +221,7 @@ test("@webkit ux-6-a v2 — members-pane nick-text renders with no inline color 
   expect(inlineColor).toBe("");
 });
 
-test("@webkit ux-6-a v2 — .member-name:hover underline is gated on (hover: hover) — no spurious underline on touch-only viewports", async ({
+test("@webkit @touch ux-6-a v2 — .member-name:hover underline is gated on (hover: hover) — no spurious underline on touch-only viewports", async ({
   page,
 }) => {
   const vjt = specUser();

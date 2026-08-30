@@ -69,7 +69,7 @@ async function hideTheBar(page: Parameters<typeof loginAs>[0]): Promise<void> {
   await closeSettings(page);
 }
 
-test("@webkit mobile: turning the bar off removes it and leaves a working door", async ({
+test("@webkit @touch mobile: turning the bar off removes it and leaves a working door", async ({
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
@@ -112,7 +112,7 @@ test("@webkit mobile: turning the bar off removes it and leaves a working door",
   await expect(page.getByTestId("show-bottom-bar-toggle")).not.toBeChecked();
 });
 
-test("@webkit mobile: the preference is remembered by the ACCOUNT, not the device", async ({
+test("@webkit @touch mobile: the preference is remembered by the ACCOUNT, not the device", async ({
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
@@ -232,7 +232,7 @@ async function inkOf(
   return ink;
 }
 
-test("@webkit mobile: the two doors are a `#` and a ☰ at one ink size, and the left one is off the channel name", async ({
+test("@webkit @touch mobile: the two doors are a `#` and a ☰ at one ink size, and the left one is off the channel name", async ({
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");

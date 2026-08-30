@@ -203,7 +203,7 @@ test("#1250 — a REAL paste is reported once to the guard: one dialog, and the 
 
 // The same measurement on the other shipped engine. The ordering is a browser
 // contract, so one engine's answer is not the answer.
-test("#1250 — a REAL paste is reported once to the guard: one dialog, and the measured order @webkit", async ({
+test("#1250 — a REAL paste is reported once to the guard: one dialog, and the measured order @webkit @touch", async ({
   page,
 }, testInfo) => {
   await realPasteOrderJourney(page, testInfo);

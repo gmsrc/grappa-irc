@@ -43,7 +43,7 @@ const FAKE_VISIBLE_PX = 300;
 // Per-run unique tag so retries / parallel rows in #spec-wN don't collide.
 const MESSAGE_BODY = `issue66 keyboard-overlap @ ${crypto.randomUUID().slice(0, 8)}`;
 
-test("@webkit issue66 — composer + last message stay inside the keyboard-shrunk viewport", async ({
+test("@webkit @touch issue66 — composer + last message stay inside the keyboard-shrunk viewport", async ({
   page,
 }) => {
   const vjt = specUser();

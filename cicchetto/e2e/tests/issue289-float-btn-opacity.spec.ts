@@ -171,7 +171,7 @@ test.afterEach(async () => {
 });
 
 test.describe("#289 — mobile floating buttons are translucent (text shows through)", () => {
-  test("@webkit — next-active + scroll-to-bottom are translucent yet clearly tappable", async ({
+  test("@webkit @touch — next-active + scroll-to-bottom are translucent yet clearly tappable", async ({
     page,
   }) => {
     const vjt = specUser();
@@ -236,7 +236,7 @@ test.describe("#289 — mobile floating buttons are translucent (text shows thro
 // is asserted first — if the project did NOT emulate a hover-less pointer
 // this contract could not witness the fix.
 test.describe("#302 — mobile float buttons don't latch :hover 'selected' after tap", () => {
-  test("@webkit — hover-less pointer keeps next-active + scroll-to-bottom at base (no latch)", async ({
+  test("@webkit @touch — hover-less pointer keeps next-active + scroll-to-bottom at base (no latch)", async ({
     page,
   }) => {
     const vjt = specUser();

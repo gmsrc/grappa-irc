@@ -188,6 +188,15 @@ test.describe("#310 — scroll-to-bottom button persists the read cursor (mobile
   // Declared through the `{ tag }` option rather than in the title, so the
   // title stays greppable exactly as `docs/TESTING.md` and #1543 spell it
   // (`--grep` matches tags too).
+  // 🔴 NO `@touch` — the PREMISE is calibrated to this device's viewport, not
+  // to an engine. `tapButtonPersistsCursorAndHolds` seeds the read cursor 25
+  // rows from the tail so the activation parks ABOVE the fold, and then
+  // asserts that as a precondition. On `chromium-pixel-touch` (412x839) that
+  // poll reads 0 and the test dies on its own premise before reaching the
+  // #310 contract — MEASURED during the issue 1878 retag; on iPhone 15
+  // (393x852) it reads over the 50px threshold, as it has all along. Porting
+  // this wants a seed derived from the pane's height rather than a constant,
+  // which is test code and not a retag.
   test("@webkit tapping the button advances the cursor to the tail and does not snap back", {
     tag: WARM_START_TAG,
   }, async ({ page }) => {

@@ -23,7 +23,7 @@ import { loginAs } from "../fixtures/cicchettoPage";
 import { NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
-test("@webkit UX-6-E — narrow mode renders one network entry; no standalone 'Server' tab", async ({
+test("@webkit @touch UX-6-E — narrow mode renders one network entry; no standalone 'Server' tab", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -50,7 +50,9 @@ test("@webkit UX-6-E — narrow mode renders one network entry; no standalone 'S
   await expect(standaloneServer).toHaveCount(0);
 });
 
-test("@webkit UX-6-E — clicking the network-header focuses the server window", async ({ page }) => {
+test("@webkit @touch UX-6-E — clicking the network-header focuses the server window", async ({
+  page,
+}) => {
   const vjt = specUser();
   await loginAs(page, vjt);
 
@@ -66,7 +68,7 @@ test("@webkit UX-6-E — clicking the network-header focuses the server window",
   await expect(header).toHaveClass(/selected/, { timeout: 5_000 });
 });
 
-test("@webkit UX-6-E — network-header has a disconnect × sibling, mirroring sidebar", async ({
+test("@webkit @touch UX-6-E — network-header has a disconnect × sibling, mirroring sidebar", async ({
   page,
 }) => {
   const vjt = specUser();

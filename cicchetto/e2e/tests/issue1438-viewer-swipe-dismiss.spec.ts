@@ -135,7 +135,7 @@ test("#1438 — mid-drag the modal moves by the finger's travel, centering intac
   expect(after - before).toBeCloseTo(90, 0);
 });
 
-test("@webkit #1438 — the IMAGE viewer container re-opens the pan, and still dismisses (iPhone 15)", async ({
+test("@webkit @touch #1438 — the IMAGE viewer container re-opens the pan, and still dismisses (iPhone 15)", async ({
   page,
 }) => {
   test.slow();

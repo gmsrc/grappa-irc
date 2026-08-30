@@ -77,7 +77,7 @@ function fmt(r: Rect): string {
   return `[x ${r.x.toFixed(0)}, y ${r.y.toFixed(0)}, w ${r.width.toFixed(0)}, h ${r.height.toFixed(0)} → right ${(r.x + r.width).toFixed(0)}, bottom ${(r.y + r.height).toFixed(0)}]`;
 }
 
-test("#278 @webkit — with the keyboard open the next-active circle does not overlap the send button and stays reachable", async ({
+test("#278 @webkit @touch — with the keyboard open the next-active circle does not overlap the send button and stays reachable", async ({
   page,
 }) => {
   const vjt = specUser();

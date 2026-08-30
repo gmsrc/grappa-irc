@@ -87,7 +87,7 @@ async function readDeclaredCssValue(
   );
 }
 
-test("@webkit ux-5-bd — .settings-drawer padding uses 1.5rem env() bottom floor", async ({
+test("@webkit @touch ux-5-bd — .settings-drawer padding uses 1.5rem env() bottom floor", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -105,7 +105,7 @@ test("@webkit ux-5-bd — .settings-drawer padding uses 1.5rem env() bottom floo
   expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
-test("@webkit ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem floor (non-notched)", async ({
+test("@webkit @touch ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem floor (non-notched)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -130,7 +130,7 @@ test("@webkit ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem flo
   expect(paddingBottom).toBeGreaterThanOrEqual(1.5 * rootEm);
 });
 
-test("@webkit ux-5-bd — .archive-modal padding uses 1.5rem env() bottom floor", async ({
+test("@webkit @touch ux-5-bd — .archive-modal padding uses 1.5rem env() bottom floor", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -145,7 +145,7 @@ test("@webkit ux-5-bd — .archive-modal padding uses 1.5rem env() bottom floor"
   expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
-test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor (non-notched)", async ({
+test("@webkit @touch ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor (non-notched)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -172,7 +172,7 @@ test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor
   expect(paddingBottom).toBeGreaterThanOrEqual(1.5 * rootEm);
 });
 
-test("@webkit ux-5-bd — .image-upload-modal padding uses 1.5rem env() bottom floor", async ({
+test("@webkit @touch ux-5-bd — .image-upload-modal padding uses 1.5rem env() bottom floor", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -189,7 +189,7 @@ test("@webkit ux-5-bd — .image-upload-modal padding uses 1.5rem env() bottom f
   expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
-test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor (BM launcher footer trap)", async ({
+test("@webkit @touch ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor (BM launcher footer trap)", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -212,7 +212,7 @@ test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor 
   expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
-test("@webkit ux-5-bd — .shell-members computed padding-bottom >= 1.5rem floor (non-notched)", async ({
+test("@webkit @touch ux-5-bd — .shell-members computed padding-bottom >= 1.5rem floor (non-notched)", async ({
   page,
 }) => {
   const vjt = specUser();

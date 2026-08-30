@@ -171,7 +171,7 @@ async function measure(page: Page): Promise<Measurement> {
   }, WITNESSES);
 }
 
-test("@webkit #1228 — a long conversation name does not push the notifications sub-page off the drawer", async ({
+test("@webkit @touch #1228 — a long conversation name does not push the notifications sub-page off the drawer", async ({
   page,
 }) => {
   const vjt = specUser();

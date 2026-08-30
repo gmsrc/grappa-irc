@@ -112,7 +112,7 @@ test("upload link on a server-advertised host alias opens the in-app viewer re-r
   await aliasModalJourney(page);
 });
 
-test("upload link on a server-advertised host alias opens the in-app viewer re-rooted to the page origin (#324) @webkit", async ({
+test("upload link on a server-advertised host alias opens the in-app viewer re-rooted to the page origin (#324) @webkit @touch", async ({
   page,
 }) => {
   await aliasModalJourney(page);

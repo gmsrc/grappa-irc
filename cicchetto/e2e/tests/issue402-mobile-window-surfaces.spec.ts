@@ -72,7 +72,7 @@ test.afterEach(async () => {
   await partChannel(vjt.token, NETWORK_SLUG, GATED_CHANNEL).catch(() => {});
 });
 
-test("@webkit #402 — a failed-JOIN window with scrollback stays reachable from exactly one mobile surface", async ({
+test("@webkit @touch #402 — a failed-JOIN window with scrollback stays reachable from exactly one mobile surface", async ({
   page,
 }) => {
   const vjt = specUser();

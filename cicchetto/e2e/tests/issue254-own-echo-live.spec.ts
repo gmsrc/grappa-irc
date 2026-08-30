@@ -138,7 +138,7 @@ test("#254 — /msg to a fresh query window subscribes BEFORE the send POST (own
   }
 });
 
-test("@webkit #254 — /msg to a fresh query window subscribes BEFORE the send POST on iOS", async ({
+test("@webkit @touch #254 — /msg to a fresh query window subscribes BEFORE the send POST on iOS", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -241,7 +241,7 @@ test("#254 — own channel message renders live after an iOS-style suspend/resum
   await assertOwnChannelMsgRendersAfterWake(page, `i254c-${crypto.randomUUID().slice(0, 8)}`);
 });
 
-test("@webkit #254 — own channel message renders live after iOS suspend/resume", async ({
+test("@webkit @touch #254 — own channel message renders live after iOS suspend/resume", async ({
   page,
 }) => {
   const vjt = specUser();

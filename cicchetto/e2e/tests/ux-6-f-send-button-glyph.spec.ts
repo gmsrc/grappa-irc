@@ -41,7 +41,7 @@ const MESSAGE_BODY = `ux-6-f-arrow-glyph-${Date.now()}`;
 
 test.setTimeout(60_000);
 
-test("@webkit ux-6-f mobile — send button is accessible by name + visible label is SVG glyph + tap submits", async ({
+test("@webkit @touch ux-6-f mobile — send button is accessible by name + visible label is SVG glyph + tap submits", async ({
   page,
 }) => {
   const vjt = specUser();

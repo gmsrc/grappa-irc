@@ -106,7 +106,7 @@ async function reportCorner(
 
 test.setTimeout(90_000);
 
-test("@webkit #1050 — the /list window drops the floating ☰, and its ✕ actually closes the directory", async ({
+test("@webkit @touch #1050 — the /list window drops the floating ☰, and its ✕ actually closes the directory", async ({
   page,
 }, testInfo) => {
   const vjt = specUser();

@@ -67,7 +67,7 @@ const TARGET_LINE = "327 far-off-screen unread line";
 // per-run-unique).
 let peerSeq = 0;
 
-test("#327 @webkit — tapping next-active scrolls a far-off-screen unread tab fully into the bottom bar", async ({
+test("#327 @webkit @touch — tapping next-active scrolls a far-off-screen unread tab fully into the bottom bar", async ({
   page,
 }) => {
   const vjt = specUser();

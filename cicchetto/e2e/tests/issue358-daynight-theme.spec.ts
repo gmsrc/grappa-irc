@@ -39,7 +39,7 @@ async function openThemesSubPage(page: import("@playwright/test").Page): Promise
 }
 
 test.describe("#358 — day/night theme pairing", () => {
-  test("@webkit the gallery layer swaps with the OS color scheme (server-owned pair)", async ({
+  test("@webkit @touch the gallery layer swaps with the OS color scheme (server-owned pair)", async ({
     page,
   }) => {
     const vjt = specUser();

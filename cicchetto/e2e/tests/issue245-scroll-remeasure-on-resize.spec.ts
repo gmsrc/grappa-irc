@@ -86,7 +86,7 @@ async function setVisualViewportHeight(page: Page, px: number): Promise<void> {
     .toBe(`${px}px`);
 }
 
-test("@webkit #245 — .scrollback re-measures overflow (touch-action) on visualViewport resize", async ({
+test("@webkit @touch #245 — .scrollback re-measures overflow (touch-action) on visualViewport resize", async ({
   page,
 }) => {
   const admin = getSeededAdmin();

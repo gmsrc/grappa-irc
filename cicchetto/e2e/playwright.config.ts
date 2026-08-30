@@ -2,8 +2,35 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Grappa e2e Playwright config.
 //
-// Default browser project: chromium. iOS-shaped specs (M3, M6, BUG7)
-// opt in to webkit + iPhone 15 device via the @webkit tag.
+// TAG VOCABULARY — ONE TAG IS ONE PROJECT OPT-IN (issue 1878):
+//
+//     @webkit  -> also runs on `webkit-iphone-15`
+//     @touch   -> also runs on `chromium-pixel-touch`
+//     both     -> runs on BOTH
+//     neither  -> runs on `chromium`, the desktop default
+//
+// The two tags are ORTHOGONAL, not a partition. A mobile behaviour that has
+// to hold on two engines carries BOTH, which is what issue 1878 did to the
+// mobile suite: every `@webkit` entry that is not iOS-bound gained `@touch`
+// alongside it rather than in place of it. Read a tag as "which project",
+// never as "which platform the behaviour is about" — a spec keeps its
+// `@webkit` when it gains `@touch`, so `--grep @webkit` still collects
+// exactly what it collected before, and the eight iOS-bound entries that
+// hold `@webkit` alone (six assert `html.is-ios` is PRESENT and read the
+// cascade hanging off it, two ride `navigator.standalone`) are the only
+// ones the widening skipped. Their Android twins are separate test code,
+// not a retag.
+//
+// 🔴 Why ORTHOGONAL and not "@touch means mobile, on both projects", which
+// is what issue 1878 proposed: `@touch` already existed, meaning
+// chromium-only, and two specs rely on that. Widening
+// `webkit-iphone-15` to `grep: /@webkit|@touch/` would drag
+// `issue1869-android-longpress-selection.spec.ts` onto WebKit, where its
+// `expect(standing?.isIos).toBe(false)` is false by construction — a RED,
+// not a vacuous green — and would drag `issue1831-tap-send-modal-survives`
+// onto the one engine its own header forbids in capitals, having measured
+// that the pre-cure code passes there. Orthogonal tags need no such
+// exception, and cost no config change at all.
 //
 // Base URL is wired via E2E_BASE_URL — set on the playwright-runner
 // container in cicchetto/e2e/compose.yaml. Local-host runs need to
@@ -68,10 +95,15 @@ export default defineConfig({
           args: ["--ignore-certificate-errors"],
         },
       },
-      // Mirror of webkit-iphone-15's grep — only specs WITHOUT
-      // `@webkit` run on the desktop project. Without this gate,
-      // `@webkit`-tagged specs (BUG7 + variants) attempt `tap()` on a
-      // non-touch context and throw "The page does not support tap".
+      // The complement of the two touch projects' greps: a spec that has
+      // opted into either of them does NOT also run here. Without this
+      // gate a touch-tagged spec attempts `tap()` on a non-touch context
+      // and throws "The page does not support tap".
+      //
+      // It must name EVERY touch project's tag, so a fourth project means
+      // an edit here as well — that coupling is the price of the desktop
+      // project being defined by subtraction, and it is deliberate: the
+      // alternative is tagging ~650 desktop entries.
       grepInvert: /@webkit|@touch/,
     },
     {
@@ -87,8 +119,28 @@ export default defineConfig({
       // Also the closer engine family to the reported device (Android), though
       // that device runs Gecko and this is Blink — see the spec header.
       //
-      // `grep: /@touch/` keeps it to the specs that need it; without that it
-      // would re-run the whole suite on a third project.
+      // `grep: /@touch/` collects the MOBILE suite, never the whole suite.
+      // Issue 1878 widened what that means — from the handful of specs that
+      // needed a synthesised click to every mobile entry that is not
+      // iOS-bound — because a mobile spec running on one engine says "you
+      // did not break Safari", not "the mobile UI works". #1869 (a long-press
+      // opening two menus on Android) is the shape of bug the old partition
+      // left uncovered: the behaviour was gated on `html.is-ios`, which
+      // simply is not there off Safari.
+      //
+      // The device stays `Pixel 7` rather than the `Pixel 5` issue 1878
+      // names. Both are chromium with `isMobile` + `hasTouch`; churning it
+      // would re-measure every geometry assertion to buy nothing.
+      //
+      // 🔴 WHAT THIS PROJECT IS NOT, now that it carries the mobile suite and
+      // the overclaim gets cheap: a Pixel device descriptor is CHROMIUM with
+      // `isMobile` + `hasTouch`. It is not an Android WebView, and it is not
+      // Firefox Android. It covers the #1869 family — behaviour gated on
+      // `html.is-ios`, which silently vanishes off Safari. It would NOT have
+      // caught #717, where Firefox Android hung on the splash of an installed
+      // PWA, because Playwright's firefox has no touch emulation and Gecko is
+      // not reachable from this harness at all. "Runs on chromium-mobile" is
+      // the claim; "Android coverage" is not.
       name: "chromium-pixel-touch",
       use: {
         ...devices["Pixel 7"],

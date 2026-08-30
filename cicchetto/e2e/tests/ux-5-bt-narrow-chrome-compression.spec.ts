@@ -121,7 +121,7 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   expect(headerBtnJustify).toBe("flex-start");
 });
 
-test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 moved chrome buttons into the RailActions drawer)", async ({
+test("@webkit @touch ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 moved chrome buttons into the RailActions drawer)", async ({
   page,
 }) => {
   const vjt = specUser();

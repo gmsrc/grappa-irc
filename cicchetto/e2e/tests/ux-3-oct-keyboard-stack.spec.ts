@@ -33,7 +33,7 @@
 import { loginAs } from "../fixtures/cicchettoPage";
 import { expect, specUser, test } from "../fixtures/test";
 
-test("@webkit UX-3 OCT — viewport meta carries interactive-widget=resizes-content", async ({
+test("@webkit @touch UX-3 OCT — viewport meta carries interactive-widget=resizes-content", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -50,7 +50,7 @@ test("@webkit UX-3 OCT — viewport meta carries interactive-widget=resizes-cont
   expect(viewportContent).toContain("viewport-fit=cover");
 });
 
-test("@webkit UX-3 OCT — installViewportHeightTracker writes --viewport-height on <html>", async ({
+test("@webkit @touch UX-3 OCT — installViewportHeightTracker writes --viewport-height on <html>", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -76,7 +76,7 @@ test("@webkit UX-3 OCT — installViewportHeightTracker writes --viewport-height
   expect(Math.abs(px - vpHeight)).toBeLessThan(1);
 });
 
-test("@webkit UX-3 OCT — installScrollPin snaps window back to (0, 0) on programmatic scroll", async ({
+test("@webkit @touch UX-3 OCT — installScrollPin snaps window back to (0, 0) on programmatic scroll", async ({
   page,
 }) => {
   const vjt = specUser();
@@ -112,7 +112,7 @@ test("@webkit UX-3 OCT — installScrollPin snaps window back to (0, 0) on progr
   });
 });
 
-test("@webkit UX-3 OCT — .shell-mobile reads var(--viewport-height) with 100dvh fallback", async ({
+test("@webkit @touch UX-3 OCT — .shell-mobile reads var(--viewport-height) with 100dvh fallback", async ({
   page,
 }) => {
   const vjt = specUser();

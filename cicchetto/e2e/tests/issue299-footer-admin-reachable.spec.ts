@@ -57,7 +57,7 @@ test.describe("#299 — admin reachable from the rail actions drawer", () => {
     await setAdminFlag(getSeededAdmin().token, vjtUserId, false);
   });
 
-  test("@webkit rail holds themes launcher; admin still present, ≥44px, and tappable", async ({
+  test("@webkit @touch rail holds themes launcher; admin still present, ≥44px, and tappable", async ({
     page,
   }) => {
     await setAdminFlag(getSeededAdmin().token, vjtUserId, true);
@@ -103,7 +103,7 @@ test.describe("#299 — admin reachable from the rail actions drawer", () => {
     await expect(page.getByTestId("admin-pane")).toBeVisible({ timeout: 5_000 });
   });
 
-  test("@webkit themes still reachable via the cog → themes nav row", async ({ page }) => {
+  test("@webkit @touch themes still reachable via the cog → themes nav row", async ({ page }) => {
     // Themes is not admin-gated — base vjt reaches it. Proves the rail's cog →
     // themes nav row reaches the themes sub-page (no launcher stranded it).
     await loginAs(page, specUser());

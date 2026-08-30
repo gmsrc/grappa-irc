@@ -51,7 +51,7 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
-test("@webkit UX-2 — rail archive opens the grouped modal + delete drops entry", async ({
+test("@webkit @touch UX-2 — rail archive opens the grouped modal + delete drops entry", async ({
   page,
 }) => {
   const vjt = specUser();

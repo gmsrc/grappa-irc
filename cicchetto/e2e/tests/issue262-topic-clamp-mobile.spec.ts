@@ -47,7 +47,7 @@ async function boundingHeight(locator: import("@playwright/test").Locator): Prom
   return box.height;
 }
 
-test("#262/#307 @webkit — a long topic clamps to 2 lines with a native ellipsis (not a bare max-height clip)", async ({
+test("#262/#307 @webkit @touch — a long topic clamps to 2 lines with a native ellipsis (not a bare max-height clip)", async ({
   page,
 }) => {
   const vjt = specUser();

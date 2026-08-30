@@ -73,7 +73,7 @@ async function boxOf(locator: Locator, what: string): Promise<Box> {
 
 test.setTimeout(120_000);
 
-test("@webkit #1039 — the ☰ occupies the same rectangle on a channel and on a query window", async ({
+test("@webkit @touch #1039 — the ☰ occupies the same rectangle on a channel and on a query window", async ({
   page,
 }) => {
   const vjt = specUser();

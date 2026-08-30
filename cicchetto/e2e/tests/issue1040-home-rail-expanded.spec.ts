@@ -129,7 +129,9 @@ test("#1040 — a channel window keeps #500's collapsed launcher, floating above
 // containment assert would be measuring the slide as much as the layout. The
 // flow-vs-popover shape is pinned on the desktop test above; what is
 // form-factor-specific is that the drawer opens straight onto the actions.
-test("@webkit #1040 — the mobile rail drawer opens straight onto the actions", async ({ page }) => {
+test("@webkit @touch #1040 — the mobile rail drawer opens straight onto the actions", async ({
+  page,
+}) => {
   const vjt = specUser();
   await loginAs(page, vjt);
   await expect(page.locator(".home-pane")).toBeVisible({ timeout: 15_000 });
