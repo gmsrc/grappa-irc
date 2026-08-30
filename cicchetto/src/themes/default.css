@@ -669,112 +669,193 @@ select:dir(rtl) {
 html.is-ios {
   position: fixed;
   inset: 0;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-}
-
-/* Dispatch-1 (2026-06-11) — selective re-enable of text selection.
-   THE selectable-text policy point: the blanket kill above is
-   Telegram Web K's pattern, and Telegram pairs it with re-enables on
-   every surface users copy from. New copyable surface → add its
-   selector HERE and to keepKeyboard.ts's SELECTABLE_TEXT_SURFACES
-   allowlist (#79, 2026-07-03 + 2026-07-04 rework): on these same
-   surfaces keepKeyboard DURATION-GATES its mousedown preventDefault —
-   a short tap is left un-prevented (keyboard dismisses) but a
-   long-press IS prevented (keyboard stays up so the iOS selection
-   survives). This `user-select: text` re-enable is the load-bearing
-   half — without it there is nothing to select. CSS and TS can't share
-   a constant, so the two lists MUST stay in sync — a surface added
-   here but not there stays unselectable while compose is focused.
-   Currently: scrollback message text
-   (channels, queries, server window all render through .scrollback),
-   the topic modal's full-topic text, and editable fields (WebKit
-   honors inherited user-select:none inside inputs in some version
-   ranges). Deliberately NOT selectable: mentions rows (navigation
-   buttons — the target message is selectable in its channel),
-   topic-bar text (clickable, opens the modal), all other chrome.
-   Full arc: docs/DESIGN_NOTES.md 2026-06-11. */
-html.is-ios .scrollback,
-html.is-ios .topic-modal-text,
-html.is-ios input,
-html.is-ios textarea {
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* #1067 — the OTHER half of `html.is-ios`'s blanket kill above:
-   `-webkit-touch-callout: none`. That property is inherited, so it lands on
-   the scrollback too, and a range installed under a suppressed callout has no
-   draggable endpoints — the second symptom #1067 diagnoses ("once text is
-   selected the endpoints cannot be moved"). #366 never re-enabled it, which is
-   why its programmatic select-all produced a selection nobody could adjust.
-
-   The re-enable is scoped in TIME, not in space: `lib/messageMenu`'s Select…
-   puts `is-selecting` on <html> while a selection is live and removes it on the
-   first `selectionchange` that finds the selection gone. Scoping it to
-   `.scrollback` permanently would put iOS's own long-press callout back on
-   every message row, where it would race the long-press menu that replaced the
-   select-all — two menus for one gesture.
-
-   NOT device-verified: the callout ⇄ grab-handle link is read from the platform
-   contract and from the code, and neither jsdom nor Playwright webkit
-   reproduces iOS selection UI. #1067 declares its own diagnosis the same way. */
-html.is-ios.is-selecting .scrollback {
-  -webkit-touch-callout: default;
-}
-
-/* #508 — <select> tap-to-open on iOS. `html.is-ios` sets
-   `-webkit-user-select: none` (the blanket kill above) and user-select
-   INHERITS, so it lands on every <select>. WebKit then refuses to open the
-   native picker on a DIRECT tap of a user-select:none form control — the
-   same "WebKit honors
-   inherited user-select:none inside controls" quirk the input/textarea
-   re-enable above works around. A tap on the associated `<label for=…>`
-   still forwards activation programmatically, which is exactly why only the
-   label opened the picker and the control itself looked dead. Re-enable it.
-   The value MUST be explicit: `user-select: auto` on a control re-inherits
-   the parent's `none` (per CSS-UI), so `text` — matching the input/textarea
-   re-enable — is the value that actually overrides it. */
-html.is-ios select {
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* The [Join] invite CTA is a button inside .scrollback — re-exclude
-   it so long-press doesn't pop the selection magnifier over a control. */
-html.is-ios .scrollback-invite-join {
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* #589 — admin pane content selectable on iOS. The blanket `html.is-ios`
-   user-select:none above kills selection on every admin table — exactly the
-   surfaces (IPs, session/visitor ids, vhosts, UA strings, error text) an
-   operator needs to copy off the device. `.admin-tab-panel` is the single
-   wrapper around every tab's content (AdminPane.tsx), so ONE selector
-   re-enables all ten tabs. Mirrors the .scrollback re-enable above; NOT
-   mirrored into keepKeyboard.ts's SELECTABLE_TEXT_SURFACES — that list is
-   compose-focus KEYBOARD policy, and the AdminPane <Match> arm UNMOUNTS
-   ComposeBox (Shell.tsx <Switch>), so no text input holds focus behind the
-   pane (handleMouseDown bails on document.activeElement). iOS native
-   long-press selection here is pure CSS. See DESIGN_NOTES 2026-08-01. */
-html.is-ios .admin-tab-panel {
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* Re-exclude controls inside the panel — a long-press on a refresh/action
-   button must not pop the selection magnifier over a control (same carve-out
-   as .scrollback-invite-join). Buttons only: <input>/<select> stay selectable
-   via the global input/select re-enables above, and anchors keep their URL
-   text copyable (the .scrollback-link reasoning in keepKeyboard.ts). */
-html.is-ios .admin-tab-panel button {
-  -webkit-user-select: none;
-  user-select: none;
 }
 
 html.is-ios body {
   height: calc(var(--vh, 1vh) * 100);
+}
+
+/* #1869 — the selection/callout policy below is TOUCH behaviour, and it used
+   to sit under `html.is-ios` alongside the layout pin above. That is what left
+   Android showing TWO menus for one long-press: Chrome's own selection toolbar
+   over a native selection of the row, plus cic's message menu behind it,
+   because on a platform that never gets `is-ios` nothing suppressed the
+   platform's own callout. Only the `position: fixed` / `--vh` pair above is
+   genuinely iOS-only — iOS is the one platform whose layout viewport ignores
+   the keyboard.
+
+   The gate is `@media (pointer: coarse)` and not a second boot class: it keys
+   on the actual pointing device rather than a UA sniff, so a mouse keeps its
+   drag-select while every touch platform gets the suppression. iOS reports
+   `pointer: coarse`, so everything #79 / #250 / #508 / #589 / #1067
+   established there is preserved — these are the same rules re-parented, not
+   new ones.
+
+   ATOMIC, and this is the half that bites: the blanket kill and EVERY
+   re-enable beneath it ship together. Widening the kill without its re-enables
+   regresses each of those issues on Android instead of iOS. Order is
+   load-bearing too — the re-excludes (`.scrollback-invite-join`,
+   `.admin-tab-panel button`) carve out of the re-enables above them at equal
+   specificity, so they must stay AFTER them.
+
+   Specificity dropped by one class when `html.is-ios X` became `html X`.
+   Checked, not assumed: no (0,1,x) rule sets `user-select` on `.scrollback`,
+   `input`, `textarea`, `select` or `.admin-tab-panel`. The two that come
+   close, `.nick-clickable` / `.channel-clickable` (#250), set `text` — the
+   same value the `.scrollback` re-enable gives them — and do not appear
+   inside an admin pane. */
+@media (pointer: coarse) {
+  html {
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Dispatch-1 (2026-06-11) — selective re-enable of text selection.
+     THE selectable-text policy point: the blanket kill above is
+     Telegram Web K's pattern, and Telegram pairs it with re-enables on
+     every surface users copy from. New copyable surface → add its
+     selector HERE and to keepKeyboard.ts's SELECTABLE_TEXT_SURFACES
+     allowlist (#79, 2026-07-03 + 2026-07-04 rework): on these same
+     surfaces keepKeyboard DURATION-GATES its mousedown preventDefault —
+     a short tap is left un-prevented (keyboard dismisses) but a
+     long-press IS prevented (keyboard stays up so the iOS selection
+     survives). This `user-select: text` re-enable is the load-bearing
+     half — without it there is nothing to select. CSS and TS can't share
+     a constant, so the two lists MUST stay in sync — a surface added
+     here but not there stays unselectable while compose is focused.
+     (keepKeyboard's own handler stays iOS-gated — its job is the iOS
+     keyboard, not selection; see #1869 in that file.)
+     Currently: the topic modal's full-topic text, and editable fields (WebKit
+     honors inherited user-select:none inside inputs in some version
+     ranges). Scrollback message text left this list in #1869 — it is
+     latch-scoped now, see the rule below. Deliberately NOT selectable:
+     mentions rows (navigation buttons — the target message is selectable in
+     its channel), topic-bar text (clickable, opens the modal), all other
+     chrome.
+     Full arc: docs/DESIGN_NOTES.md 2026-06-11. */
+  html .topic-modal-text,
+  html input,
+  html textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* #1869 — `.scrollback` is NOT in the list above. It is the one copyable
+     surface whose selection is scoped in TIME instead, and the reason is that
+     the iOS mechanism does not port: `-webkit-touch-callout` is WebKit-only
+     (`CSS.supports("-webkit-touch-callout", "none")` is FALSE in Blink,
+     measured on Chrome 151). On iOS `callout: none` + `user-select: text`
+     means "no native long-press UI, still selectable for Select…". Blink has
+     only the second half — and there `user-select: text` IS the native
+     long-press selection, which is the two-menu frame #1869 reports.
+
+     So on a coarse pointer the row defaults to NOT selectable and the
+     `is-selecting` latch below lifts it, exactly as that latch already lifts
+     the callout. Same design, one more property.
+
+     The two #250 tokens are named explicitly because they match their elements
+     DIRECTLY and so beat the inherited value — without them a long-press on a
+     nick still raises the platform's toolbar. See the latch for what this does
+     to #250's guarantee. */
+  html .scrollback,
+  html .scrollback .nick-clickable,
+  html .scrollback .channel-clickable {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* #1067 — the OTHER half of the blanket kill above:
+     `-webkit-touch-callout: none`. That property is inherited, so it lands on
+     the scrollback too, and a range installed under a suppressed callout has no
+     draggable endpoints — the second symptom #1067 diagnoses ("once text is
+     selected the endpoints cannot be moved"). #366 never re-enabled it, which is
+     why its programmatic select-all produced a selection nobody could adjust.
+
+     The re-enable is scoped in TIME, not in space: `lib/messageMenu`'s Select…
+     puts `is-selecting` on <html> while a selection is live and removes it on the
+     first `selectionchange` that finds the selection gone. Scoping it to
+     `.scrollback` permanently would put the platform's own long-press callout
+     back on every message row, where it would race the long-press menu that
+     replaced the select-all — two menus for one gesture. #1869 is that exact
+     state, arrived at from the other direction: on Android the kill never
+     applied at all, so the callout was never suppressed to begin with.
+
+     #1869 added `user-select: text` to the same latch, for Blink, where the
+     callout property does nothing. It is load-bearing and not belt-and-braces:
+     Blink omits `user-select: none` subtrees from a selection's TEXT, so
+     without it Select… installs a range whose `toString()` is the nick alone
+     (measured: `"<peluche>"` vs `"14:04:12 <peluche> prot"`).
+
+     WHAT THIS COSTS #250, deliberately. #250 gave the nick/channel tokens their
+     own `user-select: text` so they would ride INSIDE an Android native
+     drag-selection, written when Android had no scrollback re-enable at all.
+     There is no native drag-selection on the scrollback any more, so that
+     guarantee is now delivered by a different route: Select… takes the whole
+     row (`selectNodeContents`), so the tokens are included by construction, and
+     they are re-enabled under this latch so the selection's text carries them.
+     Desktop is untouched — it reports `pointer: fine` and never enters the
+     gate, which is where #250's mouse-drag case lives.
+
+     NOT device-verified on iOS: the callout ⇄ grab-handle link is read from the
+     platform contract and from the code, and neither jsdom nor Playwright webkit
+     reproduces iOS selection UI. #1067 declares its own diagnosis the same way.
+     The Blink half IS device-verified (Android 17 emulator, Chrome 151). */
+  html.is-selecting .scrollback,
+  html.is-selecting .scrollback .nick-clickable,
+  html.is-selecting .scrollback .channel-clickable {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* #508 — <select> tap-to-open on iOS. The blanket kill above sets
+     `-webkit-user-select: none` and user-select INHERITS, so it lands on
+     every <select>. WebKit then refuses to open the native picker on a
+     DIRECT tap of a user-select:none form control — the same "WebKit honors
+     inherited user-select:none inside controls" quirk the input/textarea
+     re-enable above works around. A tap on the associated `<label for=…>`
+     still forwards activation programmatically, which is exactly why only the
+     label opened the picker and the control itself looked dead. Re-enable it.
+     The value MUST be explicit: `user-select: auto` on a control re-inherits
+     the parent's `none` (per CSS-UI), so `text` — matching the input/textarea
+     re-enable — is the value that actually overrides it. */
+  html select {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* The [Join] invite CTA is a button inside .scrollback — re-exclude
+     it so long-press doesn't pop the selection magnifier over a control. */
+  html .scrollback-invite-join {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* #589 — admin pane content selectable on touch. The blanket
+     user-select:none above kills selection on every admin table — exactly the
+     surfaces (IPs, session/visitor ids, vhosts, UA strings, error text) an
+     operator needs to copy off the device. `.admin-tab-panel` is the single
+     wrapper around every tab's content (AdminPane.tsx), so ONE selector
+     re-enables all ten tabs. Mirrors the .scrollback re-enable above; NOT
+     mirrored into keepKeyboard.ts's SELECTABLE_TEXT_SURFACES — that list is
+     compose-focus KEYBOARD policy, and the AdminPane <Match> arm UNMOUNTS
+     ComposeBox (Shell.tsx <Switch>), so no text input holds focus behind the
+     pane (handleMouseDown bails on document.activeElement). Native
+     long-press selection here is pure CSS. See DESIGN_NOTES 2026-08-01. */
+  html .admin-tab-panel {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* Re-exclude controls inside the panel — a long-press on a refresh/action
+     button must not pop the selection magnifier over a control (same carve-out
+     as .scrollback-invite-join). Buttons only: <input>/<select> stay selectable
+     via the global input/select re-enables above, and anchors keep their URL
+     text copyable (the .scrollback-link reasoning in keepKeyboard.ts). */
+  html .admin-tab-panel button {
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 /* UX-6 bucket A (2026-05-20) — overlay scroll-lock sentinel. The class
@@ -3780,7 +3861,12 @@ button.topic-bar-windows-opener {
      This CSS `user-select: text` is deliberately kept INDEPENDENT of that
      (keyboard policy ≠ selection policy — #250 must stay text-selectable).
      Range/Playwright cannot prove the Android behavior (see issue250 spec
-     header); device-verified post-ship. */
+     header); device-verified post-ship.
+     #1869 SUPERSEDES the touch half of this: on a coarse pointer the scrollback
+     no longer offers a native drag-selection for the token to ride inside, so
+     the token is set back to `none` there and re-enabled under `is-selecting`
+     with the rest of the row. This declaration still owns the DESKTOP case
+     (`pointer: fine`), which is untouched. */
   -webkit-user-select: text;
   user-select: text;
 }

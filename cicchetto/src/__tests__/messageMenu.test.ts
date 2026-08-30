@@ -134,7 +134,7 @@ describe("selectMessageText", () => {
     expect(ranges[0]?.commonAncestorContainer).toBe(row);
   });
 
-  // THE point of the item. `html.is-ios` kills `-webkit-touch-callout`, and a
+  // THE point of the item. The touch blanket kills `-webkit-touch-callout`, and a
   // range installed under a suppressed callout has no draggable endpoints —
   // the second reported symptom. Select… lifts the kill, scoped in TIME.
   it("arms the callout re-enable while a selection is live", () => {

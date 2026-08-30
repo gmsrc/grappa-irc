@@ -284,8 +284,8 @@ describe("bindMessageGestures — long press = message menu", () => {
   });
 });
 
-// issue 1857 — `Select…` lifts `html.is-ios`'s blanket `-webkit-touch-callout:
-// none` over the whole `.scrollback` and takes it back on the first
+// issue 1857 — `Select…` lifts the touch blanket `-webkit-touch-callout:
+// none` (`@media (pointer: coarse)` since #1869) over the whole `.scrollback` and takes it back on the first
 // `selectionchange` that finds the selection gone. That event is QUEUED as a
 // task, so on the touch that ends the selection it lands AFTER touch-down —
 // and touch-down is when WebKit reads the property to decide whether to run

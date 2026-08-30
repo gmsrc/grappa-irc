@@ -1,0 +1,152 @@
+import { describe, expect, it } from "vitest";
+import { coarsePointerBlocks, themeCss } from "./helpers/themeCss";
+
+// #1869 — the selection/callout policy is TOUCH behaviour, not iOS behaviour.
+//
+// It used to sit under `html.is-ios`, a class `lib/platform.ts` adds only when
+// `isIos()`, so Android got NONE of it: nothing suppressed Chrome's own
+// long-press callout, and one press on a message row opened TWO menus — the
+// platform's selection toolbar over a native selection of the row, plus cic's
+// message menu behind it. Device-verified on an Android 17 emulator, Chrome
+// 151: `window.getSelection()` came back non-collapsed with the pressed word
+// while cic's menu reported open in the same frame.
+//
+// WHY A SOURCE-LEVEL TEST AND NOT A BEHAVIOURAL ONE — the same limit
+// `hoverGate.test.ts` documents, and the one #1869 itself declares. jsdom
+// applies no stylesheet, and no Playwright project here renders a platform's
+// native selection UI: `page.emulateMedia()` has no `pointer` key, so nothing
+// in CI can put this query into either branch on purpose. What IS
+// deterministic is what the cascade is ASKED to do. These read that; a real
+// device is the only witness for what an engine paints.
+//
+// THE DRIFT THIS GUARDS. The kill and its re-enables are one atomic set: #79
+// (scrollback + topic text), #1067 (the `is-selecting` callout latch), #508
+// (<select> pickers), #589 (admin panes), plus the two re-excludes that carve
+// out of them. Widening the kill while leaving a re-enable behind does not
+// fail loudly — it silently makes that surface uncopyable on every touch
+// device. So the assertion is a SET comparison, not a spot-check.
+
+// Every selector the touch policy owns, with the declaration that proves it is
+// the policy rule and not something else that happens to share the selector.
+const POLICY = [
+  { selector: "html", declares: /-webkit-user-select:\s*none/ },
+  { selector: "html .topic-modal-text", declares: /user-select:\s*text/ },
+  { selector: "html input", declares: /user-select:\s*text/ },
+  { selector: "html textarea", declares: /user-select:\s*text/ },
+  // #1869 — the row and BOTH #250 tokens default to unselectable on touch.
+  { selector: "html .scrollback", declares: /user-select:\s*none/ },
+  { selector: "html .scrollback .nick-clickable", declares: /user-select:\s*none/ },
+  { selector: "html .scrollback .channel-clickable", declares: /user-select:\s*none/ },
+  // …and the latch lifts all three, callout AND user-select.
+  { selector: "html.is-selecting .scrollback", declares: /-webkit-touch-callout:\s*default/ },
+  { selector: "html.is-selecting .scrollback", declares: /user-select:\s*text/ },
+  { selector: "html.is-selecting .scrollback .nick-clickable", declares: /user-select:\s*text/ },
+  {
+    selector: "html.is-selecting .scrollback .channel-clickable",
+    declares: /user-select:\s*text/,
+  },
+  { selector: "html select", declares: /user-select:\s*text/ },
+  { selector: "html .scrollback-invite-join", declares: /user-select:\s*none/ },
+  { selector: "html .admin-tab-panel", declares: /user-select:\s*text/ },
+  { selector: "html .admin-tab-panel button", declares: /user-select:\s*none/ },
+] as const;
+
+const coarse = () => coarsePointerBlocks().join("\n");
+
+// Rules inside the gate, as `{ selectors, body }`. Innermost blocks only, the
+// same shape `allRules` returns — the `[^{}]` classes cannot span a brace.
+function coarseRules(): { selectors: string; body: string }[] {
+  const out: { selectors: string; body: string }[] = [];
+  for (const match of coarse().matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    out.push({ selectors: (match[1] ?? "").trim(), body: match[2] ?? "" });
+  }
+  return out;
+}
+
+// Whether `selector` appears in some rule inside the gate whose body matches
+// `declares`. Selector lists are split, because these rules group: the
+// scrollback / topic / input / textarea re-enable is ONE rule over four
+// selectors and each of them must count.
+function gatedDeclares(selector: string, declares: RegExp): boolean {
+  return coarseRules().some(
+    (rule) =>
+      rule.selectors
+        .split(",")
+        .map((one) => one.trim().replace(/\s+/g, " "))
+        .includes(selector) && declares.test(rule.body),
+  );
+}
+
+const stripped = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
+
+describe("#1869 — the touch selection policy is gated on pointer, not on iOS", () => {
+  // THE CONTROL, first: every assertion below passes just as well against a
+  // sheet that deleted the policy outright. Deleting the suppression and
+  // re-parenting it are different changes, and only one of them was asked for.
+  it("still declares every rule of the policy", () => {
+    for (const { selector, declares } of POLICY) {
+      expect(
+        gatedDeclares(selector, declares),
+        `${selector} declaring ${declares} inside @media (pointer: coarse)`,
+      ).toBe(true);
+    }
+  });
+
+  // THE DISCRIMINATOR — the whole set moved, not the kill alone. A kill that
+  // widened to Android while a re-enable stayed on `html.is-ios` would leave
+  // that surface uncopyable on Android, which is #79 / #508 / #589 regressing
+  // sideways rather than #1869 being fixed.
+  it("leaves no user-select or touch-callout rule behind on html.is-ios", () => {
+    const stranded = stripped
+      .split(/(?=^html\.is-ios)/m)
+      .filter((chunk) => /^html\.is-ios[^{}]*\{[^{}]*(?:user-select|touch-callout)/.test(chunk))
+      .map((chunk) => chunk.slice(0, chunk.indexOf("{")).trim());
+
+    expect(stranded, "html.is-ios rules still declaring selection policy").toEqual([]);
+  });
+
+  // `html.is-ios` keeps the half that IS iOS-only. Asserted so the split is
+  // read as a split: pushing the layout pin under `pointer: coarse` too would
+  // put `position: fixed` on Android, where the layout viewport already reacts
+  // to the keyboard — the double-shrink UX-6-D spent 8 iterations on.
+  it("keeps the layout-viewport pin on html.is-ios", () => {
+    expect(stripped).toMatch(/^html\.is-ios\s*\{[^}]*position:\s*fixed/m);
+    expect(stripped).toMatch(/^html\.is-ios body\s*\{[^}]*height:\s*calc\(var\(--vh/m);
+  });
+
+  // The gate must not have swallowed the layout pin from the other direction
+  // either — an `is-ios` rule INSIDE `(pointer: coarse)` would be dead on a
+  // desktop browser reporting `pointer: fine`, which iPadOS-with-trackpad does.
+  it("declares no layout pin inside the pointer gate", () => {
+    expect(coarse()).not.toMatch(/position:\s*fixed/);
+  });
+
+  // THE #1869 defect itself, stated as a rule. `-webkit-touch-callout` is
+  // WebKit-only, so on Blink an unlatched `user-select: text` on the row IS the
+  // native long-press selection — the two-menu frame. Any rule that grants the
+  // scrollback selectability on a coarse pointer must be latched behind
+  // `is-selecting`; an unlatched one puts the bug straight back.
+  it("grants the scrollback no unlatched selectability on a coarse pointer", () => {
+    const unlatched = coarseRules().filter(
+      (rule) =>
+        /user-select:\s*text/.test(rule.body) &&
+        rule.selectors.split(",").some((one) => {
+          const sel = one.trim().replace(/\s+/g, " ");
+          return sel.includes(".scrollback") && !sel.includes(".is-selecting");
+        }),
+    );
+
+    expect(
+      unlatched.map((r) => r.selectors),
+      "scrollback rules granting user-select: text outside the is-selecting latch",
+    ).toEqual([]);
+  });
+
+  // Desktop keeps #250's mouse-drag guarantee: the tokens' own top-level
+  // `user-select: text` must survive, since `pointer: fine` never enters the
+  // gate and that declaration is the only thing carrying the nick into a drag.
+  it("leaves #250's desktop declarations intact outside the gate", () => {
+    expect(stripped).toMatch(/^\.nick-clickable\s*\{[^}]*user-select:\s*text/m);
+    expect(stripped).toMatch(/^\.channel-clickable\s*\{[^}]*user-select:\s*text/m);
+  });
+});

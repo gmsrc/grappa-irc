@@ -62,8 +62,9 @@ import { isIos } from "./platform";
 // text-selection-drag start, so on copyable text we only fire it for a
 // long-press (keep the keyboard so the selection survives) and skip it
 // for a tap (let the keyboard dismiss). This list MUST stay in sync with
-// default.css's `html.is-ios .scrollback, .topic-modal-text`
-// `user-select: text` re-enable — a new copyable surface must be added to
+// default.css's `.scrollback, .topic-modal-text` `user-select: text`
+// re-enable, which #1869 moved from `html.is-ios` into
+// `@media (pointer: coarse)` — a new copyable surface must be added to
 // BOTH sites or the two policies drift (same shape as the nick-fold
 // SQL/fragment invariant). See docs/DESIGN_NOTES.md 2026-06-11
 // (Dispatch-1) + 2026-07-03 (#79 v1) + 2026-07-04 (#79 long-press rework).
@@ -74,8 +75,8 @@ const SELECTABLE_TEXT_SURFACES = ".scrollback, .topic-modal-text";
 // on tap AND long-press, never a tap-to-close).
 //
 // This is the KEYBOARD/focus policy, which is INDEPENDENT of the CSS
-// text-selection policy (default.css's `html.is-ios` `user-select`
-// re-exclude) — do NOT assume this list mirrors the CSS one:
+// text-selection policy (default.css's `@media (pointer: coarse)`
+// `user-select` re-exclude) — do NOT assume this list mirrors the CSS one:
 //   * `.scrollback-invite-join` (the [Join] CTA) is a non-copyable
 //     control, so it is in BOTH: keyboard-preserve here AND
 //     `user-select: none` in CSS.

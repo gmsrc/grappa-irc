@@ -18,8 +18,8 @@ import MessageContextMenu from "../MessageContextMenu";
 // (the spec queues a task), so the event the install itself provokes is
 // delivered AFTER that teardown, straight into the freshly-registered listener.
 // If the teardown emptied the selection, the class would be gone within a
-// macrotask and `html.is-ios.is-selecting .scrollback { -webkit-touch-callout:
-// default }` would never apply — the re-enable #1067 added is what gives the
+// macrotask and `html.is-selecting .scrollback { -webkit-touch-callout:
+// default }` (inside `@media (pointer: coarse)` since #1869) would never apply — the re-enable #1067 added is what gives the
 // selection its draggable endpoints.
 //
 // The test asserts the window stays OPEN across that teardown. It deliberately

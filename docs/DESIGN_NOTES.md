@@ -44165,3 +44165,87 @@ env file, the volume and the update/stop verbs, and never says how to make an
 account — the source-mode banner is the only one carrying that hint. That is
 plausibly where the reporter ran out of road, but it is code and this is a
 docs change, so it is recorded here and not touched.
+<!-- entry #1869 -->
+
+---
+
+## 2026-08-30 — #1869: the touch selection policy was gated on iOS, and the iOS mechanism does not port to Blink
+
+Android long-press opened two menus at once: Chrome's native selection
+toolbar over a native selection of the row, plus cic's own message menu.
+The whole selection/callout policy sat under `html.is-ios`, a class
+`lib/platform.ts` adds only when `isIos()` — so Android received none of
+it. That much the issue diagnosed from the code.
+
+**What the issue's suggested direction could not know, and what makes this
+entry worth writing: re-parenting the block does not fix it.** Measured on
+an Android 17 emulator, Chrome 151:
+
+```js
+CSS.supports("-webkit-touch-callout", "none")                 // => false
+[...getComputedStyle(row)].includes("-webkit-touch-callout")  // => false
+```
+
+`-webkit-touch-callout` is **WebKit-only; Blink does not implement it.** On
+iOS the policy is a PAIR and each half does one job: `callout: none`
+suppresses the platform's long-press UI, `user-select: text` keeps the row
+selectable so `Select…` has something to install a range into. Blink has
+only the second half — and there `user-select: text` IS the native
+long-press selection. So the naive port hands Android an inert property
+and carries along the exact re-enable that produces the reported frame.
+
+The gate still moved to `@media (pointer: coarse)`, because the policy IS
+touch behaviour and only the `position: fixed` / `--vh` pin is genuinely
+iOS-only. But that move alone was measured to change nothing observable on
+Android: the surfaces the widened kill newly covers are mostly `<button>`,
+which Android's selection engine already skips (#250's own comment records
+this). The gate is necessary bookkeeping, not the cure.
+
+**The cure is to scope the row's selectability in TIME, which is what
+#1067 already does for the callout.** `.scrollback` defaults to
+`user-select: none` on a coarse pointer and the `is-selecting` latch lifts
+it for the duration of one `Select…`. One mechanism, one more property —
+not a second parallel machine. It is load-bearing rather than
+belt-and-braces: Blink omits `user-select: none` subtrees from a
+selection's TEXT, so without the lift `Select…` installs a range whose
+`toString()` is the nick alone (measured: `"<peluche>"` against
+`"14:24:42 <@vjt> ok quindi…"`).
+
+**This SUPERSEDES the touch half of #250, deliberately.** #250 gave
+`.nick-clickable` / `.channel-clickable` their own `user-select: text` so
+the tokens would ride INSIDE an Android native drag-selection — written
+when Android had no scrollback re-enable at all, which is precisely the
+state this entry ends. Two consequences, and the second is why the tokens
+are named explicitly in the new rules rather than left to inherit:
+
+1. #250's guarantee is now delivered by a different route. There is no
+   native drag-selection left for the token to be excluded from; `Select…`
+   takes the whole row (`selectNodeContents`), so the tokens are included
+   by construction, and they are re-enabled under the latch so the
+   selection's text carries them.
+2. A token matches its element DIRECTLY, so it beats the inherited `none`.
+   Left alone, a long-press landing on a nick would still raise the
+   platform's toolbar — the bug surviving in a narrower place. The gate
+   therefore sets both tokens to `none` and the latch restores both.
+
+#250's top-level declarations stay untouched and still own the DESKTOP
+case: `pointer: fine` never enters the gate, so mouse drag-select is
+exactly as it was.
+
+**Verification, and the half that is NOT verified.** The Blink side is
+device-verified — same row, same press point, fix toggled at runtime:
+native selection `"thread"` with both menus, versus a collapsed selection
+with cic's menu alone. **iOS is not re-verified**: whether defaulting
+`.scrollback` to `user-select: none` on `pointer: coarse` disturbs the iOS
+flow needs a real device, because jsdom applies no stylesheet and
+`page.emulateMedia()` has no `pointer` key, so no CI project can force
+either branch of the query. #1067 and #1857 declare the same limit for
+their own diagnoses.
+
+Guarded by `cicchetto/src/__tests__/touchSelectionPolicy.test.ts` as a
+SET comparison, not a spot-check: the kill and every re-enable must live
+inside the gate together, nothing selection-related may remain on
+`html.is-ios`, the layout pin must stay there, and no rule may grant the
+scrollback `user-select: text` outside the latch. That last one is the
+defect itself stated as a rule. `hoverGatedBlocks` was generalised to
+`mediaGatedBlocks` rather than copied.

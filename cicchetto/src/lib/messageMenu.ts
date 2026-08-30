@@ -58,11 +58,13 @@ export async function copyMessageRow(row: HTMLElement): Promise<void> {
   }
 }
 
-// Lifts `html.is-ios`'s blanket `-webkit-touch-callout: none` for the duration
-// of one selection (default.css pairs this class with the re-enable). Scoping
-// it in TIME rather than in space is what keeps the two long-presses from
-// colliding: with the callout permanently back on the scrollback, every hold
-// would race iOS's own selection UI against this menu.
+// Lifts the touch blanket `-webkit-touch-callout: none` for the duration of one
+// selection (default.css pairs this class with the re-enable, inside
+// `@media (pointer: coarse)` since #1869 — it was `html.is-ios` before, which
+// is why Android had no callout suppression to lift). Scoping it in TIME rather
+// than in space is what keeps the two long-presses from colliding: with the
+// callout permanently back on the scrollback, every hold would race the
+// platform's own selection UI against this menu.
 export const SELECTING_CLASS = "is-selecting";
 
 // The detach for the `selectionchange` watcher `selectMessageText` installs.
