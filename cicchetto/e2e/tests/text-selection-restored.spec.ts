@@ -55,27 +55,47 @@ test("desktop — scrollback text is selectable while compose has focus", async 
   expect(selected).toContain("drag across me");
 });
 
-test("@webkit iOS — .scrollback re-enables user-select under the is-ios global kill", async ({
+// #1869 rewrote what this asserts, and the reason is worth stating: the
+// scrollback is no longer selectable STANDING, it is selectable while the app
+// says so. `-webkit-touch-callout` is WebKit-only, so on Blink the standing
+// `user-select: text` this used to assert IS the platform's long-press
+// selection — two menus for one gesture on Android. The row now defaults to
+// `none` on any coarse pointer and #1067's `is-selecting` latch lifts it for
+// the duration of one `Select…`.
+//
+// So the guard became two-state, which is strictly MORE than it checked
+// before: standing `none`, latched `text`. Asserting only the first half would
+// pass against a sheet that made the row permanently unselectable and broke
+// Select… outright.
+test("@webkit iOS — .scrollback is unselectable standing and selectable under the latch", async ({
   page,
 }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  const styles = await page.evaluate(() => {
-    const scrollback = document.querySelector(".scrollback");
-    if (!scrollback) return null;
-    return {
-      htmlIsIos: document.documentElement.classList.contains("is-ios"),
-      htmlUserSelect: getComputedStyle(document.documentElement).webkitUserSelect,
-      scrollbackUserSelect: getComputedStyle(scrollback).webkitUserSelect,
-    };
-  });
+  const read = () =>
+    page.evaluate(() => {
+      const scrollback = document.querySelector(".scrollback");
+      if (!scrollback) return null;
+      return {
+        htmlIsIos: document.documentElement.classList.contains("is-ios"),
+        htmlUserSelect: getComputedStyle(document.documentElement).webkitUserSelect,
+        scrollbackUserSelect: getComputedStyle(scrollback).webkitUserSelect,
+      };
+    });
 
-  expect(styles).not.toBeNull();
-  // iPhone 15 UA → applyIosClass marks the root; both halves of the
-  // Telegram pattern must hold: chrome unselectable, messages selectable.
-  expect(styles?.htmlIsIos).toBe(true);
-  expect(styles?.htmlUserSelect).toBe("none");
-  expect(styles?.scrollbackUserSelect).toBe("text");
+  const standing = await read();
+  expect(standing).not.toBeNull();
+  // iPhone 15 UA → applyIosClass marks the root. The blanket kill is unchanged;
+  // what moved is where it is gated (`@media (pointer: coarse)`, #1869).
+  expect(standing?.htmlIsIos).toBe(true);
+  expect(standing?.htmlUserSelect).toBe("none");
+  expect(standing?.scrollbackUserSelect).toBe("none");
+
+  // The latch, applied the way `lib/messageMenu`'s Select… applies it.
+  await page.evaluate(() => document.documentElement.classList.add("is-selecting"));
+
+  const latched = await read();
+  expect(latched?.scrollbackUserSelect).toBe("text");
 });

@@ -44235,12 +44235,25 @@ exactly as it was.
 **Verification, and the half that is NOT verified.** The Blink side is
 device-verified — same row, same press point, fix toggled at runtime:
 native selection `"thread"` with both menus, versus a collapsed selection
-with cic's menu alone. **iOS is not re-verified**: whether defaulting
-`.scrollback` to `user-select: none` on `pointer: coarse` disturbs the iOS
-flow needs a real device, because jsdom applies no stylesheet and
-`page.emulateMedia()` has no `pointer` key, so no CI project can force
-either branch of the query. #1067 and #1857 declare the same limit for
-their own diagnoses.
+with cic's menu alone.
+
+**Correcting a claim this entry first made:** that no CI project could
+exercise the query. Wrong, and the e2e suite proved it by going red on two
+`@webkit` specs the moment the contract changed. `webkit-iphone-15` and
+`chromium-pixel-touch` both report `pointer: coarse` NATIVELY — no
+`emulateMedia` needed, which is the only thing that has no `pointer` key —
+so the CASCADE is assertable on both engine families, and now is:
+`issue1869-android-longpress-selection.spec.ts` on Blink, the `@webkit`
+twins in `text-selection-restored` and `issue250-android-nick-select` on
+WebKit. The Blink spec also pins the SERIALISATION, which is the part a
+computed-style read cannot show: unlatched, a range over the row does not
+contain the body.
+
+What stays a device question is whether the platform's toolbar actually
+appears — no project renders native selection UI. So the iOS CASCADE is
+covered in CI, while iOS BEHAVIOUR under the new default is not, and that
+is the residual risk of this change. #1067 and #1857 declare the same
+limit for their own diagnoses.
 
 Guarded by `cicchetto/src/__tests__/touchSelectionPolicy.test.ts` as a
 SET comparison, not a spot-check: the kill and every re-enable must live

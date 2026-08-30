@@ -11,13 +11,20 @@ import { coarsePointerBlocks, themeCss } from "./helpers/themeCss";
 // 151: `window.getSelection()` came back non-collapsed with the pressed word
 // while cic's menu reported open in the same frame.
 //
-// WHY A SOURCE-LEVEL TEST AND NOT A BEHAVIOURAL ONE — the same limit
-// `hoverGate.test.ts` documents, and the one #1869 itself declares. jsdom
-// applies no stylesheet, and no Playwright project here renders a platform's
-// native selection UI: `page.emulateMedia()` has no `pointer` key, so nothing
-// in CI can put this query into either branch on purpose. What IS
-// deterministic is what the cascade is ASKED to do. These read that; a real
-// device is the only witness for what an engine paints.
+// WHY A SOURCE-LEVEL TEST TOO, next to the e2e ones. jsdom applies no
+// stylesheet, so nothing here can read a computed value. What this file reads
+// is the SHAPE of the sheet — which rules exist and where they are gated —
+// which is what rots when someone adds a re-enable and forgets the gate.
+//
+// The COMPUTED side is covered in e2e and needs no `emulateMedia`: both
+// `webkit-iphone-15` and `chromium-pixel-touch` report `pointer: coarse`
+// natively, so `issue1869-android-longpress-selection.spec.ts` (Blink) and the
+// `@webkit` twins in `text-selection-restored` / `issue250-android-nick-select`
+// assert the real cascade on both engine families.
+//
+// What NO project can do is render a platform's native selection UI, so
+// "does the toolbar actually appear?" stays a device question — the limit
+// #1067 and #1857 declare, and #1869 verified by hand on Android.
 //
 // THE DRIFT THIS GUARDS. The kill and its re-enables are one atomic set: #79
 // (scrollback + topic text), #1067 (the `is-selecting` callout latch), #508
