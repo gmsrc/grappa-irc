@@ -9,6 +9,14 @@
 //     listener by bubbling to `.scrollback`, exactly as a real finger does. A
 //     narrow viewport forces the mobile shell so the #1041 edge directive is
 //     also live, which is what makes the zone-separation test mean something.
+//   * Untagged does NOT mean `pointer: fine`. Measured on this project:
+//     `hasTouch: true` puts Chromium's primary pointer at COARSE, so the whole
+//     file reports `(pointer: coarse)` and `(hover: none)` and every test here
+//     runs INSIDE #1869's `@media (pointer: coarse)` gate — `.scrollback` is
+//     `user-select: none` standing. Worth spelling out because the bullet above
+//     reads as a desktop harness and the gate is invisible from the source; a
+//     review of #1869 read it that way and concluded the Select… test below
+//     could not see the gate. The Select… test asserts the premise itself now.
 //   * The FEEL is a DEVICE call: synthetic events drive no pixel scroll,
 //     chromium is not iOS Safari, and neither reproduces iOS selection UI. Does
 //     the slide read like Telegram's, do the grab handles actually appear once
@@ -345,11 +353,38 @@ test("issue1067 — Select… hands back a live selection over the row and arms 
   await postMessage(page, body);
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
 
+  // THE premise, and the reason this is the one test that drives the shipped
+  // `Select…` rather than a hand-built range. #1869 made `.scrollback`
+  // `user-select: none` STANDING on a coarse pointer, and Blink omits
+  // `user-select: none` subtrees from a selection's TEXT — so the assertion
+  // below is answerable only if the production path lifted the latch itself.
+  // Asserted rather than assumed because the pointer here comes from this
+  // file's `hasTouch: true` and nothing in a test title says so: were the file
+  // ever to slip back to `pointer: fine`, the row would be selectable standing
+  // and the assertion would go vacuous in silence instead of red.
+  //
+  // Measured, so the teeth are not an argument: renaming the latch class in
+  // `lib/messageMenu` reds this test with an EMPTY selection, while the two
+  // #1869 cascade tests — which build their range by hand — stay green.
+  const standing = await page.evaluate(() => {
+    const sb = document.querySelector(".scrollback");
+    return {
+      coarse: matchMedia("(pointer: coarse)").matches,
+      userSelect: sb === null ? null : getComputedStyle(sb).userSelect,
+    };
+  });
+  expect(standing.coarse).toBe(true);
+  expect(standing.userSelect).toBe("none");
+
   await longPressRow(page, body, { x: 200, y: 400 }, HOLD_MS);
   await menuItem(page, "Select…").click();
 
   const selected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
   expect(selected).toContain(body);
+  // #250's guarantee, delivered by the new route: the author rides inside the
+  // selection because Select… takes the whole row and the latch re-enables the
+  // token under it, not because the token carries a standing re-enable.
+  expect(selected).toContain(specNick());
   // `is-selecting` is what lets `html.is-ios .scrollback` get its
   // `-webkit-touch-callout` back for the life of this selection — without it
   // the range has no draggable endpoints on iOS. The CLASS is asserted here;
