@@ -699,11 +699,20 @@ html.is-ios body {
    specificity, so they must stay AFTER them.
 
    Specificity dropped by one class when `html.is-ios X` became `html X`.
-   Checked, not assumed: no (0,1,x) rule sets `user-select` on `.scrollback`,
-   `input`, `textarea`, `select` or `.admin-tab-panel`. The two that come
-   close, `.nick-clickable` / `.channel-clickable` (#250), set `text` — the
-   same value the `.scrollback` re-enable gives them — and do not appear
-   inside an admin pane. */
+   Checked, not assumed — every `user-select` declaration in this sheet was
+   enumerated: nothing at (0,1,x) sets it on `input`, `textarea`, `select` or
+   `.admin-tab-panel`, so those four re-enables carry unopposed.
+
+   `.scrollback` is the exception, and it is WHY the two #250 tokens are named
+   EXPLICITLY in the rules below instead of being left to inherit.
+   `.nick-clickable` / `.channel-clickable` carry their own top-level
+   `user-select: text` at (0,1,0), and that value now DISAGREES with what the
+   row gets on a coarse pointer — `none`, not `text` — while a token matches
+   its element DIRECTLY and the row reaches it only by inheritance, which a
+   direct match beats outright. Naming them puts the gate's rules at (0,2,1)
+   standing and (0,3,1) latched, over (0,1,0), on every engine and independently
+   of source order. Delete either token from those two selector lists and the
+   defect is back, narrowed to a long-press that lands on a nick. */
 @media (pointer: coarse) {
   html {
     -webkit-user-select: none;

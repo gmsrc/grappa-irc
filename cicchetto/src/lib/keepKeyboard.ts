@@ -62,12 +62,27 @@ import { isIos } from "./platform";
 // text-selection-drag start, so on copyable text we only fire it for a
 // long-press (keep the keyboard so the selection survives) and skip it
 // for a tap (let the keyboard dismiss). This list MUST stay in sync with
-// default.css's `.scrollback, .topic-modal-text` `user-select: text`
-// re-enable, which #1869 moved from `html.is-ios` into
-// `@media (pointer: coarse)` — a new copyable surface must be added to
+// default.css's selectable-text policy — which #1869 made TWO-TIER, and
+// the tier is what decides where a new surface goes:
+//
+//   * STANDING re-enable — `user-select: text` inside
+//     `@media (pointer: coarse)`: `.topic-modal-text`, `input`,
+//     `textarea`. Surfaces with no platform long-press selection worth
+//     suppressing.
+//   * LATCH-scoped — `user-select: none` standing, lifted only while
+//     `html.is-selecting` is up: `.scrollback` and the two #250 tokens
+//     inside it. On Blink a STANDING `text` here IS the platform's own
+//     long-press selection, and `-webkit-touch-callout: none` (WebKit
+//     only) cannot suppress it — that is the two-menu frame #1869
+//     reports.
+//
+// So a new copyable surface goes in the standing re-enable UNLESS a
+// long-press on it can raise the platform's selection UI, in which case
+// it follows `.scrollback` into the latch. Either way it must land in
 // BOTH sites or the two policies drift (same shape as the nick-fold
 // SQL/fragment invariant). See docs/DESIGN_NOTES.md 2026-06-11
-// (Dispatch-1) + 2026-07-03 (#79 v1) + 2026-07-04 (#79 long-press rework).
+// (Dispatch-1) + 2026-07-03 (#79 v1) + 2026-07-04 (#79 long-press rework)
+// + 2026-08-30 (#1869).
 const SELECTABLE_TEXT_SURFACES = ".scrollback, .topic-modal-text";
 // Controls that live INSIDE a selectable surface whose KEYBOARD policy is
 // "always preserve on tap" — the exclude wins in isSelectableSurface, so
