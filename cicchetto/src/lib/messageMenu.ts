@@ -123,16 +123,29 @@ export function selectMessageText(row: HTMLElement): boolean {
   // selection and the keyboard is what is in its way.
   const focused = document.activeElement;
   if (isTextEntry(focused)) focused.blur();
-  const range = document.createRange();
-  range.selectNodeContents(row);
-  selection.removeAllRanges();
-  selection.addRange(range);
   // One latch, one watcher (issue 1857). A second Select… while the first
   // selection is still live used to stack another listener on the document —
   // only the one that FIRED ever detached itself, so a session that selected
   // repeatedly accumulated them.
+  //
+  // The latch goes up BEFORE the range goes in, and the order is deliberate:
+  // since #1869 the latch is what makes `.scrollback` `user-select: text` on a
+  // coarse pointer, so raising it first is the only ordering under which the
+  // row is selectable at the instant the range is installed. Raised after, the
+  // range is installed while the row still computes `user-select: none`.
+  //
+  // NOT MEASURED, and deliberately not claimed: whether any engine actually
+  // drops or truncates a range installed under `none` and later lifted. jsdom
+  // applies no stylesheet and no browser launches on the machine this was
+  // written on, so the ordering is pinned by a test that observes the latch at
+  // install time and nothing here observes a consequence. What this buys is
+  // that the question stops needing an answer.
   disarmMessageSelection();
   document.documentElement.classList.add(SELECTING_CLASS);
+  const range = document.createRange();
+  range.selectNodeContents(row);
+  selection.removeAllRanges();
+  selection.addRange(range);
   // Disarm the moment the operator is done. Without this the callout stays up
   // for the rest of the session and the next hold anywhere in the scrollback
   // pops iOS's own menu over ours. This is the LATE exit — see

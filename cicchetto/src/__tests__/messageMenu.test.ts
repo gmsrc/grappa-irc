@@ -134,6 +134,33 @@ describe("selectMessageText", () => {
     expect(ranges[0]?.commonAncestorContainer).toBe(row);
   });
 
+  // The ORDER, pinned. Since #1869 the `is-selecting` latch is also what gives
+  // `.scrollback` its `user-select: text` on a coarse pointer, so the latch has
+  // to be up before the range goes in or the range is installed while the row
+  // still computes `none`. This observes the latch AT the moment `addRange`
+  // runs — the only instant that distinguishes the two orderings.
+  //
+  // What it does NOT observe: any consequence. jsdom applies no stylesheet, so
+  // nothing here can tell whether an engine minds. Red against the previous
+  // ordering (latch after the range), green against this one — that is its
+  // whole claim.
+  it("raises the latch before the range goes in, not after", () => {
+    let latchedAtInstall: boolean | null = null;
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      removeAllRanges: vi.fn(),
+      addRange: vi.fn(() => {
+        latchedAtInstall = document.documentElement.classList.contains(SELECTING_CLASS);
+      }),
+      toString: () => "12:34 <vjt> ciao",
+      isCollapsed: false,
+    } as unknown as Selection);
+
+    expect(selectMessageText(scrollbackRow("12:34 <vjt> ciao"))).toBe(true);
+    // The probe has to have run at all, or `false` below would be furniture.
+    expect(latchedAtInstall).not.toBeNull();
+    expect(latchedAtInstall).toBe(true);
+  });
+
   // THE point of the item. The touch blanket kills `-webkit-touch-callout`, and a
   // range installed under a suppressed callout has no draggable endpoints —
   // the second reported symptom. Select… lifts the kill, scoped in TIME.
