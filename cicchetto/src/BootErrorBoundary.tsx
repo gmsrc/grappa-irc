@@ -61,13 +61,32 @@ const BootFailure: Component<{ error: unknown; onRetry: () => void }> = (props) 
         Could not load Grappa.
       </p>
       <p class="boot-failure-detail">{failureText(props.error)}</p>
+      {/* #1877 — THE LABEL NAMES WHAT IT RESTARTS. "Retry" and "Reload" both
+            read as "try again" to anyone who has not read this file, and a
+            self-hoster who hit this screen on iOS reported not knowing which to
+            press. The two are not interchangeable: this one is three fetches
+            with the bundle untouched (press it when the network came back), the
+            one below throws the running app away (press it when the app itself
+            is suspect). So each label names its OBJECT — the load, or the app.
+
+            The distinction goes in the LABEL and not in a line of copy under
+            each button, which the issue offers as the alternative. Two reasons.
+            The screen is deliberately bare (see the header) and the label costs
+            no new element; and the accessible name is what the reporter's
+            VoiceOver reads out when it lands on the control, whereas a sibling
+            paragraph is announced separately or not at all unless it is wired
+            through `aria-describedby` — machinery for a hint that would still
+            leave the button itself saying "try again". The situational advice
+            such a line would carry ("if the network just came back") is instead
+            in the ORDER: primary first, the muted fallback second (the
+            `.boot-failure-reload` rule in themes/default.css). */}
       <button
         type="button"
         class="boot-failure-retry"
         data-testid="boot-failure-retry"
         onClick={() => props.onRetry()}
       >
-        Retry
+        Retry loading
       </button>
       {/* The escape hatch of last resort. The boundary wraps Shell for the
             whole session, so it also catches throws with nothing to do with the
@@ -122,10 +141,16 @@ const BootFailure: Component<{ error: unknown; onRetry: () => void }> = (props) 
           window.location.reload();
         }}
       >
-        {/* `performRefresh` can take up to ~2s waiting on controllerchange.
+        {/* "Restart app", not "Reload" (#1877): the sibling above retries the
+              LOAD, this one throws the running app away — either onto a fresh
+              bundle or onto the same one. Both branches restart it, so the
+              label is honest for both, and it shares no word with "Retry
+              loading" for the reader who is scanning rather than reading.
+
+              `performRefresh` can take up to ~2s waiting on controllerchange.
               On a dead-boot screen a button that appears to do nothing is
               exactly what sends the user back to force-killing the app. */}
-        {reloading() ? "Reloading…" : "Reload"}
+        {reloading() ? "Restarting…" : "Restart app"}
       </button>
     </div>
   );

@@ -151,6 +151,26 @@ describe("BootErrorBoundary (#717 — a failed boot must not freeze on the splas
     expect(screen.queryByTestId("crt-splash")).toBeNull();
   });
 
+  // #1877 — the two buttons ARE the recovery ladder, and "Retry"/"Reload" both
+  // read as "try again" to anyone who has not read the source. The names must
+  // say WHICH THING each one restarts: the load (three fetches, no navigation)
+  // or the app (a bundle refresh or a page reload). Asserted as the ACCESSIBLE
+  // name rather than the text node because that is what the reporter's iOS
+  // VoiceOver reads out, and it is the property a hint paragraph parked under
+  // the button would NOT have changed.
+  it("names what each recovery button restarts, so the two are not both 'try again'", async () => {
+    localStorage.setItem("grappa-token", "tokA");
+    const api = await import("../lib/api");
+    const pending = deferredMe(api);
+
+    await renderBootTree();
+    pending.reject(new Error("network down"));
+    await screen.findByTestId("boot-failure");
+
+    expect(screen.getByTestId("boot-failure-retry")).toHaveAccessibleName("Retry loading");
+    expect(screen.getByTestId("boot-failure-reload")).toHaveAccessibleName("Restart app");
+  });
+
   it("leaves a healthy boot untouched", async () => {
     localStorage.setItem("grappa-token", "tokA");
     const api = await import("../lib/api");
@@ -307,6 +327,11 @@ describe("BootErrorBoundary reload — purge needs proof the server answers", ()
 
     expect(performRefresh).toHaveBeenCalledTimes(1);
     expect(reloadSpy).not.toHaveBeenCalled();
+
+    // #1877 — the in-flight label is part of the same naming: this branch is
+    // the one that can sit for ~2s waiting on `controllerchange`, so the button
+    // must say it is restarting rather than keep offering the restart.
+    expect(screen.getByTestId("boot-failure-reload")).toHaveAccessibleName("Restarting…");
   });
 
   // Both conditions are required: a status came back earlier, but the link has

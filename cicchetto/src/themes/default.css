@@ -12163,8 +12163,9 @@ button.topic-bar-windows-opener {
   cursor: pointer;
 }
 
-/* Reload is the fallback-of-the-fallback, not the primary action — muted so
-   Retry reads as the thing to try first. */
+/* The restart is the fallback-of-the-fallback, not the primary action — muted
+   so the retry above reads as the thing to try first. Named by ROLE, not by
+   label: the two labels were renamed once already (#1877). */
 .boot-failure-reload {
   border-color: var(--muted);
   color: var(--muted);
