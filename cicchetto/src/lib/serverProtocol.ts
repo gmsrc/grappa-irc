@@ -51,21 +51,45 @@ import { type Accessor, createSignal } from "solid-js";
 // Mirrors `Grappa.Protocol.min_version/0`'s naming, pointed at the peer this
 // side is judging.
 //
-// 🔴 THE OBLIGATION, and nothing enforces it. Narrowing any guard to REQUIRE
-// a field introduced by protocol version N obliges you to raise this number
-// to N in the same change. Measured, not assumed: no test ties this constant
-// to `Grappa.Protocol.version/0`, and no line anywhere says that tightening a
-// narrower costs a floor raise — so nothing will remind you. Forget it and a
-// bundle needing a v5 field goes on accepting a v2–v4 server, drops every
-// envelope missing that field and shows NO banner: the silent mode this
-// module was written to end, reintroduced by the module itself.
+// 🔴 THE OBLIGATION. Narrowing any guard to REQUIRE a field introduced by
+// protocol version N obliges you to raise this number to N in the same
+// change. Forget it and a bundle needing a v5 field goes on accepting a
+// v2–v4 server, drops every envelope missing that field and shows NO banner:
+// the silent mode this module was written to end, reintroduced by the module
+// itself.
 //
-// Named debt, not an oversight (DESIGN_NOTES 2026-08-21, #1393d): a real gate
-// needs the field → version-that-introduced-it history, and
-// `priv/wire/shape.pin` holds a digest, not a history. Inventing that history
-// inside this slice would be an unmeasured mechanism, so it is a separate
-// issue rather than a hurried one here.
-export const MIN_SERVER_PROTOCOL_VERSION = 2;
+// It was forgotten exactly once and it went exactly that way. The #1280
+// per-network profile put `age`, `gender`, `location`, `languages`, `custom`
+// and `avatar_url` on `Grappa.Networks.Wire.credential_json/0` at protocol 9
+// and generated them REQUIRED (no `q:` in `wireSchema.ts`, unlike the
+// `optional(:gender)` its own sibling `Session.Wire.member/0` carries), while
+// this number stayed at 2. Measured on the artefact rather than argued: the
+// e2e vhost stub was serving the 13-key body of a protocol-8 server, the
+// trace shows `narrowCredentialResponse` throwing `WireShapeError` on it, one
+// PATCH on the wire instead of two, and the network left PARKED with the
+// reconnect leg never issued. No banner, because 8 >= 2.
+//
+// Hence 9, and hence `CLIENT_PROTOCOL_VERSION` moving with it — the pinned
+// `MIN_SERVER <= CLIENT` invariant is what makes the pair move together, and
+// 2 was in any case stale against a server that has been at 9 since #1280.
+//
+// This does NOT make the bundle tolerant; it makes it HONEST. A protocol-8
+// server still cannot have its credential read here — the banner now says so
+// instead of the operator finding out from a network that parks and stays
+// parked. Relaxing the narrower (the six fields `optional(:…)` on the server
+// typespec, the #1766 `show_bottom_bar?` shape) is the OTHER cure and the one
+// that removes the condition rather than announcing it; it is a server-side
+// change that moves the shape digest and therefore costs a protocol bump of
+// its own, which is why it is not folded in here.
+//
+// Still named debt (DESIGN_NOTES 2026-08-21, #1393d): the GENERAL gate needs
+// the field → version-that-introduced-it history, and `priv/wire/shape.pin`
+// holds a digest of the current shape, not a history. What exists now is one
+// entry of that ledger, written where the fact already was — the credential
+// shape is tied to this constant by an implication test in
+// `serverProtocol.test.ts`, which passes under EITHER cure and fails only on
+// the state above. Every other narrower is still on trust.
+export const MIN_SERVER_PROTOCOL_VERSION = 9;
 
 // `null` until the user-topic join reply lands (or if it carries no number
 // at all — a server old enough to predate #447's join-reply field, which is

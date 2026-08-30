@@ -43762,3 +43762,94 @@ inline), check whether a MORE SPECIFIC existing surface (here, the
 already-built WHOIS card) fits the actual use case before reaching for
 an invariant exception — the exception may turn out to be unnecessary,
 not just narrow.
+<!-- entry #1654a -->
+
+---
+
+## 2026-08-30 — #1654a: the client-side floor stops lying about the credential shape it demands
+
+`MIN_SERVER_PROTOCOL_VERSION` 2 → 9, `CLIENT_PROTOCOL_VERSION` 2 → 9, and one
+implication test tying the first to the shape the narrower actually requires.
+
+**The obligation, and how it was missed.** `serverProtocol.ts` carries it in
+red: narrowing any guard to REQUIRE a field introduced by protocol version N
+obliges raising that constant to N in the same change. #1280 narrowed three
+guards at once — `age`, `gender`, `location`, `languages`, `custom` and
+`avatar_url` joined `Grappa.Networks.Wire.credential_json/0` and its two
+`network_with_nick` siblings at protocol 9, and the codegen emitted them
+REQUIRED because the typespec declares them `required(:k)` and `walkObject`
+rejects an absent required key ("a REQUIRED key that is absent is a shape
+mismatch, not a tolerance"). The floor stayed at 2. Note the asymmetry inside
+that one change: `Grappa.Session.Wire.member/0` DID get `optional(:gender)`
+and so generated `q: ["gender"]`, so the mechanism was in hand and applied on
+one surface out of four.
+
+**Measured on the artefact, not argued.** The e2e vhost stub was serving the
+13-key body of a protocol-8 server — its key set is *set-equal* to what the
+generated schema declared before #1280, so the run was an accidental and
+faithful new-client → old-server compatibility test. It failed: the Playwright
+trace shows exactly one PATCH on the wire (`{"connection_state":"parked"}`)
+where the spec expects two, the console carries
+`[reconnect] bounce failed: WireShapeError`, and `bounceNetwork` awaits the
+park before issuing the connect leg — so the network is left PARKED and never
+comes back. No banner, because `8 >= 2`. That is precisely the silent mode the
+module was written to end, reintroduced by the module itself, and it is the
+same mechanism CLAUDE.md already records from the other direction under #1626
+("cic's generated `wireSchema` rejects an object missing a required key, so an
+old bundle throws every archive response away").
+
+**Two cures; this is the one the repo's text forces.** Raising the floor makes
+the bundle's declaration TRUE. Marking the six fields `optional(:…)` on the
+server typespec — the #1766 `show_bottom_bar?` shape — would instead make the
+bundle TOLERANT, so the older body reads and nothing breaks. The second is the
+better outcome and it is not what shipped here, for a reason that is about
+provenance rather than taste: the imperative in the repo names the first, twice
+(`serverProtocol.ts` and `protocol_test.exs` restate it verbatim), while #1766
+and #1626 are *recorded choices* with rationales, not obligations. The
+tolerance cure is also not cic-only — it moves the shape digest that
+`mix grappa.wire_pin --check` covers, and by the #1393d rule a shape change
+costs a protocol bump of its own. Raising the floor is a strictly smaller
+change that discharges the written obligation; relaxing the narrower is a
+server-side follow-up worth taking on its own merits.
+
+**Say plainly what this does not do: it fixes the SIGNAL, not the CONDITION.**
+A protocol-8 server still cannot have its credential read by this bundle. What
+changes is that the operator is told, instead of discovering it from a network
+that parks and stays parked. The three affected verbs are
+`PATCH /networks/:slug`, `PATCH /networks/:slug/identity` and
+`PUT /networks/:slug/password`; `GET /networks` is NOT affected, because only
+`S_NetworksWireCredentialJson` is wired into a narrower — the two
+`network_with_nick` shapes got the same required fields but no narrower imports
+them.
+
+**Who actually sees the banner, measured.** `shouldShowServerOutdatedBanner()`
+fires iff the server NAMED a number below the floor; an unknown number is not
+treated as old. Bundle and server both come from `origin/main` and the BEAM
+serves the SPA, so the only sustained way to be below 9 is a bundle shipped
+ahead of its server — which is a first-class operator verb,
+`scripts/deploy-m42.sh --cic`, documented as "cic-only bundle deploy, NO BEAM
+restart". In that window the banner is TRUE and its message already names the
+actionable half ("the BEAM was not restarted"). It is the alarm working, not a
+false alarm.
+
+**Why `CLIENT_PROTOCOL_VERSION` had to move with it.** `MIN_SERVER <= CLIENT`
+is pinned in `serverProtocol.test.ts` — a bundle requiring more than it speaks
+would refuse every server that accepts it. Raising the spoken number is safe in
+the direction that can bite (the handshake refuses a client BELOW
+`Grappa.Protocol.min_version/0`, which is 1, never one above) and it was in any
+case stale: the server has been at 9 since #1280, which is why every boot
+logged `protocol mismatch: this bundle speaks 2, the server speaks 9`. The two
+constants stay separate — they coincide today, and that is a fact about today.
+
+**The gate, and its honest limit.** `protocol_test.exs` explains why the
+GENERAL gate cannot be built: it needs a ledger of which protocol version
+introduced each field, and `priv/wire/shape.pin` holds a digest of the current
+shape, not a history. That is still true and no ledger is invented here. What
+exists now is ONE entry of it, written where the fact already was — the
+server's own v9 note names the six fields — expressed as an implication:
+either the narrower reads a pre-profile credential, or the floor is at least 9.
+It passes under EITHER cure, so applying the tolerance later does not require
+editing the assertion, and it fails only on the state main was in. The test
+carries its own positive control (a current credential must read, or a typo in
+the fixture would let a floor raise "fix" a defect that is not there) and a
+negative control. Every other narrower in the bundle is still on trust.

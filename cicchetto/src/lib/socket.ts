@@ -79,11 +79,29 @@ let _socket: Socket | null = null;
 // new event kind or field is free and never moves it") is gone with its
 // server-side twin: the wire version now moves on EVERY shape change.
 //
+// 2 → 9. Two reasons and the first alone is sufficient. (1) The number is the
+// CONTRACT version, and the server has been at 9 since the #1280 profile
+// fields landed; 2 had simply stopped tracking it across the intervening
+// bumps, which is why every boot logged `protocol mismatch: this bundle
+// speaks 2, the server speaks 9` — a true statement about a stale constant,
+// not about a real incompatibility. (2) `MIN_SERVER_PROTOCOL_VERSION` had to
+// rise to 9 to stop lying about the credential shape this bundle requires
+// (see its own note), and `MIN_SERVER <= CLIENT` is pinned in
+// `serverProtocol.test.ts` — a bundle requiring more than it speaks would
+// refuse every server that accepts it. The pair moves together or neither
+// moves.
+//
+// Raising THIS one is safe in the direction that can bite: the handshake
+// refuses a client BELOW `Grappa.Protocol.min_version/0`, which is 1, and
+// never one above. `protocol_test.exs` pins that from the other side
+// (`cic_protocol_version() >= Protocol.min_version()`).
+//
 // This is what cic SPEAKS. What it REQUIRES of the server is a separate
 // constant in `serverProtocol.ts` (`MIN_SERVER_PROTOCOL_VERSION`), and the
 // two are deliberately not the same number — a later bundle may speak v5
-// and still cope with a v2 server.
-export const CLIENT_PROTOCOL_VERSION = 2;
+// and still cope with a v2 server. They coincide today; that is a fact about
+// today, not a merge of the two axes.
+export const CLIENT_PROTOCOL_VERSION = 9;
 
 // #193 — force the correct WS scheme from the page origin, absolutely.
 //
