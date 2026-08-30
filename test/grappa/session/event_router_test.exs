@@ -688,7 +688,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a CTCP USERINFO reply NOTICE captures Gender= into peer_profile_cache" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "USERINFO Age=30; Gender=F; Location=Italy", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -696,6 +696,39 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.peer_profile_cache == %{"alice" => %{gender: :female}}
     end
 
+    # The peer-profile cache is an OPT-IN feature: `maybe_query_userinfo/2`
+    # and `maybe_query_avatar/2` both refuse to ASK when the subject has not
+    # opted in. The capture half has to refuse to LEARN on the same terms —
+    # otherwise a peer who answers a question we never asked populates a
+    # cache the subject switched off, and for AVATAR that answer also costs
+    # an outbound fetch of a URL the peer chose.
+    test "opted OUT, a CTCP USERINFO reply leaves peer_profile_cache untouched" do
+      state = base_state(%{show_peer_profiles: false})
+      body = <<0x01, "USERINFO Age=30; Gender=F; Location=Italy", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+      assert new_state.peer_profile_cache == %{}
+    end
+
+    test "opted OUT, a CTCP AVATAR reply neither marks the cache nor dispatches a fetch" do
+      state = base_state(%{show_peer_profiles: false})
+      body = <<0x01, "AVATAR http://peer.example/av.png", 0x01>>
+      m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
+
+      assert {:cont, new_state, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      # `:pending` is the observable proof a fetch was dispatched — the task
+      # is detached, so the cache mark is what this layer can assert on.
+      assert new_state.peer_profile_cache == %{}
+      # …and the row is still visible, framing intact: the opt-in governs the
+      # cache, never the transcript.
+      assert attrs.channel == "$server"
+      assert attrs.body == body
+    end
+
+    # Deliberately left on the OPTED-OUT default: the visible scrollback row
+    # is not part of the opt-in. Refusing to LEARN from a CTCP reply must
+    # never turn into refusing to SHOW it.
     test "a CTCP USERINFO reply still persists the normal visible row (not silent)" do
       state = base_state()
       body = <<0x01, "USERINFO Gender=M", 0x01>>
@@ -710,7 +743,7 @@ defmodule Grappa.Session.EventRouterTest do
 
     test "CTCP USERINFO Gender= parsing is case-insensitive for M/F/X" do
       for {letter, expected} <- [{"m", :male}, {"F", :female}, {"x", :nonbinary}] do
-        state = base_state()
+        state = base_state(%{show_peer_profiles: true})
         body = <<0x01, "USERINFO Gender=#{letter}", 0x01>>
         m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -720,7 +753,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a CTCP USERINFO reply with no Gender= field leaves peer_profile_cache untouched" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "USERINFO Age=30; Location=Italy", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -729,7 +762,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a CTCP USERINFO reply with an unrecognised Gender= value leaves peer_profile_cache untouched" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "USERINFO Gender=Q", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -746,7 +779,7 @@ defmodule Grappa.Session.EventRouterTest do
     # this file's; asserting on ITS outcome here would need cross-process
     # Mox wiring for no real coverage gain.
     test "a CTCP AVATAR reply with an http(s) URL marks the cache :pending and dispatches a fetch" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "AVATAR http://peer.example/av.png", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -755,7 +788,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a CTCP AVATAR reply accepts https too" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "AVATAR https://peer.example/av.png", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -764,7 +797,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a CTCP AVATAR reply with a bare filename (the legacy DCC offer) is refused, never dispatched" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "AVATAR myface.png 4096", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -775,7 +808,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a CTCP AVATAR reply with a non-http scheme (e.g. file://) is refused" do
-      state = base_state()
+      state = base_state(%{show_peer_profiles: true})
       body = <<0x01, "AVATAR file:///etc/passwd", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -784,7 +817,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a second CTCP AVATAR reply while a fetch is already :pending does not re-dispatch" do
-      state = base_state(%{peer_profile_cache: %{"alice" => %{avatar_slug: :pending}}})
+      state = base_state(%{show_peer_profiles: true, peer_profile_cache: %{"alice" => %{avatar_slug: :pending}}})
       body = <<0x01, "AVATAR http://peer.example/second.png", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 
@@ -794,7 +827,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a second CTCP AVATAR reply for an already-cached (real slug) nick does not re-dispatch" do
-      state = base_state(%{peer_profile_cache: %{"alice" => %{avatar_slug: "existingslug"}}})
+      state = base_state(%{show_peer_profiles: true, peer_profile_cache: %{"alice" => %{avatar_slug: "existingslug"}}})
       body = <<0x01, "AVATAR http://peer.example/second.png", 0x01>>
       m = msg(:notice, ["vjt", body], {:nick, "alice", "u", "h"})
 

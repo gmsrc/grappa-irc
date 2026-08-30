@@ -2608,10 +2608,7 @@ defmodule Grappa.Session.EventRouter do
     # `ctcp_meta/1` (no separate silent-bookkeeping path). The ONLY thing
     # M2 adds is a side-effect extraction of `Gender=` into
     # `peer_profile_cache`, alongside the unchanged persist.
-    state2 =
-      state
-      |> maybe_capture_peer_userinfo(sender, body)
-      |> maybe_capture_peer_avatar(sender, body)
+    state2 = maybe_capture_peer_profile(state, sender, body)
 
     {state3, eff} =
       build_persist(
@@ -3279,12 +3276,46 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
+  # The CAPTURE half of the peer-profile feature, and the mirror of
+  # `maybe_query_peer_profile/2` (the ASK half): one door so a caller
+  # doesn't have to know both fields exist, and — the reason this
+  # wrapper exists rather than two piped calls — ONE place where the
+  # `show_peer_profiles` opt-in is honoured.
+  #
+  # The opt-in gate belongs on BOTH halves, not just the ask. A reply is
+  # not proof we asked: a peer can send a CTCP reply nobody solicited,
+  # and until the gate was here, one arriving for a subject who had
+  # switched the feature OFF still populated `peer_profile_cache` — and,
+  # on the AVATAR arm, still spent an outbound HTTP fetch of a URL the
+  # peer chose. Gating only the ask left the opt-out half-honoured, which
+  # is the "two patterns" CLAUDE.md rejects: a reader of
+  # `maybe_query_avatar/2` would reasonably conclude the whole feature
+  # was off.
+  #
+  # Scope, deliberately: this governs what the session LEARNS, never what
+  # it SHOWS. The `:persist` row for the notice is built by the caller
+  # after this returns and is untouched — a CTCP reply stays visible in
+  # `$server` whatever the opt-in says, exactly as before.
+  @spec maybe_capture_peer_profile(state(), String.t(), binary()) :: state()
+  defp maybe_capture_peer_profile(state, sender, body) do
+    if Map.get(state, :show_peer_profiles, false) do
+      state
+      |> maybe_capture_peer_userinfo(sender, body)
+      |> maybe_capture_peer_avatar(sender, body)
+    else
+      state
+    end
+  end
+
   # M2 — side-effect extraction for an inbound CTCP USERINFO reply: if
   # `body` carries a parseable `Gender=` field, fold it into
   # `peer_profile_cache[fold(sender)]`. A no-op (returns `state`
   # unchanged) for any other CTCP verb, a plain non-CTCP notice, or a
   # USERINFO reply with no recognisable Gender= — the cache is
   # best-effort, never a parse failure surfaced to the user.
+  #
+  # Reached only through `maybe_capture_peer_profile/3`, which owns the
+  # `show_peer_profiles` gate — do not call this directly.
   @spec maybe_capture_peer_userinfo(state(), String.t(), binary()) :: state()
   defp maybe_capture_peer_userinfo(state, sender, body) do
     case CTCP.verb_args(body) do
@@ -3465,6 +3496,11 @@ defmodule Grappa.Session.EventRouter do
   # implements) is silently dropped. Marks `avatar_slug: :pending`
   # BEFORE the fetch completes so a second reply (channel + private, or
   # a repeat) doesn't dispatch a second fetch for the same nick.
+  #
+  # Reached only through `maybe_capture_peer_profile/3`, which owns the
+  # `show_peer_profiles` gate — do not call this directly. That gate is
+  # load-bearing HERE and not merely tidy: this arm is the only one in
+  # the capture half that spends an outbound network request.
   @spec maybe_capture_peer_avatar(state(), String.t(), binary()) :: state()
   defp maybe_capture_peer_avatar(state, sender, body) do
     case CTCP.verb_args(body) do
