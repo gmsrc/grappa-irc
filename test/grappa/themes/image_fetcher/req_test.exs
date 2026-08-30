@@ -1,4 +1,4 @@
-defmodule Grappa.Themes.ImageFetcher.ReqTest do
+defmodule Grappa.Net.ImageFetcher.ReqTest do
   @moduledoc """
   The real URL image fetcher (#75). The SSRF resolver is injected in
   `config/test.exs` (`Grappa.ThemesSsrfTestResolver`) so a Bypass server on
@@ -7,7 +7,7 @@ defmodule Grappa.Themes.ImageFetcher.ReqTest do
   """
   use ExUnit.Case, async: true
 
-  alias Grappa.Themes.ImageFetcher.Req, as: Fetcher
+  alias Grappa.Net.ImageFetcher.Req, as: Fetcher
 
   # Minimal PNG signature + padding — enough to assert byte round-trip.
   @png <<137, 80, 78, 71, 13, 10, 26, 10>> <> :binary.copy(<<0>>, 64)

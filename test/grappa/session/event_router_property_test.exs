@@ -75,7 +75,10 @@ defmodule Grappa.Session.EventRouterPropertyTest do
         topics: %{},
         channels_created: %{},
         channel_modes: %{},
-        userhost_cache: %{}
+        userhost_cache: %{},
+        # M2
+        peer_profile_cache: %{},
+        show_peer_profiles: false
       }
     end
   end
@@ -291,7 +294,10 @@ defmodule Grappa.Session.EventRouterPropertyTest do
         network_id: 1,
         nick: "self",
         members: original_members,
-        userhost_cache: %{}
+        userhost_cache: %{},
+        # M2
+        peer_profile_cache: %{},
+        show_peer_profiles: false
       }
 
       msg = %Message{
@@ -328,7 +334,10 @@ defmodule Grappa.Session.EventRouterPropertyTest do
       topics: %{},
       channels_created: %{},
       channel_modes: %{},
-      userhost_cache: %{}
+      userhost_cache: %{},
+      # M2
+      peer_profile_cache: %{},
+      show_peer_profiles: false
     }
   end
 

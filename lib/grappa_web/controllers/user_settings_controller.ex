@@ -123,6 +123,36 @@ defmodule GrappaWeb.UserSettingsController do
   def update_upload_ttl_seconds(_, _), do: {:error, :bad_request}
 
   @doc """
+  `GET /me/settings/show-peer-profiles` — M2: whether this subject has
+  opted in to grappa querying OTHER users' CTCP USERINFO profile (the
+  gender badge's source). Default `false`.
+  """
+  @spec show_show_peer_profiles(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show_show_peer_profiles(conn, _) do
+    subject = Subject.from_assigns(conn.assigns)
+    enabled = UserSettings.get_show_peer_profiles(subject)
+    render(conn, :show_peer_profiles, enabled: enabled)
+  end
+
+  @doc """
+  `PUT /me/settings/show-peer-profiles` — persists the opt-in. Body:
+  `{"show_peer_profiles": true | false}`. Takes effect on a live
+  session's next (re)spawn, not instantly — see
+  `Grappa.UserSettings.get_show_peer_profiles/1`.
+  """
+  @spec update_show_peer_profiles(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
+  def update_show_peer_profiles(conn, %{"show_peer_profiles" => enabled}) when is_boolean(enabled) do
+    subject = Subject.from_assigns(conn.assigns)
+
+    with {:ok, _} <- UserSettings.put_show_peer_profiles(subject, enabled) do
+      render(conn, :show_peer_profiles, enabled: UserSettings.get_show_peer_profiles(subject))
+    end
+  end
+
+  def update_show_peer_profiles(_, _), do: {:error, :bad_request}
+
+  @doc """
   `GET /me/settings/auto-away-debounce-seconds` — the subject's
   auto-away grace period (#348).
 

@@ -75,7 +75,7 @@ defmodule Grappa.Themes.BackgroundImageTest do
   end
 
   test "url path delegates to the injected fetcher, re-encodes, and stores", ctx do
-    expect(Grappa.Themes.ImageFetcherMock, :fetch, fn "http://host/bg.png" ->
+    expect(Grappa.Net.ImageFetcherMock, :fetch, fn "http://host/bg.png" ->
       {:ok, ctx.png, "image/png"}
     end)
 
@@ -86,14 +86,14 @@ defmodule Grappa.Themes.BackgroundImageTest do
   end
 
   test "url path propagates an SSRF block from the fetcher", ctx do
-    expect(Grappa.Themes.ImageFetcherMock, :fetch, fn _ -> {:error, :ssrf_blocked} end)
+    expect(Grappa.Net.ImageFetcherMock, :fetch, fn _ -> {:error, :ssrf_blocked} end)
 
     assert {:error, :ssrf_blocked} =
              BackgroundImage.process_and_store(ctx.subject, {:url, "http://10.0.0.1/x"})
   end
 
   test "url path propagates a fetch failure from the fetcher", ctx do
-    expect(Grappa.Themes.ImageFetcherMock, :fetch, fn _ -> {:error, :fetch_failed} end)
+    expect(Grappa.Net.ImageFetcherMock, :fetch, fn _ -> {:error, :fetch_failed} end)
 
     assert {:error, :fetch_failed} =
              BackgroundImage.process_and_store(ctx.subject, {:url, "http://host/gone"})

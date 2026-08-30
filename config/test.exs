@@ -132,6 +132,14 @@ config :grappa,
          __DIR__
        )
 
+# M3b — mirrors the uploads storage config above.
+config :grappa,
+       :peer_avatars_storage_root,
+       Path.expand(
+         "../runtime/peer_avatars_test#{System.get_env("MIX_TEST_PARTITION")}",
+         __DIR__
+       )
+
 # #399 — point the embedded-frontend serving at a committed fixture
 # bundle (a Vite-shaped index.html + assets/ + backgrounds/ +
 # service-worker.js + manifest) so the SPA-serving + Bundle live-read
@@ -197,8 +205,8 @@ config :grappa, :vhost_ptr_resolver, &Grappa.PtrTestResolver.resolve/1
 # Req-impl tests can reach a Bypass server) while delegating every other host
 # to the real `Grappa.Net.Ssrf` guard, keeping the block path honest.
 config :grappa, :themes,
-  image_fetcher: Grappa.Themes.ImageFetcherMock,
-  image_ssrf_resolver: Grappa.Themes.ImageFetcher.TestResolver
+  image_fetcher: Grappa.Net.ImageFetcherMock,
+  image_ssrf_resolver: Grappa.Net.ImageFetcher.TestResolver
 
 # #543 INC-5 — source-alias command seam → a Mox so the FreeBSD/Linux adapter
 # tests assert argv + exit-mapping without a real `sudo ifconfig` / `sysctl` /

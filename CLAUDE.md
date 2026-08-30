@@ -48,6 +48,7 @@ Grappa.Application
 ├── Grappa.Net.SourceAliasManager      (#543 alias ref-counts; after Endpoint — boot reconcile; before Bootstrap — sessions acquire)
 ├── Grappa.Visitors.Reaper             (60s sweep of expired visitors; after Endpoint)
 ├── Grappa.Uploads.Reaper              (UX-6-B1 upload GC sweep; after Endpoint)
+├── Grappa.Avatars.Reaper              (M3b peer-avatar cache GC sweep; after Endpoint)
 ├── Grappa.Accounts.Reaper             (#223 idle auth-session GC; after Endpoint)
 └── Grappa.Bootstrap                   (reads DB credentials, spawns sessions; LAST)
 ```

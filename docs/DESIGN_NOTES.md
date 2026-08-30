@@ -43692,3 +43692,73 @@ vjt's readings off the m42 front, reported here and not reproduced. Nothing
 in this change was exercised against a live proxy: `nginx -t` proves the
 file parses and that the uncomment path parses, and says nothing about
 whether 400 is the right burst for anybody else's deployment.
+<!-- entry #1280 -->
+
+---
+
+## 2026-08-29 — #1280: KVIrc-style profile (USERINFO + AVATAR) — where the avatar lives, and why it's not a scrollback exception
+
+Lucy asked for a KVIrc-era "profile" per `(user, network)`: age/gender/
+location/languages/a free custom field over the classic CTCP USERINFO
+convention, plus an avatar over CTCP AVATAR. Investigating the actual
+KVIrc source (`KviIrcServerParser_ctcp.cpp`, `KviAvatar.cpp`) showed
+these are two unrelated, unauthenticated, pre-IRCv3 mechanisms — USERINFO
+is a pull-based free-text reply (KVIrc itself only ever parses `Gender=`
+back out of it, everything else is display-only); AVATAR's reply is
+either an `http://` URL or a bare filename fetched via **DCC**, a direct
+P2P TCP connection to the querying client. Shipped in three milestones:
+M1 (the text fields + USERINFO auto-reply), M2 (opt-in peer visibility +
+a gender badge in the member list), M3a (this entry — the user's own
+avatar), with M3b (peer avatars) still to come.
+
+**DCC is out of scope, permanently.** grappa is an always-on multi-user
+bouncer; accepting inbound P2P connections from arbitrary IRC nicks has
+no place in that architecture and was never seriously considered. The
+CTCP AVATAR reply grappa sends is **URL-only** — always an absolute
+`Grappa.Uploads.public_url/2` HTTP(S) URL, never a bare filename, so
+there is no DCC branch to trigger on either end.
+
+**The avatar renders in the WHOIS card, not the member list and not
+scrollback.** This was a mid-plan correction: the first pass at this
+feature assumed a small icon next to the nick in the member list (like
+the M2 gender badge) and treated that as a deliberate, narrow exception
+to *"IRC stays text only… no inline rendering of media types in
+scrollback"* worth a DESIGN_NOTES note on its own. Restricting it to the
+WHOIS card instead (`WhoisCard.tsx`, an already-existing structured
+peer-info surface — nothing new to build there) means the avatar is
+**outside that invariant's literal scope** (WHOIS is not scrollback) —
+this note exists anyway because it's still a new image-rendering
+surface and every durable decision belongs in the log, not because the
+invariant needed lifting.
+
+**Own avatar (M3a, this entry) is same-origin and permanent, on the
+existing upload pipeline — no new storage mechanism.** `Grappa.Uploads`
+already supported a permanent row (`expires_at: nil`, previously
+documented as "admin-pinned uploads, not exposed in v1" — now exposed).
+`Grappa.Networks.Credential.avatar_upload_id` is a `belongs_to` onto it;
+`Credentials.set_avatar/3` creates-then-links-then-retires (never
+retire-then-create — a failed replace must never leave the user with no
+avatar at all), reusing `Uploads.Reaper`'s exact unlink-then-soft-delete
+sequence for the retired row.
+
+**A peer's avatar (M3b, not yet built) will NEVER be fetched by the
+browser directly.** The URL a peer's CTCP AVATAR reply carries is
+arbitrary and untrusted — grappa's server will fetch it (SSRF-hardened:
+scheme allowlist, private/loopback/link-local rejection re-checked after
+every redirect hop, size + timeout caps, real content sniffed against
+the same image MIME allowlist `POST /api/uploads` uses, run through the
+existing `MetadataStrip` for the same privacy reason a stranger's avatar
+can carry its own EXIF/GPS data), cache the sanitized bytes, and serve
+them from grappa's own origin behind normal auth. This avoids leaking
+the viewing user's IP to a stranger's image host, sidesteps CSP
+entirely (no `img-src` loosening needed), and keeps the public,
+unauthenticated `GET /uploads/:slug` route reserved for content the
+operator's own users chose to publish — never a proxy for arbitrary
+third-party URLs.
+
+**Apply:** when a feature's first design pass borrows a UI slot "because
+it's the closest existing pattern" (member-list badge, scrollback
+inline), check whether a MORE SPECIFIC existing surface (here, the
+already-built WHOIS card) fits the actual use case before reaching for
+an invariant exception — the exception may turn out to be unnecessary,
+not just narrow.

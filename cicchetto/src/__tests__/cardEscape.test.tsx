@@ -79,6 +79,7 @@ const WHOIS_BUNDLE: WhoisBundle = {
   secure_cipher: null,
   certfp: null,
   extra_lines: null,
+  avatar_url: null,
 };
 
 const WHOWAS_BUNDLE = {
@@ -129,6 +130,12 @@ const SERVER_NET: Network = {
   connection_state_reason: null,
   connection_state_changed_at: new Date(SERVER_NOW - 86400 * 1000).toISOString(),
   connection: SERVER_CONN,
+  age: null,
+  gender: null,
+  location: null,
+  languages: null,
+  custom: null,
+  avatar_url: null,
   inserted_at: "2026-07-01T00:00:00.000Z",
   updated_at: "2026-07-01T00:00:00.000Z",
 };

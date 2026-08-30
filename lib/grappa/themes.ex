@@ -44,6 +44,7 @@ defmodule Grappa.Themes do
     top_level?: true,
     deps: [
       Grappa.Accounts.User,
+      Grappa.Net.ImageFetcher,
       Grappa.Net.Ssrf,
       # #299 amendment (author model A): publish snapshots the visitor's
       # representative nick from the credential anchor.

@@ -3072,9 +3072,12 @@ describe("subscribe — BUG5b: own-action events do not bump unread", () => {
       });
 
       const key = channelKey("freenode", "#grappa");
+      // M2 — `narrowMembers` totals the gender field: a member entry the
+      // server sent without one (an old server, or a peer who never set it)
+      // reaches the store as an explicit `null`, never an absent key.
       expect(members.seedMembers).toHaveBeenCalledWith(key, [
-        { nick: "vjt", modes: ["@"] },
-        { nick: "alice", modes: [] },
+        { nick: "vjt", modes: ["@"], gender: null },
+        { nick: "alice", modes: [], gender: null },
       ]);
     });
 

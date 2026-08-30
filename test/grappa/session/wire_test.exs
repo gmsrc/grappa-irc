@@ -344,7 +344,9 @@ defmodule Grappa.Session.WireTest do
                kind: :members_seeded,
                network: "azzurra",
                channel: "#grappa",
-               members: members
+               # M2 — member/1 always adds :gender (nil when the source
+               # map didn't carry one), so the expected payload does too.
+               members: Enum.map(members, &Map.put(&1, :gender, nil))
              }
     end
 
@@ -372,7 +374,8 @@ defmodule Grappa.Session.WireTest do
                kind: :names_reply,
                network: "azzurra",
                channel: "#grappa",
-               members: members
+               # M2 — see the members_seeded/3 test above.
+               members: Enum.map(members, &Map.put(&1, :gender, nil))
              }
     end
 
@@ -508,11 +511,14 @@ defmodule Grappa.Session.WireTest do
 
   describe "member/1" do
     test "projects a Session.member() to the per-row wire shape" do
-      assert Wire.member(%{nick: "vjt", modes: ["@"]}) == %{nick: "vjt", modes: ["@"]}
+      # M2 — `:gender` rides along, defaulting nil when the caller didn't
+      # merge one in (peer never queried/answered, or show_peer_profiles
+      # off).
+      assert Wire.member(%{nick: "vjt", modes: ["@"]}) == %{nick: "vjt", modes: ["@"], gender: nil}
     end
 
     test "preserves an empty modes list (regular voice-less member)" do
-      assert Wire.member(%{nick: "bob", modes: []}) == %{nick: "bob", modes: []}
+      assert Wire.member(%{nick: "bob", modes: []}) == %{nick: "bob", modes: [], gender: nil}
     end
 
     test "filters extra source fields to the contract (future-drift insulation)" do
@@ -522,7 +528,18 @@ defmodule Grappa.Session.WireTest do
       # free today; this test pins the contract so a regression that
       # adds Map.put(:account, ...) to the projection is caught.
       assert Wire.member(%{nick: "vjt", modes: ["@"], account: "leaked", host: "h.example"}) ==
-               %{nick: "vjt", modes: ["@"]}
+               %{nick: "vjt", modes: ["@"], gender: nil}
+    end
+
+    # M2
+    test "projects a known gender through unchanged" do
+      assert Wire.member(%{nick: "vjt", modes: [], gender: :nonbinary}) ==
+               %{nick: "vjt", modes: [], gender: :nonbinary}
+    end
+
+    test "defaults gender to nil when the source map omits the key entirely" do
+      refute Map.has_key?(%{nick: "vjt", modes: []}, :gender)
+      assert Wire.member(%{nick: "vjt", modes: []}).gender == nil
     end
   end
 
@@ -535,8 +552,8 @@ defmodule Grappa.Session.WireTest do
 
       assert Wire.members_index(members) == %{
                members: [
-                 %{nick: "vjt", modes: ["@"]},
-                 %{nick: "alice", modes: []}
+                 %{nick: "vjt", modes: ["@"], gender: nil},
+                 %{nick: "alice", modes: [], gender: nil}
                ]
              }
     end
@@ -791,7 +808,7 @@ defmodule Grappa.Session.WireTest do
         channels: ["@#italia", "+#grappa"]
       }
 
-      payload = Wire.whois_bundle("azzurra", "alice", accum)
+      payload = Wire.whois_bundle("azzurra", "alice", accum, nil)
 
       assert payload == %{
                kind: :whois_bundle,
@@ -832,12 +849,13 @@ defmodule Grappa.Session.WireTest do
                secure: false,
                secure_cipher: nil,
                certfp: nil,
-               extra_lines: nil
+               extra_lines: nil,
+               avatar_url: nil
              }
     end
 
     test "tolerates an empty accum (no numerics fired before 318) — every field nil; is_operator false" do
-      payload = Wire.whois_bundle("azzurra", "ghost", %WhoisAccum{})
+      payload = Wire.whois_bundle("azzurra", "ghost", %WhoisAccum{}, nil)
 
       assert payload == %{
                kind: :whois_bundle,
@@ -874,7 +892,8 @@ defmodule Grappa.Session.WireTest do
                secure: false,
                secure_cipher: nil,
                certfp: nil,
-               extra_lines: nil
+               extra_lines: nil,
+               avatar_url: nil
              }
     end
 
@@ -889,7 +908,7 @@ defmodule Grappa.Session.WireTest do
         extra_lines: [%{numeric: 320, text: "is a volunteer staff member"}]
       }
 
-      payload = Wire.whois_bundle("libera", "alice", accum)
+      payload = Wire.whois_bundle("libera", "alice", accum, nil)
 
       assert payload.account == "AliceAccount"
       assert payload.secure == true
@@ -904,7 +923,7 @@ defmodule Grappa.Session.WireTest do
     # verbatim. :rail is the query-rail auto-fetch; anything else defaults to
     # :user (proven by the two exact-map tests above, which prime no :source).
     test "projects the accum :source (rail auto-fetch) into the wire shape" do
-      payload = Wire.whois_bundle("azzurra", "alice", %WhoisAccum{source: :rail})
+      payload = Wire.whois_bundle("azzurra", "alice", %WhoisAccum{source: :rail}, nil)
       assert payload.source == :rail
     end
   end
@@ -1183,7 +1202,7 @@ defmodule Grappa.Session.WireTest do
         Wire.kicked("net", "#c", "by", "r"),
         Wire.away_confirmed("net", :present),
         Wire.mentions_bundle("net", "from", "to", nil, []),
-        Wire.whois_bundle("net", "alice", %WhoisAccum{}),
+        Wire.whois_bundle("net", "alice", %WhoisAccum{}, nil),
         Wire.peer_away("net", "alice", "Gone fishing"),
         Wire.invite_ack("net", "#italia", "alice"),
         Wire.lusers_bundle("net", %LusersAccum{}),

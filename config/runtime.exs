@@ -171,6 +171,15 @@ if config_env() == :prod do
   # knob, and every env var carries a registry/compose/.env.example tax.
   wal_checkpoint_bytes = 16 * 1024 * 1024
 
+  # M3b — cached peer CTCP AVATAR images. Read at boot, stashed in
+  # :persistent_term via Grappa.Avatars.boot/1. Sibling of the uploads
+  # dir, its own subdirectory (a separate trust domain — see
+  # `Grappa.Avatars` moduledoc).
+  peer_avatars_storage_root =
+    System.get_env("PEER_AVATARS_STORAGE_ROOT") || "runtime/peer_avatars"
+
+  config :grappa, :peer_avatars_storage_root, peer_avatars_storage_root
+
   # NB: `:cic_dist_root` is derived ABOVE, hoisted out of this prod block
   # (all envs except :test) since #485 — see the comment there, which
   # folds in the #526 jail-CWD knowledge that used to live here.

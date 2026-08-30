@@ -202,7 +202,30 @@ defmodule Grappa.Protocol do
   # `walkObject` drops undeclared keys rather than rejecting them
   # (additive-only, #447) — so the `row_count` an old server still sends
   # is simply ignored. It stays at 2.
-  @protocol_version 8
+  # v9 (#1865) is additive again, and on three surfaces at once: the
+  # per-network profile (`age`, `gender`, `location`, `languages`,
+  # `custom`) plus `avatar_url` join `Grappa.Networks.Wire`'s credential
+  # and network-with-nick payloads, `avatar_url` joins the WHOIS bundle,
+  # and `whois_avatar_ready` is a NEW event arm on the user topic —
+  # emitted once the peer's avatar has been fetched server-side, which is
+  # inherently later than the bundle that named it.
+  #
+  # The bump is the rule, not the gate (see the #1782 paragraph above):
+  # additivity describes what the server EMITS, and a floor that moves
+  # only when something breaks is a floor that lies about what a client
+  # is talking to. `mix grappa.wire_pin --check` is what makes it
+  # non-optional.
+  #
+  # @min_protocol_version stays at 1 and this one is the ordinary case,
+  # not the argued one: every field here is new, none is repurposed or
+  # taken back, and cic's `walkObject` DROPS undeclared keys rather than
+  # rejecting them — so a v1..v8 bundle pointed at a v9 server ignores
+  # the profile fields and the new event arm and is otherwise untouched.
+  # The mirror obligation on the cic side does not fire either:
+  # `MIN_SERVER_PROTOCOL_VERSION` rises when the bundle starts REQUIRING
+  # a newer field, and cic renders the profile only when present. It
+  # stays at 2.
+  @protocol_version 9
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -213,7 +236,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 8
+  @spec version() :: 9
   def version, do: @protocol_version
 
   @doc """

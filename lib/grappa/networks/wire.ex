@@ -26,6 +26,7 @@ defmodule Grappa.Networks.Wire do
   """
 
   alias Grappa.Networks.{Credential, Network}
+  alias Grappa.Uploads
   alias Grappa.Wire.Time, as: WireTime
 
   @type credential_json :: %{
@@ -40,6 +41,17 @@ defmodule Grappa.Networks.Wire do
           connection_state: Credential.connection_state(),
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
+          age: String.t() | nil,
+          gender: Credential.gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil,
+          # M3a — the credential's own avatar, absolute URL (built by
+          # `Grappa.Uploads.public_url/2` off the preloaded
+          # `:avatar_upload`), `nil` when unset. Same "carried here for
+          # BOTH subjects so the settings editor can seed itself from
+          # `GET /networks`" rationale as the profile fields above.
+          avatar_url: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -121,6 +133,22 @@ defmodule Grappa.Networks.Wire do
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
           connection: connection_info() | nil,
+          # KVIrc-style CTCP USERINFO profile — carried here (mirroring
+          # `:ident`/`:realname` above, #211 phase 7's own precedent) so
+          # cic's per-network profile editor (`PATCH /networks/:id/profile`)
+          # can seed its inputs from the `GET /networks` rows, for BOTH
+          # subjects, the same way the identity editor already does.
+          age: String.t() | nil,
+          gender: Credential.gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil,
+          # M3a — the credential's own avatar, absolute URL (built by
+          # `Grappa.Uploads.public_url/2` off the preloaded
+          # `:avatar_upload`), `nil` when unset. Same "carried here for
+          # BOTH subjects so the settings editor can seed itself from
+          # `GET /networks`" rationale as the profile fields above.
+          avatar_url: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -164,6 +192,22 @@ defmodule Grappa.Networks.Wire do
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: String.t() | nil,
           connection: connection_info() | nil,
+          # KVIrc-style CTCP USERINFO profile — carried here (mirroring
+          # `:ident`/`:realname` above, #211 phase 7's own precedent) so
+          # cic's per-network profile editor (`PATCH /networks/:id/profile`)
+          # can seed its inputs from the `GET /networks` rows, for BOTH
+          # subjects, the same way the identity editor already does.
+          age: String.t() | nil,
+          gender: Credential.gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil,
+          # M3a — the credential's own avatar, absolute URL (built by
+          # `Grappa.Uploads.public_url/2` off the preloaded
+          # `:avatar_upload`), `nil` when unset. Same "carried here for
+          # BOTH subjects so the settings editor can seed itself from
+          # `GET /networks`" rationale as the profile fields above.
+          avatar_url: String.t() | nil,
           inserted_at: String.t(),
           updated_at: String.t()
         }
@@ -318,10 +362,45 @@ defmodule Grappa.Networks.Wire do
       connection_state: c.connection_state,
       connection_state_reason: c.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(c.connection_state_changed_at),
+      # KVIrc-style CTCP USERINFO profile — additive, snake_case, no
+      # `protocol_version` bump needed (CLAUDE.md's additive-only wire
+      # contract). Un-prefixed on the wire (the `profile_` prefix is a
+      # storage-column concern); `PATCH /networks/:id/profile` accepts
+      # the same un-prefixed keys back.
+      age: c.profile_age,
+      gender: c.profile_gender,
+      location: c.profile_location,
+      languages: c.profile_languages,
+      custom: c.profile_custom,
+      avatar_url: avatar_url(c),
       inserted_at: DateTime.to_iso8601(c.inserted_at),
       updated_at: DateTime.to_iso8601(c.updated_at)
     }
   end
+
+  @doc """
+  M3a — the credential's own avatar as an absolute URL
+  (`Grappa.Uploads.public_url/2` off the preloaded `:avatar_upload`),
+  or `nil` when unset. Absolute (not a bare `/uploads/...` path)
+  because the SAME value also feeds the CTCP AVATAR NOTICE reply
+  (`Grappa.Session.EventRouter`) — plain text sent to an arbitrary
+  remote IRC client with no origin of its own to resolve a relative
+  URL against — so there is exactly one avatar-URL shape everywhere,
+  not a relative one for JSON and a separately-built absolute one for
+  IRC.
+
+  `:avatar_upload` MUST be preloaded (same convention as `:network`
+  above — every context function that returns a credential for
+  rendering preloads both, see `Grappa.Networks.Credentials`). An
+  un-preloaded association reads as `Ecto.Association.NotLoaded`, not
+  `nil` — the second clause below only matches a genuinely unset FK.
+  """
+  @spec avatar_url(Credential.t()) :: String.t() | nil
+  def avatar_url(%Credential{avatar_upload: %Uploads.Upload{} = upload}) do
+    Uploads.public_url(upload.slug, upload.mime)
+  end
+
+  def avatar_url(%Credential{avatar_upload_id: nil}), do: nil
 
   @doc """
   Renders a `Networks.Network` + the credential's nick + T32
@@ -357,6 +436,12 @@ defmodule Grappa.Networks.Wire do
       connection_state_reason: cred.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
       connection: connection_json(connection),
+      age: cred.profile_age,
+      gender: cred.profile_gender,
+      location: cred.profile_location,
+      languages: cred.profile_languages,
+      custom: cred.profile_custom,
+      avatar_url: avatar_url(cred),
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }
@@ -401,6 +486,12 @@ defmodule Grappa.Networks.Wire do
       connection_state_reason: cred.connection_state_reason,
       connection_state_changed_at: WireTime.iso8601_or_nil(cred.connection_state_changed_at),
       connection: connection_json(connection),
+      age: cred.profile_age,
+      gender: cred.profile_gender,
+      location: cred.profile_location,
+      languages: cred.profile_languages,
+      custom: cred.profile_custom,
+      avatar_url: avatar_url(cred),
       inserted_at: DateTime.to_iso8601(n.inserted_at),
       updated_at: DateTime.to_iso8601(n.updated_at)
     }

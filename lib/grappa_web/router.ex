@@ -401,6 +401,13 @@ defmodule GrappaWeb.Router do
     get "/me/settings/upload-ttl-seconds", UserSettingsController, :show_upload_ttl_seconds
     put "/me/settings/upload-ttl-seconds", UserSettingsController, :update_upload_ttl_seconds
 
+    # M2 — opt-in to grappa querying OTHER users' CTCP USERINFO profile
+    # (the gender badge's source). Default false; no live-broadcast bridge
+    # (see `Grappa.UserSettings.get_show_peer_profiles/1` doc) — a live
+    # session picks it up on its next (re)spawn.
+    get "/me/settings/show-peer-profiles", UserSettingsController, :show_show_peer_profiles
+    put "/me/settings/show-peer-profiles", UserSettingsController, :update_show_peer_profiles
+
     # #348 — the WS-disconnect -> upstream AWAY grace period, per subject.
     # ONE scalar carries three states: `null` = no preference (the
     # server-wide default applies), `0` = OFF (no timer is ever armed),
@@ -515,6 +522,27 @@ defmodule GrappaWeb.Router do
     # ResolveNetwork pipeline (ownership built-in) + the `networks` nginx
     # allowlist — no proxy change.
     patch "/identity", NetworksController, :identity
+
+    # KVIrc-style CTCP USERINFO profile (age/gender/location/languages/
+    # custom) for BOTH subjects. Sibling of `/identity` rather than a key
+    # on it — unlike identity, this never bounces the live upstream
+    # connection (see `NetworksController.profile/2` doc). Same
+    # ResolveNetwork pipeline (ownership) + no proxy change.
+    patch "/profile", NetworksController, :profile
+
+    # M3a — own avatar upload, sibling of `/profile` in the same sense
+    # (never bounces the live upstream connection). Same ResolveNetwork
+    # pipeline (ownership) + no proxy change.
+    put "/avatar", NetworksController, :avatar
+    delete "/avatar", NetworksController, :delete_avatar
+
+    # M3b — authenticated serving route for a cached PEER avatar
+    # (`Grappa.Avatars`, keyed by `(network, folded nick)`). Deliberately
+    # NOT the public `/uploads/:slug` shape — see
+    # `NetworksController.peer_avatar/2` doc. Same ResolveNetwork
+    # pipeline (ownership: any live credential on this network can view
+    # any peer avatar cached for it).
+    get "/peer_avatar/:slug", NetworksController, :peer_avatar
 
     # #189 — on-connect perform list editor (raw IRC lines run SERVER-side
     # at 001, before the built-in identify + autojoin). Rides the same

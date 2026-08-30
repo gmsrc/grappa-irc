@@ -8,7 +8,7 @@ defmodule Grappa.Themes.BackgroundImage do
   script) and an SSRF via fetch-by-URL. The defences, in order:
 
     1. **Source** — either a direct `Plug.Upload` or a URL fetched through the
-       SSRF-guarded, size-capped `Grappa.Themes.ImageFetcher` (injected impl).
+       SSRF-guarded, size-capped `Grappa.Net.ImageFetcher` (injected impl).
        Uploads are validated against the raster content-type allowlist (no SVG)
        and the same byte cap.
     2. **Decode + re-encode** — the bytes are run through ffmpeg (`-frames:v 1`,
@@ -27,9 +27,9 @@ defmodule Grappa.Themes.BackgroundImage do
 
   Returns `{:ok, slug}` or a tagged `{:error, reason}`; never raises.
   """
+  alias Grappa.Net.ImageFetcher
   alias Grappa.{ServerSettings, Uploads}
   alias Grappa.Sys.HardenedCmd
-  alias Grappa.Themes.ImageFetcher
 
   require Logger
 

@@ -1,7 +1,10 @@
 import {
   deleteAccount as apiDeleteAccount,
+  deleteNetworkAvatar as apiDeleteNetworkAvatar,
   putNetworkPassword as apiPutNetworkPassword,
   updateNetworkIdentity as apiUpdateNetworkIdentity,
+  updateNetworkProfile as apiUpdateNetworkProfile,
+  uploadNetworkAvatar as apiUploadNetworkAvatar,
 } from "./api";
 import { clearLocalAuth, getSubject, isPersistentIdentity, logout, token } from "./auth";
 import { requestConfirm } from "./confirmDialog";
@@ -191,6 +194,51 @@ export async function updateIdentity(
   const t = token();
   if (t === null) return;
   await apiUpdateNetworkIdentity(t, networkSlug, fields);
+  refetchUser();
+}
+
+/**
+ * updateProfile — the KVIrc-style CTCP USERINFO profile (age/gender/
+ * location/languages/a free custom field) on `networkSlug`
+ * (`PATCH /networks/:slug/profile`). Unlike identity, there is NO live
+ * reconnect: these fields never ride the IRC handshake, they only feed
+ * `Grappa.Session.EventRouter`'s CTCP USERINFO auto-reply — the server
+ * updates any live session's in-memory copy without bouncing it.
+ *
+ * Refetches `/me` so the drawer reflects the persisted values. Errors
+ * PROPAGATE (unlike quit/logout) — a 422 (CRLF injection, over the byte
+ * cap, an unrecognised gender) must surface inline.
+ */
+export async function updateProfile(
+  networkSlug: string,
+  fields: { age?: string; gender?: string; location?: string; languages?: string; custom?: string },
+): Promise<void> {
+  const t = token();
+  if (t === null) return;
+  await apiUpdateNetworkProfile(t, networkSlug, fields);
+  refetchUser();
+}
+
+/**
+ * uploadAvatar — M3a — sets (or replaces) the own avatar on `networkSlug`
+ * (`PUT /networks/:slug/avatar`). Same never-bounces-the-connection
+ * posture as `updateProfile` above.
+ */
+export async function uploadAvatar(networkSlug: string, file: File): Promise<void> {
+  const t = token();
+  if (t === null) return;
+  await apiUploadNetworkAvatar(t, networkSlug, file);
+  refetchUser();
+}
+
+/**
+ * deleteAvatar — M3a — clears the avatar on `networkSlug`
+ * (`DELETE /networks/:slug/avatar`).
+ */
+export async function deleteAvatar(networkSlug: string): Promise<void> {
+  const t = token();
+  if (t === null) return;
+  await apiDeleteNetworkAvatar(t, networkSlug);
   refetchUser();
 }
 

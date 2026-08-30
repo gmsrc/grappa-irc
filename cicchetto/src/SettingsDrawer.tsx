@@ -32,10 +32,22 @@ import { formatDuration } from "./lib/duration";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { errorMessage, friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
-import { deleteAccountBody, updateIdentity, updateNetworkPassword } from "./lib/lifecycle";
+import {
+  deleteAccountBody,
+  deleteAvatar,
+  updateIdentity,
+  updateNetworkPassword,
+  updateProfile,
+  uploadAvatar,
+} from "./lib/lifecycle";
 import { networks, user } from "./lib/networks";
 import { mirrorNotificationPrefs, notificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
+import {
+  loadShowPeerProfiles,
+  saveShowPeerProfiles,
+  showPeerProfilesValue,
+} from "./lib/peerProfiles";
 import {
   deletePushSubscription,
   deviceRows,
@@ -152,6 +164,10 @@ const SettingsDrawer: Component<Props> = (props) => {
   // which is why it is a signal and not derived from the stored value
   // alone.
   const [autoAwaySavingError, setAutoAwaySavingError] = createSignal<string | null>(null);
+  // M2 — the peer-profiles opt-in. Boolean, no custom-value mode.
+  const [showPeerProfilesSavingError, setShowPeerProfilesSavingError] = createSignal<string | null>(
+    null,
+  );
   const [autoAwayCustomMode, setAutoAwayCustomMode] = createSignal(false);
   const [autoAwayCustomDraft, setAutoAwayCustomDraft] = createSignal("");
   // #228, #251 — source-bind (vhost) selection. Server owns the allow-set +
@@ -293,6 +309,28 @@ const SettingsDrawer: Component<Props> = (props) => {
   // call sites.
   const [identityArmed, setIdentityArmed] = createSignal(false);
 
+  // KVIrc-style CTCP USERINFO profile (age/gender/location/languages/a free
+  // custom field). Targets the SAME selected network the identity editor
+  // above does — no separate picker. Unlike identity, saving does NOT
+  // reconnect (these fields never ride the IRC handshake), so there's no
+  // two-tap confirm here — a plain save.
+  const [profileAge, setProfileAge] = createSignal("");
+  const [profileGender, setProfileGender] = createSignal("");
+  const [profileLocation, setProfileLocation] = createSignal("");
+  const [profileLanguages, setProfileLanguages] = createSignal("");
+  const [profileCustom, setProfileCustom] = createSignal("");
+  const [profileSaving, setProfileSaving] = createSignal(false);
+  const [profileError, setProfileError] = createSignal<string | null>(null);
+  const [profileSaved, setProfileSaved] = createSignal(false);
+
+  // M3a — the own avatar, on the SAME selected network the profile editor
+  // above does. No text signal for the value itself: the current avatar is
+  // read straight off `net.avatar_url` (server-authoritative, like every
+  // other credential field here) — these signals only track the upload
+  // widget's transient in-flight state.
+  const [avatarUploading, setAvatarUploading] = createSignal(false);
+  const [avatarError, setAvatarError] = createSignal<string | null>(null);
+
   // #124 — the per-network PASSWORD field. Its own signals and its own save,
   // NOT folded into the identity form above: the password is write-only and
   // leave-blank-to-keep, while the identity fields round-trip and treat a
@@ -335,8 +373,73 @@ const SettingsDrawer: Component<Props> = (props) => {
       setIdentityArmed(false);
       setIdentitySaved(false);
       setIdentityError(null);
+      setProfileAge(net.age ?? "");
+      setProfileGender(net.gender ?? "");
+      setProfileLocation(net.location ?? "");
+      setProfileLanguages(net.languages ?? "");
+      setProfileCustom(net.custom ?? "");
+      setProfileSaved(false);
+      setProfileError(null);
     }),
   );
+
+  const onSaveProfile = async () => {
+    setProfileError(null);
+    setProfileSaved(false);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    setProfileSaving(true);
+    try {
+      // Send all 5 fields; a blank one clears it (same "editor owns the
+      // full value including clear" contract as identity above).
+      await updateProfile(net.slug, {
+        age: profileAge(),
+        gender: profileGender(),
+        location: profileLocation(),
+        languages: profileLanguages(),
+        custom: profileCustom(),
+      });
+      setProfileSaved(true);
+    } catch (err) {
+      setProfileError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't save profile. Try again.",
+      );
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const onUploadAvatar = async (file: File) => {
+    setAvatarError(null);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    setAvatarUploading(true);
+    try {
+      await uploadAvatar(net.slug, file);
+    } catch (err) {
+      setAvatarError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't upload avatar. Try again.",
+      );
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
+  const onDeleteAvatar = async () => {
+    setAvatarError(null);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    setAvatarUploading(true);
+    try {
+      await deleteAvatar(net.slug);
+    } catch (err) {
+      setAvatarError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't remove avatar. Try again.",
+      );
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
 
   const onSaveIdentity = async () => {
     setIdentityArmed(false);
@@ -463,6 +566,9 @@ const SettingsDrawer: Component<Props> = (props) => {
       // #348 — same reason: the auto-away control must show what the
       // server stored, not a client-side guess.
       void loadAutoAwayDebounce(t);
+      // M2 — same reason: the peer-profiles toggle must show the
+      // subject's actual opt-in, not a client-side guess.
+      void loadShowPeerProfiles(t);
       // #228, #251 — load the source-bind (vhost) view so the widget
       // reflects the server's allow-set + current selection.
       void loadVhostSettings(t);
@@ -766,6 +872,21 @@ const SettingsDrawer: Component<Props> = (props) => {
       await saveAutoAwayDebounce(t, seconds);
     } catch (err) {
       setAutoAwaySavingError(err instanceof Error ? err.message : "save_failed");
+    }
+  };
+
+  // M2 — persist the peer-profiles opt-in. Flipping this ON does not
+  // retroactively query anyone already in a joined channel — it only
+  // gates the lazy query for nicks seen from here on.
+  const onShowPeerProfilesChange = async (e: Event) => {
+    const enabled = (e.currentTarget as HTMLInputElement).checked;
+    const t = token();
+    if (t === null) return;
+    setShowPeerProfilesSavingError(null);
+    try {
+      await saveShowPeerProfiles(t, enabled);
+    } catch (err) {
+      setShowPeerProfilesSavingError(err instanceof Error ? err.message : "save_failed");
     }
   };
 
@@ -1384,6 +1505,177 @@ const SettingsDrawer: Component<Props> = (props) => {
                 </div>
               </div>
 
+              {/* KVIrc-style CTCP USERINFO profile (age/gender/location/
+                languages/a free custom field), per network — targets the
+                same selected network the identity card above does. Unlike
+                identity, saving does NOT reconnect: these fields never ride
+                the IRC handshake, they only feed the server's CTCP
+                USERINFO auto-reply — so a plain save, no two-tap confirm. */}
+              <div
+                class="settings-section settings-section-card"
+                data-testid="settings-section-profile"
+              >
+                <h4 class="settings-section-heading">profile</h4>
+                <div class="settings-identity" data-testid="settings-profile">
+                  <label for="settings-profile-age">Age</label>
+                  <input
+                    id="settings-profile-age"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileAge()}
+                    onInput={(e) => setProfileAge(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-profile-gender">Gender</label>
+                  <select
+                    id="settings-profile-gender"
+                    data-testid="settings-profile-gender"
+                    value={profileGender()}
+                    onChange={(e) => setProfileGender(e.currentTarget.value)}
+                  >
+                    <option value="">unset</option>
+                    <option value="male">male</option>
+                    <option value="female">female</option>
+                    <option value="nonbinary">non-binary</option>
+                  </select>
+
+                  <label for="settings-profile-location">Location</label>
+                  <input
+                    id="settings-profile-location"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileLocation()}
+                    onInput={(e) => setProfileLocation(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-profile-languages">Languages</label>
+                  <input
+                    id="settings-profile-languages"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileLanguages()}
+                    onInput={(e) => setProfileLanguages(e.currentTarget.value)}
+                  />
+
+                  <label for="settings-profile-custom">Custom</label>
+                  <input
+                    id="settings-profile-custom"
+                    type="text"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    value={profileCustom()}
+                    onInput={(e) => setProfileCustom(e.currentTarget.value)}
+                  />
+                  <p class="settings-identity-hint">
+                    Shown to anyone who sends you a CTCP USERINFO query. Leave a field blank to
+                    clear it.
+                  </p>
+
+                  <button
+                    type="button"
+                    class="settings-identity-apply"
+                    data-testid="settings-profile-apply"
+                    disabled={profileSaving()}
+                    onClick={() => void onSaveProfile()}
+                  >
+                    {profileSaving() ? "saving…" : "save profile"}
+                  </button>
+
+                  <Show when={profileError()}>
+                    {(msg) => (
+                      <p
+                        role="alert"
+                        class="settings-identity-error"
+                        data-testid="settings-profile-error"
+                      >
+                        {msg()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={profileSaved()}>
+                    <p class="settings-identity-ok" data-testid="settings-profile-ok">
+                      Profile saved.
+                    </p>
+                  </Show>
+                </div>
+              </div>
+
+              {/* M3a — the own avatar, per network. A permanent, self-hosted
+                upload (same `Grappa.Uploads` pipeline as any other embedded
+                upload, just `expires_at: nil`), served over CTCP AVATAR to
+                whoever asks and — once M3b lands — rendered in peers' WHOIS
+                cards. Never bounces the connection, like /profile above. */}
+              <div
+                class="settings-section settings-section-card"
+                data-testid="settings-section-avatar"
+              >
+                <h4 class="settings-section-heading">avatar</h4>
+                <div class="settings-identity" data-testid="settings-avatar">
+                  <Show when={selectedIdentityNetwork()?.avatar_url}>
+                    {(url) => (
+                      <img
+                        src={url()}
+                        alt="Current avatar"
+                        class="settings-avatar-preview"
+                        width={64}
+                        height={64}
+                      />
+                    )}
+                  </Show>
+
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
+                    data-testid="settings-avatar-file"
+                    disabled={avatarUploading()}
+                    onChange={(e) => {
+                      const file = e.currentTarget.files?.[0];
+                      e.currentTarget.value = "";
+                      if (file) void onUploadAvatar(file);
+                    }}
+                  />
+                  <p class="settings-identity-hint">
+                    Shown to anyone who sends you a CTCP AVATAR query.
+                  </p>
+
+                  <Show when={selectedIdentityNetwork()?.avatar_url}>
+                    <button
+                      type="button"
+                      class="settings-identity-apply"
+                      data-testid="settings-avatar-remove"
+                      disabled={avatarUploading()}
+                      onClick={() => void onDeleteAvatar()}
+                    >
+                      remove avatar
+                    </button>
+                  </Show>
+
+                  <Show when={avatarUploading()}>
+                    <p class="settings-identity-hint" data-testid="settings-avatar-uploading">
+                      uploading…
+                    </p>
+                  </Show>
+                  <Show when={avatarError()}>
+                    {(msg) => (
+                      <p
+                        role="alert"
+                        class="settings-identity-error"
+                        data-testid="settings-avatar-error"
+                      >
+                        {msg()}
+                      </p>
+                    )}
+                  </Show>
+                </div>
+              </div>
+
               {/* #124 — the per-network password. THE one place this secret is
                 editable: it is the credential password, the value
                 `$nickserv_pass` expands to, and for a visitor the credential
@@ -1568,6 +1860,40 @@ const SettingsDrawer: Component<Props> = (props) => {
               <Show when={autoAwaySavingError() !== null}>
                 <p class="auto-away-error" role="alert" data-testid="auto-away-error">
                   {autoAwaySavingError()}
+                </p>
+              </Show>
+            </fieldset>
+
+            {/* M2 — opt-in to grappa querying other people's CTCP USERINFO
+                profile (the member-list gender badge's source). Off by
+                default: nobody gets an outbound CTCP query from this
+                bouncer just for existing in a shared channel. */}
+            <fieldset class="show-peer-profiles-fieldset">
+              <legend>peer profiles</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={showPeerProfilesValue()}
+                  onChange={(e) => {
+                    void onShowPeerProfilesChange(e);
+                  }}
+                  data-testid="show-peer-profiles-toggle"
+                />
+                show other people's profile info (gender badge)
+              </label>
+              <p class="settings-section-blurb" data-testid="show-peer-profiles-hint">
+                When on, grappa asks other users' clients for their public CTCP USERINFO profile the
+                first time you see them in a channel, and shows a gender badge next to their name
+                when they answer. This sends a small extra message to each new person you meet — off
+                by default.
+              </p>
+              <Show when={showPeerProfilesSavingError() !== null}>
+                <p
+                  class="show-peer-profiles-error"
+                  role="alert"
+                  data-testid="show-peer-profiles-error"
+                >
+                  {showPeerProfilesSavingError()}
                 </p>
               </Show>
             </fieldset>

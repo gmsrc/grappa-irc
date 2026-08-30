@@ -85,6 +85,7 @@ const WHOIS_BUNDLE: WhoisBundle = {
   secure_cipher: null,
   certfp: null,
   extra_lines: null,
+  avatar_url: null,
 };
 
 const WHOWAS_BUNDLE = {

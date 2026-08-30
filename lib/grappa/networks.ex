@@ -49,6 +49,12 @@ defmodule Grappa.Networks do
       Grappa.PubSub,
       Grappa.Repo,
       Grappa.Scrollback,
+      # M3a — the credential's per-network avatar is a `belongs_to`
+      # onto `Grappa.Uploads.Upload` (a permanent, `expires_at: nil`
+      # row). `Grappa.Uploads`'s own deps are [Repo, Subject,
+      # HardenedCmd] — no edge back to `Grappa.Networks` — so this is a
+      # one-way dependency, not a cycle.
+      Grappa.Uploads,
       # #543 INC-4 — SessionPlan reads the global addressing config
       # (mode + static-mapping prefix) once per plan build and threads it
       # into `Vhosts.effective_source/3`, so Vhosts stays off ServerSettings.

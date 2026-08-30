@@ -105,6 +105,15 @@ const WhoisCard: Component<Props> = (props) => {
       {(b) => (
         <div class="whois-card" data-testid="whois-card">
           <div class="whois-card-header">
+            {/* M3b — the authenticated `/networks/:id/peer_avatar/:slug`
+                path from `Grappa.Avatars`, NEVER the peer's raw declared
+                URL (see docs/DESIGN_NOTES.md #1280: fetched/sanitized
+                server-side, served same-origin, WHOIS-card-only — not
+                the member list, not scrollback). Absent when never
+                queried / still fetching / the peer never answered. */}
+            <Show when={b().avatar_url}>
+              {(url) => <img class="whois-card-avatar" src={url()} alt="" />}
+            </Show>
             <NickText nick={b().target} extraClass="whois-card-target" />
             <For each={collectTags(b())}>
               {(tag) => (

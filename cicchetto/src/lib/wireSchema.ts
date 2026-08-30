@@ -20,6 +20,7 @@ import {
   IRCIDENTIFIER_CASEMAPPING,
   LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD,
   NETWORKS_CREDENTIAL_CONNECTION_STATE,
+  NETWORKS_CREDENTIAL_GENDER,
   NETWORKS_CREDENTIALS_ADMIN_WIRE_SESSION_ACTION,
   NETWORKS_CREDENTIALS_ADMIN_WIRE_SPAWN_ERROR,
   NETWORKS_NETWORK_SERVICES_FLAVOR,
@@ -600,6 +601,9 @@ export const S_NetworksCredentialConnectionState = {
   e: [...NETWORKS_CREDENTIAL_CONNECTION_STATE],
 } as const;
 
+// Grappa.Networks.Credential.gender/0
+export const S_NetworksCredentialGender = { e: [...NETWORKS_CREDENTIAL_GENDER] } as const;
+
 // Grappa.Networks.Credentials.AdminWire.live_state_json/0
 export const S_NetworksCredentialsAdminWireLiveStateJson = {
   o: {
@@ -759,6 +763,12 @@ export const S_NetworksWireCredentialJson = {
     connection_state: S_NetworksCredentialConnectionState,
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
+    age: { u: ["s", "z"] },
+    gender: { u: [S_NetworksCredentialGender, "z"] },
+    location: { u: ["s", "z"] },
+    languages: { u: ["s", "z"] },
+    custom: { u: ["s", "z"] },
+    avatar_url: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
   },
@@ -786,6 +796,12 @@ export const S_NetworksWireNetworkWithNickJson = {
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
     connection: { u: [S_NetworksWireConnectionInfo, "z"] },
+    age: { u: ["s", "z"] },
+    gender: { u: [S_NetworksCredentialGender, "z"] },
+    location: { u: ["s", "z"] },
+    languages: { u: ["s", "z"] },
+    custom: { u: ["s", "z"] },
+    avatar_url: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
   },
@@ -805,6 +821,12 @@ export const S_NetworksWireVisitorNetworkWithNickJson = {
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
     connection: { u: [S_NetworksWireConnectionInfo, "z"] },
+    age: { u: ["s", "z"] },
+    gender: { u: [S_NetworksCredentialGender, "z"] },
+    location: { u: ["s", "z"] },
+    languages: { u: ["s", "z"] },
+    custom: { u: ["s", "z"] },
+    avatar_url: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
   },
@@ -1086,7 +1108,14 @@ export const S_SessionWireLusersBundlePayload = {
 } as const;
 
 // Grappa.Session.Wire.member/0
-export const S_SessionWireMember = { o: { nick: "s", modes: { a: "s" } } } as const;
+export const S_SessionWireMember = {
+  o: {
+    nick: "s",
+    modes: { a: "s" },
+    gender: { u: [{ l: "male" }, { l: "female" }, { l: "nonbinary" }, "z"] },
+  },
+  q: ["gender"],
+} as const;
 
 // Grappa.Session.Wire.members_index_payload/0
 export const S_SessionWireMembersIndexPayload = {
@@ -1273,6 +1302,11 @@ export const S_SessionWireWhoReplyPayload = {
   o: { kind: { l: "who_reply" }, network: "s", target: "s", users: { a: S_SessionWireWhoUser } },
 } as const;
 
+// Grappa.Session.Wire.whois_avatar_ready_payload/0
+export const S_SessionWireWhoisAvatarReadyPayload = {
+  o: { kind: { l: "whois_avatar_ready" }, network: "s", nick: "s", avatar_url: "s" },
+} as const;
+
 // Grappa.Session.Wire.whois_extra_line/0
 export const S_SessionWireWhoisExtraLine = { o: { numeric: "i", text: "s" } } as const;
 
@@ -1310,6 +1344,7 @@ export const S_SessionWireWhoisBundlePayload = {
     secure_cipher: { u: ["s", "z"] },
     certfp: { u: ["s", "z"] },
     extra_lines: { u: [{ a: S_SessionWireWhoisExtraLine }, "z"] },
+    avatar_url: { u: ["s", "z"] },
   },
 } as const;
 

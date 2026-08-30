@@ -6,7 +6,7 @@ import type {
   WireChannelEvent,
 } from "./api";
 import type { ModesEntry, TopicEntry } from "./channelTopic";
-import type { MemberEntry } from "./memberTypes";
+import type { MemberEntry, MemberGender } from "./memberTypes";
 // #429 — the generated RUNTIME schemas. `S_*` consts are the same typespecs
 // `wireTypes.ts` mirrors at compile time, emitted as data so the boundary can
 // enforce them after tsc has erased the types.
@@ -318,6 +318,15 @@ export function narrowIsupportChanged(
   };
 }
 
+// M2 — the only 3 values `Grappa.Networks.Credential.genders/0` (and the
+// wire's matching closed set) allow. Anything else (a future value grappa
+// hasn't shipped a badge for yet, or malformed data) degrades to "unknown",
+// same posture as `narrowCasemapping`'s unknown-value fallback elsewhere in
+// this file — never a rejected envelope over one bad field.
+function narrowMemberGender(raw: unknown): MemberGender | null {
+  return raw === "male" || raw === "female" || raw === "nonbinary" ? raw : null;
+}
+
 export function narrowMembers(raw: unknown): MemberEntry[] | null {
   if (!Array.isArray(raw)) return null;
   const out: MemberEntry[] = [];
@@ -328,7 +337,7 @@ export function narrowMembers(raw: unknown): MemberEntry[] | null {
     for (const mode of e.modes) {
       if (typeof mode !== "string") return null;
     }
-    out.push({ nick: e.nick, modes: e.modes as string[] });
+    out.push({ nick: e.nick, modes: e.modes as string[], gender: narrowMemberGender(e.gender) });
   }
   return out;
 }

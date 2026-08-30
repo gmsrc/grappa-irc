@@ -68,6 +68,7 @@ defmodule Grappa.Networks.Credential do
   alias Grappa.{EncryptedBinary, Subject}
   alias Grappa.IRC.{AuthFSM, Identifier, Identity}
   alias Grappa.Networks.Network
+  alias Grappa.Uploads.Upload
   alias Grappa.Visitors.Visitor
 
   # The atom literal stays here (Ecto.Enum needs a compile-time literal for
@@ -121,6 +122,20 @@ defmodule Grappa.Networks.Credential do
   # set; the context module enforces which transitions are valid.
   @connection_states [:connected, :failing, :parked, :failed]
 
+  # KVIrc-style CTCP USERINFO profile — gender is the one closed-set
+  # field (CLAUDE.md: atoms/literal types for closed sets, never a bare
+  # string). `nil` means "not configured" (no badge, USERINFO omits the
+  # field); the three values are deliberately inclusive of non-binary,
+  # not a straight M/F carryover from the original 2000s CTCP convention.
+  @genders [:male, :female, :nonbinary]
+
+  # Each free-text profile field (age/location/languages/custom) gets
+  # interpolated into an outbound CTCP USERINFO NOTICE reply, so it's
+  # capped well under IRC's 512-byte line limit even with all four
+  # fields populated at once. Mirrors `@perform_list_max_bytes`'s
+  # byte-cap posture (manual `byte_size/1` guard, not `validate_length`).
+  @profile_field_max_bytes 100
+
   # H15 (REV-D 2026-05-22): hard ceiling on the per-credential
   # `last_joined_channels` snapshot. Schema-level cap so every
   # persistence path observes the same bound — the context helper
@@ -165,8 +180,24 @@ defmodule Grappa.Networks.Credential do
   @spec connection_states() :: [connection_state(), ...]
   def connection_states, do: @connection_states
 
+  @doc """
+  Returns the closed-set list of valid `:profile_gender` values. Mirror
+  of `auth_methods/0` shape — same reason (tests iterate the full enum
+  instead of hard-coding it).
+  """
+  @spec genders() :: [gender(), ...]
+  def genders, do: @genders
+
   @type auth_method :: AuthFSM.auth_method()
   @type connection_state :: :connected | :failing | :parked | :failed
+  @type gender :: :male | :female | :nonbinary
+  @type profile :: %{
+          age: String.t() | nil,
+          gender: gender() | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil
+        }
 
   @type t :: %__MODULE__{
           id: integer() | nil,
@@ -197,6 +228,13 @@ defmodule Grappa.Networks.Credential do
           connection_state_changed_at: DateTime.t() | nil,
           away_reason: String.t() | nil,
           away_since: DateTime.t() | nil,
+          profile_age: String.t() | nil,
+          profile_gender: gender() | nil,
+          profile_location: String.t() | nil,
+          profile_languages: String.t() | nil,
+          profile_custom: String.t() | nil,
+          avatar_upload_id: Ecto.UUID.t() | nil,
+          avatar_upload: Upload.t() | Ecto.Association.NotLoaded.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -300,6 +338,31 @@ defmodule Grappa.Networks.Credential do
     # See DESIGN_NOTES 2026-07-26 #417.
     field :away_reason, :string
     field :away_since, :utc_datetime_usec
+
+    # KVIrc-style CTCP USERINFO profile (per (subject, network), like
+    # every other identity field on this schema). Free text except
+    # `profile_gender`, a closed-set `Ecto.Enum` over a plain `:string`
+    # column (same storage shape as `auth_method`/`connection_state`
+    # above). All nilable, no default — `nil` across the board is "no
+    # profile configured," and `EventRouter`'s CTCP USERINFO reply
+    # composes only the fields that are set.
+    field :profile_age, :string
+    field :profile_gender, Ecto.Enum, values: @genders
+    field :profile_location, :string
+    field :profile_languages, :string
+    field :profile_custom, :string
+
+    # M3a — the per-(subject, network) avatar: a `belongs_to` onto a
+    # PERMANENT `Grappa.Uploads.Upload` row (`expires_at: nil`, so the
+    # Reaper's TTL sweep never touches it — unlike an ordinary
+    # scrollback-image upload). Ecto's `belongs_to` auto-defines the
+    # `avatar_upload_id` FK field; NOT redeclared separately above.
+    # `on_delete: :nilify_all` at the DB level (migration) means a
+    # credential never dangles on a hard-deleted upload row — it just
+    # loses its avatar. `Credentials.set_avatar/4`/`clear_avatar/1` are
+    # the only writers; nothing here casts it directly (it's never raw
+    # user input — see those functions' moduledocs for why).
+    belongs_to :avatar_upload, Upload, type: :binary_id
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -725,6 +788,71 @@ defmodule Grappa.Networks.Credential do
     credential
     |> cast(%{away_reason: reason, away_since: since}, [:away_reason, :away_since])
     |> validate_change(:away_reason, &Identity.safe_line_token/2)
+  end
+
+  @doc """
+  Narrow changeset for the KVIrc-style CTCP USERINFO profile (age,
+  gender, location, languages, a free custom field), per `(subject,
+  network)` — mirrors `identity_changeset/2`'s shape, casting ONLY
+  these 5 fields. All optional: an empty attrs map is a valid no-op.
+
+  `profile_gender`'s closed set is enforced by the `Ecto.Enum` cast on
+  the schema field itself (an unrecognised atom/string is a normal
+  changeset error, same as `auth_method`). The 4 free-text fields each
+  get the `safe_line_token/2` CRLF/NUL wire-hygiene guard PLUS a
+  `@profile_field_max_bytes` cap — both matter because `EventRouter`'s
+  `{"USERINFO", _}` CTCP reply clause interpolates every non-nil field
+  verbatim into one outbound NOTICE line.
+  """
+  @spec profile_changeset(t(), map()) :: Ecto.Changeset.t()
+  def profile_changeset(%__MODULE__{} = credential, attrs) when is_map(attrs) do
+    credential
+    |> cast(attrs, [
+      :profile_age,
+      :profile_gender,
+      :profile_location,
+      :profile_languages,
+      :profile_custom
+    ])
+    |> validate_change(:profile_age, &Identity.safe_line_token/2)
+    |> validate_change(:profile_age, &validate_profile_field_bytes/2)
+    |> validate_change(:profile_location, &Identity.safe_line_token/2)
+    |> validate_change(:profile_location, &validate_profile_field_bytes/2)
+    |> validate_change(:profile_languages, &Identity.safe_line_token/2)
+    |> validate_change(:profile_languages, &validate_profile_field_bytes/2)
+    |> validate_change(:profile_custom, &Identity.safe_line_token/2)
+    |> validate_change(:profile_custom, &validate_profile_field_bytes/2)
+  end
+
+  # Byte-cap guard for a single free-text profile field. Mirror of
+  # `validate_perform/2`'s byte-counted `cond` shape (this codebase's
+  # established pattern for a byte cap — NOT `validate_length`, which
+  # counts graphemes).
+  defp validate_profile_field_bytes(field, value) when is_binary(value) do
+    if byte_size(value) > @profile_field_max_bytes do
+      [{field, "must be at most #{@profile_field_max_bytes} bytes"}]
+    else
+      []
+    end
+  end
+
+  @doc """
+  Returns the 5 profile fields as a plain map — the single source of
+  truth both `Credentials.update_credential_profile/2` (the live-session
+  broadcast payload) and `Grappa.Networks.SessionPlan.base_plan/6` (the
+  `:restored_profile` init opt) read, so `EventRouter`'s CTCP USERINFO
+  reply sees the identical shape whether the profile was just written or
+  restored at boot/restart.
+  """
+  @spec profile_snapshot(t()) :: profile()
+  def profile_snapshot(%__MODULE__{} = cred) do
+    %{
+      age: cred.profile_age,
+      gender: cred.profile_gender,
+      location: cred.profile_location,
+      languages: cred.profile_languages,
+      custom: cred.profile_custom
+    }
   end
 
   defp validate_autojoin_channels(field, list) when is_list(list) do

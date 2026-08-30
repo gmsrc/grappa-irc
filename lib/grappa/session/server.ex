@@ -235,6 +235,28 @@ defmodule Grappa.Session.Server do
   @type restored_away :: {String.t(), DateTime.t()} | nil
 
   @typedoc """
+  The KVIrc-style CTCP USERINFO profile (age/gender/location/languages/
+  custom), threaded into `init/1` via `SessionPlan.base_plan/6`'s
+  `:restored_profile` opt and updated live on a
+  `{:credential_profile_changed, network_id, profile}` message from the
+  `user_settings` bridge topic. `EventRouter`'s `{"USERINFO", _}` CTCP
+  clause reads this straight off `state.profile` — no DB hit per query.
+
+  Deliberately NOT `Grappa.Networks.Credential.profile()`: `Session`
+  must not statically alias `Networks` (Networks already deps Session;
+  the reverse closes a Boundary cycle — same reasoning as
+  `away_persister`'s closure indirection above). The shape is
+  duplicated, not shared, on purpose.
+  """
+  @type profile :: %{
+          age: String.t() | nil,
+          gender: :male | :female | :nonbinary | nil,
+          location: String.t() | nil,
+          languages: String.t() | nil,
+          custom: String.t() | nil
+        }
+
+  @typedoc """
   Opaque function-reference indirection that lets `Session.Server`
   ask the producing context (Networks / Visitors) "re-resolve the
   fresh plan from the DB" without statically aliasing either module.
@@ -383,6 +405,15 @@ defmodule Grappa.Session.Server do
           # User-only (visitor plans omit both).
           optional(:away_persister) => Deps.away_persister(),
           optional(:restored_away) => restored_away(),
+          # KVIrc-style CTCP USERINFO profile snapshot — BOTH subjects
+          # (unlike away, this isn't user-only). Omitted opt boots an
+          # all-nil profile (`empty_profile/0`).
+          optional(:restored_profile) => profile(),
+          # M3a — the credential's own avatar, absolute URL (already
+          # `nil`-safe: `Grappa.Networks.Wire.avatar_url/1` returns `nil`
+          # when unset). Same both-subjects, omitted-boots-nil shape as
+          # `:restored_profile` above.
+          optional(:restored_avatar_url) => String.t() | nil,
           optional(:query_window_open?) => EventRouter.query_window_open?(),
           optional(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
@@ -397,6 +428,12 @@ defmodule Grappa.Session.Server do
           # integration env may substitute a short window. `:disabled` is
           # the #348 OFF state — no debounce timer is ever armed.
           optional(:auto_away_debounce_ms) => non_neg_integer() | :disabled,
+          # M2 — the subject's opt-in to peer CTCP USERINFO/AVATAR queries
+          # (source of the member-list gender badge). Normally injected by
+          # `Grappa.Session.start_session/3`, mirror of the debounce opt
+          # above; omitted opt (test seam) defaults to `false` — silent
+          # unless a test explicitly opts in.
+          optional(:show_peer_profiles) => boolean(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Run at 001
           # before the built-in identify and before autojoin. The `$nickserv_pass`
@@ -441,6 +478,17 @@ defmodule Grappa.Session.Server do
           # process hot-reloaded across the field's introduction answers
           # instead of KeyError-crashing (the #216 contract).
           auto_reply_budget: AutoReplyBudget.t(),
+          # M2 — network-wide cache of what THIS session has learned about
+          # peers' CTCP USERINFO profile (currently just `:gender`), via a
+          # query WE sent. Same lifecycle as `userhost_cache` (evicted on
+          # QUIT/PART/KICK/NICK) and same key fold (`normalize_nick/2`).
+          # Presence in this map (even with `gender: nil`) means "already
+          # queried this session" — the lazy-query trigger's dedup gate.
+          peer_profile_cache: EventRouter.peer_profile_cache(),
+          # M2 — the subject's `show_peer_profiles` opt-in, resolved once
+          # at spawn (mirrors `auto_away_debounce_ms`). `false` means the
+          # lazy CTCP USERINFO/AVATAR query never fires for this session.
+          show_peer_profiles: boolean(),
           # CP15 B1 + cluster #6 extraction: per-channel window state
           # bundle (states + failure_reasons + failure_numerics +
           # kicked_meta in one struct). Sibling to `members` —
@@ -520,6 +568,8 @@ defmodule Grappa.Session.Server do
           recover_timer: reference() | nil,
           recover_settle_timer: reference() | nil,
           away_state: AwayState.t(),
+          profile: profile(),
+          avatar_url: String.t() | nil,
           auto_away_timer: reference() | nil,
           # #671 — the auto-away debounce window (ms), injected from
           # `start_session/3` (the subject's #348 preference over the
@@ -1021,6 +1071,8 @@ defmodule Grappa.Session.Server do
       channels_created: %{},
       userhost_cache: %{},
       auto_reply_budget: AutoReplyBudget.new(System.monotonic_time(:millisecond)),
+      peer_profile_cache: %{},
+      show_peer_profiles: Map.get(opts, :show_peer_profiles, false),
       window_state: WindowState.new(),
       in_flight_joins: %{},
       awaiting_invite: MapSet.new(),
@@ -1078,6 +1130,15 @@ defmodule Grappa.Session.Server do
       # persisted. The `AWAY :<reason>` is re-emitted upstream at 001 by
       # `maybe_resend_away/1` (the ircd connection is fresh and away-blind).
       away_state: restore_away_state(Map.get(opts, :restored_away)),
+      # KVIrc-style CTCP USERINFO profile — boots from the plan's
+      # `:restored_profile` snapshot (empty when omitted, e.g. a test
+      # seam that doesn't set it). Updated in place, without a
+      # reconnect, on `{:credential_profile_changed, network_id, _}`.
+      profile: Map.get(opts, :restored_profile, empty_profile()),
+      # M3a — boots from the plan's `:restored_avatar_url` (nil when
+      # omitted or unset), updated live on `{:credential_avatar_changed,
+      # ...}` — same shape as `profile` above.
+      avatar_url: Map.get(opts, :restored_avatar_url),
       auto_away_timer: nil,
       # #671 — debounce window from the spawn boundary
       # (`start_session/3`); an explicit opt still wins so a unit test can
@@ -1198,6 +1259,19 @@ defmodule Grappa.Session.Server do
       Phoenix.PubSub.subscribe(
         Grappa.PubSub,
         Topic.user_settings(opts.subject_label)
+      )
+
+    # M3b — and to this NETWORK's peer-avatar-cache bridge, so a fetch
+    # that completes off-mailbox (`Grappa.Avatars.fetch_and_cache/3`,
+    # running in a detached `Grappa.TaskSupervisor` task) can fold its
+    # result into `state.peer_profile_cache` and push an incremental
+    # WHOIS-card update, even when the fetch finishes after the 318 that
+    # closed the bundle. Keyed by network_id (not subject_label) — see
+    # `Topic.peer_avatar_cache/1`'s moduledoc for why.
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Grappa.PubSub,
+        Topic.peer_avatar_cache(state.network_id)
       )
 
     emit_lifecycle(:spawned, state)
@@ -2391,10 +2465,16 @@ defmodule Grappa.Session.Server do
     channel = fold_key(state, channel)
 
     if MapSet.member?(state.seeded_channels, channel) do
+      # M2 — same gender merge as the `members_seeded` broadcast
+      # (apply_effects), so `GET /members` and the WS event never
+      # disagree on the badge.
       members =
         state.members
         |> Map.get(channel, %{})
-        |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
+        |> Enum.map(fn {nick, modes} ->
+          gender = Map.get(state.peer_profile_cache, fold_key(state, nick), %{})[:gender]
+          %{nick: nick, modes: modes, gender: gender}
+        end)
         |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
       {:reply, {:ok, members}, state}
@@ -2940,6 +3020,66 @@ defmodule Grappa.Session.Server do
   # knob turned now applies now, not at the session's next restart.
   def handle_info({:auto_away_debounce_changed, preference}, state) do
     {:noreply, apply_auto_away_debounce(state, resolve_auto_away_debounce(preference))}
+  end
+
+  # KVIrc-style CTCP USERINFO profile — a live edit via
+  # `PATCH /networks/:id/profile` broadcasts on the same subject-scoped
+  # `user_settings` bridge topic the auto-away debounce uses above. That
+  # topic is per-SUBJECT (not per-network), so every live session of this
+  # subject — on every network — receives it; the `network_id` guard here
+  # is what keeps a profile edit on network A from touching network B's
+  # session. No reconnect: `state.profile` just updates in place, and the
+  # next inbound CTCP USERINFO reply reflects it.
+  def handle_info({:credential_profile_changed, network_id, _}, %{network_id: other} = state)
+      when network_id != other do
+    {:noreply, state}
+  end
+
+  def handle_info({:credential_profile_changed, network_id, fields}, %{network_id: network_id} = state) do
+    {:noreply, %{state | profile: fields}}
+  end
+
+  # M3a — same shape as `:credential_profile_changed` above: a live edit
+  # via `PUT`/`DELETE /networks/:id/avatar` broadcasts on the same
+  # subject-scoped `user_settings` bridge topic, and `state.avatar_url`
+  # updates in place for the next inbound CTCP AVATAR reply — no
+  # reconnect (the avatar never rides the IRC handshake).
+  def handle_info({:credential_avatar_changed, network_id, _}, %{network_id: other} = state)
+      when network_id != other do
+    {:noreply, state}
+  end
+
+  def handle_info({:credential_avatar_changed, network_id, avatar_url}, %{network_id: network_id} = state) do
+    {:noreply, %{state | avatar_url: avatar_url}}
+  end
+
+  # M3b — a peer avatar fetch (`Grappa.Avatars.fetch_and_cache/3`) landed
+  # off this GenServer's mailbox, in a detached `Grappa.TaskSupervisor`
+  # task. Fold the resulting slug into `peer_profile_cache` and push an
+  # incremental wire event on the user topic — the fetch routinely
+  # completes AFTER a `/whois` already closed its bundle (318 fires
+  # immediately; the HTTP round-trip does not), so a currently-open
+  # WHOIS card would otherwise never learn the avatar arrived without
+  # the operator re-running `/whois`. cic patches the event into an
+  # already-open card by nick match and ignores it otherwise — no
+  # server-side "is a card open" tracking needed.
+  def handle_info({:peer_avatar_ready, network_id, _, _}, %{network_id: other} = state)
+      when network_id != other do
+    {:noreply, state}
+  end
+
+  def handle_info({:peer_avatar_ready, network_id, nick_key, slug}, %{network_id: network_id} = state) do
+    cache = Map.get(state, :peer_profile_cache, %{})
+    existing = Map.get(cache, nick_key, %{})
+    new_cache = Map.put(cache, nick_key, Map.put(existing, :avatar_slug, slug))
+
+    :ok =
+      Grappa.PubSub.broadcast_event(
+        Topic.user(state.subject_label),
+        SessionWire.whois_avatar_ready(state.network_slug, nick_key, peer_avatar_route(state, slug))
+      )
+
+    {:noreply, %{state | peer_profile_cache: new_cache}}
   end
 
   # Linked Client crashed abnormally. Record a backoff failure (so the
@@ -3759,6 +3899,40 @@ defmodule Grappa.Session.Server do
   @spec session_casemapping(t()) :: Identifier.casemapping()
   defp session_casemapping(state),
     do: ISupport.casemapping(Map.get(state, :isupport, ISupport.default()))
+
+  # M3b — the authenticated, same-origin serving path a browser fetches
+  # a cached peer avatar from — NEVER the raw third-party URL the peer's
+  # CTCP AVATAR reply carried. Relative (no `base_url()` needed, unlike
+  # `Grappa.Uploads.public_url/2`'s CTCP-reply use case): this only ever
+  # reaches the browser over the already-authenticated wire, never IRC.
+  @spec peer_avatar_route(t(), String.t()) :: String.t()
+  defp peer_avatar_route(state, slug) do
+    "/networks/#{state.network_id}/peer_avatar/#{slug}"
+  end
+
+  # M3b — resolves a WHOIS target's cached avatar URL, if any. Checks
+  # THIS session's in-memory `peer_profile_cache` first (cheap, no DB
+  # hit, populated by M2/M3b's own lazy query); falls back to
+  # `Grappa.Avatars.get/2` (a DIFFERENT session on this network, or a
+  # prior restart of this one, may have already cached this peer). `nil`
+  # when neither has it — the common case for a target never seen in a
+  # shared channel, or a fetch still in flight.
+  @spec whois_target_avatar_url(t(), String.t()) :: String.t() | nil
+  defp whois_target_avatar_url(state, target) do
+    nick_key = fold_key(state, target)
+    cache = Map.get(state, :peer_profile_cache, %{})
+
+    case Map.get(Map.get(cache, nick_key, %{}), :avatar_slug) do
+      slug when is_binary(slug) ->
+        peer_avatar_route(state, slug)
+
+      _ ->
+        case Grappa.Avatars.get(state.network_id, nick_key) do
+          nil -> nil
+          row -> peer_avatar_route(state, row.slug)
+        end
+    end
+  end
 
   # Existing behavior — persist scrollback row, broadcast on per-channel
   # PubSub topic, send the wire line. Reply carries the persisted row.
@@ -5439,9 +5613,15 @@ defmodule Grappa.Session.Server do
     # is a single signal write with no extra fetch (the race window between
     # WS subscribe and HTTP fetch is what made the old re-fetch design
     # flaky on slow JOIN sequences).
+    # M2 — merge in the cached peer gender (nil when never queried/
+    # answered, e.g. `show_peer_profiles` off) so `Wire.member/1`'s
+    # `:gender` key is populated straight from state, no extra fetch.
     members =
       members_map
-      |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
+      |> Enum.map(fn {nick, modes} ->
+        gender = Map.get(state.peer_profile_cache, fold_key(state, nick), %{})[:gender]
+        %{nick: nick, modes: modes, gender: gender}
+      end)
       |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
     # CP24 bucket E web/S8: mark channel as NAMES-seeded so
@@ -5468,9 +5648,14 @@ defmodule Grappa.Session.Server do
   # (the authoritative sidebar set) — this is a parallel VIEW, not a
   # second source of truth.
   defp apply_effects([{:names_reply, channel, roster, reply_to} | rest], state) do
+    # M2 — same gender merge as :members_seeded/list_members above: one
+    # roster shape, one badge source, no parallel view left un-merged.
     members =
       roster
-      |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
+      |> Enum.map(fn {nick, modes} ->
+        gender = Map.get(state.peer_profile_cache, fold_key(state, nick), %{})[:gender]
+        %{nick: nick, modes: modes, gender: gender}
+      end)
       |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
     :ok =
@@ -5729,11 +5914,17 @@ defmodule Grappa.Session.Server do
   # — NOT persisted in scrollback. cic's `whoisCard.ts` keys by network
   # and replaces on each new bundle.
   defp apply_effects([{:whois_bundle, target, accum, reply_to} | rest], state) do
+    # M3b — synchronous cache-hit path: a peer avatar already cached
+    # (from an earlier M2/M3b lazy query on this or a prior WHOIS) is
+    # available immediately; the async-fetch-completes-later path is
+    # `handle_info({:peer_avatar_ready, ...})` above.
+    avatar_url = whois_target_avatar_url(state, target)
+
     :ok =
       Broadcaster.to_requester(
         state,
         reply_to,
-        SessionWire.whois_bundle(state.network_slug, target, accum)
+        SessionWire.whois_bundle(state.network_slug, target, accum, avatar_url)
       )
 
     apply_effects(rest, state)
@@ -6885,6 +7076,22 @@ defmodule Grappa.Session.Server do
     do: AwayState.restore_explicit(reason, since)
 
   defp restore_away_state(nil), do: AwayState.new()
+
+  # All-nil profile — the boot default when the plan omits
+  # `:restored_profile` (a test seam that doesn't set it; every real
+  # plan from `SessionPlan.base_plan/6` always supplies one, even when
+  # the credential has no profile configured, since
+  # `Credential.profile_snapshot/1` itself returns all-nil in that case).
+  @spec empty_profile() :: %{
+          age: nil,
+          gender: nil,
+          location: nil,
+          languages: nil,
+          custom: nil
+        }
+  defp empty_profile do
+    %{age: nil, gender: nil, location: nil, languages: nil, custom: nil}
+  end
 
   # GH #417 — at 001 RPL_WELCOME, re-assert any active away to the FRESH
   # upstream connection (which starts away-blind — the ircd forgot across

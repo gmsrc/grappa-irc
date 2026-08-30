@@ -50,6 +50,9 @@ config :grappa, Grappa.Repo,
 # covers both.
 config :grappa, :uploads_storage_root, Path.expand("../runtime/uploads_dev", __DIR__)
 
+# M3b — cached peer CTCP AVATAR images. Sibling dir, same runtime/ bind-mount.
+config :grappa, :peer_avatars_storage_root, Path.expand("../runtime/peer_avatars_dev", __DIR__)
+
 config :grappa, GrappaWeb.Endpoint,
   http: [ip: {0, 0, 0, 0}, port: 4000],
   check_origin: false,

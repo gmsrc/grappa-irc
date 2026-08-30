@@ -69,6 +69,17 @@ const CREDENTIAL_JSON = {
   connection_state: "parked",
   connection_state_reason: null,
   connection_state_changed_at: null,
+  // M2/M3 — the KVIrc-style USERINFO profile block. Additive on the wire but
+  // NOT optional in the schema (`S_NetworksWireCredentialJson`): `walkObject`
+  // rejects an absent required key even when its type unions `null`, so the
+  // fixture has to spell all six out. `null` is what the server renders for a
+  // credential that has never filled the profile in.
+  age: null,
+  gender: null,
+  location: null,
+  languages: null,
+  custom: null,
+  avatar_url: null,
   inserted_at: "2026-08-16T00:00:00Z",
   updated_at: "2026-08-16T00:00:00Z",
 };
@@ -132,7 +143,7 @@ async function bootToVhostPage(
   // bundle cannot read — and `bounce()` awaits the park before issuing the
   // reconnect, so one unreadable response silently costs the second PATCH.
   // `{}` is a body the server never sends: `Wire.credential_to_json/1` always
-  // renders all thirteen fields.
+  // renders all nineteen fields.
   await page.route(`**/networks/${ANCHOR}`, (route) => {
     if (route.request().method() === "PATCH") {
       const body = route.request().postDataJSON() as { connection_state?: string } | null;

@@ -1,4 +1,4 @@
-defmodule Grappa.Themes.ImageFetcher.TestResolver do
+defmodule Grappa.Net.ImageFetcher.TestResolver do
   @moduledoc """
   Test-only SSRF resolver for the theme image-fetcher (#75).
 

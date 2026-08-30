@@ -48,6 +48,9 @@ export const NETWORKS_CREDENTIAL_CONNECTION_STATE = [
 export type NetworksCredentialConnectionState =
   (typeof NETWORKS_CREDENTIAL_CONNECTION_STATE)[number];
 
+export const NETWORKS_CREDENTIAL_GENDER = ["male", "female", "nonbinary"] as const;
+export type NetworksCredentialGender = (typeof NETWORKS_CREDENTIAL_GENDER)[number];
+
 export const NETWORKS_NETWORK_SERVICES_FLAVOR = ["azzurra", "atheme", "oftc", "unknown"] as const;
 export type NetworksNetworkServicesFlavor = (typeof NETWORKS_NETWORK_SERVICES_FLAVOR)[number];
 
@@ -753,6 +756,12 @@ export type NetworksWireCredentialJson = {
   connection_state: NetworksCredentialConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  age: string | null;
+  gender: NetworksCredentialGender | null;
+  location: string | null;
+  languages: string | null;
+  custom: string | null;
+  avatar_url: string | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -777,6 +786,12 @@ export type NetworksWireNetworkWithNickJson = {
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
   connection: NetworksWireConnectionInfo | null;
+  age: string | null;
+  gender: NetworksCredentialGender | null;
+  location: string | null;
+  languages: string | null;
+  custom: string | null;
+  avatar_url: string | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -793,6 +808,12 @@ export type NetworksWireVisitorNetworkWithNickJson = {
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
   connection: NetworksWireConnectionInfo | null;
+  age: string | null;
+  gender: NetworksCredentialGender | null;
+  location: string | null;
+  languages: string | null;
+  custom: string | null;
+  avatar_url: string | null;
   inserted_at: string;
   updated_at: string;
 };
@@ -970,6 +991,7 @@ export const SESSION_WIRE_WIRE_EVENT_KIND = [
   "away_confirmed",
   "mentions_bundle",
   "whois_bundle",
+  "whois_avatar_ready",
   "peer_away",
   "invite_ack",
   "lusers_bundle",
@@ -1138,6 +1160,7 @@ export type SessionWireServerReplyPayload = {
 export type SessionWireMember = {
   nick: string;
   modes: string[];
+  gender?: "male" | "female" | "nonbinary" | null;
 };
 
 export type SessionWireMembersIndexPayload = {
@@ -1250,6 +1273,7 @@ export type SessionWireWhoisBundlePayload = {
   secure_cipher: string | null;
   certfp: string | null;
   extra_lines: SessionWireWhoisExtraLine[] | null;
+  avatar_url: string | null;
 };
 
 export type SessionWirePeerAwayPayload = {
@@ -1385,6 +1409,13 @@ export type SessionWireRecoverResultPayload = {
   reason: SessionWireRecoverReason | null;
 };
 
+export type SessionWireWhoisAvatarReadyPayload = {
+  kind: "whois_avatar_ready";
+  network: string;
+  nick: string;
+  avatar_url: string;
+};
+
 export type WireSessionEvent =
   | SessionWireChannelsChangedPayload
   | SessionWireOwnNickChangedPayload
@@ -1422,7 +1453,8 @@ export type WireSessionEvent =
   | SessionWireDirectoryFailedPayload
   | SessionWireConnectionProgressPayload
   | SessionWireRecoverProgressPayload
-  | SessionWireRecoverResultPayload;
+  | SessionWireRecoverResultPayload
+  | SessionWireWhoisAvatarReadyPayload;
 
 // === Grappa.SessionLog.Wire ===
 

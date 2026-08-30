@@ -876,6 +876,52 @@ defmodule Grappa.UserSettings do
   end
 
   # ---------------------------------------------------------------------------
+  # show_peer_profiles accessor (M2 — peer CTCP USERINFO/gender-badge opt-in)
+  # ---------------------------------------------------------------------------
+
+  @show_peer_profiles_key "show_peer_profiles"
+
+  @doc """
+  Whether `subject` has opted in to grappa querying OTHER users' CTCP
+  USERINFO profile (age/gender/location/languages/custom) — the source
+  for the gender badge in the member list. Default `false`: unset,
+  malformed, or any non-`true` stored value all read back as `false`, so
+  a fresh subject's bouncer stays silent on the wire until they opt in.
+
+  Read at session boot only (mirrors `get_upload_ttl_seconds/1` — no
+  live-broadcast bridge like `auto_away_debounce_seconds` has): flipping
+  this while a session is live takes effect on that session's next
+  (re)spawn, not instantly. The debounce's live-retune exists because a
+  timer already armed needs to change NOW; an opt-in gating a future
+  outbound CTCP query has no equivalent already-in-flight state to
+  correct, so the added live-bridge plumbing isn't earning its keep here.
+  """
+  @spec get_show_peer_profiles(Subject.t()) :: boolean()
+  def get_show_peer_profiles({_, _} = subject) do
+    case fetch_existing_or_nil(subject) do
+      nil -> false
+      %Settings{data: data} -> data[@show_peer_profiles_key] == true
+    end
+  end
+
+  @doc """
+  Sets the peer-profile opt-in preference for `subject`. `true` to opt
+  in; `false` (or omitting the call — a fresh subject already reads
+  `false`) to opt back out.
+
+  Preserves other keys in `data` (merge semantics, mirror of
+  `put_upload_ttl_seconds/2`).
+  """
+  @spec put_show_peer_profiles(Subject.t(), boolean()) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def put_show_peer_profiles({_, _} = subject, value) when is_boolean(value) do
+    # `false` DELETES the key rather than storing it: a fresh subject already
+    # reads `false`, so an explicit `false` row would be a second spelling of
+    # the default. `put_or_delete/3` deletes on `nil`, hence the mapping.
+    update_data(subject, &put_or_delete(&1, @show_peer_profiles_key, value || nil))
+  end
+
+  # ---------------------------------------------------------------------------
   # auto_away_debounce_seconds accessors (#348)
   # ---------------------------------------------------------------------------
 

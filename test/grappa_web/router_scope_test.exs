@@ -102,7 +102,15 @@ defmodule GrappaWeb.RouterScopeTest do
     {"GET", "/me/settings/aliases"},
     {"PUT", "/me/settings/aliases"},
     {"GET", "/me/settings/display-prefs"},
-    {"PUT", "/me/settings/display-prefs"}
+    {"PUT", "/me/settings/display-prefs"},
+    # M2 — the peer-profile opt-in. Client-usable by the same reasoning as
+    # `display-prefs` above: it is a per-subject switch over what the
+    # connection this client reads on may ASK other users, not a
+    # credential and not an account-management verb. It carries no
+    # secret, and refusing it would leave a headless client unable to
+    # tell whether the badges it renders are even being populated.
+    {"GET", "/me/settings/show-peer-profiles"},
+    {"PUT", "/me/settings/show-peer-profiles"}
   ]
 
   # Routes with no bearer gate at all — the login doors, the public

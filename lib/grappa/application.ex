@@ -26,6 +26,10 @@ defmodule Grappa.Application do
       Grappa.ShareTokens,
       Grappa.Uploads,
       Grappa.Uploads.Reaper,
+      # M3b — start/2 calls Avatars.boot/1 (storage-root DI-seam, mirrors
+      # Uploads.boot/1 above) and supervises Avatars.Reaper.
+      Grappa.Avatars,
+      Grappa.Avatars.Reaper,
       Grappa.Vault,
       # #1404 — start/2 calls Vhosts.boot/1 to seed the deployment's
       # source-mapping key, the same boot-time DI-seam shape as the
@@ -61,6 +65,11 @@ defmodule Grappa.Application do
     # runtime. Boot-time read of `Application.get_env/2` is the
     # CLAUDE.md-designated boundary (mirrors Admission.Config.boot/0).
     :ok = Grappa.Uploads.boot(uploads_storage_root())
+
+    # M3b — same boot-time :persistent_term seeding for the peer-avatar
+    # cache's storage root (a separate directory/context from uploads —
+    # see `Grappa.Avatars` moduledoc).
+    :ok = Grappa.Avatars.boot(peer_avatars_storage_root())
 
     # H16 (REV-D 2026-05-22): pin the VAPID public key in
     # `:persistent_term` so PushVapidController reads lock-free per
@@ -438,6 +447,11 @@ defmodule Grappa.Application do
           # only").
           {Grappa.Uploads.Reaper, storage_root: uploads_storage_root(), interval_ms: reaper_interval_ms()},
 
+          # M3b — sibling sweep for the peer-avatar cache. Same "why after
+          # Endpoint" rationale as Uploads.Reaper above (the serving route
+          # must be reachable before sweeps start removing rows/files).
+          {Grappa.Avatars.Reaper, storage_root: peer_avatars_storage_root(), interval_ms: reaper_interval_ms()},
+
           # #223: auth-session housekeeping GC. Sibling of Visitors.Reaper
           # / Uploads.Reaper — a THIRD domain (Accounts) gets its OWN
           # periodic sweep rather than folding into an unrelated reaper
@@ -468,6 +482,38 @@ defmodule Grappa.Application do
         # loops (the flag stays `true` from the last successful boot,
         # but Repo + ETS checks in the controller catch the wedge).
         :ok = Grappa.Health.mark_ready()
+
+        # M3a: the absolute base URL a stored upload's public URL is
+        # built against (`Grappa.Uploads.public_url/2`) — needed by
+        # `Grappa.Networks.Wire.avatar_url/1` for the CTCP AVATAR
+        # reply, which (unlike the JSON wire response) goes out over
+        # IRC to an arbitrary remote client with no origin of its own
+        # to resolve a relative path against. Seeded HERE, after
+        # `Supervisor.start_link/2` returns, not alongside the other
+        # `boot/1` calls above `children` is built: `Endpoint.url/0`
+        # reads a `:persistent_term` Phoenix itself populates only once
+        # the `GrappaWeb.Endpoint` CHILD has actually started — calling
+        # it earlier (measured) crashes boot with "could not find
+        # persistent term for endpoint GrappaWeb.Endpoint."
+        #
+        # Guarded on the SAME flag `endpoint_child/0` reads: when
+        # `:start_endpoint` is false there is no Endpoint child, so
+        # Phoenix never writes that `:persistent_term` and `url/0`
+        # raises the very error the paragraph above describes — which
+        # is what the one-shot `grappa.*` mix tasks
+        # (`Mix.Tasks.Grappa.Boot.start_app_silent/0`) and the
+        # integration testnet boot hit, measured. Skipping the seed
+        # there is correct rather than merely tolerable: `base_url/0`
+        # feeds `Uploads.public_url/2`, reached only from the CTCP
+        # AVATAR reply on a live IRC session, and a node with no HTTP
+        # surface runs no sessions (`:start_bootstrap` is off in the
+        # same breath). It stays a raise, not a nil, so a caller that
+        # DOES reach it on such a node is a contract violation and says
+        # so.
+        if Application.get_env(:grappa, :start_endpoint, true) do
+          :ok = Grappa.Uploads.boot_base_url(GrappaWeb.Endpoint.url())
+        end
+
         result
 
       other ->
@@ -540,6 +586,11 @@ defmodule Grappa.Application do
   # reads from `:persistent_term`.
   defp uploads_storage_root do
     Application.fetch_env!(:grappa, :uploads_storage_root)
+  end
+
+  # M3b — mirrors `uploads_storage_root/0` for the peer-avatar cache.
+  defp peer_avatars_storage_root do
+    Application.fetch_env!(:grappa, :peer_avatars_storage_root)
   end
 
   # #893: the shared tick cadence of the three ambient sweepers

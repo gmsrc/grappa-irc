@@ -1,4 +1,4 @@
-defmodule Grappa.Themes.ImageFetcher.Req do
+defmodule Grappa.Net.ImageFetcher.Req do
   @moduledoc """
   Real fetch-by-URL image fetcher (#75) — `Req` over an SSRF-guarded, rebind-safe
   connection.
@@ -16,7 +16,7 @@ defmodule Grappa.Themes.ImageFetcher.Req do
        bypass); a non-200 is `:fetch_failed`.
     5. Enforce a raster content-type allowlist and a hard byte cap.
 
-  Never raises — every failure is a tagged `Grappa.Themes.ImageFetcher.error`.
+  Never raises — every failure is a tagged `Grappa.Net.ImageFetcher.error`.
 
   ## Size cap posture
 
@@ -36,9 +36,9 @@ defmodule Grappa.Themes.ImageFetcher.Req do
   such bound, and for one the in-flight byte ceiling becomes the thing to
   build.
   """
-  @behaviour Grappa.Themes.ImageFetcher
+  @behaviour Grappa.Net.ImageFetcher
 
-  alias Grappa.Themes.ImageFetcher
+  alias Grappa.Net.ImageFetcher
 
   @max_bytes 8 * 1024 * 1024
   @connect_timeout_ms 5_000
