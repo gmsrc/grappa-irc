@@ -134,12 +134,20 @@ export function selectMessageText(row: HTMLElement): boolean {
   // row is selectable at the instant the range is installed. Raised after, the
   // range is installed while the row still computes `user-select: none`.
   //
-  // NOT MEASURED, and deliberately not claimed: whether any engine actually
-  // drops or truncates a range installed under `none` and later lifted. jsdom
-  // applies no stylesheet and no browser launches on the machine this was
-  // written on, so the ordering is pinned by a test that observes the latch at
-  // install time and nothing here observes a consequence. What this buys is
-  // that the question stops needing an answer.
+  // WHAT BLINK DOES IS NOW MEASURED, and it is not a truncated range. With the
+  // two orderings swapped by hand and the e2e `Select…` test rerun on a coarse
+  // pointer, the selection still serialised WHOLE: `Selection.toString()` walks
+  // the layout tree at CALL time, so it reads the `user-select` the row
+  // computes then — not the one it computed when `addRange` ran. The control
+  // that makes that a measurement rather than a nil result: renaming the class
+  // above reds the very same test with an EMPTY selection.
+  //
+  // So the order stays for the reason it can honestly stay for — it is the one
+  // ordering that needs no per-engine argument — and NOT because it repairs a
+  // demonstrated defect on Blink. WebKit remains unmeasured: no browser
+  // launches on the machine this was written on, and `webkit-iphone-15` cannot
+  // host that spec at all (its `tap()` dispatches no click — see the header of
+  // issue1869-android-longpress-selection.spec.ts).
   disarmMessageSelection();
   document.documentElement.classList.add(SELECTING_CLASS);
   const range = document.createRange();

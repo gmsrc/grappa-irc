@@ -143,7 +143,10 @@ describe("selectMessageText", () => {
   // What it does NOT observe: any consequence. jsdom applies no stylesheet, so
   // nothing here can tell whether an engine minds. Red against the previous
   // ordering (latch after the range), green against this one — that is its
-  // whole claim.
+  // whole claim. On Blink the answer is now known, and it is "no": see the note
+  // in `lib/messageMenu`, measured by rerunning the e2e Select… test on a
+  // coarse pointer with the orderings swapped. So this pins an ORDERING, not a
+  // repair — do not let it grow an assertion that implies otherwise.
   it("raises the latch before the range goes in, not after", () => {
     let latchedAtInstall: boolean | null = null;
     vi.spyOn(window, "getSelection").mockReturnValue({
