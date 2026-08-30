@@ -165,9 +165,9 @@ const SettingsDrawer: Component<Props> = (props) => {
   // alone.
   const [autoAwaySavingError, setAutoAwaySavingError] = createSignal<string | null>(null);
   // M2 — the peer-profiles opt-in. Boolean, no custom-value mode.
-  const [showPeerProfilesSavingError, setShowPeerProfilesSavingError] = createSignal<
-    string | null
-  >(null);
+  const [showPeerProfilesSavingError, setShowPeerProfilesSavingError] = createSignal<string | null>(
+    null,
+  );
   const [autoAwayCustomMode, setAutoAwayCustomMode] = createSignal(false);
   const [autoAwayCustomDraft, setAutoAwayCustomDraft] = createSignal("");
   // #228, #251 — source-bind (vhost) selection. Server owns the allow-set +
@@ -1882,14 +1882,17 @@ const SettingsDrawer: Component<Props> = (props) => {
                 show other people's profile info (gender badge)
               </label>
               <p class="settings-section-blurb" data-testid="show-peer-profiles-hint">
-                When on, grappa asks other users' clients for their public
-                CTCP USERINFO profile the first time you see them in a
-                channel, and shows a gender badge next to their name when
-                they answer. This sends a small extra message to each new
-                person you meet — off by default.
+                When on, grappa asks other users' clients for their public CTCP USERINFO profile the
+                first time you see them in a channel, and shows a gender badge next to their name
+                when they answer. This sends a small extra message to each new person you meet — off
+                by default.
               </p>
               <Show when={showPeerProfilesSavingError() !== null}>
-                <p class="show-peer-profiles-error" role="alert" data-testid="show-peer-profiles-error">
+                <p
+                  class="show-peer-profiles-error"
+                  role="alert"
+                  data-testid="show-peer-profiles-error"
+                >
                   {showPeerProfilesSavingError()}
                 </p>
               </Show>
