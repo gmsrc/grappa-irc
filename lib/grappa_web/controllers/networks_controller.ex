@@ -315,10 +315,17 @@ defmodule GrappaWeb.NetworksController do
   `:authn` + `:resolve_network` gate every other `/networks/:network_id/*`
   route already has (ownership: any live credential on this network).
 
-  200 with the image bytes; 404 for a bad slug, a missing/expired row,
-  or a row whose file went missing (no oracle — same collapse
-  `UploadsController.show/2` uses); 401 without a Bearer; 403/404 (via
-  `:resolve_network`) for a network the caller has no credential on.
+  The lookup is scoped to the RESOLVED network, not to the slug alone —
+  `:resolve_network` proves a credential on the network in the path and
+  nothing beyond it, so `Avatars.get_by_slug/2` takes that network's id
+  and the "ownership on this network" clause above is enforced rather
+  than merely intended.
+
+  200 with the image bytes; 404 for a bad slug, a missing/expired row, a
+  row cached for a different network, or a row whose file went missing
+  (no oracle — same collapse `UploadsController.show/2` uses); 401
+  without a Bearer; 403/404 (via `:resolve_network`) for a network the
+  caller has no credential on.
 
   `path` comes from `Avatars.storage_path/1`, which validates the slug
   against `^[a-z2-7]{26}$` before joining it — same guard
@@ -329,7 +336,7 @@ defmodule GrappaWeb.NetworksController do
   @sobelow_skip ["Traversal.FileModule", "XSS.SendResp"]
   @spec peer_avatar(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def peer_avatar(conn, %{"slug" => slug}) when is_binary(slug) do
-    with {:ok, row} <- Avatars.get_by_slug(slug),
+    with {:ok, row} <- Avatars.get_by_slug(conn.assigns.network.id, slug),
          path = Avatars.storage_path(row.slug),
          {:ok, bytes} <- File.read(path) do
       conn

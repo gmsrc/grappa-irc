@@ -1341,6 +1341,49 @@ defmodule GrappaWeb.NetworksControllerTest do
     |> Repo.update!()
   end
 
+  describe "GET /networks/:network_id/peer_avatar/:slug" do
+    # The route is nested under `:resolve_network`, so the caller is already
+    # proven to hold a credential on the network in the PATH. The lookup must
+    # be scoped to that same network — a slug is a bearer of nothing on its
+    # own, and the action's own doc scopes ownership to "this network".
+    test "404s for a slug cached on a network the caller is not resolved onto", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-avatar-#{u()}")
+      session = session_fixture(vjt)
+
+      {mine, _} = network_with_server(port: 6667, slug: "avatar-mine-#{u()}")
+      {theirs, _} = network_with_server(port: 6668, slug: "avatar-theirs-#{u()}")
+      _ = credential_fixture(vjt, mine)
+      _ = credential_fixture(vjt, theirs)
+
+      Mox.stub(Grappa.Net.ImageFetcherMock, :fetch, fn _ ->
+        {:ok, Grappa.UploadFixtures.bytes(:gps_png), "image/png"}
+      end)
+
+      assert :ok = Grappa.Avatars.fetch_and_cache(theirs.id, "somepeer", "http://peer.example/av.png")
+      row = Grappa.Avatars.get(theirs.id, "somepeer")
+      on_exit(fn -> File.rm(Grappa.Avatars.storage_path(row.slug)) end)
+      assert File.exists?(Grappa.Avatars.storage_path(row.slug))
+
+      cross =
+        conn
+        |> put_bearer(session.id)
+        |> get("/networks/#{mine.slug}/peer_avatar/#{row.slug}")
+
+      assert json_response(cross, 404)
+
+      # Positive control: the very same slug, served from ITS OWN network,
+      # is a 200 — so the 404 above is the network scope and not a missing
+      # file, an expired row, or a broken route.
+      own =
+        build_conn()
+        |> put_bearer(session.id)
+        |> get("/networks/#{theirs.slug}/peer_avatar/#{row.slug}")
+
+      assert response(own, 200)
+      assert Plug.Conn.get_resp_header(own, "content-type") == ["image/png"]
+    end
+  end
+
   # U-0 helper — drive the per-network circuit to `:open` by directly
   # writing the ETS row with a far-future `cooled_at_ms`. We bypass
   # `NetworkCircuit.record_failure/1` because the test config sets

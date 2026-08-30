@@ -279,15 +279,30 @@ defmodule Grappa.Avatars do
   end
 
   @doc """
-  Looks up a row by slug for the authenticated serving route. Returns
-  `:not_found` for a bad slug shape, a missing row, or an expired one —
-  collapsed to one variant so the serving route leaks no oracle.
+  Looks up a row by `(network_id, slug)` for the authenticated serving
+  route. Returns `:not_found` for a bad slug shape, a missing row, an
+  expired one, or a row belonging to a DIFFERENT network — collapsed to
+  one variant so the serving route leaks no oracle.
+
+  `network_id` is not redundant with the slug. The serving route is
+  mounted under `/networks/:network_id/...` behind `ResolveNetwork`,
+  which proves the caller holds a credential on THAT network and nothing
+  more; the action's own contract is "any live credential on this
+  network". A slug-only lookup would have made every cached row on the
+  deployment readable from any one network the caller is bound to, which
+  is a wider grant than the route's own gate proves — so the conjunct
+  here is what makes the documented scope true rather than aspirational.
+  Mirrors `get/2`, which has been `(network_id, nick_key)`-scoped from
+  the start.
   """
-  @spec get_by_slug(String.t()) :: {:ok, PeerAvatar.t()} | {:error, :not_found}
-  def get_by_slug(slug) when is_binary(slug) do
+  @spec get_by_slug(integer(), String.t()) :: {:ok, PeerAvatar.t()} | {:error, :not_found}
+  def get_by_slug(network_id, slug) when is_integer(network_id) and is_binary(slug) do
     if Regex.match?(@slug_regex, slug) do
       now = DateTime.utc_now()
-      query = from a in PeerAvatar, where: a.slug == ^slug and a.expires_at > ^now
+
+      query =
+        from a in PeerAvatar,
+          where: a.network_id == ^network_id and a.slug == ^slug and a.expires_at > ^now
 
       case Repo.one(query) do
         nil -> {:error, :not_found}

@@ -79,13 +79,13 @@ defmodule Grappa.AvatarsTest do
     assert Repo.aggregate(PeerAvatar, :count) == 1
   end
 
-  describe "get_by_slug/1" do
-    test "returns :not_found for a malformed slug" do
-      assert {:error, :not_found} = Avatars.get_by_slug("not-a-real-slug")
+  describe "get_by_slug/2" do
+    test "returns :not_found for a malformed slug", ctx do
+      assert {:error, :not_found} = Avatars.get_by_slug(ctx.network_id, "not-a-real-slug")
     end
 
-    test "returns :not_found for an unknown slug" do
-      assert {:error, :not_found} = Avatars.get_by_slug("aaaaaaaaaaaaaaaaaaaaaaaaaa")
+    test "returns :not_found for an unknown slug", ctx do
+      assert {:error, :not_found} = Avatars.get_by_slug(ctx.network_id, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
     end
 
     test "returns the row for a live cached slug", ctx do
@@ -93,7 +93,25 @@ defmodule Grappa.AvatarsTest do
       assert :ok = Avatars.fetch_and_cache(ctx.network_id, "findable", "http://peer.example/av.png")
       row = Avatars.get(ctx.network_id, "findable")
 
-      assert {:ok, ^row} = Avatars.get_by_slug(row.slug)
+      assert {:ok, ^row} = Avatars.get_by_slug(ctx.network_id, row.slug)
+    end
+
+    # The serving route is mounted under `/networks/:network_id/...` and its
+    # own doc scopes ownership to "any live credential on THIS network". The
+    # slug alone is not that scope: a caller resolved onto network A must not
+    # be handed a row cached for network B.
+    test "returns :not_found for a slug cached on a DIFFERENT network", ctx do
+      expect(Grappa.Net.ImageFetcherMock, :fetch, fn _ -> {:ok, ctx.png, "image/png"} end)
+      assert :ok = Avatars.fetch_and_cache(ctx.network_id, "elsewhere", "http://peer.example/av.png")
+      row = Avatars.get(ctx.network_id, "elsewhere")
+
+      other_network_id = network_fixture().id
+      refute other_network_id == ctx.network_id
+
+      assert {:error, :not_found} = Avatars.get_by_slug(other_network_id, row.slug)
+      # Positive control: the row IS live and IS reachable from its own
+      # network, so the :not_found above is the scope and not an expiry.
+      assert {:ok, ^row} = Avatars.get_by_slug(ctx.network_id, row.slug)
     end
 
     test "returns :not_found for an expired row", ctx do
@@ -105,7 +123,7 @@ defmodule Grappa.AvatarsTest do
       |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -1, :second))
       |> Repo.update!()
 
-      assert {:error, :not_found} = Avatars.get_by_slug(row.slug)
+      assert {:error, :not_found} = Avatars.get_by_slug(ctx.network_id, row.slug)
       assert Avatars.get(ctx.network_id, "stale") == nil
     end
   end
