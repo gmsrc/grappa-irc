@@ -43949,3 +43949,58 @@ than a scoping one. `state.network_slug` is already on the state (the
 sibling wire call one line up uses it), so the change is small — it is
 the coverage and the visible-behaviour flip that make it somebody's
 decision rather than this branch's.
+<!-- entry #1870 -->
+
+---
+
+## 2026-08-30 — #1870: a LIBRARY feature at module top level is a white page, not a missing feature
+
+Firefox 115 ESR renders `irc.sindro.me` blank — no splash, no login form,
+nothing mounted. The console names one frame: `Intl.Segmenter is not a
+constructor`, `frameBudget.ts:40`. That line built the grapheme segmenter at
+module TOP LEVEL; `ComposeBox` imports `frameBudgetForTarget`, so the
+constructor ran while the main bundle was still EVALUATING and the throw took
+React's mount with it. A frame counter — two advisory numbers under a compose
+box — cost the whole application.
+
+**The build target cannot catch this class, and that is the general rule worth
+keeping.** `vite.config.ts` targets `es2022`, and `Intl.Segmenter` is a LIBRARY
+feature rather than syntax: no transpile step and no `target` setting ever
+looks at it, and the bundle is byte-identical whether the browser has the API
+or not. A missing SYNTAX feature is a build-time fact; a missing LIBRARY
+feature is a runtime one, and WHERE it is touched decides whether it costs one
+feature or the app. Module top level is the one place where it costs the app,
+because the module graph is evaluated before anything renders.
+
+The cure is two independent halves, separate on purpose. (1) The segmenter is
+resolved on FIRST USE behind `typeof Intl.Segmenter === "function"`, so an
+absent API degrades the counter instead of the mount; `undefined` means
+not-asked-yet and `null` asked-and-absent, which also stops an ICU segmenter
+being built for a session that never overflows a frame. (2) The one call site
+(`chunkCount`) falls back to `Array.from(body)` — a CODE POINT split.
+
+**What the fallback gets wrong is DECLARED, not discovered.** `Array.from`
+iterates code points, so surrogate pairs stay whole: two 🍕 at a 4-byte budget
+count 2 frames on both paths, where a UTF-16 unit walk would say 4. A
+combining sequence and a ZWJ emoji cluster are NOT whole — `e`+U+0301 at a
+2-byte budget reads 2 frames where the segmenter reads 1, and the family emoji
+at 4 bytes reads 7 where the segmenter reads 1. Both live in the test file as a
+table that states the two answers side by side, so the price is a fixture
+rather than a claim. It is affordable for a reason specific to THIS module and
+not transferable: the count is an advisory MIRROR of `Grappa.IRC.LineSplit`,
+and the split that actually reaches the wire is still the server's, so the
+fallback can move a number on screen and never a byte on the wire. A module
+whose client-side answer WERE the outcome would not get this fallback.
+
+**Not measured, by anyone: that Firefox 115 renders white.** There is no FF115
+on the worker host and Playwright ships no build of it, so the white page stays
+a diagnosis read off a user's stack trace, never an observation. What IS
+measured is the code-level property that diagnosis names: with `Intl.Segmenter`
+deleted from `Intl`, importing the module used to throw the reported
+`TypeError` at the reported line, and now does not — the reproduction carries
+its own positive control, asserting the property is really gone before it
+concludes anything from its absence.
+
+Left to vjt and deliberately untouched: whether FF115 ESR is a support target
+at all. If it is not, telling the operator so is a product decision and a
+different change; this entry only stops one absent API from being a blank page.
