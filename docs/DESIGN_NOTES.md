@@ -44110,3 +44110,58 @@ platform delivers one, never that the platform delivers it. The known
 limitation `resumeProbe` records applies unchanged: a document thawed with
 neither a visibility transition nor a `pageshow` is not covered, because there
 is nothing to observe.
+<!-- entry #1875 -->
+
+---
+
+## 2026-08-30 — #1875: the operator CLI splits on "packaged", not on "the image"
+
+A self-hoster on `ghcr.io/vjt/grappa:latest` followed the README's own
+recommended path and hit verbs that are not there. Two different programs
+answer to `bin/grappa` and the README named only one of them.
+
+### The axis is the release, not the container
+
+The issue framed it as image-vs-checkout. Measured, that is too narrow, and
+writing it that way would have shipped a second half-truth. `install_operator_cli/1`
+is a **`mix release` step** — `steps: [:assemble, &install_operator_cli/1, …]`
+in `mix.exs` — which renames the generated boot script to `bin/grappa-release`
+and `File.cp!`s `infra/release/grappa.sh` into its place. Nothing about that is
+Docker. `Dockerfile.release`'s only part in it is a `COPY` of the source file
+into the build context so the step can find it; the overwrite is the release
+assembly, and it therefore happens for the `.deb`, the AUR package, a bastille
+jail and a systemd install exactly as it does for the image — the four doors
+`grappa.sh`'s own moduledoc enumerates. The reader most exposed to the narrow
+framing is the one INSTALL.md's AWS one-click path serves, since that installs
+the `.deb`. So both documents say **packaged release**, never "the image", and
+name the per-substrate way in (`sudo grappa`, `docker exec … bin/grappa`,
+`…/rel/grappa/bin/grappa`) separately from the verb set.
+
+### Label in place, rather than a section per substrate
+
+The issue offered both. Labelled blocks with the equivalent alongside won
+because the surrounding operator prose is substrate-**neutral** — the `--auth`
+value set, the vhost/`--source` precedence, what a session cap means — and two
+sections would have duplicated all of it, giving one explanation two places to
+rot. The split is real only at the verb line, so that is the only place that
+forks: `bind-network` + `add-server` + `create-user --name` on a checkout,
+`add-network` + positional `create-user` on a release, with the caps verb
+declared absent (it is a mix task; the admin console's Networks tab is the
+answer there) rather than quietly dropped.
+
+### Two of the report's citations did not survive
+
+Neither changes the conclusion, and both would have misled the next reader.
+The `@usage` block said to be liftable from `infra/release/grappa.sh` is not
+in that file — it has no heredoc at all; the usage text is `@usage` in
+`lib/grappa/release/cli.ex`, reached because the shell dispatcher rewrites
+`help` into the `eval` that calls `Grappa.Release.cli/1`. And `Dockerfile.release`
+does not overwrite the boot script, per the paragraph above.
+
+### Left alone deliberately
+
+`infra/docker/deploy.sh`'s release-mode install banner prints the web UI, the
+env file, the volume and the update/stop verbs, and never says how to make an
+account — the source-mode banner is the only one carrying that hint. That is
+plausibly where the reporter ran out of road, but it is code and this is a
+docs change, so it is recorded here and not touched.
