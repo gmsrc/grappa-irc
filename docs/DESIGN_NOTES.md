@@ -44319,3 +44319,137 @@ all. No e2e spec asserts anything on this screen: `grep` over
 and every `Retry`/`Reload` hit in the suite is prose in a comment about a page
 reload. Nothing was updated there because there is nothing there, and a
 Playwright spec was not fabricated for a copy change.
+<!-- entry #1878 -->
+
+---
+
+## 2026-08-30 — #1878: one tag is one project, and three specs said no
+
+The mobile suite ran on ONE engine. `@webkit` sent a spec to
+`webkit-iphone-15` and the desktop project's `grepInvert` kept it off
+`chromium`, so a green said "you did not break Safari" rather than "the
+mobile UI works". #1869 — a long-press opening two menus on Android — is
+the shape of bug that leaves uncovered: the behaviour was gated on
+`html.is-ios`, which is simply not there off Safari.
+
+The cure is 134 entries in 80 spec files gaining `@touch` **alongside**
+their `@webkit`, so they also run on `chromium-pixel-touch`. No project
+definition changed. That is the whole diff, plus comments.
+
+### Why ALONGSIDE and not INSTEAD, which is what the issue proposed
+
+The issue asked for `@webkit` → `@touch` as a REPLACEMENT, with
+`webkit-iphone-15` widened to `grep: /@webkit|@touch/` so that `@touch`
+would mean "mobile, on both projects". It was written against a working
+copy predating #1831, and #1831 had already introduced `@touch` meaning
+`chromium-pixel-touch` ONLY. Widening the webkit project would therefore
+have dragged the two specs that already carry it onto WebKit:
+
+* `issue1869-android-longpress-selection.spec.ts` asserts
+  `expect(standing?.isIos).toBe(false)`. On `webkit-iphone-15` that is
+  false by construction — a **RED**, not a vacuous green, on a spec that
+  landed on `main` the same day.
+* `issue1831-tap-send-modal-survives.spec.ts` carries a capitalised
+  instruction in its own header not to do this, backed by a measurement:
+  WebKit's injected tap dispatches `pointerdown / touchstart / pointerup`
+  and stops — no click at all — so the pre-cure code passes there.
+
+So the vocabulary is orthogonal instead: **one tag is one project
+opt-in.** `@webkit` → `webkit-iphone-15`, `@touch` →
+`chromium-pixel-touch`, both tags → both projects, neither → `chromium`.
+A spec that must hold on two engines says so twice. This needs no config
+change at all, and it leaves `--grep @webkit` collecting exactly the set
+it collected before — the widening ADDED a tag, it did not move one.
+
+The cost is the desktop project staying defined by subtraction: its
+`grepInvert` must name every touch project's tag, so a fourth project
+edits it too. The alternative is tagging the ~650 untagged desktop
+entries, which is worse.
+
+### The exception list is 11 entries in 10 files, not 8 in 7
+
+Eight were named by the issue and hold up. Six assert `html.is-ios` is
+PRESENT and then read the cascade hanging off it
+(`issue250-android-nick-select`, `issue508-ios-select-tappable`,
+`issue589-ios-admin-select`, `issue79-ios-select-keyboard-open`,
+`text-selection-restored`, `ux-6-d-keyboard-pattern` — the last tags its
+`describe`, so five tests ride it). Two ride `navigator.standalone`, an
+iOS-pre-17 API (`issue259-install-hint`).
+
+Three more were found by RUNNING the retagged suite on the touch project,
+and each fails for a different reason. This is the part a census could
+not have produced:
+
+* `issue350-link-tap-keyboard` is **iOS-bound and the census missed it**.
+  `keepKeyboard.handleMouseDown` opens with `if (!isIos()) return`
+  (`src/lib/keepKeyboard.ts`), so off Safari the mechanism is inert and
+  the asserted `defaultPrevented` is false. The list was built by
+  grepping for the `html.is-ios` CSS class; this spec exercises the JS
+  gate, and no grep for the class can see it. **The general rule: the
+  iOS surface has two doors, a class in the cascade and `isIos()` in
+  the handlers, and a census that knows only the first under-reports.**
+* `issue310-scroll-to-bottom-btn-cursor`'s mobile arm dies on **its own
+  premise, which is calibrated to a viewport and not to an engine**. It
+  seeds the read cursor 25 rows from the tail so the activation parks
+  above the fold, then asserts that precondition; on 412x839 the poll
+  reads 0 where on 393x852 it reads over the 50px threshold. Porting it
+  wants a seed derived from the pane's height, which is test code.
+* `issue1223-admin-card-affordances`'s heading-tap arm fails **and the
+  mechanism is NOT established.** Measured: `touchscreen.tap(383,
+  413.66)`, aimed at the heading's dead space, comes back with the
+  `confirmDetach` modal open and no `admin-session-detail-*` in the DOM
+  at all; the same coordinates open the row on WebKit. It has the SHAPE
+  of the #1831 class — chromium synthesises the compat mouse events and
+  hit-tests the click against the layout as it stands at RELEASE, which
+  WebKit never produces — but that was not measured here and is not
+  claimed. If it is that, the red is a product defect on Android rather
+  than a harness one, which is why the tag is withheld and the spec is
+  not weakened. Its three siblings in the same file port green.
+
+### What the numbers were, and why the issue's did not reproduce
+
+The issue's five figures — 434 spec files, 789 `test(`, 145 tagged
+entries (142 `test` + 3 `test.describe`), 87 files — reproduce EXACTLY at
+`e4a22a9a6`, the last commit before #1831 landed on 2026-08-28. On the
+tip they read 436 / 793 / 145 / 87. Nothing was wrong; the copy was two
+days old, which is also why the issue describes two projects when there
+have been three since #1831. Worth recording because the tag count is the
+one that did NOT move, so a reader spot-checking that single figure would
+conclude the whole census still held.
+
+A static `test(` census is not the collected total either: seven spec
+files build cases in a loop, so Playwright collects 803 where the static
+count reads 793. The two instruments agree per-file on the other 429,
+which is what makes either of them quotable.
+
+### The delta, per project
+
+Taken the same way on both sides — `scripts/integration.sh --list` on the
+base tree, the run's own `[project]` result lines after:
+
+| project | before | after |
+|---|---|---|
+| `chromium` | 648 | 648 |
+| `chromium-pixel-touch` | 4 | **140** |
+| `webkit-iphone-15` | 151 | 151 |
+| total | 803 | 939 |
+
++136, every one of them on the new leg, and the other two projects
+byte-for-byte the same set. That last part is the check worth keeping:
+the desktop count moving at all would mean an entry had silently left or
+joined the untagged set.
+
+### What this project is not
+
+`devices["Pixel 7"]` is chromium with `isMobile` + `hasTouch`. It is not
+an Android WebView and it is not Firefox Android. It covers the #1869
+family; it would NOT have caught #717 (Firefox Android hanging on the
+splash of an installed PWA), because Playwright's firefox has no touch
+emulation and Gecko is unreachable from this harness at all. The device
+stays `Pixel 7` rather than the `Pixel 5` the issue names — both are
+chromium with the same two flags, and churning it would re-measure every
+geometry assertion to buy nothing.
+
+The retagged titles still read "iOS" in places: the retag inserts a tag
+and rewrites no prose, and renaming them would break every `--grep` and
+doc reference that quotes a title.

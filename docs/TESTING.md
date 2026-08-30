@@ -464,15 +464,32 @@ stack (`cicchetto/e2e/compose.yaml`):
 * **playwright-runner**: official Playwright base, runs `npx playwright test` against `https://nginx-test` from inside the docker network.
 
 Cold bring-up: ~30s, suite ~3 min — both wall-clock figures inherited
-from an earlier run, not re-measured. Size of the suite, counted statically on
-`cicchetto/e2e/tests/*.spec.ts` (not from a run): **411 spec files**
-declaring **755** cases (750 `test(` + 5 `test.skip(`, line-anchored).
-That is a floor, not the collected total — 101 of those files build
-cases inside a loop, and the two Playwright projects **partition** the
-set rather than duplicate it (`chromium` is `grepInvert: /@webkit/`,
-`webkit-iphone-15` is `grep: /@webkit/`). For collected counts, read
-what a real run reports; the figures quoted in trap 4 below are runtime
-numbers and were not re-measured here.
+from an earlier run, not re-measured.
+
+**Do not quote a suite size from this file — take it from the tool.**
+`scripts/integration.sh --list` prints `Total: N tests in M files` plus
+one `[project] › file:line › title` line per collected test, which is
+the only count that reflects the loops (7 spec files build cases inside
+one, so a static `test(` census reads low) and the only one that splits
+by project. A static census answers a different question and every
+figure ever written down here has rotted within days.
+
+The three Playwright projects do **not** partition the suite any more
+(issue 1878). Each tag is an opt-in to ONE project and a spec may carry
+both:
+
+| tag in the title | project it opts into |
+|---|---|
+| `@webkit` | `webkit-iphone-15` (`devices["iPhone 15"]`) |
+| `@touch` | `chromium-pixel-touch` (`devices["Pixel 7"]`) |
+| both | both — the mobile suite's default since issue 1878 |
+| neither | `chromium` (`devices["Desktop Chrome"]`), by `grepInvert` |
+
+So `--grep @webkit` still collects exactly the set it always did: the
+widening ADDED `@touch`, it did not move `@webkit`. Eight entries in
+seven files stay `@webkit`-only because they are iOS-bound by
+construction — six assert `html.is-ios` is present, two ride
+`navigator.standalone`.
 
 E2E test outputs land in `cicchetto/e2e/test-results/` (failure
 artifacts: screenshot, video, trace.zip) and
@@ -768,17 +785,28 @@ the hard way on 2026-07-27.
    `feedback_bg_task_exit_code_masked_by_chain` (an `exit 0` that is
    really a trailing `echo`); evidence bar is `feedback_landed_claim_evidence`.
 
-4. **`--project chromium` is NOT the ship gate — it drops every
-   `@webkit` spec.** The suite partitions across two Playwright projects;
-   `webkit-iphone-15` carries the `@webkit`-tagged specs that chromium
-   never collects (~419 tests chromium-only vs ~526+ for the full
-   two-project run). `--project chromium` is an **iso-rerun tool**, not a
-   green light. Before claiming a green e2e, **reconcile the collected
-   COUNT against the baseline** — a run that collected 419 when the
-   baseline is 526+ silently skipped 100+ specs. "N ≥ 1 collected" is a
-   smoke check that Playwright found *something*, NOT a check that it
-   collected the *right* set. See `feedback_e2e_user_class_parity_matrix`
-   + `feedback_playwright_webkit_not_ios_scroll`.
+4. **`--project <one>` is NOT the ship gate — it drops every spec the
+   other two projects carry.** `chromium` never collects a tagged spec
+   at all (`grepInvert`), and since issue 1878 the two touch projects
+   overlap heavily rather than dividing the mobile specs between them,
+   so no single project is a superset of any other. `--project` is an
+   **iso-rerun tool**, not a green light.
+
+   Before claiming a green e2e, **reconcile the collected COUNT against
+   a baseline you took the same way** — `scripts/integration.sh --list`
+   on the base ref, then on yours. Do not carry a number in from this
+   file or from an older report: the totals move whenever a spec file
+   lands. "N ≥ 1 collected" is a smoke check that Playwright found
+   *something*, NOT a check that it collected the *right* set. See
+   `feedback_e2e_user_class_parity_matrix` +
+   `feedback_playwright_webkit_not_ios_scroll`.
+
+   🔴 And do not read `chromium-pixel-touch` as "Android coverage". A
+   Pixel device descriptor is chromium with `isMobile` + `hasTouch` — not
+   an Android WebView, not Firefox Android. It covers the #1869 family
+   (behaviour gated on `html.is-ios`, which is absent off Safari). It
+   would not have caught #717: Playwright's firefox has no touch
+   emulation, so Gecko is unreachable from this harness.
 
 5. **A fresh worktree's `cicchetto/e2e/infra` submodule is EMPTY — and
    the repair everyone reaches for (rsync) POISONS git.** Worktrees
