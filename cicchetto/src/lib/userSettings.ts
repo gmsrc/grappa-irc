@@ -403,7 +403,13 @@ export async function getShowPeerProfiles(token: string): Promise<boolean> {
   const res = await fetch("/me/settings/show-peer-profiles", {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw await readError(res);
+  // #449, same reasoning as `getDisplayPrefs` above — ISOLATED from the
+  // dead-token handler (`fireDeadTokenHandler: false`). This fires at
+  // boot, not on a user action, and it is a COSMETIC read: a transient
+  // 401 here must not clear a valid session's token and bounce the whole
+  // Shell back to the login screen. `loadShowPeerProfiles` already
+  // swallows the throw and leaves the cache at the server's own default.
+  if (!res.ok) throw await readError(res, false);
   const body = (await res.json()) as ShowPeerProfilesResponse;
   return body.show_peer_profiles;
 }
