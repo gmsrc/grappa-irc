@@ -53,10 +53,14 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // trips Playwright strict mode.
 const MESSAGE_BODY = `android-nick-select target ${Date.now()}`;
 
-// Read the computed selection policy off the freshly-rendered sender
-// button of a message we just sent (specNick() is vjt's own nick), so
-// the `.nick-clickable` under test is guaranteed present and attributed.
-async function nickSelectionStyles(page: import("@playwright/test").Page) {
+// Send one message and hand back its sender button (specNick() is vjt's own
+// nick), so the `.nick-clickable` under test is present and attributed.
+//
+// SEEDING IS SEPARATE FROM READING because #1869's twin reads the same row
+// TWICE — standing, then under the latch. Sending `MESSAGE_BODY` a second time
+// puts two identical rows in the scrollback and the locator dies of strict
+// mode, which is exactly what it did before this split.
+async function seedNick(page: import("@playwright/test").Page) {
   const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -67,7 +71,10 @@ async function nickSelectionStyles(page: import("@playwright/test").Page) {
 
   const nick = row.locator(".scrollback-sender.nick-clickable");
   await expect(nick).toContainText(specNick());
+  return nick;
+}
 
+function nickStyles(nick: import("@playwright/test").Locator) {
   return nick.evaluate((el) => {
     const cs = getComputedStyle(el);
     return {
@@ -81,7 +88,7 @@ async function nickSelectionStyles(page: import("@playwright/test").Page) {
 test("#250 desktop — .nick-clickable is user-select:text unconditionally (not is-ios-gated)", async ({
   page,
 }) => {
-  const styles = await nickSelectionStyles(page);
+  const styles = await nickStyles(await seedNick(page));
 
   // chromium project → NON-is-ios path: proving `text` here proves the
   // rule is unconditional. Fails (inherited `auto`) on unfixed code.
@@ -109,7 +116,8 @@ test("#250 desktop — .nick-clickable is user-select:text unconditionally (not 
 test("@webkit #250/#1869 iOS — .nick-clickable follows the row, unselectable until latched", async ({
   page,
 }) => {
-  const styles = await nickSelectionStyles(page);
+  const nick = await seedNick(page);
+  const styles = await nickStyles(nick);
 
   // WebKit reflects only the PREFIXED `webkitUserSelect` in computed
   // style (the unprefixed `userSelect` reads `undefined` there) — same
@@ -119,6 +127,7 @@ test("@webkit #250/#1869 iOS — .nick-clickable follows the row, unselectable u
 
   await page.evaluate(() => document.documentElement.classList.add("is-selecting"));
 
-  const latched = await nickSelectionStyles(page);
+  // Same locator, re-read: seeding again would send a second identical row.
+  const latched = await nickStyles(nick);
   expect(latched.webkitUserSelect).toBe("text");
 });

@@ -33,20 +33,23 @@ import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
-// Date.now() suffix (house pattern): the e2e sqlite scrollback persists across
-// re-runs against a KEEP_STACK=1 stack, and a static body would match two rows
-// on the second run and trip Playwright strict mode.
-const MESSAGE_BODY = `1869 long-press target ${Date.now()}`;
-
 const SELECTING_CLASS = "is-selecting";
 
-async function seedRow(page: Page) {
+// Date.now() suffix (house pattern) AND a per-test tag: the e2e sqlite
+// scrollback persists across KEEP_STACK=1 re-runs *and* across the tests in
+// this file, which share one stack. A single module-level body would be sent
+// twice — once per test — and the locator would then match two rows and die of
+// Playwright strict mode. The tag is what keeps the two tests disjoint.
+const bodyFor = (tag: string) => `1869 ${tag} target ${Date.now()}`;
+
+async function seedRow(page: Page, tag: string) {
+  const body = bodyFor(tag);
   await loginAs(page, specUser());
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
-  await composeSend(page, MESSAGE_BODY);
-  const row = scrollbackLine(page, "privmsg", MESSAGE_BODY);
+  await composeSend(page, body);
+  const row = scrollbackLine(page, "privmsg", body);
   await expect(row).toBeVisible({ timeout: 5_000 });
-  return row;
+  return { row, body };
 }
 
 function readCascade(page: Page) {
@@ -67,7 +70,7 @@ function readCascade(page: Page) {
 test("@touch #1869 — the row is unselectable standing and selectable under the latch", async ({
   page,
 }) => {
-  await seedRow(page);
+  await seedRow(page, "cascade");
 
   const standing = await readCascade(page);
   expect(standing).not.toBeNull();
@@ -104,7 +107,7 @@ test("@touch #1869 — the row is unselectable standing and selectable under the
 test("@touch #1869 — a range over the row serialises the whole row only when latched", async ({
   page,
 }) => {
-  const row = await seedRow(page);
+  const { row, body } = await seedRow(page, "serialise");
 
   const select = () =>
     row.evaluate((el) => {
@@ -118,12 +121,12 @@ test("@touch #1869 — a range over the row serialises the whole row only when l
     });
 
   const unlatched = await select();
-  expect(unlatched).not.toContain(MESSAGE_BODY);
+  expect(unlatched).not.toContain(body);
 
   await page.evaluate((cls) => document.documentElement.classList.add(cls), SELECTING_CLASS);
 
   const latched = await select();
-  expect(latched).toContain(MESSAGE_BODY);
+  expect(latched).toContain(body);
   // #250's guarantee, delivered by the new route: the author rides inside the
   // selection because Select… takes the whole row, not because the token
   // carries a standing re-enable.
