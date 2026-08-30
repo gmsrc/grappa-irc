@@ -229,15 +229,35 @@ login screen.
 ## Create your first user
 
 A fresh install has no accounts and connects to no networks until you say
-so.
+so. Which command you run depends on which of the two paths above you took —
+the from-source stack has Mix in it, the pre-built image does not.
+
+**From-source stack** (the clone-and-build path):
 
 ```sh
 docker compose -f compose.yaml run --rm grappa \
   mix grappa.create_user --name you --password 'change-me'
 ```
 
+**Pre-built image** (`get.sh` or `compose.release.yaml`). A release ships no
+Mix, so there is no `grappa.create_user` task to run; the image carries its own
+three-verb operator CLI as `bin/grappa` instead. The account name is
+**positional** — a flag in that slot is rejected, not taken as the name:
+
+```sh
+docker exec -it grappa bin/grappa create-user you --admin
+```
+
+`grappa` there is the container name (`GRAPPA_CONTAINER` overrides it).
+Omitting `--password` makes it prompt on the terminal, so the secret stays out
+of shell history — that is what the `-it` is for. On a `.deb` / AUR box the
+same program is just `sudo grappa create-user you --admin`. `bin/grappa help`
+lists the three verbs and their arguments.
+
 Then log in via the web UI. To connect the bouncer to an IRC network, see
-**"Bind a network"** in [README.md](README.md).
+**"Bind a network"** in [README.md](README.md) — it gives both forms, since
+the verbs differ too (`bind-network` from a checkout, `add-network` on a
+packaged release).
 
 ## A throwaway box for testing (staging)
 

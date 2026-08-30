@@ -105,7 +105,11 @@ Optional, opt-in, per-channel — and **never touches grappa or the IRC wire**: 
 
 ## Usage
 
-grappa runs as a single container against a sqlite DB. There is no config file — every `(user, network)` binding lives in the DB and is read by `Grappa.Bootstrap` at boot. The operator interface is `bin/grappa`:
+grappa runs as a single container against a sqlite DB. There is no config file — every `(user, network)` binding lives in the DB and is read by `Grappa.Bootstrap` at boot. The operator interface is `bin/grappa`.
+
+> **Two different programs answer to that name.** Check which one you have before copying a command below. A **source checkout** carries the repo-root `bin/grappa`, a docker-compose wrapper with the full verb table. A **packaged release** carries a much smaller one: `mix release` moves the generated boot script aside and installs the dispatcher from [`infra/release/grappa.sh`](infra/release/grappa.sh) in its place (the `install_operator_cli/1` step in `mix.exs`), so the ghcr.io image, the `.deb`, the AUR package and a bastille / systemd install all get the **release CLI**. A release ships no Mix, so every `grappa.*` mix task — most of the verbs below — is simply not there, and asking for one gets you the boot script's own `ERROR: Unknown command …`.
+
+**Source checkout** — run from the clone:
 
 ```sh
 bin/grappa help                # every verb (boot-time + live-state + debug)
@@ -116,7 +120,21 @@ bin/grappa list-visitors       # live-state verb (RPC into the running BEAM)
 bin/grappa remote-shell        # iex --remsh into the live node
 ```
 
-Boot-time verbs run as mix tasks in the container; live-state verbs attach to the running BEAM over Erlang distribution, so they introspect or mutate the actual supervised state (no second BEAM, no port collision). Developer scripts — gates, tests, shells — live in `scripts/*.sh`; how to run the test suites is documented in `docs/TESTING.md`; the full operator + deploy runbook is `docs/OPERATIONS.md`. The design of per-client derived outbound source addresses — written for the staff of networks a grappa instance connects to, rather than for developers — is `docs/DERIVED_SOURCE_ADDRESSES.md` (not yet implemented; #454, #543).
+Boot-time verbs run as mix tasks in the container; live-state verbs attach to the running BEAM over Erlang distribution, so they introspect or mutate the actual supervised state (no second BEAM, no port collision).
+
+**Packaged release** — three account verbs, plus whatever the release boot script already knew:
+
+```sh
+grappa help                                        # the three verbs and their arguments
+grappa create-user NAME [--admin] [--password PW]
+grappa add-network USER NETWORK --server HOST:PORT --nick NICK --auth METHOD [...]
+grappa remove-network USER NETWORK
+grappa start | daemon | eval | rpc | remote | stop | pid | version
+```
+
+How you reach that program depends on the substrate: `sudo grappa …` on a `.deb` / AUR box, `docker exec -it grappa bin/grappa …` against the container `infra/docker/deploy.sh` installs (named `grappa` unless `GRAPPA_CONTAINER` says otherwise), `.../rel/grappa/bin/grappa …` in a jail or under systemd. Anything outside the list above — `list-visitors`, `add-server`, `set-network-caps`, `seed-scrollback`, `remote-shell` … — has **no verb here**: live state is reachable through the release's own `rpc` / `remote` (`grappa rpc 'Grappa.Operator.list_visitors_text!()'` is the twin of `bin/grappa list-visitors`), and the per-network caps live in the admin console's **Networks** tab.
+
+Developer scripts — gates, tests, shells — live in `scripts/*.sh`; how to run the test suites is documented in `docs/TESTING.md`; the full operator + deploy runbook is `docs/OPERATIONS.md`. The design of per-client derived outbound source addresses — written for the staff of networks a grappa instance connects to, rather than for developers — is `docs/DERIVED_SOURCE_ADDRESSES.md` (not yet implemented; #454, #543).
 
 ### First deploy
 
@@ -145,6 +163,8 @@ On later deploys `scripts/deploy.sh` auto-detects hot-safe changes (running-modu
 
 ### Bind a network
 
+**From a source checkout** — three verbs, all flags named:
+
 ```sh
 bin/grappa create-user --name vjt --password "correct horse battery staple"
 bin/grappa add-server  --network azzurra --host irc.azzurra.chat --port 6697 --tls
@@ -153,9 +173,20 @@ bin/grappa bind-network --user vjt --network azzurra \
   --autojoin '#italia,#hacking'
 ```
 
-- `--auth`: `auto | sasl | server_pass | nickserv_identify | none`.
-- `--source <IPv4|IPv6>` (on `add-server`) pins a per-network fallback outbound IP; a per-subject vhost pin/selection (admin panel → Vhosts tab, #228) overrides it. The auto-rotation pool is DB-driven (curated `in_pool` vhosts), no env var.
-- `bin/grappa set-network-caps --network azzurra --max-visitor-sessions N --max-user-sessions N` sets independent visitor/user admission caps (omit for unlimited; visitor saturation never blocks operator login).
+**On a packaged release** — the same thing in two verbs, because `add-network` creates the network and the server itself. `create-user` takes the name **positionally** and rejects a flag in that slot (`create-user --name vjt` errors with *"create-user needs an account name, got the flag --name"*):
+
+```sh
+grappa create-user vjt --password "correct horse battery staple"
+grappa add-network vjt azzurra --server irc.azzurra.chat:6697 \
+  --nick vjt --password 'NICKSERV_PASS' --auth nickserv_identify \
+  --autojoin '#italia,#hacking'
+```
+
+- `--auth`: `auto | sasl | server_pass | nickserv_identify | none`, on both forms.
+- TLS: explicit `--tls` on the checkout's `add-server`; on `add-network` it **defaults to on for port 6697** and off otherwise, with `--tls` / `--no-tls` to override.
+- Omit `--password` on the release `create-user` and it prompts on the terminal, so the secret stays out of shell history — pass `-it` if you are going through `docker exec`.
+- `--source <IPv4|IPv6>` (on the checkout's `add-server`, or `--source` on the release's `add-network`) pins a per-network fallback outbound IP; a per-subject vhost pin/selection (admin panel → Vhosts tab, #228) overrides it. The auto-rotation pool is DB-driven (curated `in_pool` vhosts), no env var.
+- `bin/grappa set-network-caps --network azzurra --max-visitor-sessions N --max-user-sessions N` sets independent visitor/user admission caps (omit for unlimited; visitor saturation never blocks operator login). It is a mix task, so a packaged release has no such verb — set the caps from the admin console's **Networks** tab instead.
 
 Re-run `scripts/deploy.sh` and Bootstrap picks up the binding on boot — or attach via `remote-shell` and drive the spawn orchestrator directly for no downtime.
 
@@ -169,13 +200,18 @@ Operators get a multi-tab admin pane in cicchetto, gated on `User.is_admin` (RES
 - **Events** — real-time admin-event tail over the `grappa:admin:events` topic; **disk-backed** (#215) so it survives a restart.
 - **Session Log** — the persisted IRC session-lifecycle log (#215): connect / register / NickServ `+r` / disconnect (with reason + duration + clean-vs-error) / reconnect-backoff, per `(user|visitor, network)` session. Every lifecycle transition also lands as a greppable, structured Logger line (`session=<kind>:<uuid>:<network_id> event=disconnected reason=… duration_ms=… clean=…`), so a 2am `grep <nick>` of the server log finally explains a drop.
 
-The admin UI's Promote button needs an existing admin, so bootstrap the **first** admin with `--admin` on `create-user`:
+The admin UI's Promote button needs an existing admin, so bootstrap the **first** admin with `--admin` on `create-user` — in whichever of the two shapes your install has:
 
 ```sh
-bin/grappa create-user --name vjt --password '…' --admin
+bin/grappa create-user --name vjt --password '…' --admin   # source checkout
+grappa create-user vjt --admin                             # packaged release (prompts for the password)
 ```
 
-After that, promote/demote everyone else from the **Admin → Users** tab. (To promote an already-existing user from the shell: `bin/grappa remote-shell --batch -e 'Grappa.Accounts.get_user_by_name!("vjt") |> Grappa.Accounts.update_admin_flags(%{is_admin: true})'`.)
+After that, promote/demote everyone else from the **Admin → Users** tab. To promote an already-existing user from the shell, the expression is the same on both; only the way in differs — `bin/grappa remote-shell --batch -e '<expr>'` from a checkout, the release's own `rpc` on a packaged install:
+
+```sh
+grappa rpc 'Grappa.Accounts.get_user_by_name!("vjt") |> Grappa.Accounts.update_admin_flags(%{is_admin: true})'
+```
 
 ### Themes
 
