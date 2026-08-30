@@ -43853,3 +43853,99 @@ editing the assertion, and it fails only on the state main was in. The test
 carries its own positive control (a current credential must read, or a typo in
 the fixture would let a floor raise "fix" a defect that is not there) and a
 negative control. Every other narrower in the bundle is still on trust.
+<!-- entry #1865a -->
+
+---
+
+## 2026-08-30 — #1865a: the peer-profile opt-in has two halves, and the cache lookup has two keys
+
+Two follow-ups to the KVIrc-style profile work (entry #1280), both of the
+same shape: a scope the code DOCUMENTED but did not ENFORCE.
+
+### The opt-in governs what we ask AND what we learn
+
+`show_peer_profiles` gated `maybe_query_userinfo/2` and
+`maybe_query_avatar/2` — the ASK half — and nothing on the CAPTURE half.
+A CTCP reply is not evidence that we asked: nothing stops a peer sending
+one unprompted, and both capture arms ran on it. For a subject with the
+feature switched OFF that meant `peer_profile_cache` filled up anyway,
+and on the AVATAR arm it also meant `dispatch_avatar_fetch/3` spending an
+outbound HTTP round trip on a URL supplied by the peer, plus a
+`peer_avatars` row and a file on disk. Measured end to end before the
+fix: a raw wire NOTICE fed into a live `Session.Server` whose state read
+`show_peer_profiles: false` and whose `peer_profile_cache` was empty
+produced an arrival at a real listener, a cached row and a file.
+
+The fix is one door — `maybe_capture_peer_profile/3`, the mirror of
+`maybe_query_peer_profile/2` — with the flag read ONCE there, and the two
+arms reachable only through it. A wrapper rather than a check in each arm
+because the failure was precisely that one of two symmetric halves was
+forgotten; a single gate cannot be half-applied by the next person to add
+a third field.
+
+**Scope of the gate, deliberately narrow: it governs what the session
+LEARNS, never what it SHOWS.** The `:persist` row for the notice is built
+after the capture returns and is untouched, so a CTCP reply still lands
+verbatim in `$server` whatever the opt-in says. A test pins that arm on
+the opted-OUT default on purpose — refusing to learn from a reply must
+never quietly turn into refusing to display it.
+
+**Named and NOT done here, because each is a wider decision than
+honouring a setting that already exists:**
+
+1. *Solicited-only capture.* The capture-side dedup asks
+   `is_nil(Map.get(entry, :avatar_slug))`, whereas its outbound twin asks
+   `Map.has_key?/2`. Under `Map.get/2` an ABSENT key and a "we asked, no
+   answer yet" key are indistinguishable, so for a subject who HAS opted
+   in, a reply from a peer we never queried is still actioned. Aligning
+   the two would close that; it also changes what the feature does for
+   the opted-in majority, which is a product call and not a scoping one.
+2. *A ceiling on the fetch fan-out.* `Grappa.TaskSupervisor` carries no
+   `max_children`; 500 concurrent children were accepted in one run with
+   no refusal, and no limit was searched for. Whether these fetches want
+   their own bounded supervisor is a supervision-tree decision.
+3. *`Grappa.Avatars.fetch_and_cache/3` can raise.* Its `@spec` is `:: :ok`
+   and its docstring promises every failure is swallowed, but `Repo.insert`
+   raises `Ecto.ConstraintError` on a foreign-key violation and no clause
+   catches it. Reproduced only from a synthetic `network_id`; the
+   production path (a `networks` row deleted while a fetch is in flight)
+   is read off the schema, not observed.
+
+### A slug is not a scope
+
+`Avatars.get_by_slug/1` matched on `slug` and `expires_at` only.
+`Grappa.Avatars` is keyed `(network_id, nick_key)` throughout — `get/2`
+has been network-scoped since day one — and the serving route is mounted
+under `/networks/:network_id/...` behind `ResolveNetwork`, whose whole
+job is to prove the caller holds a credential on THAT network. The
+action's own doc says "ownership: any live credential on this network".
+The lookup did not carry the network, so the second half of that sentence
+was aspirational: what the gate proved and what the query enforced were
+different sets.
+
+Now `get_by_slug/2`, taking the resolved network's id and adding the
+conjunct, with the controller passing `conn.assigns.network.id`. Not a
+default argument (CLAUDE.md forbids them precisely so a caller cannot
+silently keep the unscoped behaviour); the arity change makes every call
+site declare which network it means, and there was only one.
+
+The `:not_found` collapse is unchanged and now covers a fourth case —
+"exists, but not on your network" — for the same no-oracle reason the
+other three collapse.
+
+**Found while measuring this, named and NOT fixed here:
+`Session.Server`'s `peer_avatar_route/2` builds
+`/networks/#{state.network_id}/peer_avatar/#{slug}` — an INTEGER id —
+while `ResolveNetwork` reads that path segment as a SLUG
+(`Networks.get_network_by_slug/1`), so the URL the server hands the
+client cannot resolve and the card's image 404s.** Measured in both
+directions on one row with its file present on disk: the integer form
+404s, the slug form is a 200 with `content-type: image/png` — the same
+row, the same credential, the same request otherwise. Nothing pinned the
+emitted shape, in either direction, which is why it survived; a fix
+therefore owes a test of the URL itself, and it turns an image that
+never rendered into one that does, which is a behaviour change rather
+than a scoping one. `state.network_slug` is already on the state (the
+sibling wire call one line up uses it), so the change is small — it is
+the coverage and the visible-behaviour flip that make it somebody's
+decision rather than this branch's.
