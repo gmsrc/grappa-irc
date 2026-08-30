@@ -44004,3 +44004,109 @@ concludes anything from its absence.
 Left to vjt and deliberately untouched: whether FF115 ESR is a support target
 at all. If it is not, telling the operator so is a product decision and a
 different change; this entry only stops one absent API from being a blank page.
+<!-- entry #1873 -->
+
+---
+
+## 2026-08-30 — #1873: a frozen process observes no edge, so the resume IS the third door
+
+A channel joined on another device was missing from an Android PWA that had
+merely been RESUMED, and appeared only after a kill-and-reopen. `channelsBySlug`
+had exactly two refresh doors: the live `channels_changed` broadcast, and
+`subscribe.ts`'s defensive resync gated on the socket transitioning INTO
+`"open"` from a non-open state. A process the OS freezes walks through neither
+— the broadcast is fanned out best-effort with no live subscriber, and on
+resume there is no edge to observe — while a kill-and-reopen heals it because
+that is a real boot through `bootFetch`.
+
+### Why `socketHealth` cannot answer this, and what follows
+
+The obvious question is whether the socket really reads a stale `"open"` after
+a freeze, or whether it is torn down and the edge simply arrives late — the two
+lead to different cures. Measured structurally rather than assumed: the health
+signal has exactly four writers (`recordSocketOpen` / `recordSocketError` /
+`recordSocketClose` / `recordConnectAttempt`), wired ONLY to phoenix's
+`onOpen` / `onError` / `onClose` at `socket.ts:196-198`. Nothing polls and
+nothing probes, so **a suspended process cannot write it**: the state is a
+RECORD of the last callback and necessarily reads whatever it read when the
+process went under. It is not a liveness test, and `kickReconnect` already
+knows that — its guard is `s.isConnected()`, the live `readyState`, not this
+signal.
+
+So both regimes are real, and the resume door means something different in
+each:
+
+* **the socket survived the absence** — no callback fires, no edge ever
+  arrives, and the defensive resync NEVER runs. The resume door is the whole
+  cure.
+* **the socket died** — the tear is observed on the thaw (or forced by #254's
+  visibilitychange kick), the state leaves `"open"`, the reconnect lands and
+  the edge fires. The resume door is a FLOOR: it puts the HTTP fetch on the
+  wire immediately rather than after a WS round trip, and HTTP does not wait
+  for the socket.
+
+Which regime an actual Android freeze produces is NOT established here — there
+is no Android on the worker host and an OS freeze cannot be simulated. The
+design is deliberately correct in both rather than betting on one.
+
+### The seam already existed, and the answer was not "add a listener"
+
+`documentVisibility.ts` is the visibility SSOT (visibilitychange AND window
+focus/blur, one set of listeners) and two consumers already have exactly the
+shape this needed — `installStaleResumeReload` (#695/#674) and
+`installResumeProbe` (#697): the signal injected as a dependency, the bfcache
+seam taken separately, both mounted from `main.tsx`. A raw
+`document.addEventListener("visibilitychange")` inside `subscribe.ts` would
+have been a parallel registration of a signal that already exists — the thing
+#192 removed when it made presence read the SSOT instead of its own listener.
+So `lib/resumeResync.ts` is a third consumer of the same seam, not a fourth
+listener.
+
+### `pagehide` is what makes `pageshow` unambiguous
+
+The first cut gated `pageshow` on `PageTransitionEvent.persisted` to tell a
+restore from the initial load. Its own test killed it: a resume that delivers
+BOTH a visibility transition and a `pageshow` then resynced TWICE, because the
+`pageshow` arm manufactured a second resume after the first had been serviced.
+`persisted` separates boot from restore but says nothing about whether this
+restore was already handled.
+
+The fix is symmetry. A departure raises the debt (`pagehide`, or the
+visibility signal going false), a return settles it (`pageshow`, or the signal
+going true), and BOTH pairs write ONE flag — so a resume that delivers three
+events raises the same debt three times and pays it once. The initial load
+fires `pageshow` with no `pagehide` before it, so boot is a no-op by
+construction and the `persisted` flag is not needed at all. No timer, no
+threshold, no stamp: the coalescing is derived from the transition rather than
+tracked beside it, and it re-arms on the next absence rather than latching.
+
+### Measured and NOT fixed here: the resync pair fetches the channels twice
+
+`channelsBySlug` is a `createResource` keyed on `networks`, which is keyed on
+`user`. Counted on a bench with a mocked api layer: `refetchNetworks()` ALONE
+takes `listChannels` from 1 to 2 — the cascade already refetches the channels —
+and the socket-edge arm's pair (`refetchNetworks(); refetchChannels();`) takes
+it from 1 to 3. So every defensive resync issues **two** identical
+`GET /networks/:slug/channels` per network, one of them redundant, and the
+resume door inherits that because it deliberately calls the SAME pair rather
+than a second, drifting definition of "resync".
+
+Left as-is on purpose: dropping the explicit `refetchChannels()` would make
+both arms depend on a cascade that is one edit away from being invisible, and
+the two arms diverging is a worse failure than one extra GET. It is a
+pre-existing property of the reconnect path, not something this change
+introduced — but it is now on a trigger that fires on every resume, which is
+what makes it worth writing down. `api.ts:1806` says the `/me` request
+coalescing was NOT extended to `listChannels` because it has "no repeating
+unattended trigger": that premise is exactly what this change repeals.
+
+### What is not proven
+
+That an Android PWA freeze delivers these events at all, and that gmsrc's
+session was in either regime. There is no Android here, Playwright ships no
+Android PWA, and a synthetic `visibilitychange` is a synthetic
+`visibilitychange` — it proves the contract the resume path obeys once the
+platform delivers one, never that the platform delivers it. The known
+limitation `resumeProbe` records applies unchanged: a document thawed with
+neither a visibility transition nor a `pageshow` is not covered, because there
+is nothing to observe.
