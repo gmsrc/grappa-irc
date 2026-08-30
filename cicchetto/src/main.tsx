@@ -28,10 +28,12 @@ import { applyFontSizeFromStorage } from "./lib/fontSize";
 import { installGlobalPaste } from "./lib/globalPaste";
 import { HIDDEN_TICK_MS, installHiddenProbe } from "./lib/hiddenProbe";
 import { installKeyboardPreserve } from "./lib/keepKeyboard";
+import { refetchChannels, refetchNetworks } from "./lib/networks";
 import { applyIosClass, isStandalonePwa } from "./lib/platform";
 import { installPushResubscribe } from "./lib/pushResubscribe";
 import { applyDeepLinkFromUrl, installPushTargetListener } from "./lib/pushTarget";
 import { browserProbePerformance, installResumeProbe } from "./lib/resumeProbe";
+import { installResumeResync } from "./lib/resumeResync";
 import { applySharedFilesFromUrl } from "./lib/shareTargetDelivery";
 import { applySidebarWidthsFromStorage } from "./lib/sidebarWidths";
 import { notifyClientClosing, reportVisibility } from "./lib/socket";
@@ -323,6 +325,21 @@ moduleRoot(() => {
     now: () => performance.now(),
     raf: (cb) => void requestAnimationFrame(cb),
     perf: browserProbePerformance(),
+    win: window,
+  });
+  // #1873 — the THIRD refresh door onto the network/channel tree. The other
+  // two are the live `channels_changed` broadcast and `subscribe.ts`'s resync
+  // on a non-open → open socket edge; a process the OS froze walks through
+  // neither, so a channel joined on another device stayed invisible until a
+  // kill-and-reopen. Same resume seam as the two installers above — the
+  // visibility SSOT injected as a signal, no parallel listener — and the same
+  // pair the socket edge refetches, so the two doors cannot drift.
+  installResumeResync({
+    isVisible: isDocumentVisible,
+    resync: () => {
+      refetchNetworks();
+      refetchChannels();
+    },
     win: window,
   });
   // #1061 — background-burn instrument. The mirror image of the resume probe:
