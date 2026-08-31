@@ -76,7 +76,18 @@ test("1883 — the returning operator is asked, and Cancel publishes nothing", a
   // one string a screen reader announces on open.
   await expect(confirm).toHaveAttribute("aria-label", `Send to ${CHANNEL}?`);
   // An image previews as a picture, from the operator's own bytes.
-  await expect(page.getByTestId("confirm-modal-attachment-thumb")).toHaveAttribute("src", /^blob:/);
+  const thumb = page.getByTestId("confirm-modal-attachment-thumb");
+  await expect(thumb).toHaveAttribute("src", /^blob:/);
+  // And it DECODED. The `src` above is set by cic and says nothing about what
+  // the browser did with it: measured on this very stack, the prod CSP's
+  // `img-src` refused the object URL (`blockedURI: blob`) and the row rendered
+  // an empty box with the attribute intact — green here, broken on screen, in
+  // the one dialog whose entire job is showing WHICH photo. `naturalWidth`
+  // is the same witness `media-link-cross-host-modal` uses for the #1240
+  // widening, and it is what a CSP revert has to red on.
+  await expect
+    .poll(() => thumb.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 5_000 })
+    .toBeGreaterThan(0);
 
   await page.getByTestId("confirm-modal-cancel").click();
   await expect(confirm).toBeHidden({ timeout: 5_000 });
