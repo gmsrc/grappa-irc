@@ -1307,22 +1307,56 @@ describe("ComposeBox", () => {
       expect(input).toBeNull();
     });
 
-    it("selecting a file via the picker calls triggerUpload with file + slug + channel", async () => {
-      const orch = await import("../lib/uploadOrchestrator");
-      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+    // 1883 — the picker no longer reaches the orchestrator by itself. It
+    // stages the pick behind a confirm; the orchestrator is reached only when
+    // the operator says Send. What is asserted here is the WIRING (the picked
+    // file reaches the guard, and nothing is uploaded before an answer) — the
+    // guard's own behaviour is pickerUpload.test.ts's job.
+    const pickFile = (file: File): void => {
       const input = document.querySelector(
         "input[type='file'][data-file-picker]",
       ) as HTMLInputElement;
-      const file = sampleImage();
-      Object.defineProperty(input, "files", {
-        value: [file],
-        configurable: true,
-      });
+      Object.defineProperty(input, "files", { value: [file], configurable: true });
       fireEvent.change(input);
+    };
+
+    it("selecting a file via the picker asks first and uploads NOTHING yet — 1883", async () => {
+      const orch = await import("../lib/uploadOrchestrator");
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+
+      pickFile(sampleImage());
+
+      const req = confirmRequest();
+      expect(req).not.toBeNull();
+      // Pin WHICH dialog opened — without this the case passes against any
+      // build that happens to have some confirm pending.
+      expect(req?.confirmLabel).toBe("Send");
+      expect(req?.attachments?.items().map((a) => a.label)).toEqual(["screenshot.png"]);
+      expect(orch.triggerUploads).not.toHaveBeenCalled();
+    });
+
+    it("confirming the picker dialog uploads the file with slug + channel — 1883", async () => {
+      const orch = await import("../lib/uploadOrchestrator");
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const file = sampleImage();
+
+      pickFile(file);
+      acceptConfirm();
 
       expect(orch.triggerUploads).toHaveBeenCalledWith(expect.any(String), "freenode", "#a", [
         file,
       ]);
+    });
+
+    it("cancelling the picker dialog uploads nothing — 1883", async () => {
+      const orch = await import("../lib/uploadOrchestrator");
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+
+      pickFile(sampleImage());
+      expect(confirmRequest()?.confirmLabel).toBe("Send");
+      dismissConfirm();
+
+      expect(orch.triggerUploads).not.toHaveBeenCalled();
     });
 
     // #351 — the compose form is NO LONGER a drop target. Drag-drop was
