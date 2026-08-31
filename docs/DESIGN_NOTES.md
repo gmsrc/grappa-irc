@@ -44530,3 +44530,47 @@ capability guard. Measured: the cic gate green on this branch — `bun run check
 NOT measured: any claim about how often the defect fires in the field, and any
 claim about the confirm's effect on upload latency. The object-URL revoke is
 proven by a spy in `ConfirmModal.test.tsx`, NOT by an observed memory figure.
+
+### The thumbnail needed a CSP token, and 29 e2e specs said so at once
+
+The e2e suite came back with 29 failures across all four shards, in three
+families that looked unrelated: the three new specs, the existing picker
+journeys (i2b, ux-6-b, uploads3, #418), and — the surprising one — the media
+viewer and preview-scroll specs, which are not picker-shaped at all. One
+mechanism, read off the artefact rather than reasoned from the code:
+`violatedDirective: img-src, blockedURI: blob`. Every one of those specs runs
+through `mediaViewer.uploadImageAndGetLink` or `uploadJourney.pickFile`, so
+every one of them now opens a confirm carrying an `<img src="blob:…">` — and
+`fixtures/test.ts`'s `_cspGuard` is an `auto` fixture that fails a spec at
+teardown for ANY violation collected during it. The journeys themselves all
+completed; the guard is what reddened them. The discriminating control was
+already in the run: `media-link-modal-viewer.spec.ts:78` drives the SAME picker
+journey with an AUDIO file — no thumbnail, no violation, green.
+
+`img-src 'self' data: https:` became `img-src 'self' data: blob: https:`. This
+is the same token, arriving for the same reason, as the `blob:` that
+`media-src` has carried since the video-duration probe: a preview of the
+operator's OWN file, minted by `URL.createObjectURL`, off the wire entirely.
+The security argument for admitting it is narrow and worth stating: a `blob:`
+URL can only be minted by same-origin script and can never name a foreign
+host, so it is not an exfiltration channel — while `https:`, which this
+directive has admitted since #1240, is the token that would carry an
+image-beacon anywhere. Two client-side cures were rejected: a `data:` URL
+(already admitted, but it is the whole file base64'd in memory, ~1.33× per row,
+for a 2.5rem picture) and a `<canvas>` (CSP-free, but it trades one token for a
+decode-and-draw path nobody else in cic uses).
+
+Four pins had to move with it, and the shape of three of them is the lesson:
+the plug's golden literal, `nginx-csp-range-parity.spec.ts`, and
+`media-link-cross-host-modal.spec.ts` each pin the WHOLE directive value, not
+the token they care about, precisely because every shorter spelling of
+`img-src` is a PREFIX of the longer one and `toContain` would sail through a
+revert. Inserting `blob:` in the middle is the third time that trap has been
+paid for.
+
+The e2e assertion this branch shipped — `toHaveAttribute("src", /^blob:/)` —
+was green in exactly the world where the feature was broken: cic sets the
+attribute, the browser refuses the resource, the row renders an empty box. It
+now also polls `naturalWidth > 0`, the same witness `media-link-cross-host-modal`
+uses for #1240. **A `src` attribute is not evidence that an image loaded; under
+a CSP it is barely evidence of anything.**
