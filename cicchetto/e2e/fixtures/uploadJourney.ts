@@ -8,9 +8,11 @@
 //
 // Layering (so the litterbox path can reuse the modal half without
 // the embedded-host POST half):
-//   pickFile()        — feed the hidden picker, wait for the privacy
-//                       modal. Heading is a REQUIRED param: it names
-//                       the active upload host (embedded grappa vs
+//   sendPickedFiles() — answer the 1883 send-confirm the picker now
+//                       raises between selection and dispatch.
+//   pickFile()        — feed the hidden picker, Send, then wait for the
+//                       privacy modal. Heading is a REQUIRED param: it
+//                       names the active upload host (embedded grappa vs
 //                       litterbox.catbox.moe) and a wrong-host modal
 //                       must fail loudly, not match loosely.
 //   uploadViaPicker() — pickFile + Continue + pin POST /api/uploads
@@ -45,10 +47,27 @@ export interface UploadResponse {
 export const EMBEDDED_MODAL_HEADING = /Upload to .+grappa/i;
 export const LITTERBOX_MODAL_HEADING = /Upload to litterbox\.catbox\.moe/i;
 
-// Feed the hidden file input (no OS dialog under setInputFiles) and
-// wait for the privacy modal. Fresh context per test → the modal
-// fires every time. Returns the modal locator for the caller to
-// Continue or Cancel.
+// 1883 — the picker's own confirm, raised BEFORE the privacy modal and
+// before anything reaches the orchestrator. Every picker-driven journey
+// passes through it, so it lives here rather than being restated: a
+// spec that forgot it would hang on the privacy modal instead of
+// failing on the step it actually skipped.
+//
+// Asserted, not just clicked: the dialog must be the SEND one (a bare
+// `confirm-modal` click would also be satisfied by whatever other
+// confirm happened to be open) and it must be gone afterwards.
+export async function sendPickedFiles(page: Page): Promise<void> {
+  const confirm = page.getByTestId("confirm-modal");
+  await expect(confirm).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("confirm-modal-confirm")).toHaveText("Send");
+  await page.getByTestId("confirm-modal-confirm").click();
+  await expect(confirm).toBeHidden({ timeout: 5_000 });
+}
+
+// Feed the hidden file input (no OS dialog under setInputFiles),
+// authorise the 1883 send-confirm, and wait for the privacy modal.
+// Fresh context per test → both modals fire every time. Returns the
+// PRIVACY modal locator for the caller to Continue or Cancel.
 export async function pickFile(
   page: Page,
   file: PickerFile,
@@ -56,6 +75,7 @@ export async function pickFile(
 ): Promise<Locator> {
   const picker = page.locator("input[data-file-picker]");
   await picker.setInputFiles(file);
+  await sendPickedFiles(page);
 
   const modal = page.getByRole("dialog", { name: modalHeading });
   await expect(modal).toBeVisible({ timeout: 5_000 });

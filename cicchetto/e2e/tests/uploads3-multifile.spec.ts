@@ -21,6 +21,7 @@ import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
+import { sendPickedFiles } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -36,13 +37,17 @@ test("uploads-3 #118 — multi-file picker uploads ALL files sequentially → tw
     localStorage.setItem("image-upload-privacy-acknowledged:embedded", "1"),
   );
 
-  // Stage TWO PNGs on the (now `multiple`) picker → triggerUploads([a, b]).
+  // Stage TWO PNGs on the (now `multiple`) picker → the 1883 send-confirm →
+  // triggerUploads([a, b]). The confirm lists the WHOLE batch, so both names
+  // are on screen before either byte moves.
   const png = Buffer.from(TINY_PNG_HEX, "hex");
   const picker = page.locator("input[data-file-picker]");
   await picker.setInputFiles([
     { name: "multi-a.png", mimeType: "image/png", buffer: png },
     { name: "multi-b.png", mimeType: "image/png", buffer: png },
   ]);
+  await expect(page.getByTestId("confirm-modal-attachment")).toHaveCount(2);
+  await sendPickedFiles(page);
 
   // Both upload sequentially → two 📸 PRIVMSGs land after the IRC echo.
   const rows = scrollbackLine(page, "privmsg", "📸");
