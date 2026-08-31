@@ -44453,3 +44453,80 @@ geometry assertion to buy nothing.
 The retagged titles still read "iOS" in places: the retag inserts a tag
 and rewrites no prose, and renaming them would break every `--grep` and
 doc reference that quotes a title.
+<!-- entry #1883 -->
+
+---
+
+## 2026-08-31 — 1883: the gallery pick asks before it publishes
+
+`onPickerChange` handed `input.files` straight to `triggerUploads`. The only
+thing between a tap and a public URL was the privacy modal, and that modal is
+one-shot per host: `startUpload` reads `localStorage[privacyKey(host)]` and, if
+the operator ever ticked "remember", dispatches immediately. So for every
+returning operator the whole sequence was tap paperclip → tap photo → it is
+public. On a phone the gallery grid is dense and the thumbnails are small; a
+mis-tap has no undo, because by the time it is visible the bytes are on the
+upload host and the link is in the channel.
+
+The cure is one step, `lib/pickerUpload.ts`, between selection and dispatch: a
+confirm that SHOWS the batch — thumbnail for a picture, name + size for
+anything else — names the destination, and offers Send / Cancel with per-file
+removal. It reuses `ConfirmModal`, which grew an OPTIONAL attachment list for
+it (`ConfirmRequest.attachments`, explicit-`null` at every call site like
+`alternative` since #816). No new overlay: the upload confirm inherits the same
+scrim, the same Esc, the same Cancel-first focus order as every other confirm
+in cic.
+
+### Where the step sits, and why not one layer down
+
+Not inside `triggerUploads`. The orchestrator owns the per-channel queue, and a
+batch nobody has authorised yet has no business being in it — it would hold the
+channel's single upload slot, render an `(i/N)` counter for files that may never
+be sent, and make `cancelUpload` mean two different things. The question is
+asked BEFORE the queue; only the answer enters it.
+
+Not `dropUpload` either, though the shape is close, and this is the trap worth
+recording: `dropUpload` filters by `categoryOf`, and the picker path
+deliberately does NOT. iOS labels a `.m4r` ringtone `application/octet-stream`,
+which `categoryOf` rejects; `normalizeUploadFile` inside the orchestrator is
+what rescues it. Reusing the drop entry point here would have re-introduced that
+filter and dropped the file one layer above its own rescue, silently.
+
+### Two open questions the issue left, answered as ASSUMPTIONS
+
+Both are reversible in one call site, and neither was ruled on.
+
+**Always-on, no "don't ask again".** A remembered opt-out is exactly the shape
+of the flag that produced the defect: a gate every returning operator has
+already switched off is not a gate. If the friction proves too high the answer
+is fewer taps, not a permanent disarm.
+
+**Picker only.** Drop and paste keep going straight through `dropUpload`: a drag
+onto a visible target is a gesture the operator aimed, and Ctrl-V is one they
+typed. A gallery tap is neither — the OS chose the grid, and two adjacent
+thumbnails are millimetres apart. Extending the guard is a call to
+`pickerUpload` from those doors; nothing in the module is picker-shaped except
+its call site.
+
+### A fourth door the issue does not name
+
+`lib/shareTargetDelivery.ts` (#1103, Web Share Target) also reaches
+`dropUpload`, and it is the one path where the operator picks neither the file
+in cic NOR the destination: the share arrives from another app on a cold boot,
+and `resolveShareDestination` sends it to the LAST FOCUSED window. That is a
+closer relative of the gallery tap than drag-and-drop is — the gesture that
+starts it IS a gallery share — and it is out of scope here only because the
+issue does not name it and the assumption above says picker. Read as a gap, not
+as a decision.
+
+### What was measured, and what was not
+
+Measured: `URL.createObjectURL` IS available under vitest's jsdom environment
+(`typeof === "function"`, returns a `blob:` URL) — jsdom's own lib ships no such
+symbol, so the thumbnail path is exercisable in unit tests and needs no
+capability guard. Measured: the cic gate green on this branch — `bun run check`
+5/5 stages, `bun run test` 330 files / 6586 tests.
+
+NOT measured: any claim about how often the defect fires in the field, and any
+claim about the confirm's effect on upload latency. The object-URL revoke is
+proven by a spy in `ConfirmModal.test.tsx`, NOT by an observed memory figure.
