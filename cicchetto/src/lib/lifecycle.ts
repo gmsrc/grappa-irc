@@ -158,6 +158,7 @@ export function confirmDetach(onDone: () => void): void {
     confirmLabel: "Switch account",
     onConfirm: () => void detach().then(onDone),
     alternative: null,
+    attachments: null,
   });
 }
 
@@ -173,6 +174,7 @@ export function confirmQuit(onDone: () => void): void {
     confirmLabel: "Quit IRC",
     onConfirm: () => void quit().then(onDone),
     alternative: null,
+    attachments: null,
   });
 }
 

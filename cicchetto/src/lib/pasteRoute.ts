@@ -234,6 +234,7 @@ function routeGuardedText(
           label: PASTE_UPLOAD_LABEL,
           onSelect: () => uploadPastedText(text, networkSlug, channelName),
         },
+        attachments: null,
       });
       return;
     case "over-limit":
@@ -248,6 +249,7 @@ function routeGuardedText(
         // No third door here: the paste door is what the cap closed, so
         // uploading IS the affirmative and there is nothing else to offer.
         alternative: null,
+        attachments: null,
       });
       return;
     case "insert":

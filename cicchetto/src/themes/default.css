@@ -5599,6 +5599,94 @@ button.topic-bar-windows-opener {
   cursor: pointer;
 }
 
+/* 1883 — the file list on an upload confirm. Capped and scrollable: a gallery
+   multi-select can be a dozen files, and a dialog that grows past the viewport
+   pushes its own Cancel button off screen — on a phone that turns the guard
+   into a trap. `overscroll-behavior` keeps a flick inside the list from
+   scrolling the pane underneath. */
+.confirm-modal-attachments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.confirm-modal-attachment {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  padding: 0.375rem;
+  min-width: 0;
+}
+
+/* Fixed box for BOTH the thumbnail and its placeholder, so a mixed batch
+   (photo + pdf) keeps every row the same height and the filenames line up. */
+.confirm-modal-attachment-thumb,
+.confirm-modal-attachment-icon {
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.confirm-modal-attachment-thumb {
+  /* `cover` and not `contain`: a preview is for recognising the picture, and
+     a letterboxed 2.5rem thumbnail of a portrait photo is a sliver. */
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.confirm-modal-attachment-icon {
+  color: var(--muted);
+}
+
+.confirm-modal-attachment-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Ellipsis rather than wrap: a camera filename is long and uninformative in
+   the middle, and a wrapped one would push the remove button around. */
+.confirm-modal-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confirm-modal-attachment-detail {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Bare glyph, not a bordered button: the row is not an action, the × is.
+   Sized to the 2.25rem touch floor the other icon buttons use. */
+.confirm-modal-attachment-remove {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  line-height: 1;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  cursor: pointer;
+}
+
+.confirm-modal-attachment-remove:hover {
+  color: var(--fg);
+}
+
 /* M-cluster M-7 — admin pane. Replaces channel content in the main
    pane (Shell.tsx) when adminOpen() === true. Full-height,
    full-width within `.shell-main`. M-8/M-9/M-10/M-11 will add tabs

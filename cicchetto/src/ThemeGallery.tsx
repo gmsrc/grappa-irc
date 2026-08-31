@@ -228,6 +228,7 @@ const ThemeGallery: Component<Props> = (props) => {
       confirmLabel: "Delete",
       onConfirm: () => void remove(theme),
       alternative: null,
+      attachments: null,
     });
 
   // #333 — split the merged list into "your themes" (owned copies/creates)

@@ -173,6 +173,7 @@ export function confirmLeaveChannel(networkSlug: string, channelName: string): v
     confirmLabel: "Yes",
     onConfirm: () => closeChannelWindow(networkSlug, channelName),
     alternative: null,
+    attachments: null,
   });
 }
 
@@ -186,5 +187,6 @@ export function confirmDisconnectNetwork(networkSlug: string): void {
     confirmLabel: "Yes",
     onConfirm: () => disconnectNetwork(networkSlug),
     alternative: null,
+    attachments: null,
   });
 }

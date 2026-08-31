@@ -17,14 +17,28 @@ describe("confirmDialog store (#195)", () => {
 
   it("requestConfirm sets the pending request without firing the action", () => {
     const onConfirm = vi.fn();
-    requestConfirm({ title: "t", body: "b", confirmLabel: "Yes", onConfirm, alternative: null });
+    requestConfirm({
+      title: "t",
+      body: "b",
+      confirmLabel: "Yes",
+      onConfirm,
+      alternative: null,
+      attachments: null,
+    });
     expect(confirmRequest()).toMatchObject({ title: "t", body: "b", confirmLabel: "Yes" });
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
   it("acceptConfirm fires the action once and clears the request", () => {
     const onConfirm = vi.fn();
-    requestConfirm({ title: "t", body: "b", confirmLabel: "Yes", onConfirm, alternative: null });
+    requestConfirm({
+      title: "t",
+      body: "b",
+      confirmLabel: "Yes",
+      onConfirm,
+      alternative: null,
+      attachments: null,
+    });
     acceptConfirm();
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(confirmRequest()).toBeNull();
@@ -32,7 +46,14 @@ describe("confirmDialog store (#195)", () => {
 
   it("dismissConfirm clears the request WITHOUT firing the action (safe default)", () => {
     const onConfirm = vi.fn();
-    requestConfirm({ title: "t", body: "b", confirmLabel: "Yes", onConfirm, alternative: null });
+    requestConfirm({
+      title: "t",
+      body: "b",
+      confirmLabel: "Yes",
+      onConfirm,
+      alternative: null,
+      attachments: null,
+    });
     dismissConfirm();
     expect(onConfirm).not.toHaveBeenCalled();
     expect(confirmRequest()).toBeNull();
@@ -52,6 +73,7 @@ describe("confirmDialog store (#195)", () => {
       confirmLabel: "Yes",
       onConfirm: first,
       alternative: null,
+      attachments: null,
     });
     requestConfirm({
       title: "2",
@@ -59,6 +81,7 @@ describe("confirmDialog store (#195)", () => {
       confirmLabel: "Yes",
       onConfirm: second,
       alternative: null,
+      attachments: null,
     });
     expect(confirmRequest()?.title).toBe("2");
     acceptConfirm();
@@ -84,6 +107,7 @@ describe("confirmDialog store (#195)", () => {
         confirmLabel: "Yes",
         onConfirm,
         alternative: alt(onSelect),
+        attachments: null,
       });
       chooseAlternative();
       expect(onSelect).toHaveBeenCalledTimes(1);
@@ -101,6 +125,7 @@ describe("confirmDialog store (#195)", () => {
         confirmLabel: "Yes",
         onConfirm,
         alternative: alt(onSelect),
+        attachments: null,
       });
       acceptConfirm();
       expect(onConfirm).toHaveBeenCalledTimes(1);
@@ -116,6 +141,7 @@ describe("confirmDialog store (#195)", () => {
         confirmLabel: "Yes",
         onConfirm,
         alternative: alt(onSelect),
+        attachments: null,
       });
       dismissConfirm();
       expect(onConfirm).not.toHaveBeenCalled();
@@ -125,7 +151,14 @@ describe("confirmDialog store (#195)", () => {
 
     it("chooseAlternative on a request that carries none is a safe no-op", () => {
       const onConfirm = vi.fn();
-      requestConfirm({ title: "t", body: "b", confirmLabel: "Yes", onConfirm, alternative: null });
+      requestConfirm({
+        title: "t",
+        body: "b",
+        confirmLabel: "Yes",
+        onConfirm,
+        alternative: null,
+        attachments: null,
+      });
       expect(() => chooseAlternative()).not.toThrow();
       expect(onConfirm).not.toHaveBeenCalled();
       // The request survives: nothing was chosen, so nothing was resolved.

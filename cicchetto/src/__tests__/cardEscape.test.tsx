@@ -146,6 +146,7 @@ const leaveChannelRequest = (onConfirm: () => void): ConfirmRequest => ({
   confirmLabel: "Yes",
   onConfirm,
   alternative: null,
+  attachments: null,
 });
 
 let handlers: KeybindingHandlers;
