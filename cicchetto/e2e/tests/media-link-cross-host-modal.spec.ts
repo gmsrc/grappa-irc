@@ -118,8 +118,12 @@ test("cross-host https image link opens the media viewer, href unchanged, bytes 
   // carry the widened token — pin it here so a plug revert reddens this
   // spec with a legible message instead of a bare naturalWidth of 0.
   const csp = (await page.request.get("/")).headers()["content-security-policy"];
+  // Whole directive, not just the `https:` token this spec is about: any
+  // shorter spelling is a PREFIX of the longer one, so a `toContain` on the
+  // fragment would stay green through a revert. (1883 inserted `blob:` for
+  // the picker confirm's own thumbnail — a different journey, same string.)
   expect(csp, "server-served CSP must widen img-src for cross-host images").toContain(
-    "img-src 'self' data: https:",
+    "img-src 'self' data: blob: https:",
   );
 
   const link = await foreignLink(page, IMAGE_URL);

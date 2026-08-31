@@ -98,16 +98,28 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
       dynamic style tags during interactive renders; rejecting `'unsafe-inline'`
       would break the irssi-shape theme system. hCaptcha loads its own sheet
       from `assets.hcaptcha.com`.
-    * `img-src 'self' data: https:` — `'self'` + `data:` for favicons, manifest
-      icons and SolidJS inline `data:` SVGs; `https:` (#1240) so the media
-      viewer's `<img>` can load a CROSS-HOST image link (an upload minted by
-      another grappa instance, or a litterbox URL) that `mediaLink.ts`
+    * `img-src 'self' data: blob: https:` — `'self'` + `data:` for favicons,
+      manifest icons and SolidJS inline `data:` SVGs; `https:` (#1240) so the
+      media viewer's `<img>` can load a CROSS-HOST image link (an upload minted
+      by another grappa instance, or a litterbox URL) that `mediaLink.ts`
       `externalMediaLink` admits client-side. Without it the classifier change
       is worse than a no-op — the modal opens EMPTY. Scheme-scoped to https,
       never http, so no mixed content; vjt granted `*` explicitly, and `https:`
       is the narrower spelling of the same practical grant (an http image on an
       https page is refused as mixed content either way) that keeps this
       directive shaped like its `media-src` sibling.
+      `blob:` (1883) is that sibling's OTHER token, arriving here for the same
+      reason it arrived there: the upload confirm previews the operator's OWN
+      picked file as a thumbnail, off the wire entirely, via
+      `URL.createObjectURL` (ConfirmModal.tsx) — the exact shape of the
+      video-duration probe `media-src blob:` already carries. Measured, not
+      argued: without it Chromium refuses the thumbnail with
+      `violatedDirective: img-src, blockedURI: blob`, the confirm renders an
+      empty box, and 29 e2e specs red on the `_cspGuard` fixture. It buys an
+      attacker nothing this directive was still holding: a `blob:` URL is
+      minted only by same-origin script, cannot name a foreign host, and so
+      cannot exfiltrate — while `https:`, already admitted above, is the token
+      that would carry an image-beacon anywhere.
     * `font-src 'self'` — system fonts only.
     * `manifest-src 'self'` — PWA install manifest.
     * `media-src 'self' blob: https:` — `blob:` for the video-upload duration
@@ -144,7 +156,7 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
 
   import Plug.Conn
 
-  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe https://api.somafm.com https://kohina.brona.dk; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe https://api.somafm.com https://kohina.brona.dk; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: blob: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   # HTTP header names are lower-cased (HTTP/2 + Plug convention); the VALUES
   # are byte-identical to the retired nginx snippet.

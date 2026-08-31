@@ -42,8 +42,11 @@ const LOAD_BEARING_DIRECTIVES = [
   // #1240 — same prefix trap: the old "img-src 'self' data:" pin is a
   // PREFIX of the widened value, so it must be pinned WITH the `https:`
   // token or a revert would sail through `toContain`. Losing it opens the
-  // cross-host image viewer as an EMPTY modal.
-  "img-src 'self' data: https:",
+  // cross-host image viewer as an EMPTY modal. 1883 added `blob:` in the
+  // middle for the picker confirm's thumbnail — pinned as the WHOLE value
+  // for the third time and the same reason: every shorter spelling of this
+  // directive is a prefix of the longer one.
+  "img-src 'self' data: blob: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
