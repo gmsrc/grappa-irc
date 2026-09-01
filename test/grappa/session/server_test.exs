@@ -44,7 +44,7 @@ defmodule Grappa.Session.ServerTest do
     WSPresence
   }
 
-  alias Grappa.Networks.{Credentials, SessionPlan}
+  alias Grappa.Networks.{Credential, Credentials, SessionPlan}
 
   alias Grappa.Session.{
     AwayState,
@@ -1808,7 +1808,7 @@ defmodule Grappa.Session.ServerTest do
     defp put_perform_list(credential, text) do
       {:ok, updated} =
         credential
-        |> Grappa.Networks.Credential.perform_changeset(%{perform_list: text})
+        |> Credential.perform_changeset(%{perform_list: text})
         |> Repo.update()
 
       updated
@@ -1985,7 +1985,7 @@ defmodule Grappa.Session.ServerTest do
     defp seed_server_pass_slot(credential, pass) do
       {:ok, updated} =
         credential
-        |> Grappa.Networks.Credential.changeset(%{server_pass: pass})
+        |> Credential.changeset(%{server_pass: pass})
         |> Repo.update()
 
       updated
@@ -2199,8 +2199,8 @@ defmodule Grappa.Session.ServerTest do
     #
     # `pending_password` is read before 001, which is the only window it
     # exists in — `run_perform_and_identify/1` clears it one-shot.
-    for method <- Grappa.Networks.Credential.auth_methods() do
-      staged? = method in Grappa.Networks.Credential.nickserv_secret_methods()
+    for method <- Credential.auth_methods() do
+      staged? = method in Credential.nickserv_secret_methods()
 
       test "#{inspect(method)} stages a pending_password: #{staged?}" do
         method = unquote(method)
