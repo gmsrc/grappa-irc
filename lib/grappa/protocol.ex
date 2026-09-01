@@ -225,7 +225,22 @@ defmodule Grappa.Protocol do
   # `MIN_SERVER_PROTOCOL_VERSION` rises when the bundle starts REQUIRING
   # a newer field, and cic renders the profile only when present. It
   # stays at 2.
-  @protocol_version 9
+  # v10 (#1044) — the server `PASS` gets its own credential slot, and with
+  # it a write door: `GET`/`PUT /networks/:network_id/server_pass`, carrying
+  # `server_pass_set` and never the secret.
+  #
+  # ⚠️ `mix grappa.wire_pin` did NOT demand this bump, and that is exactly
+  # why it is written down. The digest spans the GENERATED artefacts, which
+  # come from `Grappa.*.Wire` typespecs; a REST endpoint whose shape lives in
+  # a controller is invisible to it. So the gate stays green either way and
+  # the number moves on the RULE, not on the tooling: reason (1) applies
+  # literally here — a cic bundle that grows a gate-secret editor REQUIRES
+  # this route and gets a 404 from any server predating it, which is the
+  # new-client-to-old-server direction the number exists to express.
+  #
+  # @min_protocol_version stays at 1: the route is purely additive and no
+  # existing client asks for it, so every v1..v9 bundle is served unchanged.
+  @protocol_version 10
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -236,7 +251,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 9
+  @spec version() :: 10
   def version, do: @protocol_version
 
   @doc """
