@@ -24,9 +24,9 @@ defmodule Grappa.Networks.ServerPassSlotTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.Networks.{Credential, Credentials}
+  alias Grappa.Networks.{Credential, Credentials, SessionPlan}
   alias Grappa.Repo
-  alias Grappa.Visitors.SessionPlan
+  alias Grappa.Visitors.SessionPlan, as: VisitorSessionPlan
 
   defp uniq, do: System.unique_integer([:positive])
 
@@ -45,6 +45,11 @@ defmodule Grappa.Networks.ServerPassSlotTest do
   end
 
   defp reload(%Credential{id: id}), do: Repo.get!(Credential, id)
+
+  defp reload_by_ids(user_id, network_id) do
+    {:ok, cred} = Credentials.get_credential_by_ids(user_id, network_id)
+    cred
+  end
 
   describe "the user branch owns the slot" do
     test "a server_pass on the wide changeset lands in the column, encrypted at rest" do
@@ -117,6 +122,60 @@ defmodule Grappa.Networks.ServerPassSlotTest do
     end
   end
 
+  describe "the read side — accessor and plan" do
+    test "upstream_server_pass/1 returns the post-Cloak-load plaintext" do
+      user = user_fixture(name: "vjt-#{uniq()}")
+      net = network()
+
+      {:ok, cred} =
+        Credentials.bind_credential(user, net, %{
+          nick: "vjt",
+          auth_method: :server_pass,
+          server_pass: "hunter2"
+        })
+
+      assert Credential.upstream_server_pass(reload(cred)) == "hunter2"
+    end
+
+    test "upstream_server_pass/1 is nil when the slot was never written" do
+      user = user_fixture(name: "vjt-#{uniq()}")
+      net = network()
+
+      {:ok, cred} =
+        Credentials.bind_credential(user, net, %{
+          nick: "vjt",
+          auth_method: :nickserv_identify,
+          password: "ns-secret"
+        })
+
+      assert is_nil(Credential.upstream_server_pass(reload(cred)))
+    end
+
+    # The middle link, and the one nothing else watches: the accessor test
+    # proves the column round-trips and the AuthFSM test proves the PASS line
+    # reads the slot, but only this proves the value TRAVELS from the row the
+    # operator configured to the plan the session is built from. A plan that
+    # dropped it would leave both neighbours green while every gated network
+    # failed its handshake.
+    test "the plan carries BOTH secrets, each in its own key" do
+      user = user_fixture(name: "vjt-#{uniq()}")
+      net = network()
+
+      {:ok, _} =
+        Credentials.bind_credential(user, net, %{
+          nick: "vjt",
+          auth_method: :server_pass,
+          password: "ns-secret",
+          server_pass: "gate-secret"
+        })
+
+      {:ok, plan} = SessionPlan.resolve(reload_by_ids(user.id, net.id))
+
+      assert plan.server_pass == "gate-secret"
+      assert plan.password == "ns-secret"
+    end
+  end
+
   describe "the visitor branch is untouched (#1044's explicit constraint)" do
     setup do
       net = network()
@@ -180,7 +239,7 @@ defmodule Grappa.Networks.ServerPassSlotTest do
           server_pass: "hunter2"
         })
 
-      {:ok, plan} = SessionPlan.resolve(visitor, net)
+      {:ok, plan} = VisitorSessionPlan.resolve(visitor, net)
 
       # The plan is what the session is actually built from: a visitor's
       # auth_method is DERIVED from the one secret, and #1044 must not shift it.

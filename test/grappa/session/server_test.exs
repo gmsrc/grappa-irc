@@ -339,13 +339,16 @@ defmodule Grappa.Session.ServerTest do
         credential_fixture(user, network, %{
           nick: "vjt-grappa",
           auth_method: :server_pass,
-          password: "loadbearing-secret",
+          # #1044 — the PASS token comes from the dedicated slot, so THAT is
+          # the value whose arrival proves DB-driven init threaded a
+          # Cloak-decrypted secret all the way to the socket.
+          server_pass: "loadbearing-secret",
           autojoin_channels: ["#sniffo"]
         })
 
       pid = start_session_for(user, network)
 
-      # PASS line proves the credential password reached IRC.Client
+      # PASS line proves the credential secret reached IRC.Client
       # decrypted by Cloak — without DB-driven init this would be `nil`.
       assert {:ok, "PASS loadbearing-secret\r\n"} =
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "PASS"), 1_000)
@@ -1988,22 +1991,68 @@ defmodule Grappa.Session.ServerTest do
       updated
     end
 
-    test "a :server_pass credential does NOT identify — the second secret is gone" do
+    # GH #1044 INVERTS the pre-existing claim here, deliberately, and this is
+    # the test the whole issue was filed for. A self-hoster on a
+    # password-gated network needs the gate PASS *and* a NickServ identify;
+    # before #1044 one credential could hold only one secret, so the second
+    # had to go into the perform list in CLEARTEXT. Now both are on the row,
+    # each in its own column, and both reach the wire in one connect.
+    #
+    # What did NOT change is #124's property, and the sibling test below is
+    # where it still lives: `server_pass_encrypted` is never a NickServ
+    # source. The identify below comes from `password_encrypted` — the same
+    # single source it comes from on every other method.
+    test "a :server_pass credential sends the gate PASS *and* identifies (#1044)" do
       {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
           nick: "grappa-test",
           auth_method: :server_pass,
-          password: "server-pw",
+          password: "ns-secret",
+          server_pass: "gate-secret",
           autojoin_channels: []
         })
 
-      # Pre-#124 this exact row identified from the dedicated field. The
-      # password is spent on PASS and the second slot is NOT a NickServ source
-      # (#1044 gave it a different role), so nothing may reach NickServ.
-      cred = seed_server_pass_slot(credential, "ns-secret")
-      pid = nickserv_plan(user, network, cred, 60_000)
+      pid = nickserv_plan(user, network, credential, 60_000)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # The gate secret, on the front door, before registration.
+      assert "PASS gate-secret\r\n" in IRCServer.sent_lines(server)
+
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY ns-secret\r\n"),
+          1_000
+        )
+
+      # Neither secret may appear where the other belongs.
+      refute "PASS ns-secret\r\n" in IRCServer.sent_lines(server)
+      refute "PRIVMSG NickServ :IDENTIFY gate-secret\r\n" in IRCServer.sent_lines(server)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # The #124 property, restated against the NEW column and still holding:
+    # a value in `server_pass_encrypted` is not a NickServ source. Without a
+    # `password_encrypted` there is simply nothing to identify with, and the
+    # gate secret must not be pressed into that role.
+    test "the server-PASS slot is never a NickServ source (#124's property, kept)" do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :server_pass,
+          server_pass: "gate-secret",
+          autojoin_channels: []
+        })
+
+      pid = nickserv_plan(user, network, credential, 60_000)
 
       :ok = IRCServer.await_handshake(server, 1_000)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
@@ -2062,7 +2111,7 @@ defmodule Grappa.Session.ServerTest do
         setup_user_and_network(port, %{
           nick: "grappa-test",
           auth_method: :server_pass,
-          password: "server-pw",
+          server_pass: "gate-secret",
           autojoin_channels: []
         })
 
@@ -2134,26 +2183,75 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "autojoin fires immediately for :server_pass carrying only the server-PASS slot" do
+    # The #347 defer pair, and since #1044 the two halves are told apart by the
+    # SECRET, not by the method — which is the whole reason
+    # `identify_expected?/1` stopped reading `auth_method`. A LONG (60s)
+    # fallback is load-bearing in BOTH: with the production ~0.5s default a
+    # wrongful defer would still fire inside the 1s assertion window and the
+    # "fires immediately" half would pass either way.
+    # GH #1044 — the two halves of the NickServ-secret gate live in different
+    # boundaries and cannot call each other (Networks deps Session; the
+    # reverse closes a cycle), so `pending_password_from_opts/1` restates the
+    # list `Credential.nickserv_secret_methods/0` owns. This is the test that
+    # keeps the restatement honest: it DRIVES the exported list, so adding a
+    # method there without teaching the session about it goes red here rather
+    # than silently leaving that method unable to identify.
+    #
+    # `pending_password` is read before 001, which is the only window it
+    # exists in — `run_perform_and_identify/1` clears it one-shot.
+    for method <- Grappa.Networks.Credential.auth_methods() do
+      staged? = method in Grappa.Networks.Credential.nickserv_secret_methods()
+
+      test "#{inspect(method)} stages a pending_password: #{staged?}" do
+        method = unquote(method)
+        {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+
+        {user, network, credential} =
+          setup_user_and_network(port, Map.put(secret_attrs(method), :nick, "grappa-test"))
+
+        pid = nickserv_plan(user, network, credential, 60_000)
+        :ok = IRCServer.await_handshake(server, 1_000)
+
+        assert is_binary(:sys.get_state(pid).pending_password) ==
+                 unquote(staged?),
+               "#{inspect(method)} disagrees with Credential.nickserv_secret_methods/0"
+
+        :ok = GenServer.stop(pid, :normal, 1_000)
+      end
+    end
+
+    # A credential of each method, carrying every secret that method needs to
+    # be valid PLUS a `password` wherever the column is free to hold one.
+    defp secret_attrs(:none), do: %{auth_method: :none, autojoin_channels: []}
+
+    defp secret_attrs(:server_pass) do
+      %{
+        auth_method: :server_pass,
+        server_pass: "gate-secret",
+        password: "ns-secret",
+        autojoin_channels: []
+      }
+    end
+
+    defp secret_attrs(method) do
+      %{auth_method: method, password: "ns-secret", autojoin_channels: []}
+    end
+
+    test ":server_pass with ONLY the gate secret fires autojoin immediately on 001" do
       {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
           nick: "grappa-test",
           auth_method: :server_pass,
-          password: "server-pw",
+          server_pass: "gate-secret",
           autojoin_channels: ["#sniffo"]
         })
 
-      # #509 made this row DEFER behind the +r gate, because it expected an
-      # identify. #124 narrowed `identify_expected?/1` back to `auth_method`
-      # alone, so no identify is coming and waiting for a `+r` that will never
-      # arrive would strand the JOIN for the full fallback window. The 60s
-      # fallback below is load-bearing: with the production ~0.5s default a
-      # wrongful defer would still fire inside the 1s window and this test
-      # would pass either way.
-      cred = seed_server_pass_slot(credential, "ns-secret")
-      pid = nickserv_plan(user, network, cred, 60_000)
+      # This is the common gate-only credential, and the #509 KNOWN EDGE in
+      # person: widening the defer to the METHOD would make every one of these
+      # wait out the fallback window for a `+r` that is never coming.
+      pid = nickserv_plan(user, network, credential, 60_000)
 
       :ok = IRCServer.await_handshake(server, 1_000)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
@@ -2164,27 +2262,37 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test ":server_pass with NO nickserv secret still fires autojoin immediately on 001 (unregressed)" do
+    test ":server_pass WITH a NickServ secret defers autojoin until +r (#347, via #1044)" do
       {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
           nick: "grappa-test",
           auth_method: :server_pass,
-          password: "server-pw",
+          server_pass: "gate-secret",
+          password: "ns-secret",
           autojoin_channels: ["#sniffo"]
         })
 
-      # A LONG (60s) fallback is load-bearing: it proves the JOIN fired on 001
-      # itself, not on the deferred-autojoin fallback timer. With the production
-      # ~0.5s default a wrongful defer would still fire inside the 1s assertion
-      # window and this "fires immediately" test would pass either way (mirror).
+      # Such a row identifies now, so #347's reason to wait applies to it for
+      # the first time: JOINing on 001 races the identify and a `+R` channel
+      # answers 477.
       pid = nickserv_plan(user, network, credential, 60_000)
 
       :ok = IRCServer.await_handshake(server, 1_000)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      # No identify expected → no defer; the JOIN lands on 001 as before #509.
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :IDENTIFY ns-secret\r\n"),
+          1_000
+        )
+
+      refute Enum.any?(IRCServer.sent_lines(server), &String.starts_with?(&1, "JOIN"))
+
+      IRCServer.feed(server, ":irc.test.org MODE grappa-test :+r\r\n")
+
       assert {:ok, "JOIN #sniffo\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "JOIN #sniffo\r\n"), 1_000)
 

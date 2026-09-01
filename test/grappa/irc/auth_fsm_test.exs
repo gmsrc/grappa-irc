@@ -63,9 +63,26 @@ defmodule Grappa.IRC.AuthFSMTest do
                AuthFSM.new(base_opts(%{auth_method: :nickserv_identify, password: ""}))
     end
 
-    test ":server_pass with valid password is accepted" do
-      assert {:ok, %AuthFSM{password: "swordfish", auth_method: :server_pass}} =
-               AuthFSM.new(base_opts(%{auth_method: :server_pass, password: "swordfish"}))
+    # GH #1044 — on `:server_pass` the secret the FSM needs is the SERVER one,
+    # carried in its own `:server_pass` opt. `:password` on such a row is the
+    # NickServ secret and the FSM never emits it (the built-in IDENTIFY is
+    # post-001, host-side), so it is neither required nor read here.
+    test ":server_pass with a valid server_pass is accepted" do
+      assert {:ok, %AuthFSM{server_pass: "swordfish", auth_method: :server_pass}} =
+               AuthFSM.new(base_opts(%{auth_method: :server_pass, server_pass: "swordfish"}))
+    end
+
+    test ":server_pass without a server_pass is rejected, naming the slot that is missing" do
+      # NOT `{:missing_password, :server_pass}`: since #1044 a `:server_pass`
+      # row can carry BOTH secrets, so an error naming "password" would point
+      # the operator at the other one.
+      assert {:error, {:missing_server_pass, :server_pass}} =
+               AuthFSM.new(base_opts(%{auth_method: :server_pass, password: "ns-secret"}))
+    end
+
+    test ":server_pass with an empty-string server_pass is rejected" do
+      assert {:error, {:missing_server_pass, :server_pass}} =
+               AuthFSM.new(base_opts(%{auth_method: :server_pass, server_pass: ""}))
     end
 
     test ":auto with valid password is accepted" do
@@ -117,9 +134,23 @@ defmodule Grappa.IRC.AuthFSMTest do
                AuthFSM.new(base_opts(%{auth_method: :sasl, password: "swo\x00rd"}))
     end
 
-    test ":server_pass with CRLF in password rejected at new/1 (irc/S5)" do
+    test ":server_pass with CRLF in server_pass rejected at new/1 (irc/S5)" do
+      assert {:error, {:invalid_line_token, :server_pass}} =
+               AuthFSM.new(base_opts(%{auth_method: :server_pass, server_pass: "p\r\nQUIT :pwn"}))
+    end
+
+    # #1044 — the OTHER secret on the same row still has to be line-safe. It
+    # never reaches the handshake, but it crosses this boundary, and the FSM
+    # is self-defending by design (the Phase-6 facade may bypass the schema).
+    test ":server_pass with CRLF in the NickServ password rejected at new/1" do
       assert {:error, {:invalid_line_token, :password}} =
-               AuthFSM.new(base_opts(%{auth_method: :server_pass, password: "p\r\nQUIT :pwn"}))
+               AuthFSM.new(
+                 base_opts(%{
+                   auth_method: :server_pass,
+                   server_pass: "swordfish",
+                   password: "p\r\nQUIT :pwn"
+                 })
+               )
     end
 
     test ":nickserv_identify with CRLF in password rejected at new/1 (irc/S5)" do
@@ -130,9 +161,23 @@ defmodule Grappa.IRC.AuthFSMTest do
     # S30 — PASS is a single wire token (RFC 2812 §3.1.1). A space/tab in a
     # :server_pass / :auto password would split it, silently truncating
     # server-side to the first token → 464 + restart loop with no breadcrumb.
-    test ":server_pass with a space in password rejected at new/1 (S30)" do
-      assert {:error, {:invalid_line_token, :password}} =
-               AuthFSM.new(base_opts(%{auth_method: :server_pass, password: "sword fish"}))
+    test ":server_pass with a space in server_pass rejected at new/1 (S30)" do
+      assert {:error, {:invalid_line_token, :server_pass}} =
+               AuthFSM.new(base_opts(%{auth_method: :server_pass, server_pass: "sword fish"}))
+    end
+
+    # #1044 — S30's single-token rule is about the PASS wire line, so it binds
+    # the slot that LANDS there and no other. The NickServ secret on the same
+    # row goes out as a PRIVMSG trailing param, where a space is legal.
+    test ":server_pass with a space in the NickServ password is still accepted (#1044)" do
+      assert {:ok, %AuthFSM{auth_method: :server_pass}} =
+               AuthFSM.new(
+                 base_opts(%{
+                   auth_method: :server_pass,
+                   server_pass: "swordfish",
+                   password: "sword fish"
+                 })
+               )
     end
 
     test ":auto with a tab in password rejected at new/1 (S30)" do
@@ -211,7 +256,7 @@ defmodule Grappa.IRC.AuthFSMTest do
     end
 
     test ":server_pass -> PASS BEFORE NICK + USER, no CAP" do
-      state = new!(%{auth_method: :server_pass, password: "swordfish"})
+      state = new!(%{auth_method: :server_pass, server_pass: "swordfish"})
       assert {%AuthFSM{phase: :pre_register}, sends} = AuthFSM.initial_handshake(state)
 
       assert send_lines(sends) == [
@@ -219,6 +264,35 @@ defmodule Grappa.IRC.AuthFSMTest do
                "NICK vjt",
                "USER vjt 0 * :Vincenzo"
              ]
+    end
+
+    # GH #1044, the whole point of the second slot: a password-gated network
+    # wants BOTH secrets at once, and the PASS line must carry the server one.
+    # If the FSM ever read `:password` here, the NickServ secret would be sent
+    # to the network's front door — a wrong secret on the wire, and the
+    # handshake fails outright rather than degrading.
+    test ":server_pass carrying BOTH secrets sends the SERVER one on PASS" do
+      state =
+        new!(%{auth_method: :server_pass, server_pass: "gate-secret", password: "ns-secret"})
+
+      assert {%AuthFSM{}, sends} = AuthFSM.initial_handshake(state)
+      lines = send_lines(sends)
+
+      assert hd(lines) == "PASS gate-secret"
+      refute Enum.any?(lines, &String.contains?(&1, "ns-secret"))
+    end
+
+    # The `:auto` arm is deliberately NOT moved: there the PASS token IS the
+    # services secret (the Bahamut/Azzurra PASS-handoff), which is a different
+    # role from the network gate `:server_pass` names. One role, one slot.
+    test ":auto reads the password, never the server_pass slot (#1044)" do
+      state = new!(%{auth_method: :auto, password: "handoff", server_pass: "gate-secret"})
+
+      assert {%AuthFSM{}, sends} = AuthFSM.initial_handshake(state)
+      lines = send_lines(sends)
+
+      assert hd(lines) == "PASS handoff"
+      refute Enum.any?(lines, &String.contains?(&1, "gate-secret"))
     end
 
     test ":sasl -> CAP LS 302 + NICK + USER (no PASS); phase advances to :awaiting_cap_ls" do
@@ -620,7 +694,8 @@ defmodule Grappa.IRC.AuthFSMTest do
       for {method, opts} <- [
             {:none, %{auth_method: :none}},
             {:sasl, %{auth_method: :sasl, password: "s3cret"}},
-            {:server_pass, %{auth_method: :server_pass, password: "s3cret"}},
+            # #1044 — `:server_pass` takes its secret from its own slot.
+            {:server_pass, %{auth_method: :server_pass, server_pass: "s3cret"}},
             {:auto, %{auth_method: :auto, password: "s3cret"}}
           ] do
         state = new!(opts)
@@ -773,7 +848,8 @@ defmodule Grappa.IRC.AuthFSMTest do
       for opts <- [
             %{auth_method: :none},
             %{auth_method: :sasl, password: "s3cret"},
-            %{auth_method: :server_pass, password: "s3cret"},
+            # #1044 — `:server_pass` takes its secret from its own slot.
+            %{auth_method: :server_pass, server_pass: "s3cret"},
             %{auth_method: :auto, password: "s3cret"}
           ] do
         state = new!(opts)

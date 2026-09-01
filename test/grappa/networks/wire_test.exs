@@ -367,6 +367,9 @@ defmodule Grappa.Networks.WireTest do
         Credentials.bind_credential(user, network, %{
           nick: "vjt",
           auth_method: :server_pass,
+          # #1044 — the row carries both secrets, which makes the accessor
+          # claim sharper: it reads ITS column and not the neighbouring one.
+          server_pass: "gate-secret",
           password: "shibboleth"
         })
 

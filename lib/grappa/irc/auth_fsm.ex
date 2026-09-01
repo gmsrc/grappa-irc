@@ -52,7 +52,9 @@ defmodule Grappa.IRC.AuthFSM do
   ## Auth methods (mirror `Grappa.Networks.Credential`)
 
       :none               -> NICK, USER
-      :server_pass        -> PASS, NICK, USER
+      :server_pass        -> PASS (from the dedicated `:server_pass` slot,
+                             #1044 — NOT `:password`, which on such a row is
+                             the NickServ secret), NICK, USER
       :nickserv_identify  -> NICK, USER (the built-in IDENTIFY is NOT emitted
                              here — Grappa.Session.Server sends it at 001,
                              AFTER the on-connect perform list, so it can be
@@ -120,7 +122,13 @@ defmodule Grappa.IRC.AuthFSM do
           required(:realname) => String.t(),
           required(:sasl_user) => String.t(),
           required(:auth_method) => auth_method(),
-          optional(:password) => String.t() | nil
+          optional(:password) => String.t() | nil,
+          # GH #1044 — the SERVER `PASS` secret, held apart from `:password`.
+          # A password-gated network wants a gate secret AND a NickServ one at
+          # the same time, so the two roles get one slot each: on
+          # `:server_pass` the PASS line reads THIS, and `:password` keeps its
+          # NickServ meaning (emitted post-001 by the host, never here).
+          optional(:server_pass) => String.t() | nil
         }
 
   @typedoc """
@@ -131,13 +139,14 @@ defmodule Grappa.IRC.AuthFSM do
   matching its success typing, which is the only automatic check binding the
   DATA copy of the key set to a declared one.
   """
-  @type opt_key :: :auth_method | :ident | :nick | :password | :realname | :sasl_user
+  @type opt_key ::
+          :auth_method | :ident | :nick | :password | :realname | :sasl_user | :server_pass
 
   # `t:opts/0` as DATA, so a caller holding a WIDER map can hand `new/1`
   # exactly this FSM's domain instead of its own. Kept adjacent to the type
   # because the two must name the same keys: a field added to one and not the
   # other silently stops being forwarded.
-  @opt_keys [:nick, :ident, :realname, :sasl_user, :auth_method, :password]
+  @opt_keys [:nick, :ident, :realname, :sasl_user, :auth_method, :password, :server_pass]
 
   @doc """
   The keys `t:opts/0` declares, for callers whose own opts map is a
@@ -166,6 +175,7 @@ defmodule Grappa.IRC.AuthFSM do
           realname: String.t(),
           sasl_user: String.t(),
           password: String.t() | nil,
+          server_pass: String.t() | nil,
           auth_method: auth_method(),
           phase: phase(),
           caps_buffer: [String.t()],
@@ -192,11 +202,13 @@ defmodule Grappa.IRC.AuthFSM do
     :auth_method,
     :phase
   ]
-  # `:password` is the only secret on the struct — `@derive Inspect`
-  # excludes it so SASL-report dumps + IEx `:sys.get_state/1` (transitively
-  # via the host Client struct) introspection never leak plaintext.
-  # CLAUDE.md "Credentials ... never logged."
-  @derive {Inspect, except: [:password]}
+  # `:password` and `:server_pass` are the struct's secrets — `@derive
+  # Inspect` excludes BOTH so SASL-report dumps + IEx `:sys.get_state/1`
+  # (transitively via the host Client struct) introspection never leak
+  # plaintext. CLAUDE.md "Credentials ... never logged." #1044 added the
+  # second one: a new secret field that is not listed here leaks on the
+  # first crash dump.
+  @derive {Inspect, except: [:password, :server_pass]}
   defstruct [
     :nick,
     :orig_nick,
@@ -204,6 +216,7 @@ defmodule Grappa.IRC.AuthFSM do
     :realname,
     :sasl_user,
     :password,
+    :server_pass,
     :auth_method,
     :phase,
     :nick_cap,
@@ -233,7 +246,8 @@ defmodule Grappa.IRC.AuthFSM do
   @spec new(opts()) ::
           {:ok, t()}
           | {:error, {:missing_password, auth_method()}}
-          | {:error, {:invalid_line_token, :nick | :ident | :realname | :sasl_user | :password}}
+          | {:error, {:missing_server_pass, :server_pass}}
+          | {:error, {:invalid_line_token, :nick | :ident | :realname | :sasl_user | :password | :server_pass}}
   def new(%{auth_method: m} = opts) when m in @auth_methods do
     with :ok <- validate_password_present(opts),
          :ok <- validate_line_safe(opts) do
@@ -247,6 +261,7 @@ defmodule Grappa.IRC.AuthFSM do
          realname: opts.realname,
          sasl_user: opts.sasl_user,
          password: Map.get(opts, :password),
+         server_pass: Map.get(opts, :server_pass),
          auth_method: m,
          phase: :pre_register,
          caps_buffer: []
@@ -283,6 +298,20 @@ defmodule Grappa.IRC.AuthFSM do
 
   defp validate_password_present(%{auth_method: :none}), do: :ok
 
+  # GH #1044 — `:server_pass` is the one method whose required secret is NOT
+  # `:password`. The PASS line reads the dedicated slot, so that is what must
+  # be present; `:password` on such a row is the NickServ secret, which the
+  # FSM never emits and must therefore never demand (a gate-only credential
+  # legitimately carries none). The error names the slot that is missing
+  # rather than reusing `:missing_password`, which since #1044 would point
+  # the operator at the OTHER secret.
+  defp validate_password_present(%{auth_method: :server_pass} = opts) do
+    case Map.get(opts, :server_pass) do
+      pw when is_binary(pw) and pw != "" -> :ok
+      _ -> {:error, {:missing_server_pass, :server_pass}}
+    end
+  end
+
   defp validate_password_present(%{password: pw}) when is_binary(pw) and pw != "",
     do: :ok
 
@@ -308,26 +337,53 @@ defmodule Grappa.IRC.AuthFSM do
 
   defp validate_password_line_safe(%{auth_method: :none}), do: :ok
 
-  # S30 — :server_pass and :auto ship the password as the SINGLE PASS wire
-  # token (RFC 2812 §3.1.1). safe_line_token? (CR/LF/NUL only) let a space or
-  # tab through, which the server splits off → the password silently
-  # truncates to the first token → 464 ERR_PASSWDMISMATCH + a restart loop
-  # with no breadcrumb. Gate the PASS-bound password with the stricter
-  # single-token predicate OPER already uses. `validate_password_present/1`
-  # has already guaranteed a non-empty binary here.
-  defp validate_password_line_safe(%{auth_method: m, password: pw})
-       when m in [:server_pass, :auto] do
-    if Identifier.safe_oper_token?(pw),
-      do: :ok,
-      else: {:error, {:invalid_line_token, :password}}
+  # GH #1044 — on `:server_pass` the two secrets take DIFFERENT gates, because
+  # they land on different wire shapes. The `server_pass` becomes the single
+  # PASS token, so it takes S30's strict single-token rule below; the
+  # `password` is the NickServ secret, which leaves as a PRIVMSG trailing
+  # param where a space is legal, so it only takes the CR/LF/NUL floor. It is
+  # checked here even though the FSM never emits it: it crosses this boundary,
+  # and the self-defending posture applies to everything that does.
+  defp validate_password_line_safe(%{auth_method: :server_pass} = opts) do
+    with :ok <- validate_pass_token(Map.get(opts, :server_pass), :server_pass) do
+      case Map.get(opts, :password) do
+        pw when is_binary(pw) and pw != "" -> validate_line_token(pw, :password)
+        _ -> :ok
+      end
+    end
   end
+
+  # S30 — :auto ships the password as the SINGLE PASS wire token (RFC 2812
+  # §3.1.1). safe_line_token? (CR/LF/NUL only) let a space or tab through,
+  # which the server splits off → the password silently truncates to the first
+  # token → 464 ERR_PASSWDMISMATCH + a restart loop with no breadcrumb. Gate
+  # the PASS-bound password with the stricter single-token predicate OPER
+  # already uses. `validate_password_present/1` has already guaranteed a
+  # non-empty binary here.
+  defp validate_password_line_safe(%{auth_method: :auto, password: pw}),
+    do: validate_pass_token(pw, :password)
 
   # :sasl (base64-encoded payload) and :nickserv_identify keep the
   # CR/LF/NUL-only line-token gate — a space is legal in those.
-  defp validate_password_line_safe(%{password: pw}) do
-    if Identifier.safe_line_token?(pw),
+  defp validate_password_line_safe(%{password: pw}), do: validate_line_token(pw, :password)
+
+  # The two gates, named once each so the per-method arms above read as the
+  # POLICY (which secret takes which rule) rather than restating the
+  # predicate. #1044 made the distinction load-bearing: with two secrets on
+  # one row, a copy-pasted gate is how the wrong rule ends up on the wrong
+  # slot.
+  @spec validate_pass_token(term(), opt_key()) :: :ok | {:error, {:invalid_line_token, opt_key()}}
+  defp validate_pass_token(token, field) do
+    if Identifier.safe_oper_token?(token),
       do: :ok,
-      else: {:error, {:invalid_line_token, :password}}
+      else: {:error, {:invalid_line_token, field}}
+  end
+
+  @spec validate_line_token(term(), opt_key()) :: :ok | {:error, {:invalid_line_token, opt_key()}}
+  defp validate_line_token(token, field) do
+    if Identifier.safe_line_token?(token),
+      do: :ok,
+      else: {:error, {:invalid_line_token, field}}
   end
 
   @doc """
@@ -392,8 +448,19 @@ defmodule Grappa.IRC.AuthFSM do
     ]
   end
 
-  defp maybe_send_pass({%__MODULE__{auth_method: m, password: pw} = state, sends})
-       when m in [:auto, :server_pass] and is_binary(pw) and pw != "" do
+  # GH #1044 — one arm per ROLE, and the two are deliberately not merged.
+  # On `:server_pass` the PASS token is the network's gate secret, which has
+  # its own slot; on `:auto` it is the services secret handed off to NickServ
+  # (Bahamut/Azzurra), which is the same secret SASL would carry and so lives
+  # in `:password`. Reading one slot with the other's method as a fallback is
+  # exactly the two-homes-for-one-role split brain #124 cured.
+  defp maybe_send_pass({%__MODULE__{auth_method: :server_pass, server_pass: pw} = state, sends})
+       when is_binary(pw) and pw != "" do
+    {state, ["PASS #{pw}\r\n" | sends]}
+  end
+
+  defp maybe_send_pass({%__MODULE__{auth_method: :auto, password: pw} = state, sends})
+       when is_binary(pw) and pw != "" do
     {state, ["PASS #{pw}\r\n" | sends]}
   end
 

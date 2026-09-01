@@ -865,40 +865,51 @@ defmodule Grappa.Networks.Credential do
     end)
   end
 
-  # Either a new plaintext `:password` arrives in this changeset, OR the
-  # row already carries a stored `password_encrypted` from a prior bind
-  # AND the auth_method isn't being changed. Validating only the virtual
-  # field would force every update of an unrelated attribute (nick,
-  # autojoin) to re-supply the password. But silently inheriting an
-  # existing password across an auth_method CHANGE would let an operator
-  # accidentally promote a NickServ-IDENTIFY password into a SASL
-  # credential — different upstream auth surface, almost certainly a
-  # typo. So when auth_method is in `cs.changes`, we require a fresh
-  # `:password`.
+  # Either a new plaintext secret arrives in this changeset, OR the row
+  # already carries a stored one from a prior bind AND the auth_method isn't
+  # being changed. Validating only the virtual field would force every update
+  # of an unrelated attribute (nick, autojoin) to re-supply the secret. But
+  # silently inheriting an existing one across an auth_method CHANGE would let
+  # an operator accidentally promote a NickServ-IDENTIFY password into a SASL
+  # credential — different upstream auth surface, almost certainly a typo. So
+  # when auth_method is in `cs.changes`, we require a fresh one.
+  #
+  # GH #1044 — WHICH secret is required depends on the method, because since
+  # #1044 a row can carry two. `:server_pass` spends the dedicated
+  # `server_pass` slot on the PASS line and leaves `password` free to mean
+  # NickServ, so requiring `password` there would demand a secret the
+  # handshake never sends — and, after the one-time move of the legacy rows,
+  # would reject a bare nick rename on every gate-only credential that
+  # legitimately has no NickServ secret at all. Every other method still
+  # requires `password`; the pairing is a table rather than a branch so a new
+  # method cannot silently inherit the wrong one.
   @spec validate_password_for_auth_method(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp validate_password_for_auth_method(cs) do
     case get_field(cs, :auth_method) do
-      :none ->
+      :none -> cs
+      :server_pass -> validate_secret_present(cs, :server_pass, :server_pass_encrypted)
+      _ -> validate_secret_present(cs, :password, :password_encrypted)
+    end
+  end
+
+  @spec validate_secret_present(Ecto.Changeset.t(), atom(), atom()) :: Ecto.Changeset.t()
+  defp validate_secret_present(cs, virtual, stored_field) do
+    new_secret = get_field(cs, virtual)
+    stored = get_field(cs, stored_field)
+    auth_method_changed? = Map.has_key?(cs.changes, :auth_method)
+
+    cond do
+      is_binary(new_secret) and byte_size(new_secret) > 0 ->
         cs
 
-      _ ->
-        new_pw = get_field(cs, :password)
-        stored = get_field(cs, :password_encrypted)
-        auth_method_changed? = Map.has_key?(cs.changes, :auth_method)
+      auth_method_changed? ->
+        add_error(cs, virtual, "must be re-supplied when auth_method changes")
 
-        cond do
-          is_binary(new_pw) and byte_size(new_pw) > 0 ->
-            cs
+      is_binary(stored) and byte_size(stored) > 0 ->
+        cs
 
-          auth_method_changed? ->
-            add_error(cs, :password, "must be re-supplied when auth_method changes")
-
-          is_binary(stored) and byte_size(stored) > 0 ->
-            cs
-
-          true ->
-            add_error(cs, :password, "required for auth_method != :none")
-        end
+      true ->
+        add_error(cs, virtual, "required for auth_method != :none")
     end
   end
 
@@ -980,6 +991,40 @@ defmodule Grappa.Networks.Credential do
   def upstream_oper_pass(%__MODULE__{oper_pass_encrypted: pw}), do: pw
 
   @doc """
+  GH #1044 — returns the post-Cloak-load plaintext server `PASS` secret, or
+  `nil` when unset. Same accessor contract as `upstream_password/1`: the
+  `:server_pass_encrypted` field name describes the on-disk representation;
+  after `Repo.one!` it carries the DECRYPTED plaintext.
+
+  This is the SINGLE read source for the server-PASS role, and it is
+  deliberately not a fallback chain onto `upstream_password/1`. A row whose
+  `auth_method` is `:server_pass` and whose slot is empty has no gate secret,
+  full stop — `Grappa.IRC.AuthFSM.new/1` refuses it with
+  `{:missing_server_pass, :server_pass}` rather than reaching for the other
+  column. Two sources for one role is the split brain #124 is named after,
+  and the pre-#1044 rows that DID keep their PASS in `password_encrypted`
+  were moved once, by migration, precisely so no reader has to guess.
+  """
+  @spec upstream_server_pass(t()) :: binary() | nil
+  def upstream_server_pass(%__MODULE__{server_pass_encrypted: pw}), do: pw
+
+  # GH #1044 — the methods on which `password_encrypted` means NickServ. The
+  # set is DATA and named once, because `Session.Server`'s
+  # `pending_password_from_opts/1` has to agree with it key for key and the
+  # two live in different boundaries (Networks deps Session; the reverse would
+  # close a cycle), so neither can call the other. `Grappa.Session.ServerTest`
+  # measures them against each other.
+  @nickserv_secret_methods [:nickserv_identify, :server_pass]
+
+  @doc """
+  GH #1044 — the `auth_method` values on which `password_encrypted` carries
+  the NickServ secret. Exported so the Session-side twin can be pinned
+  against this list instead of restating it.
+  """
+  @spec nickserv_secret_methods() :: [auth_method(), ...]
+  def nickserv_secret_methods, do: @nickserv_secret_methods
+
+  @doc """
   GH #581 — the NickServ secret VALUE this credential recovers an identity
   with, or `nil` when none is on file. The SINGLE SOURCE OF TRUTH for BOTH
   the `/recover` action (`Session.Server` IDENTIFYs with this value) AND the
@@ -988,7 +1033,8 @@ defmodule Grappa.Networks.Credential do
 
   Mirrors EXACTLY the resolution `Session.Server`'s `nickserv_secret/1`
   applies, but over the PERSISTENT credential rather than the one-shot
-  session state: a `:nickserv_identify` upstream password, and nothing else.
+  session state: the upstream password of a row whose method leaves that
+  column meaning NickServ, and nothing else.
 
   #124 collapsed this to ONE source. It used to be a two-source precedence
   with the #509 `$nickserv_pass` column winning ahead of the password. Two
@@ -999,6 +1045,16 @@ defmodule Grappa.Networks.Credential do
   here or anywhere. `Session.Server`'s `nickserv_secret/1` collapsed in the
   SAME commit: the two are documented as required to stay identical, so they
   can only move together.
+
+  GH #1044 WIDENS THE METHOD SET AND NOT THE SOURCE, and the distinction is
+  the whole of #124's property. `:server_pass` joins `:nickserv_identify`
+  because on such a row the gate secret has moved to its own slot, which
+  leaves `password_encrypted` meaning NickServ exactly as it does everywhere
+  else. There is still ONE column read for this role and no fallback chain —
+  `server_pass_encrypted` is never consulted here, which is what keeps #509
+  from coming back through the new column. `Session.Server`'s
+  `pending_password_from_opts/1` carries the identical gate and moved in the
+  same commit.
 
   The secret must be non-empty — an empty secret is "nothing to identify
   with" (same `pw != ""` posture as the live gate and
@@ -1012,7 +1068,7 @@ defmodule Grappa.Networks.Credential do
   """
   @spec recover_secret(t()) :: binary() | nil
   def recover_secret(%__MODULE__{} = cred) do
-    if cred.auth_method == :nickserv_identify and secret_present?(upstream_password(cred)),
+    if cred.auth_method in @nickserv_secret_methods and secret_present?(upstream_password(cred)),
       do: upstream_password(cred),
       else: nil
   end

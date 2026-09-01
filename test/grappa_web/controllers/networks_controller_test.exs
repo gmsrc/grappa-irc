@@ -1036,18 +1036,27 @@ defmodule GrappaWeb.NetworksControllerTest do
       assert Credential.recover_secret(reloaded) == "newsecret"
     end
 
-    test ":server_pass keeps its method — the password is spent on PASS", %{conn: conn} do
-      # The field edits THE secret for the network, whatever the method spends
-      # it on. Promoting here would silently redirect a server password to
-      # NickServ and break a working handshake.
+    test ":server_pass keeps its method, and the field edits the NickServ secret", %{conn: conn} do
+      # The field edits the secret this column holds, and #1044 settled what
+      # that is on a `:server_pass` row: the NickServ one, because the gate
+      # secret moved to its own slot. Promoting the METHOD here would still be
+      # wrong (it would change what the handshake does), which is the half
+      # this test has always guarded — what changed is that the edited value
+      # no longer goes on the PASS line, so the gate secret must come out
+      # untouched.
       {vjt, session, network, slug, _} =
-        password_setup(%{auth_method: :server_pass, password: "old-server-pw"})
+        password_setup(%{
+          auth_method: :server_pass,
+          password: "old-ns-pw",
+          server_pass: "gate-secret"
+        })
 
-      assert json_response(put_password(conn, session, slug, %{password: "new-server-pw"}), 200)
+      assert json_response(put_password(conn, session, slug, %{password: "new-ns-pw"}), 200)
 
       {:ok, reloaded} = Credentials.get_credential(vjt, network)
       assert reloaded.auth_method == :server_pass
-      assert Credential.upstream_password(reloaded) == "new-server-pw"
+      assert Credential.upstream_password(reloaded) == "new-ns-pw"
+      assert Credential.upstream_server_pass(reloaded) == "gate-secret"
     end
 
     test "a blank or missing password is a 400, never a silent clear", %{conn: conn} do

@@ -1133,7 +1133,8 @@ defmodule Grappa.IRC.ClientTest do
       _ =
         start_client(port, %{
           auth_method: :server_pass,
-          password: "swordfish"
+          # #1044 — the PASS token comes from the dedicated slot.
+          server_pass: "swordfish"
         })
 
       :ok = IRCServer.await_handshake(server, 1_000)

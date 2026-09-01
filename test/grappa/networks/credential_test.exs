@@ -159,9 +159,14 @@ defmodule Grappa.Networks.CredentialTest do
              })
     end
 
-    test "false for :server_pass with only an upstream password (spent on PASS, not NickServ)" do
+    # INVERTED by #1044, and the inversion is the feature. While one slot held
+    # both roles, a `:server_pass` row's password WAS spent on the PASS line,
+    # so it could not also be a NickServ secret. Now the gate secret has its
+    # own column and this one means NickServ here like it does everywhere
+    # else — so such a credential IS recoverable.
+    test "true for :server_pass — its password is the NickServ secret since #1044" do
       cred = %Credential{auth_method: :server_pass, password_encrypted: "shibboleth"}
-      refute Credential.has_nickserv_secret?(cred)
+      assert Credential.has_nickserv_secret?(cred)
     end
 
     test "#1044 — the server-PASS slot does not grant the gate" do
@@ -190,8 +195,18 @@ defmodule Grappa.Networks.CredentialTest do
       assert Credential.recover_secret(%Credential{auth_method: :none}) == nil
     end
 
-    test "nil for :server_pass with only an upstream password (spent on PASS, not NickServ)" do
+    # INVERTED by #1044 — see the sibling in `has_nickserv_secret?/1` above.
+    # The method set widened; the SOURCE did not, which is what keeps #124's
+    # property intact and is pinned by the two tests below.
+    test "returns the :server_pass upstream password — NickServ's since #1044" do
       cred = %Credential{auth_method: :server_pass, password_encrypted: "shibboleth"}
+      assert Credential.recover_secret(cred) == "shibboleth"
+    end
+
+    # SASL is the method that must NOT join the set: it spends `:password` on
+    # the SASL payload, so that column is not a NickServ secret there.
+    test "nil for :sasl — its password is spent on the SASL payload" do
+      cred = %Credential{auth_method: :sasl, password_encrypted: "shibboleth"}
       assert Credential.recover_secret(cred) == nil
     end
 

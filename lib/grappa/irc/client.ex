@@ -196,6 +196,10 @@ defmodule Grappa.IRC.Client do
           required(:sasl_user) => String.t(),
           required(:auth_method) => AuthFSM.auth_method(),
           optional(:password) => String.t() | nil,
+          # GH #1044 — the server `PASS` secret. Narrowed into the FSM's own
+          # closed opts map by the `Map.take(opts, AuthFSM.opt_keys())` in
+          # `init/1`, like every other registration field.
+          optional(:server_pass) => String.t() | nil,
           optional(:source_address) => String.t() | nil,
           # #100 liveness watchdog — test seam. Production omits both and
           # inherits the `@liveness_*_ms` config defaults; tests inject tiny

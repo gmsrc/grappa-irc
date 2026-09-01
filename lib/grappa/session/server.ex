@@ -367,6 +367,12 @@ defmodule Grappa.Session.Server do
           required(:sasl_user) => String.t(),
           required(:auth_method) => AuthFSM.auth_method(),
           required(:password) => String.t() | nil,
+          # GH #1044 — the server `PASS` secret, the second of the credential's
+          # two. OPTIONAL for the same reason as `:tls_verify` above: a live
+          # pre-#1044 plan map survives a hot reload without it, and
+          # `client_opts/1` reads it with a nil default, which is the posture
+          # every row had before the slot existed.
+          optional(:server_pass) => String.t() | nil,
           required(:autojoin_channels) => [String.t()],
           required(:host) => String.t(),
           required(:port) => :inet.port_number(),
@@ -546,6 +552,10 @@ defmodule Grappa.Session.Server do
           pending_auth_timer: reference() | nil,
           pending_registration_secret: String.t() | nil,
           pending_password: String.t() | nil,
+          # GH #1044 — whether a NickServ secret was staged at init. Survives
+          # the one-shot clearing of `pending_password` above, which is the
+          # only reason it exists; see `identify_expected?/1`.
+          nickserv_secret_staged?: boolean(),
           # GH #189 — the on-connect perform list (raw text) + its `$oper_pass`
           # secret, decrypted plaintext threaded from the credential at boot.
           # Read at 001 by `run_perform_and_identify/1`. nil when unset.
@@ -1109,6 +1119,13 @@ defmodule Grappa.Session.Server do
       pending_auth_timer: nil,
       pending_registration_secret: nil,
       pending_password: pending_password_from_opts(opts),
+      # GH #1044 — the STABLE record of "a NickServ secret was staged", which
+      # `pending_password` stops being the moment the one-shot identify clears
+      # it. Derived from the same function on the same opts, so the two cannot
+      # disagree; read by `identify_expected?/1` to decide the #347 autojoin
+      # defer. Two methods stage a secret now, so the method alone no longer
+      # carries this fact.
+      nickserv_secret_staged?: pending_password_from_opts(opts) != nil,
       perform_list: Map.get(opts, :perform_list),
       oper_pass: Map.get(opts, :oper_pass),
       # #1398 — the subject tag decides WHICH closures are due, so the
@@ -1297,9 +1314,19 @@ defmodule Grappa.Session.Server do
   # the identify. Anon visitors (`auth_method: :none`) and SASL/server-pass
   # users keep `pending_password = nil`; an empty-string password is treated
   # as absent (nothing to identify with, so `$nickserv_pass` stays unbound).
+  #
+  # GH #1044 widened the METHOD set, not the source. `:server_pass` joins
+  # `:nickserv_identify` because the gate secret moved to its own slot on such
+  # a row, which leaves `:password` meaning NickServ exactly as it does
+  # everywhere else — so a self-hoster on a password-gated network finally
+  # gets both. `:server_pass` is precisely the one the sentence above used to
+  # exclude; SASL still keeps `pending_password = nil` (it spends `:password`
+  # on the SASL payload, so that column is not a NickServ secret there).
+  # `Grappa.Networks.Credential.nickserv_secret_methods/0` is the same list on
+  # the persistent side, and the two are pinned against each other by test.
   @spec pending_password_from_opts(init_opts()) :: String.t() | nil
-  defp pending_password_from_opts(%{auth_method: :nickserv_identify, password: pw})
-       when is_binary(pw) and pw != "",
+  defp pending_password_from_opts(%{auth_method: m, password: pw})
+       when m in [:nickserv_identify, :server_pass] and is_binary(pw) and pw != "",
        do: pw
 
   defp pending_password_from_opts(_), do: nil
@@ -4889,7 +4916,13 @@ defmodule Grappa.Session.Server do
       realname: opts.realname,
       sasl_user: opts.sasl_user,
       auth_method: opts.auth_method,
-      password: opts.password
+      password: opts.password,
+      # GH #1044 — the server `PASS` secret. `Map.get` rather than
+      # `opts.server_pass`: a plan map built before this slice (a live process
+      # surviving a hot reload, a hand-built test plan) has no such key, and
+      # the honest answer for its absence is "no gate secret", which is what
+      # every pre-#1044 row meant anyway.
+      server_pass: Map.get(opts, :server_pass)
     }
   end
 
@@ -6558,18 +6591,36 @@ defmodule Grappa.Session.Server do
 
   defp maybe_autojoin_or_defer(state), do: fire_autojoin(state)
 
-  # GH #347 / #509 / #124 — an identify is expected at 001 (so autojoin must
-  # wait for the +r echo) whenever an effective NickServ secret exists. Since
-  # #124 that is exactly ONE condition: `:nickserv_identify`, whose
-  # `pending_password` was staged from the credential password. It subsumes the
-  # "perform list consumed `$nickserv_pass`" case — consumption requires an
-  # effective secret, and there is only this one source of it. We test the
-  # STABLE `auth_method` (the origin of `pending_password`) rather than
-  # `pending_password` itself, since `run_perform_and_identify/1` has already
-  # cleared it one-shot by the time this runs.
+  # GH #347 / #509 / #124 / #1044 — an identify is expected at 001 (so autojoin
+  # must wait for the +r echo) whenever an effective NickServ secret exists. It
+  # subsumes the "perform list consumed `$nickserv_pass`" case — consumption
+  # requires an effective secret, and there is only one source of it.
+  #
+  # We cannot test `pending_password` itself: `run_perform_and_identify/1` has
+  # already cleared it one-shot by the time this runs. #124 could therefore
+  # test `auth_method`, which WAS the stable origin of that value while
+  # exactly one method staged it. Since #1044 two do, and the method alone no
+  # longer answers the question — a `:server_pass` row with no NickServ secret
+  # (the common gate-only credential) must NOT defer, or every one of them
+  # waits out the fallback window for a `+r` that is never coming. That is the
+  # #509 KNOWN EDGE, and reintroducing it by widening the method test is the
+  # trap this field exists to avoid.
+  #
+  # So the stable origin is recorded directly: one boolean, derived at init
+  # from the SAME `pending_password_from_opts/1` that stages the secret, so it
+  # cannot drift from it.
+  #
+  # The second clause is the hot-reload shim this file applies to every new
+  # state key, and it is NOT redundant here: `state` is a plain MAP, not a
+  # struct, so `Deploy.Preflight` — which refuses a hot deploy on a changed
+  # `defstruct` — has nothing to read and would let one through. A plain
+  # module reload does not rewrite live process state, so a session that
+  # started before this slice reaches this function without the key. Its
+  # honest answer is the pre-#1044 rule, which is exactly what that session's
+  # `pending_password` was staged under.
   @spec identify_expected?(t()) :: boolean()
-  defp identify_expected?(%{auth_method: :nickserv_identify}), do: true
-  defp identify_expected?(_), do: false
+  defp identify_expected?(%{nickserv_secret_staged?: staged?}), do: staged?
+  defp identify_expected?(%{auth_method: m}), do: m == :nickserv_identify
 
   # Single funnel for the two deferred-autojoin triggers (#347): the +r
   # self-MODE echo and the `:autojoin_defer` fallback timer.

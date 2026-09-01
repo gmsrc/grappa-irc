@@ -311,6 +311,13 @@ defmodule Grappa.Networks.SessionPlan do
       sasl_user: Credential.effective_sasl_user(cred),
       auth_method: cred.auth_method,
       password: Credential.upstream_password(cred),
+      # GH #1044 — the server `PASS` secret, in its own key because it is its
+      # own role. On a `:server_pass` row the PASS wire token reads THIS and
+      # `password` above keeps the NickServ meaning it has on every visitor
+      # row; on `:auto` the PASS token is the services handoff and still comes
+      # from `password`. Both travel on every plan (a nil slot is the common
+      # case) so the FSM never has to ask which shape of plan it got.
+      server_pass: Credential.upstream_server_pass(cred),
       # GH #189 — on-connect perform list + its `$oper_pass` secret. Both
       # decrypted-on-load plaintext (accessors), nil when unset. Threaded into
       # Session.Server state and expanded + run at 001, before the built-in
