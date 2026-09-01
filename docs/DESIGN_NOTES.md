@@ -44972,3 +44972,88 @@ the expiry rate nor how many expiring visitors hold uploads was measured —
 that is structure, not magnitude. Nor is the volume of already-orphaned bytes
 on production established; the defect is proved from the code, and the
 one-off sweep for existing orphans is a separate deliverable.
+<!-- entry #1896 -->
+
+---
+
+## 2026-09-01 — #1896: the shell's regime branch was tearing the radio down
+
+A user on a Galaxy S24 Ultra reported that rotating the phone with the radio
+playing drops the audio for a fraction of a second and then restarts it, every
+rotation, both directions. The issue read the chain out of the source and said
+so; this entry records that it was then **reproduced in-process** before
+anything was changed, and what the cure costs.
+
+### The chain, re-measured on `origin/main` before touching anything
+
+`isMobile()` is `matchMedia("(max-width: 768px)")` (`theme.ts`, `MOBILE_QUERY`)
+and `Shell` branches on it with a `<Show>` carrying two complete subtrees, each
+of which mounted its own `<AudioMiniPlayer />`. A phone whose landscape CSS
+width clears 768 flips that signal when it turns, Solid destroys one subtree and
+builds the other, and the `<audio>` on the far side is a different element. Its
+`on(activeAudio, …)` effect then runs as a first tune, and for a stream
+`mustRefetch()` is true (#1700 — a stream has no position to resume to,
+re-tuning IS its resume), so it re-fetches. The new HTTP connection is the gap;
+the `play()` beside it is the "restarts on its own".
+
+Reproduced, not argued: the new `Shell.test` case mounts the shell, marks the
+live `<audio>` object, flips the regime signal, and finds a different element on
+the other side. That required making the suite's `isMobile` mock a real signal —
+the regime had only ever been a start-up condition in tests, which is precisely
+why no existing test could see a rotation. Every pre-existing site assigns it
+before its `render`, measured (40 assignments, 0 after a render), so nothing
+else changed behaviour.
+
+### The cure, and why it is the element that must not move
+
+One `<AudioMiniPlayer />`, mounted once ABOVE the regime `<Show>`. Each branch
+renders an `<AudioDock />` where the player used to be, and the player portals
+its CHROME into whichever dock is live. The `<audio>` element never moves at
+all.
+
+Moving the element with the chrome — one `<Portal>` around the whole component —
+was rejected on the spec: a media element removed from a document has its
+internal pause steps queued after "await a stable state", so a same-task
+re-insertion probably survives. Probably is not a contract to ship playback on,
+and there is no need to: the chrome holds no transport state, so only the chrome
+has to travel.
+
+Two wrappers now stand between `.drop-upload-zone` and `.audio-mini-player` (the
+dock, and the container `<Portal>` builds inside it). Both are `display:
+contents`, so the bar remains a direct flex ITEM of the compose column — #1701's
+ruling. Without that the layout is identical today, because both wrappers are
+full-width and auto-height and the column declares no `gap`, and silently wrong
+the first time either of those changes. #1701's Shell assertion moved from
+`parentElement` to `closest(".drop-upload-zone")` for the same reason, and the
+CSS-text guard beside it is what keeps the weaker DOM assertion honest.
+
+### The consequence, named rather than discovered later
+
+The hoist necessarily lifts the player above the window-kind `<Switch>` too,
+because the regime `<Show>` encloses it. There is one arithmetic here, not two
+decisions: you cannot mount above the branch and remain inside the `<Match>`.
+
+So the #1701 kill-and-re-tune on a window switch is gone as well — including the
+half that file called "a defect in its own right and not this file's to fix", an
+upload restarting from the beginning when the operator visits home. What changes
+in exchange is that on home / list / mentions the audio now keeps playing with no
+bar on screen. That state is not new: #1697 ships it deliberately as
+`playerHidden`, and the doors out of it are the same ones — `RailRadio` and
+`RailActions` live in `.shell-members`, OUTSIDE the `<Switch>`, so stop and
+un-hide are reachable on every window kind in both regimes. Verified, not
+assumed.
+
+#1734's resume point is kept and unchanged. It now fires only on Shell's own
+teardown rather than on every window switch, which narrows WHEN it runs without
+touching what it must do.
+
+### Not established
+
+Not reproduced on hardware, and no device was rotated: the e2e crosses the
+breakpoint with `setViewportSize` in desktop Chromium, which is the same
+`matchMedia` edge and the same JSX flip, not an orientation change. The S24
+Ultra's real landscape CSS width was never read off the handset — the phone-shaped
+viewports in the spec straddle 768 by construction, they are not a measurement of
+the reporter's device. And nothing here says the audible gap is the ONLY thing a
+rotation costs: the flip rebuilds the whole subtree, and the audio element is the
+casualty that was measured.
