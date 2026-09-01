@@ -44574,3 +44574,113 @@ attribute, the browser refuses the resource, the row renders an empty box. It
 now also polls `naturalWidth > 0`, the same witness `media-link-cross-host-modal`
 uses for #1240. **A `src` attribute is not evidence that an image loaded; under
 a CSP it is barely evidence of anything.**
+<!-- entry #1044 -->
+
+---
+
+## 2026-09-01 — 1044: one secret slot, several roles — and the read half nobody had written
+
+A self-hoster bound a network with `--auth server_pass` for hostmasking and
+found the only place left for the NickServ password was the on-connect
+perform list, in cleartext. One credential, one secret slot, and an
+`auth_method` deciding which single role it was spent on.
+
+The column that fixes it had already landed and was HALF dead. Measured on
+`origin/main 725788267`: `server_pass_encrypted` exists, the wide changeset
+casts it, `validate_server_pass_is_user_only/1` guards it and
+`put_encrypted_server_pass/1` writes it — while `upstream_server_pass` was
+**0 hits** in `lib/` (positive control: `upstream_oper_pass`, 3). So
+`grappa.repair_passwords`'s "never read and never written" was half false,
+and the issue's own account of what was missing was too generous: only the
+READ was.
+
+### Two roles, two arms — not one guard over both methods
+
+`maybe_send_pass/1` used to be a single clause guarding
+`m in [:auto, :server_pass]` over `:password`. It is now one clause each,
+and the split is the design rather than a refactor. On `:server_pass` the
+PASS token is the NETWORK'S GATE secret; on `:auto` it is the services
+secret handed off to NickServ (Bahamut/Azzurra), the same value SASL would
+carry. Those are two roles that happened to share a wire line, and #124's
+property is one home per ROLE. `:auto` therefore does NOT move, and a
+gate-secret-plus-handoff credential is out of scope, named here so the next
+reader does not read the asymmetry as an oversight.
+
+S30's single-token rule follows the SLOT that lands on the PASS line, not
+the method: the NickServ secret beside it keeps the CR/LF/NUL floor,
+because it leaves as a PRIVMSG trailing param where a space is legal.
+
+### The read cutover needed a data migration, and there was no third option
+
+The slot was opened EMPTY (`remove` + `add`, deliberately, so a retired
+NickServ secret could not be relabelled as a server password). So every
+`:server_pass` row in existence still kept its PASS in
+`password_encrypted`, and the instant `AuthFSM` reads the new slot those
+rows send no PASS at all — a refused handshake, not a degraded one.
+
+"Read the slot, fall back to the password column" is shorter and needs no
+migration. It is also precisely the two-homes-for-one-role split brain
+#124 is named after, so it was never available. The bytes move once, by
+migration, and the predicate is four conjuncts: the method, `user_id IS
+NOT NULL` (the slot is user-only), `server_pass_encrypted IS NULL` (a row
+written through the post-#1044 door already has both secrets in their right
+homes — and this is also what makes the migration idempotent), and a
+non-null source.
+
+**Measured before it was written, because the whole migration rests on it:
+a Cloak AES-GCM ciphertext is portable between two `EncryptedBinary`
+columns by a raw SQL copy.** Positive control, a same-column round trip
+returning the plaintext; the measurement, a raw copy into the other column
+still decrypting through the schema; negative control, one byte flipped,
+which must NOT decrypt — it loads as the atom `:error` rather than raising,
+which is worth knowing on its own. The property is pinned by the
+migration's test, which drives the moved value back out through the SCHEMA:
+comparing blobs would have been green on undecryptable garbage.
+
+### `identify_expected?/1` stopped reading `auth_method`, and that is the subtle half
+
+Widening the #347 autojoin defer from `:nickserv_identify` to "either
+method" reintroduces the #509 KNOWN EDGE that #124 removed: the common
+gate-only credential has no NickServ secret, expects no identify, and would
+wait out the whole fallback window for a `+r` that is never coming.
+
+The method could answer "is an identify expected" only while exactly ONE
+method staged a secret. Two do now, so the question moved to the secret
+itself — a boolean derived at init from the same `pending_password_from_opts/1`
+that stages it, because `pending_password` is cleared one-shot before the
+defer decision runs. It carries a hot-reload fallback clause and that is
+NOT redundant: session state here is a plain MAP, not a struct, so
+`Deploy.Preflight` (which refuses a hot deploy on a changed `defstruct`)
+has nothing to read and would let one through.
+
+The two halves of the widened method set live in different boundaries
+(`Networks` deps `Session`; the reverse closes a cycle) and cannot call
+each other, so `Credential.nickserv_secret_methods/0` is exported as DATA
+and a test DRIVES that list against live sessions. Falsified before being
+trusted: adding `:sasl` to the list turns it red naming the method.
+
+### The version bumped on the rule, not on the gate
+
+`/networks/:id/server_pass` renders its shape in a controller, and the wire
+pin's digest spans the artefacts generated from `Grappa.*.Wire` typespecs —
+so the digest is BYTE-IDENTICAL across this slice and `mix grappa.wire_pin
+--check` would have stayed green with the number still. It moved anyway:
+reason (1) of the 2026-08-21 ruling applies literally, since a cic bundle
+growing a gate-secret editor REQUIRES the route and gets a 404 from any
+older server. Recorded because the next person to add a REST-only surface
+will find the gate silent and needs to know that silence is not permission.
+
+### Corrected in passing
+
+Three comments in `lib/` described a `password_set` field on the credential
+wire. There is no such field, and `networks_controller_test` asserts there
+is not — the password door is write-only including its set-ness. The
+comments now say so, since they were the signposts pointing at where
+`server_pass_set`'s sibling supposedly lived.
+
+The column's validation also TIGHTENED: it was `safe_line_token`
+(CR/LF/NUL) while `AuthFSM` gates the same value with S30's single-token
+rule, so a gate secret with a space saved 200 and then refused every
+connect — the ircd keeps the first token and answers 464 with nothing in
+the log. A write door that accepts what the reader will reject is the
+silent-swallow the boundary rule forbids.
