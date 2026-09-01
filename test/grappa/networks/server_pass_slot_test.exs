@@ -229,6 +229,18 @@ defmodule Grappa.Networks.ServerPassSlotTest do
       assert Credential.recover_secret(stored) == "ns-secret"
     end
 
+    # The narrow write door (#1044's REST endpoint) has to carry the guard
+    # itself. Inheriting it from the wide changeset is not a thing a changeset
+    # can do, and this is precisely the surface an HTTP client reaches.
+    test "the NARROW server_pass changeset refuses a visitor too", %{net: net, visitor: visitor} do
+      {:ok, cred} = Credentials.get_visitor_credential(visitor.id, net.id)
+
+      {:error, changeset} = Credentials.update_server_pass(cred, %{"server_pass" => "hunter2"})
+
+      assert %{server_pass: ["is only valid on a user credential"]} = errors_on(changeset)
+      assert is_nil(raw_slot(cred))
+    end
+
     test "the session plan still identifies with the NickServ secret", %{
       net: net,
       visitor: visitor

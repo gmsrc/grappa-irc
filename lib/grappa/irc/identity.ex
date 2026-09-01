@@ -103,6 +103,31 @@ defmodule Grappa.IRC.Identity do
   end
 
   @doc """
+  `validate_change/3` callback for a value whose ONLY destiny is a single
+  wire token — `Identifier.safe_oper_token?/1`, so a space or tab is
+  rejected alongside CR/LF/NUL.
+
+  GH #1044. The stricter sibling of `safe_line_token/2` above, and the
+  distinction is about the SHAPE the value lands in rather than how secret
+  it is: a trailing param may hold spaces, a bare token may not. The server
+  `PASS` is the case that needed it — the receiving ircd splits the line and
+  keeps the FIRST token, so a space silently truncates the secret and the
+  handshake comes back 464 with nothing in the log to explain it. `AuthFSM`
+  applies the same predicate at the wire, and applying it only there would
+  let the write door answer 200 to a value that then refuses every connect.
+
+  An empty string is rejected too (`safe_oper_token?/1` requires non-empty),
+  so a changeset that means "clear this field" must map `""` to `nil`
+  BEFORE this runs rather than casting it through.
+  """
+  @spec safe_oper_token(atom(), String.t()) :: [{atom(), String.t()}]
+  def safe_oper_token(field, value) when is_binary(value) do
+    if Identifier.safe_oper_token?(value),
+      do: [],
+      else: [{field, "must be a single token: no spaces, tabs, CR, LF or NUL"}]
+  end
+
+  @doc """
   Returns `ident` when a binary, else the `nick` fallback (GH #152). The
   ident defaults to the nick so the USER line stays `USER <nick> …` for a
   subject that never set a distinct ident.

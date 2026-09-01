@@ -1025,6 +1025,36 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
+  GH #1044 — sets or clears the server `PASS` slot for `credential`.
+
+  Takes an already-fetched credential (the caller's lookup was subject-scoped,
+  so ownership is asserted) and routes through the narrow
+  `Credential.server_pass_changeset/2`. `""` clears; omitting the key is a
+  valid no-op (leave-blank-to-keep).
+
+  Like the perform list and UNLIKE the password, there is NO live verb: the
+  secret is spent on the `PASS` line during registration, so it cannot be
+  applied to a connection that is already up. An edit persists and takes
+  effect on the next (re)connect, when `SessionPlan` re-resolves the plan.
+  Bouncing a working session to install a gate secret it did not need would
+  be a worse trade than the wait.
+
+  A visitor credential is REFUSED by the changeset's user-only guard rather
+  than silently storing a value nothing can spend; a concurrent unbind
+  surfaces as `{:error, :not_found}`.
+  """
+  @spec update_server_pass(Credential.t(), map()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_server_pass(%Credential{} = credential, attrs) when is_map(attrs) do
+    case credential |> Credential.server_pass_changeset(attrs) |> Repo.update() do
+      {:ok, updated} -> {:ok, updated}
+      {:error, _} = err -> err
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @doc """
   Rotates the stored upstream NickServ password for `(user_id, network_id)`.
 
   #131: the id-keyed write `Session.Server`'s `credential_committer`

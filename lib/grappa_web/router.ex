@@ -558,6 +558,15 @@ defmodule GrappaWeb.Router do
     # ResolveNetwork pipeline, so ownership is asserted the same way.
     put "/password", NetworksController, :update_password
 
+    # #1044 — the server PASS a password-gated network demands before
+    # registration. A sibling of `/password` rather than a key on it: two
+    # different secrets with two different destinations, which is the whole
+    # point of the issue (one field editing both is the state it replaces).
+    # Write-only like `/perform`'s `$oper_pass` — GET reports set-ness only.
+    # Same ResolveNetwork pipeline, so ownership is asserted the same way.
+    get "/server_pass", NetworksController, :server_pass
+    put "/server_pass", NetworksController, :update_server_pass
+
     get "/channels", ChannelsController, :index
     post "/channels", ChannelsController, :create
     delete "/channels/:channel_id", ChannelsController, :delete

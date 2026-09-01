@@ -430,10 +430,14 @@ defmodule Grappa.Networks.Credential do
     |> validate_change(:realname, &Identity.safe_line_token/2)
     |> validate_change(:sasl_user, &Identity.safe_line_token/2)
     |> validate_change(:password, &Identity.safe_line_token/2)
-    # GH #1044 — the server PASS is a single-line wire token (`PASS <secret>`),
-    # so it gets the same CR/LF/NUL guard as `:password`: a newline here would
-    # split the outbound frame and inject a second command.
-    |> validate_change(:server_pass, &Identity.safe_line_token/2)
+    # GH #1044 — the server PASS is the SINGLE token of a `PASS <secret>` line,
+    # so it takes the STRICTER gate: a newline would split the outbound frame
+    # and inject a second command, and a space would be split off by the
+    # receiving ircd, truncating the secret to its first token and earning a
+    # 464 with no breadcrumb. Same predicate `AuthFSM` applies at the wire —
+    # enforcing it only there would let this door store a value that then
+    # refuses every connect.
+    |> validate_change(:server_pass, &Identity.safe_oper_token/2)
     |> validate_server_pass_is_user_only()
     |> validate_change(:auth_command_template, &Identity.safe_line_token/2)
     |> validate_change(:autojoin_channels, &validate_autojoin_channels/2)
@@ -629,6 +633,46 @@ defmodule Grappa.Networks.Credential do
     # re-interpolated into `PRIVMSG NickServ :IDENTIFY` on the next connect.
     |> validate_change(:password, &Identity.safe_line_token/2)
     |> put_encrypted_password()
+  end
+
+  @doc """
+  GH #1044 — narrow changeset for the server `PASS` slot alone, the write
+  door that gives the gate secret somewhere to live other than the NickServ
+  column. Mirror of `password_changeset/2` (one secret, nothing else
+  touched); the wide `changeset/2` also accepts the field, for the bind path
+  that sets everything at once.
+
+  `empty_values: []` keeps a blank `""` a real change (default `cast/3`
+  would drop it as "missing"), so the editor can CLEAR the slot —
+  `put_encrypted_server_pass/1` maps `""` to `nil` (SQL NULL). OMITTING the
+  key keeps whatever is stored, the leave-blank-to-keep semantics every
+  secret field here uses.
+
+  USER-ONLY, enforced by the same `validate_server_pass_is_user_only/1` the
+  wide changeset applies: a visitor's `auth_method` is DERIVED from its one
+  secret and never reaches `:server_pass`, so the value would be stored
+  where nothing could ever spend it. The guard has to be repeated on this
+  door rather than assumed from the other — a narrow changeset that skipped
+  it would be a hole in exactly the surface an HTTP client can reach.
+  """
+  @spec server_pass_changeset(t(), map()) :: Ecto.Changeset.t()
+  def server_pass_changeset(%__MODULE__{} = credential, attrs) when is_map(attrs) do
+    credential
+    |> cast(attrs, [:server_pass], empty_values: [])
+    |> validate_server_pass_token()
+    |> validate_server_pass_is_user_only()
+    |> put_encrypted_server_pass()
+  end
+
+  # `""` is the CLEAR verb and must reach `put_encrypted_server_pass/1`
+  # untouched; `safe_oper_token/2` rejects an empty string (it is not a
+  # token), so the two would contradict each other without this gate.
+  @spec validate_server_pass_token(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp validate_server_pass_token(cs) do
+    case get_change(cs, :server_pass) do
+      "" -> cs
+      _ -> validate_change(cs, :server_pass, &Identity.safe_oper_token/2)
+    end
   end
 
   @doc """
@@ -949,6 +993,17 @@ defmodule Grappa.Networks.Credential do
   # has already invalidated the changeset on the visitor branch, so a valid
   # changeset carrying this change is a user credential by construction.
   @spec put_encrypted_server_pass(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  # `""` is the CLEAR verb, and it stores SQL NULL rather than an empty blob —
+  # same mapping `put_encrypted_perform_field/3` applies to its two fields.
+  # An empty string would otherwise read back as "a secret is set" through
+  # `upstream_server_pass/1`, and `AuthFSM` would then refuse a credential the
+  # editor showed as configured. Only the narrow `server_pass_changeset/2`
+  # can reach this arm: the wide changeset's default `cast/3` drops `""` as
+  # missing before it ever becomes a change.
+  defp put_encrypted_server_pass(%{valid?: true, changes: %{server_pass: ""}} = cs) do
+    put_change(cs, :server_pass_encrypted, nil)
+  end
+
   defp put_encrypted_server_pass(%{valid?: true, changes: %{server_pass: pw}} = cs)
        when is_binary(pw) do
     put_change(cs, :server_pass_encrypted, pw)

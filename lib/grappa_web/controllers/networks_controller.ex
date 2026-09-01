@@ -368,8 +368,9 @@ defmodule GrappaWeb.NetworksController do
   new value — which is the entire point of the field. A parked / no-session
   edit persists only.
 
-  Body: `{password}` — required, non-blank. 200 with the updated credential
-  (carrying `password_set: true`, never the value); 400 on a missing or blank
+  Body: `{password}` — required, non-blank. 200 with the updated credential,
+  which says nothing about the stored secret: not the value, and deliberately
+  not even its set-ness (pinned by the write-only test). 400 on a missing or blank
   password; 422 when services would refuse it (spaces / under 5 / over 32 bytes
   / control codes / equal to the nick); 404 if the credential vanished; 401
   without a Bearer.
@@ -407,8 +408,10 @@ defmodule GrappaWeb.NetworksController do
   credential vanished; 401 without a Bearer.
 
   #124 removed the `nickserv_pass_set` sibling: `$nickserv_pass` expands from
-  the credential password now, whose set-ness is reported by the identity
-  surface (`password_set`), not here.
+  the credential password now, whose set-ness no surface reports at all — the
+  password door is write-only end to end. #1044's server `PASS` has its own
+  `GET /networks/:network_id/server_pass`, not a key here: that secret belongs
+  to registration, not to the perform list.
   """
   @spec perform(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found}
   def perform(conn, _) do
@@ -449,9 +452,71 @@ defmodule GrappaWeb.NetworksController do
     end
   end
 
+  @doc """
+  GH #1044 — GET the server `PASS` set-ness for this `(subject, network)`.
+
+  Returns `{server_pass_set}` and never the value: write-only, exactly like
+  `$oper_pass` on the perform surface. 404 if the credential vanished; 401
+  without a Bearer.
+  """
+  @spec server_pass(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found}
+  def server_pass(conn, _) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, credential} <- fetch_credential(subject, network) do
+      render(conn, :server_pass, server_pass: server_pass_wire(credential))
+    end
+  end
+
+  @doc """
+  GH #1044 — PUT the server `PASS`, the secret a password-gated network
+  demands before registration.
+
+  A sibling of `/password` rather than a key on it, and for the reason the
+  whole issue exists: they are two different secrets with two different
+  destinations, and one field editing both is the state this replaces.
+
+  Body: `{server_pass}` — `""` clears, omitting the key keeps the stored one
+  (leave-blank-to-keep). Persists ONLY: the secret is spent during
+  registration, so a live session picks it up on its next (re)connect — this
+  endpoint deliberately does not bounce a working connection the way
+  `/password` does, since that one changes what an ALREADY-registered
+  session would do next.
+
+  200 with `{server_pass_set}`; 422 on a value that is not a single wire
+  token (spaces / CR / LF / NUL) or on a visitor credential, which cannot
+  spend this secret at all; 404 if the credential vanished; 401 without a
+  Bearer.
+  """
+  @spec update_server_pass(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :not_found | Ecto.Changeset.t()}
+  def update_server_pass(conn, params) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, credential} <- fetch_credential(subject, network),
+         {:ok, updated} <- Credentials.update_server_pass(credential, server_pass_attrs(params)) do
+      render(conn, :server_pass, server_pass: server_pass_wire(updated))
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  # #1044 — pick ONLY the secret from the body (string keys), dropping the
+  # `:network_id` route param and any stray key before the changeset casts.
+  # Mirror of `perform_attrs/1`.
+  @spec server_pass_attrs(map()) :: map()
+  defp server_pass_attrs(params), do: Map.take(params, ["server_pass"])
+
+  # #1044 — the wire shape: set-ness only. The secret is NEVER serialised,
+  # the same write-only posture `$oper_pass` has on the perform surface.
+  @spec server_pass_wire(Credential.t()) :: %{server_pass_set: boolean()}
+  defp server_pass_wire(%Credential{} = credential) do
+    %{server_pass_set: Credential.upstream_server_pass(credential) != nil}
+  end
 
   # Only `:connected` and `:parked` are user-settable. `:failed` is
   # server-set only (k-line / permanent SASL — S1.4 lenient triggers);

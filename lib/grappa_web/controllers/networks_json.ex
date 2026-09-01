@@ -63,12 +63,24 @@ defmodule GrappaWeb.NetworksJSON do
 
   #124 dropped the `nickserv_pass_set` sibling. `$oper_pass` keeps its flag
   because it remains a perform-owned secret; the NickServ one moved to the
-  credential password and is reported as `password_set` on the credential wire
-  shape instead.
+  credential password, whose set-ness this surface deliberately does not
+  report (see `NetworksController.update_password/2` — the response says
+  nothing about the stored secret, not even whether there is one).
   """
   @spec perform(%{perform: %{perform_list: String.t() | nil, oper_pass_set: boolean()}}) ::
           %{perform_list: String.t() | nil, oper_pass_set: boolean()}
   def perform(%{perform: %{perform_list: perform_list, oper_pass_set: oper_pass_set}}) do
     %{perform_list: perform_list, oper_pass_set: oper_pass_set}
+  end
+
+  @doc """
+  GH #1044 — the server `PASS` wire shape: set-ness and nothing else. Passed
+  straight through from the controller's `server_pass_wire/1`; the secret
+  never reaches here, the same write-only posture `oper_pass_set` has above.
+  """
+  @spec server_pass(%{server_pass: %{server_pass_set: boolean()}}) ::
+          %{server_pass_set: boolean()}
+  def server_pass(%{server_pass: %{server_pass_set: server_pass_set}}) do
+    %{server_pass_set: server_pass_set}
   end
 end

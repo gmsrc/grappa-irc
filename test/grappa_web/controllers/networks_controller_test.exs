@@ -1116,6 +1116,112 @@ defmodule GrappaWeb.NetworksControllerTest do
     end
   end
 
+  describe "GET + PUT /networks/:network_id/server_pass (#1044)" do
+    defp server_pass_setup(attrs) do
+      vjt = user_fixture(name: "vjt-sp-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-sp-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+
+      cred =
+        credential_fixture(
+          vjt,
+          network,
+          Map.merge(%{nick: "vjt-irc", password: "fixture-pw"}, attrs)
+        )
+
+      {vjt, session, network, slug, cred}
+    end
+
+    defp server_pass_conn(conn, session) do
+      conn
+      |> put_bearer(session.id)
+      |> put_req_header("content-type", "application/json")
+    end
+
+    test "GET reports the slot as unset by default", %{conn: conn} do
+      {_, session, _, slug, _} = server_pass_setup(%{auth_method: :nickserv_identify})
+
+      body =
+        conn
+        |> server_pass_conn(session)
+        |> get("/networks/#{slug}/server_pass")
+        |> json_response(200)
+
+      assert body["server_pass_set"] == false
+    end
+
+    test "PUT stores the secret and reports it set, never echoing the value", %{conn: conn} do
+      {vjt, session, network, slug, _} = server_pass_setup(%{auth_method: :nickserv_identify})
+
+      body =
+        conn
+        |> server_pass_conn(session)
+        |> put("/networks/#{slug}/server_pass", %{server_pass: "gate-secret"})
+        |> json_response(200)
+
+      # Write-only end to end: the set-ness travels, the secret never does.
+      assert body["server_pass_set"] == true
+      refute Map.has_key?(body, "server_pass")
+      refute inspect(body) =~ "gate-secret"
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert Credential.upstream_server_pass(reloaded) == "gate-secret"
+    end
+
+    # The door exists so the gate secret has somewhere to go OTHER than the
+    # NickServ column — so the neighbouring secret must come out untouched.
+    test "PUT leaves the NickServ secret alone", %{conn: conn} do
+      {vjt, session, network, slug, _} =
+        server_pass_setup(%{auth_method: :nickserv_identify, password: "ns-secret"})
+
+      assert conn
+             |> server_pass_conn(session)
+             |> put("/networks/#{slug}/server_pass", %{server_pass: "gate-secret"})
+             |> json_response(200)
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert Credential.upstream_password(reloaded) == "ns-secret"
+      assert reloaded.auth_method == :nickserv_identify
+    end
+
+    test "an empty string CLEARS the slot", %{conn: conn} do
+      {vjt, session, network, slug, _} =
+        server_pass_setup(%{auth_method: :server_pass, server_pass: "gate-secret"})
+
+      body =
+        conn
+        |> server_pass_conn(session)
+        |> put("/networks/#{slug}/server_pass", %{server_pass: ""})
+        |> json_response(200)
+
+      assert body["server_pass_set"] == false
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert is_nil(Credential.upstream_server_pass(reloaded))
+    end
+
+    # S30: the value is re-interpolated into the single PASS wire token, so a
+    # space would truncate it server-side and a newline would inject a command.
+    test "a CRLF secret is a 422", %{conn: conn} do
+      {_, session, _, slug, _} = server_pass_setup(%{auth_method: :nickserv_identify})
+
+      assert conn
+             |> server_pass_conn(session)
+             |> put("/networks/#{slug}/server_pass", %{server_pass: "a\r\nJOIN #evil"})
+             |> json_response(422)
+    end
+
+    test "requires a Bearer", %{conn: conn} do
+      {_, _, _, slug, _} = server_pass_setup(%{auth_method: :nickserv_identify})
+
+      assert conn
+             |> put_req_header("content-type", "application/json")
+             |> put("/networks/#{slug}/server_pass", %{server_pass: "gate-secret"})
+             |> json_response(401)
+    end
+  end
+
   describe "GET + PUT /networks/:network_id/perform (#189)" do
     test "GET returns the perform list + oper_pass_set (empty by default)", %{conn: conn} do
       vjt = user_fixture(name: "vjt-perf-#{u()}")
