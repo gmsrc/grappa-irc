@@ -403,7 +403,7 @@ defmodule Grappa.UploadsTest do
     end
   end
 
-  describe "delete_all_for_user/1" do
+  describe "delete_all_for_subject/1" do
     test "deletes every uploads row for the user AND removes their files", %{root: root} do
       user = user_fixture([])
       other = user_fixture([])
@@ -449,7 +449,7 @@ defmodule Grappa.UploadsTest do
       :ok = Uploads.boot(root)
       on_exit(fn -> :ok = Uploads.boot(original_root) end)
 
-      assert :ok = Uploads.delete_all_for_user(user.id)
+      assert :ok = Uploads.delete_all_for_subject({:user, user.id})
 
       # Rows for user gone; other user's row + file preserved
       assert Uploads.get_by_id(u1.id) == {:error, :not_found}
@@ -462,9 +462,9 @@ defmodule Grappa.UploadsTest do
       assert File.exists?(uo_path)
     end
 
-    test "is idempotent when user has no uploads" do
+    test "is idempotent when the subject has no uploads" do
       user = user_fixture([])
-      assert :ok = Uploads.delete_all_for_user(user.id)
+      assert :ok = Uploads.delete_all_for_subject({:user, user.id})
     end
   end
 

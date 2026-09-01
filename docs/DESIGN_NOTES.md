@@ -44888,3 +44888,87 @@ Client only. The server behaviour — row gone ⇒ 404, no oracle — is correct
 and untouched. The disk-side half of the same incident (account deletion
 cascades the rows but never unlinks the files) is a separate issue and is
 not addressed here.
+<!-- entry #1890 -->
+
+---
+
+## 2026-09-01 — #1890: the cascade takes the rows and leaves the bytes
+
+Account deletion removed a subject's `uploads` ROWS and left the FILES on
+disk. `uploads.user_id` / `uploads.visitor_id` carry `ON DELETE CASCADE`, and
+nothing on any deletion path called `File.rm/1`. The bytes then became
+unreachable (row gone ⇒ 404), invisible to `Grappa.Uploads.Reaper` (which
+sweeps ROWS and unlinks from them), and uncounted by `live_bytes_sum/0`
+(row-derived) — so the global-cap accounting drifted from real disk usage
+with no signal anywhere.
+
+### The fix goes at the chokepoints, not at the door the issue named
+
+The issue named `AccountDeletion.delete_account/1`. Measured, that is one of
+**five** doors that destroy a subject, and the smallest: `Operator.delete_user/2`
+and `Operator.delete_visitor/2` (admin), `Visitors.purge_if_anon/1` (anon
+co-terminus), and — the one with by far the highest cadence —
+`Grappa.Visitors.Reaper`'s **60-second** sweep of expired visitors. Repairing
+the self-delete door alone would have left the automatic door leaking on a
+one-minute tick.
+
+All five funnel through exactly two functions, so the unlink sits there:
+`Accounts.delete_user/1` and `Visitors.destroy_visitor/1`. `destroy_visitor/1`
+and not `Visitors.delete/1`, because `purge_if_anon/1` reaches the former
+without passing the latter.
+
+`Uploads.delete_all_for_subject/1` replaces the former
+`delete_all_for_user/1`, whose `@doc` declared it test-support-only and
+asserted that "production lifecycle uses `soft_delete/2`" — a sentence that
+becomes false the instant production calls it. It takes `Subject.t()` (the
+bare-id tuple both call sites already hold) and queries through the existing
+`Subject.subject_where/2`, so the two arms differ only in an FK column and no
+second query idiom is introduced. Its one previous caller, the test harness,
+moved with it: no half-migration, no two spellings of one verb.
+
+### Why a failed unlink is logged rather than discarded or retried
+
+`Uploads.Reaper.unlink_then_soft_delete/3` can afford to leave a row alone
+when `File.rm/1` fails, because **the row IS its retry token** and the next
+sweep tries again. On the deletion path the row is about to be destroyed, so
+no retry token will ever exist — the reaper's third arm is structurally
+unavailable here, and a discarded error is a permanent leak that nothing can
+later detect.
+
+So the three outcomes stay apart. `:ok` proceeds. `{:error, :enoent}` is NOT
+a failure and is deliberately kept OUT of the log — it is the expected
+idempotent case (the reaper or a prior partial run got there first), and
+logging it would drown the one line that matters. `{:error, reason}` logs the
+slug and **continues**: a read-only disk must not hold someone's right to be
+deleted hostage, and the log line is the only surrogate for the retry token
+being destroyed. The metadata shape mirrors the reaper's own failure line
+(`upload_id` / `slug` / `error`), all three already in the Logger allowlist,
+so this costs no `config/` edit.
+
+On the visitor side the call sits INSIDE the existing `Repo.BusyRetry.run/1`
+block, beside the published-theme re-home — which is the same figure: a
+pre-delete step disposing of something the cascade would otherwise destroy
+without cleaning up. Inside and not before, so a sustained SQLITE_BUSY still
+degrades to `{:error, :db_unavailable}` for every caller rather than raising
+past it; re-running is safe because the second pass finds no rows and an
+already-unlinked file answers `:enoent`.
+
+### Measured, and deliberately not claimed
+
+`storage_path/2` has been `Path.join(storage_root, slug)` — no extension —
+since the commit that introduced it (`61269ebe7`); the only other commit
+touching that name merely added a caller, and no commit in the file's history
+ever composed a filename with an extension. So unlinking by slug cannot miss
+a historically differently-named file.
+
+Peer avatars are NOT in this class: `peer_avatars.network_id` references
+`networks`, which carries no owner column, so destroying a subject never
+cascades them. Theme background images ARE covered, because
+`Themes.BackgroundImage` stores them through `Uploads.create/3`.
+
+Not claimed: that self-delete is the dominant source of orphans. The visitor
+reaper has the higher cadence and passes through the same hole, but neither
+the expiry rate nor how many expiring visitors hold uploads was measured —
+that is structure, not magnitude. Nor is the volume of already-orphaned bytes
+on production established; the defect is proved from the code, and the
+one-off sweep for existing orphans is a separate deliverable.

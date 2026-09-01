@@ -237,7 +237,7 @@ if Mix.env() in [:dev, :test] do
       :ok = QueryWindows.close_all_for_user(user.id)
       :ok = Push.subscription_clear_all_for_user(user.id)
       :ok = UserSettings.reset_for_user(user.id)
-      :ok = Uploads.delete_all_for_user(user.id)
+      :ok = Uploads.delete_all_for_subject({:user, user.id})
       # S1 (#364) — drain the #247 watch list too. Without this, a spec's
       # `/notify add` rows survive the reset baseline AND re-arm MONITOR/WATCH
       # on the respawned Session.Server (which reads Notify.list/2 at

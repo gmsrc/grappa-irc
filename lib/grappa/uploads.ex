@@ -33,6 +33,10 @@ defmodule Grappa.Uploads do
       `expires_at <= now()` AND `deleted_at IS NULL`.
     * `soft_delete/2` — flips `deleted_at`. The caller MUST `File.rm/1`
       the on-disk file FIRST (Reaper does this in `sweep/0`).
+    * `delete_all_for_subject/1` — HARD-deletes a departing subject's
+      uploads, bytes first. Called from the two chokepoints every
+      subject-destroying door funnels through, because the FK cascade
+      takes the rows and leaves the files (issue 1890).
     * `storage_path/2` — joins `storage_root` + slug, base32-validates
       the slug. Used by `create/3` to write, by the controller to
       read, by Reaper to unlink.
@@ -84,6 +88,8 @@ defmodule Grappa.Uploads do
 
   alias Grappa.{Repo, Subject}
   alias Grappa.Uploads.{ContentType, MetadataStrip, Upload}
+
+  require Logger
 
   @slug_byte_size 16
   @slug_regex ~r/\A[a-z2-7]{26}\z/
@@ -426,28 +432,69 @@ defmodule Grappa.Uploads do
   end
 
   @doc """
-  Test-support: HARD-deletes every `uploads` row for `user_id` and
-  removes the corresponding on-disk files. Intended for
-  `Grappa.TestSupport.SubjectReset` only — production lifecycle uses
-  `soft_delete/2` (which the reaper sweeps in
-  `Grappa.Uploads.Reaper.sweep/2`).
+  HARD-delete every upload owned by `subject` — the on-disk bytes FIRST,
+  the row after. Returns `:ok`; idempotent when the subject owns none.
 
-  Iterates per-row to mirror the admin DELETE controller pattern
-  (`File.rm(path)` then row removal). Idempotent if the user has no
-  rows. `File.rm/1` result discarded — a file already swept by the
-  reaper is the expected idempotent case.
+  Called from the two chokepoints that every subject-destroying door
+  funnels through — `Grappa.Accounts.delete_user/1` and
+  `Grappa.Visitors.destroy_visitor/1` — because `uploads.user_id` /
+  `uploads.visitor_id` carry `ON DELETE CASCADE`, which takes the ROWS
+  and leaves the FILES (issue 1890). Routing it at the chokepoints and
+  not at the self-delete door is deliberate: five doors reach those two
+  functions, and the highest-cadence one is `Grappa.Visitors.Reaper`'s
+  60-second sweep, not self-delete.
+
+  ## Why the unlink cannot fail silently here
+
+  `Grappa.Uploads.Reaper` can afford to leave a row alone when
+  `File.rm/1` fails: the ROW IS ITS RETRY TOKEN, and the next sweep
+  tries again. On this path the row is about to be destroyed, so no
+  retry token will ever exist — a discarded error becomes a permanent
+  leak that nothing can later detect, which is the silent-swallow
+  CLAUDE.md forbids at a boundary. So the three outcomes stay apart:
+
+    * `:ok` — unlinked.
+    * `{:error, :enoent}` — NOT a failure, the expected idempotent case
+      (the reaper or a prior partial run got there first). Logging it
+      would drown the one line below that matters.
+    * `{:error, reason}` — logged with the slug, and the deletion
+      CONTINUES. A read-only disk must not hold someone's right to be
+      deleted hostage; the log line is the only surrogate for the retry
+      token being destroyed, and the slug is what makes the leaked
+      bytes findable afterwards.
   """
-  @spec delete_all_for_user(Ecto.UUID.t()) :: :ok
-  def delete_all_for_user(user_id) when is_binary(user_id) do
+  @spec delete_all_for_subject(Subject.t()) :: :ok
+  def delete_all_for_subject(subject) do
     storage_root = storage_root()
-    query = from(u in Upload, where: u.user_id == ^user_id)
-    rows = Repo.all(query)
 
-    Enum.each(rows, fn %Upload{slug: slug} = up ->
-      _ = File.rm(storage_path(storage_root, slug))
-      Repo.delete!(up)
-    end)
+    Upload
+    |> Subject.subject_where(subject)
+    |> Repo.all()
+    |> Enum.each(&unlink_then_delete(&1, storage_root))
 
+    :ok
+  end
+
+  @spec unlink_then_delete(Upload.t(), Path.t()) :: :ok
+  defp unlink_then_delete(%Upload{slug: slug} = up, storage_root) do
+    case File.rm(storage_path(storage_root, slug)) do
+      :ok ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        # Same metadata shape as `Grappa.Uploads.Reaper`'s failure line —
+        # one greppable message, the identifiers as structured fields.
+        Logger.error("upload orphaned: unlink failed, row deleted anyway",
+          upload_id: up.id,
+          slug: slug,
+          error: inspect(reason)
+        )
+    end
+
+    _ = Repo.delete!(up)
     :ok
   end
 end

@@ -87,6 +87,11 @@ defmodule Grappa.Accounts do
       Grappa.EncryptedBinary,
       Grappa.IRC,
       Grappa.Repo,
+      # Issue 1890 — `delete_user/1` unlinks the departing user's upload
+      # bytes before the FK cascade drops the rows that name them. The
+      # CONTEXT and not the `Upload` leaf: what is needed here is the
+      # verb, not the struct.
+      Grappa.Uploads,
       Grappa.Visitors.Visitor
     ],
     exports: [Wire, AdminWire, Login, TOTP, TOTPRecoveryCode, Passkey, WebAuthn]
@@ -96,7 +101,7 @@ defmodule Grappa.Accounts do
   alias Grappa.Accounts.{Passkey, RecoveryCodes, Revocations, Session, TOTP, TOTPRecoveryCode, User}
   alias Grappa.Ecto.Like
   alias Grappa.IRC.Identifier
-  alias Grappa.Repo
+  alias Grappa.{Repo, Uploads}
   alias Grappa.Visitors.Visitor
 
   require Identifier
@@ -463,6 +468,14 @@ defmodule Grappa.Accounts do
         if current.is_admin and other_admins_count(id) == 0 do
           {:error, :last_admin}
         else
+          # Issue 1890 — BEFORE the delete, because the `uploads.user_id`
+          # CASCADE below takes the ROWS and nothing takes the FILES, and
+          # once the rows are gone no record of which slugs to unlink
+          # survives anywhere. Every door that destroys a user funnels
+          # through here (self-delete, admin delete, the test harness), so
+          # this is the one place the unlink has to sit.
+          :ok = Uploads.delete_all_for_subject({:user, id})
+
           {:ok, _} = Repo.delete(user)
           # The CASCADE takes the `accounts_sessions` rows with the user row,
           # so the socket teardown has to be announced here: nothing

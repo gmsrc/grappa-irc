@@ -79,6 +79,10 @@ defmodule Grappa.Visitors do
       Grappa.SpawnOrchestrator,
       Grappa.Subject,
       Grappa.Themes,
+      # Issue 1890 — `destroy_visitor/1` unlinks the visitor's upload bytes
+      # before the FK cascade drops the rows that name them. The CONTEXT and
+      # not the `Upload` leaf: what is needed here is the verb, not the struct.
+      Grappa.Uploads,
       Grappa.UserSettings,
       # #645 — Login records the client source prefix before it spawns, so a
       # first-time visitor is not held by mode-2 addressing.
@@ -90,7 +94,7 @@ defmodule Grappa.Visitors do
   import Ecto.Query
 
   alias Grappa.Accounts.Revocations
-  alias Grappa.{Admission, Networks, Repo, Session, SpawnOrchestrator, Themes, UserSettings}
+  alias Grappa.{Admission, Networks, Repo, Session, SpawnOrchestrator, Themes, Uploads, UserSettings}
   alias Grappa.Networks.{Credential, Credentials}
   alias Grappa.Visitors.{SessionPlan, Visitor}
 
@@ -841,6 +845,18 @@ defmodule Grappa.Visitors do
     outcome =
       Repo.BusyRetry.run(fn ->
         Themes.rehome_visitor_published_to_system(visitor.id)
+        # Issue 1890 — the second pre-delete step, and the same shape as the
+        # re-home above: something the `visitor_id` CASCADE would otherwise
+        # destroy without disposing of it. Here it is the upload FILES —
+        # the cascade takes the rows and leaves the bytes, and once the rows
+        # are gone nothing names the slugs to unlink.
+        #
+        # INSIDE the retry, not before it, so a sustained SQLITE_BUSY still
+        # degrades to `{:error, :db_unavailable}` for every caller instead
+        # of raising past it. Re-running it is safe: the second pass finds
+        # no rows, and a file already unlinked answers `:enoent`, which
+        # `delete_all_for_subject/1` treats as the idempotent case.
+        :ok = Uploads.delete_all_for_subject({:visitor, visitor.id})
         {:ok, _} = Repo.delete(visitor)
         {:ok, :deleted}
       end)
