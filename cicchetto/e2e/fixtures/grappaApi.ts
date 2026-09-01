@@ -660,8 +660,18 @@ export async function adminDeleteUploadBySlug(adminToken: string, slug: string):
 // `Endpoint.url/0` is configured with, and the runner reaches grappa by its
 // compose service name. Re-rooting keeps this working wherever the deployment
 // thinks it lives, and the path is the whole of what identifies the upload.
-export async function publicUploadStatus(uploadUrl: string): Promise<number> {
-  const res = await fetch(`${GRAPPA_BASE_URL}${new URL(uploadUrl).pathname}`);
+//
+// `method` is REQUIRED rather than defaulted to GET, because the two verbs
+// answer two different questions and a caller has to say which one it is
+// asking. GET is "is the route gone"; HEAD is "does the verb the viewer's
+// probe actually uses reach that same answer" — `Plug.Head` is supposed to
+// rewrite HEAD to GET above the router, and a default would let a spec assert
+// the first while believing it had checked the second.
+export async function publicUploadStatus(
+  uploadUrl: string,
+  method: "GET" | "HEAD",
+): Promise<number> {
+  const res = await fetch(`${GRAPPA_BASE_URL}${new URL(uploadUrl).pathname}`, { method });
   return res.status;
 }
 

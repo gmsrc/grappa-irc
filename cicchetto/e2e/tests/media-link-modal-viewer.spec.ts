@@ -234,12 +234,21 @@ test("a DELETED upload reads as gone, not as a broken load (issue 1889)", async 
   const { slug, url, link } = await uploadImageAndGetLink(page, "gone-upload.png");
   await adminDeleteUploadBySlug(getSeededAdmin().token, slug);
 
-  // Precondition, asserted rather than assumed: without it a delete that
-  // silently did nothing would surface as "the client did not react", which is
-  // a different bug in a different file. Read from the RUNNER against the
-  // public route, so it is the server's own answer and not the browser's
-  // (which may have cached, and whose failure is the thing under test).
-  expect(await publicUploadStatus(url)).toBe(404);
+  // Preconditions, asserted rather than assumed, and read from the RUNNER
+  // against the public route so they are the server's own answer and not the
+  // browser's (which may have cached, and whose failure is the thing under
+  // test). Without them a delete that silently did nothing would surface as
+  // "the client did not react", which is a different bug in a different file.
+  expect(await publicUploadStatus(url, "GET")).toBe(404);
+
+  // The SECOND one is the load-bearing measurement, and it is asserted here
+  // rather than inferred from this spec's outcome. The viewer's probe asks
+  // with HEAD; a 404 is the only thing that earns "gone"; and `Plug.Head`
+  // rewriting HEAD to GET above the router is the reason the two are supposed
+  // to agree. If they ever stop agreeing the cure goes INERT — the probe would
+  // never see a 404 — and no unit test could tell, because there the 404 is
+  // fabricated. So the wire is asked directly, with the verb the client uses.
+  expect(await publicUploadStatus(url, "HEAD")).toBe(404);
 
   const viewer = await openMediaViewer(page, link);
 
