@@ -6610,17 +6610,21 @@ defmodule Grappa.Session.Server do
   # from the SAME `pending_password_from_opts/1` that stages the secret, so it
   # cannot drift from it.
   #
-  # The second clause is the hot-reload shim this file applies to every new
-  # state key, and it is NOT redundant here: `state` is a plain MAP, not a
-  # struct, so `Deploy.Preflight` — which refuses a hot deploy on a changed
-  # `defstruct` — has nothing to read and would let one through. A plain
-  # module reload does not rewrite live process state, so a session that
-  # started before this slice reaches this function without the key. Its
-  # honest answer is the pre-#1044 rule, which is exactly what that session's
-  # `pending_password` was staged under.
+  # `Map.get/3` rather than `state.nickserv_secret_staged?`, and rather than a
+  # second function clause: this is the hot-reload shim the file applies to
+  # every new state key (`Map.get(state, :isupport, …)`, `Map.get(state,
+  # :umodes, [])`). It is NOT redundant here — `state` is a plain MAP, so
+  # `Deploy.Preflight`, which refuses a hot deploy on a changed `defstruct`,
+  # has nothing to read and would let one through, and a module reload does
+  # not rewrite live process state. A second clause expresses the same thing
+  # but Dialyzer proves it unreachable FROM THE TYPE (`t()` declares the key
+  # required) and reports `pattern_match_cov`, so the shim has to be a lookup
+  # rather than a pattern. The default is the pre-#1044 rule, which is exactly
+  # what such a session's `pending_password` was staged under.
   @spec identify_expected?(t()) :: boolean()
-  defp identify_expected?(%{nickserv_secret_staged?: staged?}), do: staged?
-  defp identify_expected?(%{auth_method: m}), do: m == :nickserv_identify
+  defp identify_expected?(state) do
+    Map.get(state, :nickserv_secret_staged?, state.auth_method == :nickserv_identify)
+  end
 
   # Single funnel for the two deferred-autojoin triggers (#347): the +r
   # self-MODE echo and the `:autojoin_defer` fallback timer.

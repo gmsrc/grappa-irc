@@ -251,6 +251,13 @@ defmodule Grappa.Session do
           required(:sasl_user) => String.t(),
           required(:auth_method) => AuthFSM.auth_method(),
           required(:password) => String.t() | nil,
+          # GH #1044 — the server `PASS`, the credential's second secret.
+          # OPTIONAL, like `:tls_verify` below and for the same reason: a plan
+          # map built before this slice (a live process across a hot reload, a
+          # hand-built test plan) carries no such key, and `client_opts/1`
+          # reads it with a nil default — which is what every row meant before
+          # the slot was read at all.
+          optional(:server_pass) => String.t() | nil,
           required(:autojoin_channels) => [String.t()],
           required(:host) => String.t(),
           required(:port) => :inet.port_number(),

@@ -372,14 +372,19 @@ defmodule Grappa.IRC.AuthFSM do
   # predicate. #1044 made the distinction load-bearing: with two secrets on
   # one row, a copy-pasted gate is how the wrong rule ends up on the wrong
   # slot.
-  @spec validate_pass_token(term(), opt_key()) :: :ok | {:error, {:invalid_line_token, opt_key()}}
+  # The field union is the two slots that can carry a PASS-bound secret, not
+  # the whole `opt_key()`: Dialyzer measures the narrower one off the call
+  # sites and rejects the wider spec as a supertype. Narrowing it here means
+  # a third caller has to name its field, which is the right friction.
+  @spec validate_pass_token(term(), :password | :server_pass) ::
+          :ok | {:error, {:invalid_line_token, :password | :server_pass}}
   defp validate_pass_token(token, field) do
     if Identifier.safe_oper_token?(token),
       do: :ok,
       else: {:error, {:invalid_line_token, field}}
   end
 
-  @spec validate_line_token(term(), opt_key()) :: :ok | {:error, {:invalid_line_token, opt_key()}}
+  @spec validate_line_token(term(), :password) :: :ok | {:error, {:invalid_line_token, :password}}
   defp validate_line_token(token, field) do
     if Identifier.safe_line_token?(token),
       do: :ok,
