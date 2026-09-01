@@ -287,7 +287,7 @@ defmodule Grappa.OperatorTest do
       :ok =
         :telemetry.attach_many(
           @db_latency_handler_id,
-          [[:grappa, :repo, :query]],
+          [[:grappa, :repo, :query], [:grappa, :repo, :lock_stall, :resolved]],
           &DbLatency.handle_telemetry/4,
           nil
         )
@@ -313,6 +313,48 @@ defmodule Grappa.OperatorTest do
       assert output =~ "messages\tinsert\t1"
       assert output =~ "# spans (D1 write-path)"
       assert output =~ "# contention"
+    end
+
+    test "an unannounced closing bracket renders its instant, its verdict and its write path (#1888)" do
+      # The CLI door is the one an operator actually reaches for mid-incident,
+      # and until #1888 nothing pinned its lock-stall block at all — so a nil
+      # in a new column would have surfaced as a crash in `bin/grappa
+      # db-latency` during the exact incident it was added to diagnose.
+      :telemetry.execute(
+        [:grappa, :repo, :lock_stall, :resolved],
+        %{held_ms: 31_295},
+        %{
+          observed_at: "2026-09-01T10:07:28.554000Z",
+          holder_pid: "#PID<0.512.0>",
+          announced: false,
+          caller: %{
+            pid: "#PID<0.512.0>",
+            initial_call: "Grappa.Session.Server.init/1",
+            stacktrace: ["Grappa.Repo.immediate_transaction/1", "Grappa.Scrollback.persist/1"]
+          }
+        }
+      )
+
+      # Drain the cast before rendering.
+      _ = DbLatency.snapshot()
+
+      output = capture_io(fn -> assert :ok = Operator.db_latency_text!() end)
+
+      assert output =~ "resolved\tat=2026-09-01T10:07:28.554000Z\tholder=#PID<0.512.0>"
+      assert output =~ "held_ms=31295"
+
+      # `waiters=0` would assert a queue was counted and found empty; the
+      # closing bracket counts none. `announced=NO` is the #1888 finding: this
+      # row is the only record the episode left.
+      assert output =~ "waiters=not counted"
+      assert output =~ "announced=NO"
+
+      # The identity, under its own wording. "holder at" is the DETECTED
+      # block's voice and names a pause site; this stack was taken at release
+      # and names the caller instead.
+      assert output =~ "write path #PID<0.512.0> (Grappa.Session.Server.init/1)"
+      assert output =~ "    Grappa.Scrollback.persist/1"
+      refute output =~ "holder at"
     end
   end
 

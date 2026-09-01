@@ -156,13 +156,35 @@ defmodule Grappa.DbLatency do
   own figure is the longest WAIT, which rides the telemetry measurements and
   is derivable from `waiters` rather than duplicated here. It gets no
   `:resolved` bracket, because there is no hold to total.
+
+  #1888 adds three fields, on the same rule — a phase that did not observe a
+  thing carries an explicit `nil` for it rather than a plausible value:
+
+    * `observed_at` — the instant the EMITTER observed the episode, on every
+      phase. Without it a ring row cannot be lined up against `erlang.log`,
+      which is the only artefact that dates a freeze, and the ring is exactly
+      the door that survives a log that went quiet.
+    * `caller` — WHO held the lock, on `:resolved` only. It is not a holder
+      `sample()` and the two must not be read as one: a sample names the
+      frame the holder PAUSED in, this names the write path that opened the
+      transaction. `holder` therefore stays `nil` on a `:resolved` row, as it
+      always has.
+    * `announced` — whether the watchdog got to report the episode WHILE it
+      held. `false` means this row is the only record of it, which is the
+      #1888 case; `nil` on the two phases where the question does not arise.
+
+  `waiter_count` is nilable for the same reason: a closing bracket counts no
+  queue, and the `0` it used to carry asserted an empty one was measured.
   """
   @type lock_stall_row :: %{
           phase: :detected | :resolved | :unattributed,
+          observed_at: String.t(),
           holder_pid: String.t() | nil,
           held_ms: non_neg_integer() | nil,
-          waiter_count: non_neg_integer(),
+          waiter_count: non_neg_integer() | nil,
           holder: map() | nil,
+          caller: map() | nil,
+          announced: boolean() | nil,
           waiters: [map()]
         }
 
@@ -291,10 +313,13 @@ defmodule Grappa.DbLatency do
   defp fold([:grappa, :repo, :lock_stall, :detected], measurements, metadata, state) do
     push_stall(state, %{
       phase: :detected,
+      observed_at: metadata.observed_at,
       holder_pid: metadata.holder.pid,
       held_ms: measurements.held_ms,
       waiter_count: measurements.waiter_count,
       holder: metadata.holder,
+      caller: nil,
+      announced: nil,
       waiters: metadata.waiters
     })
   end
@@ -307,21 +332,34 @@ defmodule Grappa.DbLatency do
   defp fold([:grappa, :repo, :lock_stall, :unattributed], measurements, metadata, state) do
     push_stall(state, %{
       phase: :unattributed,
+      observed_at: metadata.observed_at,
       holder_pid: nil,
       held_ms: nil,
       waiter_count: measurements.waiter_count,
       holder: nil,
+      caller: nil,
+      announced: nil,
       waiters: metadata.waiters
     })
   end
 
+  # #1888 — the closing bracket, which since that issue also fires for an
+  # episode the watchdog never announced. `caller` is the identity such a row
+  # carries INSTEAD of a holder sample (there is no pause site left to sample
+  # by then), and `announced: false` is the finding: this row is the only
+  # record that episode left anywhere.
   defp fold([:grappa, :repo, :lock_stall, :resolved], measurements, metadata, state) do
     push_stall(state, %{
       phase: :resolved,
+      observed_at: metadata.observed_at,
       holder_pid: metadata.holder_pid,
       held_ms: measurements.held_ms,
-      waiter_count: 0,
+      # nil, not 0: nothing in a closing bracket counted a queue, and a zero
+      # would assert an empty one was measured.
+      waiter_count: nil,
       holder: nil,
+      caller: metadata.caller,
+      announced: metadata.announced,
       waiters: []
     })
   end

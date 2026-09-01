@@ -41,6 +41,7 @@ defmodule Grappa.Repo.LockWatchTest do
 
   @detected [:grappa, :repo, :lock_stall, :detected]
   @unattributed [:grappa, :repo, :lock_stall, :unattributed]
+  @resolved [:grappa, :repo, :lock_stall, :resolved]
 
   # 🔴 TWO CLOCKS BOUND EVERY TEST HERE, AND THEY HAVE TO BE ORDERED.
   #
@@ -137,17 +138,20 @@ defmodule Grappa.Repo.LockWatchTest do
     handler = "lock-watch-test-#{System.unique_integer([:positive])}"
     test_pid = self()
 
-    # Both doors on ONE handler, tagged by event: a test that asserts the
+    # Every door on ONE handler, tagged by event: a test that asserts the
     # attributed line fired must also be able to REFUTE the unattributed one
     # (and vice versa). Two separate handlers would let a mutant that emits
-    # both pass every assertion in the file.
+    # both pass every assertion in the file. #1888 adds the closing bracket
+    # for the same reason — a test that asserts an episode brackets must be
+    # able to refute that it brackets when it should not.
     :ok =
       :telemetry.attach_many(
         handler,
-        [@detected, @unattributed],
+        [@detected, @unattributed, @resolved],
         fn
           @detected, measurements, metadata, _ -> send(test_pid, {:stall, measurements, metadata})
           @unattributed, measurements, metadata, _ -> send(test_pid, {:unattributed, measurements, metadata})
+          @resolved, measurements, metadata, _ -> send(test_pid, {:resolved, measurements, metadata})
         end,
         nil
       )
@@ -415,6 +419,165 @@ defmodule Grappa.Repo.LockWatchTest do
       assert Enum.any?(holders, &(&1.pid == me))
 
       assert %{holders: [], waiters: []} = LockWatch.inspect_lock()
+    end
+  end
+
+  describe "the closing bracket, when the watchdog never spoke (#1888)" do
+    # The premise these four tests are bought against, and it is the whole
+    # reason the bracket had to change: before #1888 `close_episode/1` matched
+    # `reported?: true` and NOTHING else, so an episode the watchdog never
+    # announced left no trace on either door. That is the exact shape #1888
+    # reports from prod — a 31 s freeze with the observer armed and not one
+    # line of its own in the log — and it makes the instrument's silence
+    # indistinguishable between "no stall happened" and "the stall happened
+    # and I could not say so".
+    #
+    # The threshold is driven to 0 rather than waited out: `stall_threshold_ms`
+    # is a wall clock, and a test that sleeps past 2_000ms to cross it measures
+    # the runner. 0 is a coherent operator setting (see the `t()` typedoc) and
+    # the file's other tests already drive detection rather than await it.
+    setup do
+      LockWatch.put_test_stall_threshold(0)
+      on_exit(fn -> LockWatch.put_test_stall_threshold(nil) end)
+      :ok
+    end
+
+    test "a hold nobody announced still brackets, and names the write path that held it" do
+      # Held from a Task, not from the test process, and that is not
+      # incidental. `$initial_call` is written by `proc_lib`, so every holder
+      # this instrument meets in prod has one — `Session.Server`, a Phoenix
+      # channel, a `Task.Supervisor` child, a reaper — while a bare ExUnit test
+      # process does NOT (measured: it reads `unknown`). Holding from the test
+      # process would have bought the assertion against the one topology that
+      # never occurs.
+      # Started INSIDE the capture, not before it: the bracket is emitted by
+      # the task's own `released/0`, which runs before the task returns, so a
+      # task spawned ahead of `with_log/1` can have logged and finished before
+      # the capture handler is even installed.
+      {task_pid, log} =
+        with_log(fn ->
+          task = Task.async(&hold_and_return/0)
+          assert {:held, _} = Task.await(task)
+          task.pid
+        end)
+
+      assert_receive {:resolved, %{held_ms: held_ms}, meta}
+      assert is_integer(held_ms) and held_ms >= 0
+
+      # The finding, not a formatting detail: this episode was never announced
+      # while it held, and the row has to SAY so — otherwise an operator reads
+      # a bracket and assumes the opening line is somewhere above it in a log
+      # that never carried one.
+      assert meta.announced == false
+      assert log =~ "db lock stall RESOLVED"
+      assert log =~ "NEVER announced"
+
+      # The identity #1888 asks for. It is the CALLER — who opened the write
+      # transaction — and deliberately not a `sample()`: by release time there
+      # is no pause site left to sample, and reusing the holder's shape would
+      # smuggle back a claim the frame cannot make.
+      assert meta.caller.pid == inspect(task_pid)
+      assert meta.caller.initial_call == "Grappa.Repo.LockWatchTest.hold_and_return/0"
+
+      # LockWatch's own plumbing is dropped from the stack, so the FIRST frame
+      # an operator reads is the write path itself. Without the drop the head
+      # is `Process.info/2` under four frames of observer — which is exactly
+      # what the first cut of this printed.
+      assert [first | _] = meta.caller.stacktrace
+      assert first =~ "Grappa.Repo.LockWatchTest.hold_and_return/0"
+      refute Enum.any?(meta.caller.stacktrace, &(&1 =~ "lock_watch.ex"))
+      refute Enum.any?(meta.caller.stacktrace, &(&1 =~ "Process.info"))
+    end
+
+    test "an ANNOUNCED hold brackets exactly as it did before, and says it was announced" do
+      # A queue behind the holder is the second half `report_stalls/2`
+      # requires. Without it the detection pass walks away and this test would
+      # measure the unannounced arm again, passing for the wrong reason.
+      waiter = queue_a_waiter()
+
+      log =
+        capture_log(fn ->
+          LockWatch.observe(fn acquired ->
+            acquired.()
+            LockWatch.scan(0)
+            :ok
+          end)
+        end)
+
+      release_waiter(waiter)
+
+      assert_receive {:stall, _, _}
+      assert_receive {:resolved, _, meta}
+
+      assert meta.announced == true
+      assert log =~ "db lock stall RESOLVED"
+      refute log =~ "NEVER announced"
+    end
+
+    test "a hold UNDER the threshold that nobody announced brackets nothing" do
+      # The negative control for the arm above. A bracket on every write
+      # transaction would bury the signal in exactly the way `report_stalls/2`
+      # refuses to, and would make the ring useless within seconds of boot.
+      LockWatch.put_test_stall_threshold(60_000)
+
+      log =
+        capture_log(fn ->
+          LockWatch.observe(fn acquired ->
+            acquired.()
+            :ok
+          end)
+        end)
+
+      refute_receive {:resolved, _, _}, 200
+      refute log =~ "db lock stall RESOLVED"
+    end
+
+    test "with no threshold published at all, only an announced hold brackets" do
+      # The graceful-degradation contract of the `:persistent_term` seam: the
+      # watchdog publishes the threshold at `init/1`, so a node where it never
+      # booted (or has just been restarted) has no threshold to compare
+      # against. Guessing one would invent a verdict; the honest fallback is
+      # the pre-#1888 behaviour, which needs no threshold because `reported?`
+      # already proves the episode crossed it.
+      LockWatch.put_test_stall_threshold(nil)
+
+      LockWatch.observe(fn acquired ->
+        acquired.()
+        :ok
+      end)
+
+      refute_receive {:resolved, _, _}, 200
+    end
+  end
+
+  describe "the instant an episode was observed (#1888)" do
+    test "every phase carries it, so a ring row can be aligned with the log" do
+      # `Grappa.DbLatency`'s ring is the door that survives a log that went
+      # quiet — but a row with no instant cannot be matched against
+      # `erlang.log`, which is the only artefact that dates the freeze. Stamped
+      # at EMIT rather than at fold: the fold happens in another process behind
+      # a cast, and `recorded_at` would be a different fact wearing this name.
+      LockWatch.put_test_stall_threshold(0)
+      on_exit(fn -> LockWatch.put_test_stall_threshold(nil) end)
+
+      waiter = queue_a_waiter()
+
+      capture_log(fn ->
+        LockWatch.observe(fn acquired ->
+          acquired.()
+          LockWatch.scan(0)
+          :ok
+        end)
+      end)
+
+      release_waiter(waiter)
+
+      assert_receive {:stall, _, detected}
+      assert_receive {:resolved, _, resolved}
+
+      for meta <- [detected, resolved] do
+        assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(meta.observed_at)
+      end
     end
   end
 
@@ -1336,6 +1499,46 @@ defmodule Grappa.Repo.LockWatchTest do
     receive do
       :release -> :ok
     end
+  end
+
+  # #1888 — a NAMED write path, so the bracket has a caller frame to name.
+  #
+  # 🔴 The trailing tuple is load-bearing and not decoration: with
+  # `observe/1` in tail position the BEAM elides this function's frame
+  # entirely, and the stack the bracket captures starts at
+  # `Task.Supervised.invoke_mfa/2` — measured, first cut of this test. A
+  # non-tail call keeps the frame, which is what makes "the head of the stack
+  # is the write path" assertable at all.
+  defp hold_and_return do
+    result = LockWatch.observe(fn acquired -> acquired.() end)
+    {:held, result}
+  end
+
+  # #1888 — a process parked inside `observe/1` BEFORE it reaches `acquired`,
+  # i.e. a genuine `:waiting` row, which is the second half `report_stalls/2`
+  # requires. It touches no SQLite: those tests measure the CLOSING bracket,
+  # and the real `RESERVED` acquisition is what the TmpRepo tests above buy.
+  #
+  # The pid comes back so the caller can release it INSIDE the same test. This
+  # file is `async: false` but its tests share one ETS table, so a waiter left
+  # parked would queue itself behind the next test's holder and turn an
+  # unattributed assertion into an attributed one at a distance.
+  defp queue_a_waiter do
+    pid = spawn(fn -> LockWatch.observe(fn _ -> park_until_released() end) end)
+
+    await_roles(nil, [pid])
+    pid
+  end
+
+  # Released and AWAITED, not just signalled: the row is deleted by the
+  # waiter's own `released/0`, so returning before it has run would leak the
+  # very row the helper exists to clean up.
+  defp release_waiter(pid) do
+    ref = Process.monitor(pid)
+    send(pid, :release)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+    await_roles(nil, [])
   end
 
   # `holder` is `nil` for the #1687 topology — a queue whose holder owns no

@@ -103,6 +103,30 @@ defmodule Grappa.Repo.LockWatch do
   `:resolved` event carrying the TOTAL hold, so a NAMED episode has both an
   opening and a closing bracket.
 
+  ### The bracket that speaks when the opening line never did (#1888)
+
+  🔴 That closing bracket used to require `reported?: true`, which made it
+  useless in the one case it is now for. **Measured in prod on 2026-09-01
+  (grappa 1.4.1, jail `grappa-new`): a 31 s freeze — no request served, on any
+  network — with this observer ARMED (`enabled: true` in `config/config.exs`,
+  overridden nowhere) and not one line of its own between 12:06:57.328 and
+  12:07:28.554.** Whatever kept the detection pass from speaking, the episode
+  then closed in TOTAL silence too: no log line, no telemetry, no ring row.
+  An instrument whose silence means both *"nothing happened"* and *"something
+  happened and I could not say so"* has stopped reporting.
+
+  So a hold past `stall_threshold_ms` now brackets whether or not it was ever
+  announced, and the line SAYS which — an announced episode has an opening
+  line above it carrying the holder's sampled stack, an unannounced one is the
+  only record that episode left, and an operator needs to know which they are
+  holding. The bracket is also where the ambiguity is cheapest to remove: by
+  then the lock is RELEASED, so nothing on this path can be blocked by the
+  stall it describes, which is exactly the trap the detection path lives in
+  (#1715).
+
+  What it carries is a `t:caller/0` and NOT a `t:sample/0` — see that type for
+  why the two must not be folded together.
+
   Both arms share that one flag, and the unattributed arm arms it on WAITER
   rows rather than a holder's. So `acquired/0` CLEARS it on promotion: a pid
   reported once while queued would otherwise carry an armed flag into its own
@@ -146,6 +170,15 @@ defmodule Grappa.Repo.LockWatch do
   suspends its target) runs ONLY once a stall has already been detected,
   on a process that is by definition already stopped.
 
+  #1888 adds ONE more `:persistent_term` read per write-transaction RELEASE
+  (the threshold the bracket compares against). It is a read and not a write
+  on purpose: a `persistent_term` WRITE is the thing that blocks on a
+  thread-progress barrier (#1715), and the only write is the one `init/1`
+  pays at boot. Everything else the bracket does — the caller's
+  `$initial_call`, its own stack — runs only once the hold has already crossed
+  the threshold, and reads the releasing process's OWN state, so it neither
+  signals nor suspends anybody.
+
   Off by default; `config :grappa, :lock_watch, enabled: true` arms it.
   `config/test.exs` leaves it OFF — its own tests arm it explicitly.
   """
@@ -156,6 +189,7 @@ defmodule Grappa.Repo.LockWatch do
 
   @table :grappa_repo_lock_watch
   @enabled_key {__MODULE__, :enabled}
+  @threshold_key {__MODULE__, :stall_threshold_ms}
   @depth_key {__MODULE__, :depth}
   @stack_frames 12
 
@@ -187,8 +221,31 @@ defmodule Grappa.Repo.LockWatch do
           stacktrace: [String.t()]
         }
 
-  @typedoc "A detected stall: one holder, the queue behind it."
+  @typedoc """
+  Who held the lock, read from the holder's OWN process at release (#1888).
+
+  🔴 Deliberately NOT a `t:sample/0`, and the distinction is the whole point.
+  A sample is taken while the holder is still parked, so `current_function`
+  and `status` name the frame it paused IN. By release there is no pause site
+  left, and reusing that shape would let a release-time stack be read as the
+  place the writer stalled — a claim this frame cannot make. What does survive
+  release is the write PATH: which caller opened the transaction. That is all
+  this carries, and it is what #1888 asks for ("pid + stacktrace or a label
+  for the operation").
+  """
+  @type caller :: %{
+          pid: String.t(),
+          initial_call: String.t(),
+          stacktrace: [String.t()]
+        }
+
+  @typedoc """
+  A detected stall: one holder, the queue behind it, and the instant it was
+  observed (#1888 — the ring row it becomes is otherwise impossible to line up
+  against `erlang.log`, which is the only artefact that dates a freeze).
+  """
   @type stall :: %{
+          observed_at: String.t(),
           holder: sample(),
           waiters: [sample()],
           waiter_count: non_neg_integer()
@@ -203,6 +260,7 @@ defmodule Grappa.Repo.LockWatch do
   field for a thing that was never observed.
   """
   @type unattributed :: %{
+          observed_at: String.t(),
           waiters: [sample()],
           holders_registered: non_neg_integer()
         }
@@ -308,7 +366,7 @@ defmodule Grappa.Repo.LockWatch do
     :ok
   end
 
-  # Transaction over. Closes the episode, and brackets it if it was reported.
+  # Transaction over. Closes the episode, and brackets it if it earned one.
   @spec released() :: :ok
   defp released do
     case depth() do
@@ -323,23 +381,79 @@ defmodule Grappa.Repo.LockWatch do
     :ok
   end
 
+  # 🔴 #1888 widened WHAT earns a bracket, and the widening is the deliverable.
+  # Until then the only clause that spoke required `reported?: true`, so an
+  # episode the watchdog never announced closed in TOTAL silence — no log line,
+  # no telemetry, no ring row. That is the shape #1888 reports from prod: this
+  # observer armed (`enabled: true` in `config/config.exs`, unoverridden), a
+  # 31 s freeze, and not one line of its own on either door. An instrument
+  # whose silence means BOTH "nothing happened" and "something happened and I
+  # could not say so" is not reporting.
+  #
+  # The bracket is where that ambiguity is cheapest to remove, because by the
+  # time this runs the lock is already RELEASED — so nothing this frame does
+  # can be blocked by the stall it is describing, which is precisely the trap
+  # the detection path lives in (#1715).
   @spec close_episode([row()]) :: :ok
-  defp close_episode([{_, :holding, since, true}]) do
+  defp close_episode([{_, :holding, since, announced}]) do
     held_ms = now_ms() - since
 
+    if announced or past_threshold?(held_ms) do
+      report_resolved(held_ms, announced)
+    end
+
+    :ok
+  end
+
+  defp close_episode(_), do: :ok
+
+  # The threshold is published by the watchdog at `init/1`, so a release that
+  # lands on a node where it never booted — or inside a supervisor restart —
+  # has none to compare against. `:unknown` answers FALSE rather than guessing
+  # one, which is exactly the pre-#1888 behaviour: an announced episode still
+  # brackets, because `reported?` already proves it crossed a threshold. A
+  # literal default here would either bracket every write transaction on the
+  # node or none of them, and both are wrong silently.
+  @spec past_threshold?(non_neg_integer()) :: boolean()
+  defp past_threshold?(held_ms) do
+    case :persistent_term.get(@threshold_key, :unknown) do
+      threshold_ms when is_integer(threshold_ms) -> held_ms >= threshold_ms
+      :unknown -> false
+    end
+  end
+
+  # 🔴 The `db lock stall RESOLVED:` prefix is LOAD-BEARING and unchanged. The
+  # #1429 census counts `lockstall_resolved` off it (`scripts/log-gap-scan.awk`)
+  # and `test/scripts/log_gap_scan_test.bats` pins the phrase verbatim, so
+  # everything #1888 adds rides in the TAIL and both keep counting with no edit
+  # — the same discipline `terminal_message/3` in `Grappa.Repo.BusyRetry`
+  # states for its own prose.
+  @spec report_resolved(non_neg_integer(), boolean()) :: :ok
+  defp report_resolved(held_ms, announced) do
+    caller = caller_identity()
+
     Logger.warning(
-      "db lock stall RESOLVED: holder #{inspect(self())} released RESERVED after #{held_ms}ms",
+      "db lock stall RESOLVED: holder #{caller.pid} released RESERVED after #{held_ms}ms — " <>
+        "#{announced_clause(announced)}; write path #{caller.initial_call}, " <>
+        "stack: #{Enum.join(caller.stacktrace, " <- ")}",
       held_ms: held_ms
     )
 
     :telemetry.execute(
       [:grappa, :repo, :lock_stall, :resolved],
       %{held_ms: held_ms},
-      %{holder_pid: inspect(self())}
+      %{observed_at: now_iso8601(), holder_pid: caller.pid, caller: caller, announced: announced}
     )
   end
 
-  defp close_episode(_), do: :ok
+  # Which of the two an operator is reading decides where they look next: an
+  # announced episode has an opening line above it carrying the holder's
+  # SAMPLED stack, while an unannounced one is the only record that episode
+  # ever left. The clause is the difference between "scroll up" and "there is
+  # nothing up there to find".
+  @spec announced_clause(boolean()) :: String.t()
+  defp announced_clause(true), do: "announced while it held"
+  defp announced_clause(false), do: "NEVER announced while it held"
 
   ## ----- Public API ---------------------------------------------------
 
@@ -392,6 +506,26 @@ defmodule Grappa.Repo.LockWatch do
     def put_test_enabled(enabled?) when is_boolean(enabled?) do
       :persistent_term.put(@enabled_key, enabled?)
     end
+
+    @doc false
+    # #1888 — publish (or WITHDRAW) the threshold the closing bracket compares
+    # against, without restarting the watchdog. `nil` erases the key, which is
+    # the only way to reach `past_threshold?/1`'s `:unknown` arm: the arm that
+    # keeps a node whose watchdog never booted on the pre-#1888 behaviour. A
+    # test that could not reach it would leave that arm unbought.
+    #
+    # Gated to :test beside `put_test_enabled/1`, and tests MUST withdraw
+    # `on_exit` for the same reason — a threshold left published is
+    # failure-at-a-distance for every later test.
+    @spec put_test_stall_threshold(non_neg_integer() | nil) :: :ok
+    def put_test_stall_threshold(nil) do
+      _ = :persistent_term.erase(@threshold_key)
+      :ok
+    end
+
+    def put_test_stall_threshold(ms) when is_integer(ms) and ms >= 0 do
+      :persistent_term.put(@threshold_key, ms)
+    end
   end
 
   ## ----- GenServer callbacks ------------------------------------------
@@ -412,6 +546,13 @@ defmodule Grappa.Repo.LockWatch do
     # table is owned here so a supervisor restart rebuilds it clean.
     _ = :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
     :persistent_term.put(@enabled_key, state.enabled)
+
+    # #1888 — the closing bracket runs in the RELEASING caller's process, not
+    # here, so it cannot read `state`. Published once at boot for the same
+    # reason `@enabled_key` is: a `:persistent_term` read is lock-free and
+    # cheap, while the WRITE is the thing that blocks on a thread-progress
+    # barrier (#1715) — and this is the only write.
+    :persistent_term.put(@threshold_key, state.stall_threshold_ms)
 
     _ = if state.enabled, do: Process.send_after(self(), :tick, state.tick_ms)
 
@@ -540,7 +681,12 @@ defmodule Grappa.Repo.LockWatch do
 
     holder = sample(pid, elapsed)
 
-    stall = %{holder: holder, waiters: waiter_samples, waiter_count: length(waiter_samples)}
+    stall = %{
+      observed_at: now_iso8601(),
+      holder: holder,
+      waiters: waiter_samples,
+      waiter_count: length(waiter_samples)
+    }
 
     # `status` rides in the PROSE, next to `current_function`, and not in the
     # metadata beside `held_ms`/`waiters`: those two are measurements an
@@ -583,7 +729,7 @@ defmodule Grappa.Repo.LockWatch do
 
     samples = Enum.map(queued, fn {pid, elapsed} -> sample(pid, elapsed) end)
     longest = Enum.max_by(samples, & &1.elapsed_ms)
-    report = %{waiters: samples, holders_registered: holders_registered}
+    report = %{observed_at: now_iso8601(), waiters: samples, holders_registered: holders_registered}
 
     Logger.warning(
       "db lock stall UNATTRIBUTED: #{length(samples)} writer(s) queued past the threshold, " <>
@@ -680,14 +826,62 @@ defmodule Grappa.Repo.LockWatch do
   @spec stacktrace(pid()) :: [String.t()]
   defp stacktrace(pid) do
     case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, frames} -> format_frames(frames)
+      nil -> []
+    end
+  end
+
+  # #1888 — the release-time identity, read from the releasing process's OWN
+  # state. That is what makes it cheap enough to sit on the release path at
+  # all: `Process.get/1` is a local dictionary read and
+  # `Process.info(self(), …)` needs no signal and suspends nobody, unlike
+  # `sample/2`, which crosses to another process. Both still run ONLY past the
+  # threshold — see `close_episode/1`.
+  @spec caller_identity() :: caller()
+  defp caller_identity do
+    %{
+      pid: inspect(self()),
+      initial_call: format_mfa(Process.get(:"$initial_call")),
+      stacktrace: caller_frames()
+    }
+  end
+
+  # The head of a release-time stack is the observer's own plumbing —
+  # `Process.info/2` under `caller_frames/0` under `report_resolved/2` under
+  # `close_episode/1` under `released/0` under `observe/1` — and an operator
+  # who has to read six frames of observer before the first frame of the thing
+  # observed reads none of them. What survives is everything ABOVE the
+  # outermost `__MODULE__` frame, which puts `Repo.immediate_transaction/1` at
+  # the head: both the seam and the proof that this was a WRITE transaction.
+  #
+  # 🔴 Dropping WHILE the frame is `__MODULE__` does not do this, measured: the
+  # innermost frame is `Process.info/2`, which belongs to `Process`, so the
+  # drop stops on the very first frame and keeps the whole observer. Taking
+  # from the END until the last `__MODULE__` frame needs no module allowlist
+  # and cannot rot as the private call chain changes shape.
+  @spec caller_frames() :: [String.t()]
+  defp caller_frames do
+    case Process.info(self(), :current_stacktrace) do
       {:current_stacktrace, frames} ->
         frames
-        |> Enum.take(@stack_frames)
-        |> Enum.map(&(&1 |> Exception.format_stacktrace_entry() |> String.trim()))
+        |> Enum.reverse()
+        |> Enum.take_while(&(not match?({__MODULE__, _, _, _}, &1)))
+        |> Enum.reverse()
+        |> format_frames()
 
       nil ->
         []
     end
+  end
+
+  # Capped and pre-formatted: these strings ride telemetry into a JSON admin
+  # response, so every frame must be JSON-encodable at the point it is built,
+  # not later.
+  @spec format_frames([tuple()]) :: [String.t()]
+  defp format_frames(frames) do
+    frames
+    |> Enum.take(@stack_frames)
+    |> Enum.map(&(&1 |> Exception.format_stacktrace_entry() |> String.trim()))
   end
 
   @spec format_mfa(mfa() | nil) :: String.t()
@@ -707,6 +901,15 @@ defmodule Grappa.Repo.LockWatch do
 
   @spec depth() :: non_neg_integer()
   defp depth, do: Process.get(@depth_key, 0)
+
+  # #1888 — stamped at EMIT, never at fold. `Grappa.DbLatency` folds behind a
+  # cast in another process, so a stamp taken there would be "when the
+  # aggregator got round to it" — a different fact wearing the same name, and
+  # skewed by exactly the load an incident produces. An ISO8601 STRING and not
+  # a `DateTime`: like every other field here it rides telemetry into a JSON
+  # admin response and must be encodable where it is built.
+  @spec now_iso8601() :: String.t()
+  defp now_iso8601, do: DateTime.to_iso8601(DateTime.utc_now())
 
   @spec now_ms() :: integer()
   defp now_ms, do: System.monotonic_time(:millisecond)

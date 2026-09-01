@@ -1032,8 +1032,9 @@ defmodule Grappa.Operator do
 
     Enum.each(snapshot.lock_stalls, fn stall ->
       IO.puts(
-        "#{stall.phase}\tholder=#{lock_stall_field(stall.holder_pid)}" <>
-          "\theld_ms=#{lock_stall_field(stall.held_ms)}\twaiters=#{stall.waiter_count}"
+        "#{stall.phase}\tat=#{stall.observed_at}\tholder=#{lock_stall_field(stall.holder_pid)}" <>
+          "\theld_ms=#{lock_stall_field(stall.held_ms)}" <>
+          "\twaiters=#{waiters_column(stall.waiter_count)}#{announced_column(stall.announced)}"
       )
 
       Enum.each(lock_stall_detail_lines(stall), &IO.puts/1)
@@ -1049,6 +1050,23 @@ defmodule Grappa.Operator do
   defp lock_stall_field(nil), do: "unattributed"
   defp lock_stall_field(value), do: to_string(value)
 
+  # #1888 — a closing bracket counts no queue, and the column has to SAY that
+  # rather than print `waiters=` (reads as a formatting slip) or `waiters=0`
+  # (asserts a measurement nobody took). `lock_stall_field/1` is the wrong
+  # voice here: its `unattributed` names the #1687 finding, not an uncounted
+  # column.
+  @spec waiters_column(non_neg_integer() | nil) :: String.t()
+  defp waiters_column(nil), do: "not counted"
+  defp waiters_column(count), do: to_string(count)
+
+  # Only the closing bracket can answer this, so the column appears only
+  # there. Printing `announced=` on the two phases where the question does not
+  # arise would invite the reader to interpret a nil as a "no".
+  @spec announced_column(boolean() | nil) :: String.t()
+  defp announced_column(nil), do: ""
+  defp announced_column(true), do: "\tannounced=yes"
+  defp announced_column(false), do: "\tannounced=NO"
+
   # The two blocks are separate because the phases carry different halves.
   # A `:resolved` row has neither (the episode is over, nothing left to
   # inspect) and still renders as its header line alone — `waiters` is `[]`
@@ -1060,9 +1078,23 @@ defmodule Grappa.Operator do
   # they are what separates "blocked on the lock" from "queued for a
   # connection".
   @spec lock_stall_detail_lines(DbLatency.lock_stall_row()) :: [String.t()]
-  defp lock_stall_detail_lines(%{holder: holder, waiters: waiters}) do
+  defp lock_stall_detail_lines(%{holder: holder, caller: caller, waiters: waiters}) do
     holder_lines(holder) ++
+      caller_lines(caller) ++
       Enum.map(waiters, &"  waiter #{&1.pid} waiting #{&1.elapsed_ms}ms at #{&1.current_function}")
+  end
+
+  # #1888 — the write path a `:resolved` row names. Labelled "write path" and
+  # not "holder at", deliberately: this stack was taken as the transaction
+  # ENDED, so it says which caller opened it and says nothing about where the
+  # holder paused. Rendering it under the holder's wording would hand an
+  # operator a frame to blame that was never measured.
+  @spec caller_lines(map() | nil) :: [String.t()]
+  defp caller_lines(nil), do: []
+
+  defp caller_lines(caller) do
+    ["  write path #{caller.pid} (#{caller.initial_call})"] ++
+      Enum.map(caller.stacktrace, &"    #{&1}")
   end
 
   @spec holder_lines(map() | nil) :: [String.t()]

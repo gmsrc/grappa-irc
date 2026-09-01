@@ -5252,8 +5252,8 @@ The handler folds **three** signal families:
   against the baseline.
 - **the D1 write-path spans** into `send_privmsg` / `persist` / `contention`
   rows.
-- **`[:grappa, :repo, :lock_stall, :detected | :resolved]`** (#1420) into the
-  bounded `lock stalls` ring — the WRITE-LOCK HOLDER.
+- **`[:grappa, :repo, :lock_stall, :detected | :resolved | :unattributed]`**
+  (#1420, #1687) into the bounded `lock stalls` ring — the WRITE-LOCK HOLDER.
 
 ### Reading a write-lock stall (#1420)
 
@@ -5264,11 +5264,17 @@ its victims — the 30.1 s `busy_timeout` rows of everybody queued behind it.
 `Grappa.Repo.LockWatch` reads at the `BEGIN IMMEDIATE` seam instead, which
 separates the **holder** from the **waiters**.
 
-A stall is reported only when a holder has held past
+A **named** stall is reported only when a holder has held past
 `:lock_watch, :stall_threshold_ms` **with at least one waiter queued behind
-it** — a slow uncontended write is not a stall. Each episode appears twice: a
-`detected` row carrying the holder's sampled **stacktrace** plus the queue, and
-a `resolved` row carrying the total hold.
+it** — a slow uncontended write is not a stall. It appears twice: a `detected`
+row carrying the holder's sampled **stacktrace** plus the queue, and a
+`resolved` row carrying the total hold.
+
+An **`unattributed`** row (#1687) is a queue past the threshold that named
+nobody — every autocommit single-statement write takes the same file lock and
+registers no holder here. It carries the WAITERS' stacks and explicit nils
+where a holder would be, and gets no `resolved` bracket: there is no hold to
+total.
 
 Two doors, and for an incident they answer different questions:
 
@@ -5277,6 +5283,28 @@ Two doors, and for an incident they answer different questions:
   evidence is a log after the fact.
 - **`bin/grappa db-latency` / `GET /admin/db_latency`** — the last 20 episodes,
   newest first, for a node you can still reach.
+
+**🔴 Read the `announced` column first (#1888).** A `resolved` row with
+`announced=NO` means the watchdog never got to report that episode WHILE it
+held — so this row is the ONLY record of it anywhere, and there is no
+`detected` line above it to scroll back to. That is not hypothetical: the
+2026-09-01 prod episode froze the node for 31 s with the observer armed and
+emitted nothing of its own on either door between 12:06:57 and 12:07:28, and
+before #1888 an unannounced episode closed in total silence too.
+
+Such a row carries a **`write path`** block instead of a holder block. The two
+are deliberately different words for different facts:
+
+| block | when it is sampled | what it names |
+|-------|--------------------|---------------|
+| `holder at …` | while the holder is still parked | the frame it PAUSED in |
+| `write path …` | as the transaction is released | the caller that OPENED it |
+
+So a `write path` block answers *who was writing*, never *where it stuck* —
+do not read a release-time frame as a pause site. Every row also carries
+`at=<ISO8601>`, which is what lets a ring row be lined up against
+`erlang.log`; the ring survives a log that went quiet, and without the instant
+there is no way to match the two.
 
 **What the stack tells you.** The holder's frames are the answer to "why is it
 not proceeding": a `Logger` frame means the transaction is blocked on logging;

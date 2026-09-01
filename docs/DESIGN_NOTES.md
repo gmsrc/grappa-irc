@@ -44684,3 +44684,115 @@ rule, so a gate secret with a space saved 200 and then refused every
 connect — the ircd keeps the first token and answers 464 with nothing in
 the log. A write door that accepts what the reader will reject is the
 silent-swallow the boundary rule forbids.
+<!-- entry #1888 -->
+
+---
+
+## 2026-09-01 — #1888: the closing bracket speaks when the opening line never did
+
+Prod froze for 31 s on 2026-09-01 (jail `grappa-new`, release
+`1.4.1-997711ac`): no request served, on any network, then everything
+resumed at once. The issue asks first for the write-lock HOLDER to be
+logged, "because today the warning says how long we waited but not who was
+writing."
+
+### The premise was incomplete, measured
+
+`Grappa.Repo.LockWatch` is ARMED in prod — `config/config.exs` declares
+`enabled: true, stall_threshold_ms: 2_000, tick_ms: 1_000` and neither
+`prod.exs` nor `runtime.exs` overrides it. It already derives the holder's
+identity (`sample/2`: pid, `current_function`, `status`,
+`message_queue_len`, `initial_call`, 12 frames) and already reports a queue
+that names nobody (#1687's `report_unattributed/2`). Both of those shipped
+INSIDE the running release — `cf5a612f2` (2026-08-23) and `c048d2bff`
+(2026-08-24) are ancestors of `997711ac` (2026-08-27), tested with
+`git merge-base --is-ancestor`.
+
+So the instrument was not missing. It was silent, and its silence was
+indistinguishable from a healthy system.
+
+### What actually had no door
+
+`close_episode/1` matched `reported?: true` and nothing else. An episode
+the watchdog never announced therefore closed with **no log line, no
+telemetry and no ring row** — the instrument's silence meant both "nothing
+happened" and "something happened and I could not say so". That ambiguity
+is what this entry removes, and the bracket is where it is cheapest to
+remove: by then the lock is RELEASED, so nothing on that path can be
+blocked by the stall it describes — which is exactly the trap the detection
+path lives in (#1715).
+
+Three changes, all on the closing bracket:
+
+1. **It fires for any hold past `stall_threshold_ms`**, announced or not,
+   and the line SAYS which. An announced episode has an opening line above
+   it carrying the holder's sampled stack; an unannounced one is the only
+   record that episode left, and an operator needs to know which they hold.
+2. **It carries a `t:caller/0`, NOT a `t:sample/0`.** A sample is taken
+   while the holder is parked, so `current_function` names the frame it
+   paused IN; by release there is no pause site left. What survives is the
+   write PATH — which caller opened the transaction — read from the
+   releasing process's own state (`$initial_call` plus its own stack, no
+   signal, no suspend). Folding the two shapes would let a release-time
+   frame be read as a pause site, and the renderer keeps them apart too
+   (`holder at …` vs `write path …`).
+3. **Every phase stamps `observed_at`**, at EMIT and not at fold: the fold
+   happens behind a cast in `Grappa.DbLatency`, so a stamp taken there
+   would be "when the aggregator got round to it", skewed by exactly the
+   load an incident produces. Without an instant a ring row cannot be lined
+   up against `erlang.log`, and the ring is the door that survives a log
+   that went quiet.
+
+`waiter_count` on a `:resolved` row went from `0` to `nil` in the same
+pass: a closing bracket counts no queue, and the zero asserted a
+measurement nobody took.
+
+### Costs, and the one that is new
+
+One extra `:persistent_term` READ per write-transaction release — the
+threshold, published once by `init/1`. A read and not a write on purpose:
+the WRITE is what blocks on a thread-progress barrier (#1715). Everything
+else runs only once the hold has already crossed the threshold. Absent the
+key (watchdog never booted, or mid-restart) `past_threshold?/1` answers
+false rather than guessing, which is byte-for-byte the pre-#1888 behaviour.
+
+### Two measurements worth keeping, and one hypothesis killed
+
+**`busy_timeout: 30_000` does NOT explain the four observed durations.**
+`BusyRetry.run/1` starts its clock before `op.()` and computes `elapsed_ms`
+in the `rescue`, so the printed figure is checkout + wait + propagation.
+30_000 is a LOWER bound; 31214 / 31295 / 31345 / 31397 ms leave 1.2–1.4 s
+unattributed, with a residual spread of 183 ms that is too tight for
+queueing noise. Only the weak form survives: `busy_timeout` is the dominant
+term.
+
+**#1888 has a one-term shape; #1687 had two.** LockWatch's own moduledoc
+records a prod decomposition measured 2026-08-22 — "~31 s of DBConnection
+checkout PLUS ~31 s of `busy_timeout`", the whole of that issue's 62 s.
+#1888's ~31.3 s is one `busy_timeout` plus ~1.3 s. These are two different
+shapes, not one episode and a shorter version of it.
+
+### Refused
+
+- That the UNATTRIBUTED line is absent from the jail's `erlang.log`. Only
+  the issue BODY was measured (0 hits on all three LockWatch signatures,
+  positive control 2, negative 0), and the body is a curated extract; the
+  issue's own census grepped only `write lock held by another writer`, so
+  the signature was never looked for. Absence in an extract is not absence.
+- That `prime_logger_module_cache/0` never ran on that node. It runs ONLY
+  in `init/1`, and the issue reports 41 days of uptime against a release
+  dated five days earlier — but "41 days" is an assertion in the body, not
+  a measurement of ours.
+- The mechanism behind the simultaneity at unfreeze: five
+  `db_conn_N … longer than 15000ms` disconnects plus one `Exqlite.Error
+  interrupted`, all inside a 30 ms window at 12:07:28.55, rather than at
+  15 s into the stall. That is the SHAPE of "nobody was scheduled" rather
+  than "each expired on its own", and it is recorded as an observation. Its
+  causal chain is #1715's, whose last link is inferred and never reproduced
+  on a bench.
+- Whether the write lock was held by a writer this seam cannot see. 129
+  bare `Repo.insert/update/delete/*_all` call sites live in 24 files under
+  `lib/` on `origin/main`, and an autocommit statement takes the same file
+  lock with no row here. Widening the seam to cover them is a separate
+  slice, deliberately not taken in this one: without the bracket above, it
+  would produce a row whose only door is the one under suspicion.

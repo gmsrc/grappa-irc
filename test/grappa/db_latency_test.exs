@@ -196,6 +196,7 @@ defmodule Grappa.DbLatencyTest do
         [:grappa, :repo, :lock_stall, :detected],
         %{held_ms: 2_400, waiter_count: 2},
         %{
+          observed_at: "2026-09-01T10:06:57.328000Z",
           holder: %{pid: "#PID<0.111.0>", stacktrace: ["Foo.bar/1"]},
           waiters: [%{pid: "#PID<0.222.0>"}, %{pid: "#PID<0.333.0>"}]
         }
@@ -204,7 +205,16 @@ defmodule Grappa.DbLatencyTest do
       :telemetry.execute(
         [:grappa, :repo, :lock_stall, :resolved],
         %{held_ms: 30_120},
-        %{holder_pid: "#PID<0.111.0>"}
+        %{
+          observed_at: "2026-09-01T10:07:28.554000Z",
+          holder_pid: "#PID<0.111.0>",
+          announced: true,
+          caller: %{
+            pid: "#PID<0.111.0>",
+            initial_call: "Grappa.Session.Server.init/1",
+            stacktrace: ["Grappa.Repo.immediate_transaction/1"]
+          }
+        }
       )
 
       assert [resolved, detected] = DbLatency.snapshot().lock_stalls
@@ -215,10 +225,27 @@ defmodule Grappa.DbLatencyTest do
       assert resolved.held_ms == 30_120
       assert resolved.holder == nil
 
+      # #1888 — `holder` stays nil (a `sample()` means "sampled while it
+      # stalled", and by release there is no pause site left to sample) while
+      # `caller` carries the write path that held the lock. Two different
+      # facts, two different keys: folding them would let a release-time stack
+      # be read as the frame the holder paused in.
+      assert resolved.caller.initial_call == "Grappa.Session.Server.init/1"
+      assert resolved.announced == true
+
+      # `waiter_count` is nil, not 0: nothing in a closing bracket counted a
+      # queue, and a 0 would assert an empty one was measured.
+      assert resolved.waiter_count == nil
+
       assert detected.phase == :detected
       assert detected.waiter_count == 2
       assert detected.holder.stacktrace == ["Foo.bar/1"]
       assert length(detected.waiters) == 2
+
+      # The instant, on both edges: a ring row that cannot be aligned with
+      # `erlang.log` cannot be matched to the freeze it belongs to.
+      assert resolved.observed_at == "2026-09-01T10:07:28.554000Z"
+      assert detected.observed_at == "2026-09-01T10:06:57.328000Z"
     end
 
     test "[:grappa, :repo, :lock_stall, :unattributed] folds with an explicit nil where the holder would be" do
@@ -226,6 +253,7 @@ defmodule Grappa.DbLatencyTest do
         [:grappa, :repo, :lock_stall, :unattributed],
         %{waiter_count: 3, longest_wait_ms: 31_303},
         %{
+          observed_at: "2026-09-01T10:07:28.554000Z",
           holders_registered: 0,
           waiters: [
             %{pid: "#PID<0.222.0>", elapsed_ms: 31_303, stacktrace: ["Exqlite.Sqlite3NIF.step/2"]},
@@ -249,6 +277,12 @@ defmodule Grappa.DbLatencyTest do
       assert row.held_ms == nil
       assert row.holder == nil
 
+      # #1888 — the same rule for the two fields the closing bracket adds.
+      # Nothing here released a hold, so there is no write path to name and no
+      # announcement to report; both stay explicitly absent.
+      assert row.caller == nil
+      assert row.announced == nil
+
       # The waiters ARE the payload: they are the only thing this episode can
       # honestly show, and the stack is what separates "blocked on the lock"
       # from "queued for a connection".
@@ -261,7 +295,12 @@ defmodule Grappa.DbLatencyTest do
         :telemetry.execute(
           [:grappa, :repo, :lock_stall, :resolved],
           %{held_ms: n},
-          %{holder_pid: "#PID<0.#{n}.0>"}
+          %{
+            observed_at: "2026-09-01T10:07:#{String.pad_leading("#{n}", 2, "0")}.000000Z",
+            holder_pid: "#PID<0.#{n}.0>",
+            announced: false,
+            caller: %{pid: "#PID<0.#{n}.0>", initial_call: "unknown", stacktrace: []}
+          }
         )
       end
 
