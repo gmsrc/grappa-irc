@@ -4397,6 +4397,24 @@ button.topic-bar-windows-opener {
    `env(safe-area-inset-bottom)` against the DEVICE, not the shrunken visual
    viewport, so an inset added HERE double-counts against `--viewport-height`
    and reopens the ~34px gap above the keyboard. */
+
+/* #1896 — the two boxes that now sit between the compose column and the bar:
+   the dock Shell renders in place of the old mount, and the container Solid's
+   <Portal> creates inside it. `display: contents` removes BOTH from layout, so
+   `.audio-mini-player` stays a direct FLEX ITEM of `.drop-upload-zone` — which
+   is what #1701's ruling ("inside the compose box's own flex column, after it")
+   is about. Without this the bar would be a block inside a block inside the
+   column: identical today, because the wrappers are full-width and auto-height
+   and the column declares no `gap`, and silently wrong the first time either of
+   those changes. Taking the boxes out of layout removes the class of bug rather
+   than the instance of it.
+   Both selectors are needed and neither is redundant: the dock is ours and the
+   portal container is Solid's, classed through the <Portal ref>. */
+.audio-dock,
+.audio-dock-portal {
+  display: contents;
+}
+
 .audio-mini-player {
   display: flex;
   align-items: center;

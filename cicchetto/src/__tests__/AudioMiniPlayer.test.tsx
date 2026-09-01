@@ -1,5 +1,6 @@
 import { render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import AudioDock from "../AudioDock";
 import AudioMiniPlayer from "../AudioMiniPlayer";
 import {
   activeAudio,
@@ -15,6 +16,20 @@ import type { RadioStation } from "../lib/radioStations";
 // the player drives so the component mounts without "Not implemented".
 // Real playback is e2e/device territory (Playwright + iPhone dogfood);
 // these tests pin the bar's show/hide + control wiring only.
+// #1896 — the bar is PORTALLED into a dock now (the element is mounted once
+// above Shell's regime branch so a rotation cannot tear it down), so a player
+// rendered on its own has nowhere to put its chrome and every test here mounts
+// the pair. The dock comes FIRST: its `ref` registers during that element's
+// creation, so the player's first render already sees one and the bar is in the
+// DOM synchronously, exactly as it was before this issue.
+const renderPlayer = () =>
+  render(() => (
+    <>
+      <AudioDock />
+      <AudioMiniPlayer />
+    </>
+  ));
+
 let playSpy: ReturnType<typeof vi.spyOn>;
 let pauseSpy: ReturnType<typeof vi.spyOn>;
 let loadSpy: ReturnType<typeof vi.spyOn>;
@@ -71,12 +86,12 @@ afterEach(() => {
 
 describe("AudioMiniPlayer", () => {
   it("renders no bar when no audio is active", () => {
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     expect(screen.queryByTestId("audio-mini-player")).toBeNull();
   });
 
   it("shows the bar and starts playback when an audio link is played", () => {
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://grappa.example/uploads/abc", null);
 
     expect(screen.getByTestId("audio-mini-player")).toBeInTheDocument();
@@ -84,7 +99,7 @@ describe("AudioMiniPlayer", () => {
   });
 
   it("close button stops playback and hides the bar", () => {
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://grappa.example/uploads/abc", null);
 
     screen.getByTestId("audio-mini-player-close").click();
@@ -98,7 +113,7 @@ describe("AudioMiniPlayer", () => {
     // Structure only — actual play/pause + seek behavior depends on
     // real media state jsdom does not implement; that is pinned by the
     // Playwright e2e + iPhone dogfood, not here.
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://grappa.example/uploads/abc", null);
 
     expect(screen.getByTestId("audio-mini-player-toggle")).toBeInTheDocument();
@@ -110,7 +125,7 @@ describe("AudioMiniPlayer", () => {
     // Same-origin `download` anchor: forces a save (overriding the
     // server's `inline` disposition) and inherits the server's
     // Content-Disposition filename — no value needed.
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://grappa.example/uploads/abc", null);
 
     const dl = screen.getByTestId("audio-mini-player-download");
@@ -135,7 +150,7 @@ describe("AudioMiniPlayer", () => {
   };
 
   it("a finite duration keeps the seek control and the download link", () => {
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://grappa.example/uploads/abc", null);
 
     loadMetadataWithDuration(212);
@@ -146,7 +161,7 @@ describe("AudioMiniPlayer", () => {
   });
 
   it("an endless stream drops the seek control — there is nothing to scrub", () => {
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://ice.somafm.com/groovesalad-128-mp3", "Groove Salad");
 
     loadMetadataWithDuration(Number.POSITIVE_INFINITY);
@@ -159,7 +174,7 @@ describe("AudioMiniPlayer", () => {
     // Two independent reasons, either one sufficient: the resource has no
     // end, so the save never finishes; and `download` is ignored outright on
     // a cross-origin href, so the anchor would navigate away from the app.
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://ice.somafm.com/groovesalad-128-mp3", "Groove Salad");
 
     loadMetadataWithDuration(Number.POSITIVE_INFINITY);
@@ -171,7 +186,7 @@ describe("AudioMiniPlayer", () => {
     // `duration` is NaN whenever the element cannot state a length. Seeking
     // is exactly as meaningless there as against Infinity, so the predicate
     // is "not a finite number" rather than "=== Infinity".
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://ice.somafm.com/dronezone-128-mp3", "Drone Zone");
 
     loadMetadataWithDuration(Number.NaN);
@@ -185,14 +200,14 @@ describe("AudioMiniPlayer", () => {
     // (`transform: translateX(100%)`), so while a station plays this docked
     // bar is the ONLY thing on screen naming it. Without the label the phone
     // cannot answer "what am I listening to".
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://ice.somafm.com/groovesalad-128-mp3", "Groove Salad");
 
     expect(screen.getByTestId("audio-mini-player-label")).toHaveTextContent("Groove Salad");
   });
 
   it("renders no label slot for an unlabelled source", () => {
-    render(() => <AudioMiniPlayer />);
+    renderPlayer();
     playAudio("https://grappa.example/uploads/abc", null);
 
     expect(screen.queryByTestId("audio-mini-player-label")).toBeNull();
@@ -212,7 +227,7 @@ describe("AudioMiniPlayer", () => {
     const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
 
     it("hiding removes the bar but leaves the source loaded and untouched", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       playSpy.mockClear();
       pauseSpy.mockClear();
@@ -230,7 +245,7 @@ describe("AudioMiniPlayer", () => {
       // flag. That re-fires `on(activeAudio)`, which reassigns `audioEl.src`
       // and calls `play()` again — a visible re-buffer of a live stream, which
       // is precisely the thing "hide ≠ stop" forbids.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       playSpy.mockClear();
       pauseSpy.mockClear();
@@ -242,7 +257,7 @@ describe("AudioMiniPlayer", () => {
     });
 
     it("the bar comes back with the same source still attached", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       screen.getByTestId("audio-mini-player-hide").click();
       playSpy.mockClear();
@@ -258,7 +273,7 @@ describe("AudioMiniPlayer", () => {
       // Guards against the tempting simplification of folding them: the ✕ is
       // the STOP verb (#115) and the phone's only reachable one while the rail
       // is slid off-screen.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
 
       expect(screen.getByTestId("audio-mini-player-hide")).toBeInTheDocument();
@@ -269,7 +284,7 @@ describe("AudioMiniPlayer", () => {
     });
 
     it("a new source re-shows a hidden bar rather than playing behind it", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       screen.getByTestId("audio-mini-player-hide").click();
 
@@ -307,7 +322,7 @@ describe("AudioMiniPlayer", () => {
       const station = RADIO_STATIONS[0];
       if (station === undefined) throw new Error("the curated table must carry a station");
 
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       tuneStation(station);
 
       // #1701 — wait for the STUBBED TEXT, not for the element.
@@ -339,7 +354,7 @@ describe("AudioMiniPlayer", () => {
     it("shows no track slot for an audio upload", () => {
       // An upload is not a station and has no feed. The slot must be absent
       // rather than empty — an empty span still takes its gap.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio("https://grappa.example/uploads/abc", null);
 
       expect(screen.queryByTestId("audio-mini-player-track")).toBeNull();
@@ -441,7 +456,7 @@ describe("AudioMiniPlayer", () => {
       // The reported symptom. `play()` on an element whose media resource is
       // gone resolves and produces silence; only `load()` goes back for a new
       // one.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       loadMetadataWithDuration(Number.POSITIVE_INFINITY);
       fire("play");
@@ -459,7 +474,7 @@ describe("AudioMiniPlayer", () => {
       // reload": a file HAS a position, resuming at `currentTime` is the whole
       // point of pausing one, and re-fetching would throw that away along with
       // whatever is already buffered.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(UPLOAD, null);
       loadMetadataWithDuration(212);
       fire("play");
@@ -477,7 +492,7 @@ describe("AudioMiniPlayer", () => {
       // the same rule covers it. This is the half the issue called the broader
       // form, and it costs nothing to include: `error !== null` is exactly
       // "cannot continue from here".
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(UPLOAD, null);
       loadMetadataWithDuration(212);
       fire("play");
@@ -494,7 +509,7 @@ describe("AudioMiniPlayer", () => {
       // Half the reason nobody noticed the bug: with no `error` handler the bar
       // kept showing ⏸ over silence, so the transport looked like it had
       // worked.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       fire("play");
       expect(toggle()).toHaveAttribute("aria-label", "pause");
@@ -510,7 +525,7 @@ describe("AudioMiniPlayer", () => {
       // state there would flip the button to ▶ over audio that is still
       // coming, which is the same lie in the other direction. Only `error` is
       // terminal, and only `error` is listened to.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       fire("play");
 
@@ -531,7 +546,7 @@ describe("AudioMiniPlayer", () => {
       // What it does NOT establish: that a real browser leaves `paused` false
       // after a dropped stream. That is a spec reading, and the device verdict
       // is owed either way.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       fire("play");
       interrupt();
@@ -546,7 +561,7 @@ describe("AudioMiniPlayer", () => {
     });
 
     it("still pauses a healthy source, and does not re-fetch to do it", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       loadMetadataWithDuration(Number.POSITIVE_INFINITY);
       fire("play");
@@ -623,12 +638,12 @@ describe("AudioMiniPlayer", () => {
 
     it("a FILE that was playing comes back at its position, still playing", () => {
       playAudio(UPLOAD, null);
-      const first = render(() => <AudioMiniPlayer />);
+      const first = renderPlayer();
       settleAt(180, 42, true);
       playSpy.mockClear();
 
       first.unmount();
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       metadataArrives(180);
 
       expect(element().currentTime).toBe(42);
@@ -639,12 +654,12 @@ describe("AudioMiniPlayer", () => {
       // The half that separates "resume" from "restart something": a re-mount
       // the operator did not ask for must not start audio they had stopped.
       playAudio(UPLOAD, null);
-      const first = render(() => <AudioMiniPlayer />);
+      const first = renderPlayer();
       settleAt(180, 42, false);
       playSpy.mockClear();
 
       first.unmount();
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       metadataArrives(180);
 
       expect(element().currentTime).toBe(42);
@@ -657,12 +672,12 @@ describe("AudioMiniPlayer", () => {
       // not draw a seek slider across an endless source while the re-mounted
       // element waits for metadata it will never usefully answer.
       playAudio(STATION, "Groove Salad");
-      const first = render(() => <AudioMiniPlayer />);
+      const first = renderPlayer();
       settleAt(Number.POSITIVE_INFINITY, 42, true);
       playSpy.mockClear();
 
       first.unmount();
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
 
       expect(playSpy).toHaveBeenCalled();
       expect(screen.getByTestId("audio-mini-player-live")).toBeInTheDocument();
@@ -675,11 +690,11 @@ describe("AudioMiniPlayer", () => {
       // exists belongs to the source that is active. This test is what keeps
       // that invariant from being quietly broken by a fourth writer.
       playAudio(UPLOAD, null);
-      const first = render(() => <AudioMiniPlayer />);
+      const first = renderPlayer();
       settleAt(180, 42, true);
       first.unmount();
 
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio("https://grappa.example/uploads/second", null);
       metadataArrives(90);
 
@@ -750,7 +765,7 @@ describe("AudioMiniPlayer", () => {
     };
 
     it("names the failure on the bar", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
 
       failWith(2);
@@ -764,7 +779,7 @@ describe("AudioMiniPlayer", () => {
       // The distinction the operator acts on: a lost connection is worth
       // pressing play for, a source this browser cannot decode never will be.
       // Kohina on iOS < 18.4 is the second kind, permanently.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
 
       failWith(4);
@@ -779,7 +794,7 @@ describe("AudioMiniPlayer", () => {
       // instead of sitting beside it: with no metadata `duration` is a finite
       // 0, so the bar would otherwise draw a scrubber and a `0:00 / 0:00`
       // clock over a source that produced no audio at all.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       expect(screen.getByTestId("audio-mini-player-seek")).toBeInTheDocument();
 
@@ -796,7 +811,7 @@ describe("AudioMiniPlayer", () => {
       // cannot decode is exactly the upload the operator wants to save and open
       // in something that can. It is not a claim about playback — it is what
       // to do about the notice beside it.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(UPLOAD, null);
 
       failWith(4);
@@ -813,7 +828,7 @@ describe("AudioMiniPlayer", () => {
       // what is unchanged from before this issue: a stream that failed BEFORE
       // metadata reads `duration = 0`, which is finite, so it is not live as
       // far as this predicate can see.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       metadataArrives(Number.POSITIVE_INFINITY);
 
@@ -827,7 +842,7 @@ describe("AudioMiniPlayer", () => {
       // keeps `duration = Infinity`, so it wears the live badge and an elapsed
       // counter that has stopped counting — a clock that says the stream is
       // still on.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       metadataArrives(Number.POSITIVE_INFINITY);
       expect(screen.getByTestId("audio-mini-player-live")).toBeInTheDocument();
@@ -842,7 +857,7 @@ describe("AudioMiniPlayer", () => {
     it("keeps naming the source — the failure is ABOUT something", () => {
       // The label survives on purpose. "connection lost" with nothing beside it
       // does not tell the operator which station to re-pick.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
 
       failWith(2);
@@ -864,7 +879,7 @@ describe("AudioMiniPlayer", () => {
           json: async () => ({ songs: [{ title: "A Land Unknown", artist: "Trestal" }] }),
         } as unknown as Response),
       );
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       // #1701's barrier, for its reason: keyed on the STUBBED TEXT, so it
       // cannot return on whichever answer happened to land first.
@@ -885,7 +900,7 @@ describe("AudioMiniPlayer", () => {
     // URL. Here that would mean the error handler RESTARTING the source, which
     // for a codec failure is an infinite retry loop nobody asked for.
     it("reporting the failure does not re-tune the source", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       playSpy.mockClear();
       loadSpy.mockClear();
@@ -901,7 +916,7 @@ describe("AudioMiniPlayer", () => {
       // The retry is #1700's, unchanged — `mustRefetch` still decides to
       // `load()`. What is new is that the notice describes the LAST ATTEMPT, so
       // it must go when a new one starts.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       failWith(2);
 
@@ -916,7 +931,7 @@ describe("AudioMiniPlayer", () => {
       // Without the clear above, the second failure would write the same value
       // to the same signal, nothing would re-render, and the operator would tap
       // play and watch the bar do nothing at all.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       failWith(4);
       toggle().click();
@@ -930,7 +945,7 @@ describe("AudioMiniPlayer", () => {
     });
 
     it("tuning something else clears the previous source's failure", () => {
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       failWith(4);
 
@@ -956,7 +971,7 @@ describe("AudioMiniPlayer", () => {
       const ogg = RADIO_STATIONS.find((s) => s.streamUrl.endsWith(".ogg"));
       if (ogg === undefined) throw new Error("the table no longer carries an ogg station");
 
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(ogg.streamUrl, ogg.title);
 
       failWith(4);
@@ -975,7 +990,7 @@ describe("AudioMiniPlayer", () => {
       // playing", which is true, and #1700 already made pressing it re-fetch.
       // What was missing was the operator knowing there was something to retry,
       // and that is the span above, not a fourth glyph.
-      render(() => <AudioMiniPlayer />);
+      renderPlayer();
       playAudio(STATION, "Groove Salad");
       element().dispatchEvent(new Event("play"));
 

@@ -1,4 +1,6 @@
 import { type Component, createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import { Portal } from "solid-js/web";
+import { audioDock } from "./AudioDock";
 import {
   activeAudio,
   audioFailureLabel,
@@ -34,6 +36,16 @@ import { nowPlayingLabel } from "./lib/nowPlaying";
 // runs — wrapping the element itself in <Show> would race ref-assignment
 // against the effect on the open transition.
 //
+// #1896 — and the component itself is now mounted unconditionally too, ONCE,
+// above Shell's `<Show when={isMobile()}>`. That branch is a JSX split and not
+// a CSS one, so a phone crossing 768px on rotation used to destroy the subtree
+// holding this element and build a fresh one in the other regime — a new
+// `<audio>`, a first-tune effect, and for a stream a new HTTP connection. The
+// element does not move any more; the CHROME travels instead, portalled into
+// whichever `<AudioDock />` is live (see that module for the whole argument).
+// The bar is therefore rendered only when a dock exists, which is exactly the
+// window kinds that have a compose column to dock to.
+//
 // #682 — LIVE mode. This bar was written for a FILE, and an internet-radio
 // station is not one: an Icecast stream has no end, so a position slider and
 // a "cur / dur" read are both meaningless against it. Live mode is DERIVED
@@ -60,18 +72,29 @@ import { nowPlayingLabel } from "./lib/nowPlaying";
 // slot would still have to clear the 44px tap floor, so it would give back
 // almost none of the vertical space that motivated hiding.
 //
-// #1701 — what unmounting ACTUALLY does, measured, because the first bullet
+// #1701 — what unmounting ACTUALLY did, measured, because the first bullet
 // above used to end "(which is why leaving chat for home already stops
-// playback)" and that is not what happens. The source is MODULE state
+// playback)" and that was not what happened. The source is MODULE state
 // (`lib/audioPlayer.ts`) and outlives the component, so leaving a scrollback
-// window for home / list / mentions / admin destroys the element — and coming
-// back RE-MOUNTS it: the `on(activeAudio, …)` effect below runs on its first
-// execution, reassigns `.src` and calls `play()`. The semantics are
-// kill-and-re-tune, not stop. A station re-buffers (#1700's `mustRefetch` says
-// re-tuning IS the correct resume for one), and an UPLOAD restarts from the
-// beginning, unasked — that half is a defect in its own right and is not this
-// file's to fix. Recorded here so the next reader reasons about the code
-// rather than about this comment.
+// window for home / list / mentions / admin destroyed the element — and coming
+// back RE-MOUNTED it: the `on(activeAudio, …)` effect below ran on its first
+// execution, reassigned `.src` and called `play()`. The semantics were
+// kill-and-re-tune, not stop. A station re-buffered (#1700's `mustRefetch` says
+// re-tuning IS the correct resume for one), and an UPLOAD restarted from the
+// beginning, unasked — "a defect in its own right and not this file's to fix",
+// as this paragraph used to close.
+//
+// #1896 CLOSED IT, and not as a bonus: the hoist that stops a ROTATION tearing
+// the element down necessarily lifts the component above the `<Switch>` too,
+// because the regime `<Show>` encloses it. There is one arithmetic here, not
+// two decisions — you cannot mount above the branch and remain inside the
+// window-kind Match. So a window switch no longer touches the element at all;
+// what changes is only whether a DOCK exists to portal the chrome into. On
+// home / list / mentions the audio keeps playing with no bar on screen, which
+// is the state #1697 already ships deliberately (`playerHidden`), and the doors
+// out of it are the same ones: `RailRadio` + `RailActions` live in
+// `.shell-members`, OUTSIDE the `<Switch>`, so stop and un-hide are reachable
+// on every window kind in both regimes.
 //
 // Where "stop" genuinely lives, and neither of the two depends on where this
 // component is mounted: `closeAudio` (the ✕ — it clears the source, and the
@@ -155,6 +178,13 @@ const AudioMiniPlayer: Component = () => {
 
   // #1734 — the element is about to be destroyed; the transport's position is
   // about to go with it. One write, at the only instant that has the fact.
+  //
+  // #1896 narrowed WHEN that happens without changing what it must do. The
+  // component no longer dies on a window switch or a rotation, so the last
+  // destruction in a session is Shell's own teardown (logout / identity
+  // change). Kept, and kept correct: a destruction that still happens is
+  // exactly the one this was written for, and the effect above still cannot
+  // tell a first tune from a re-mount without it.
   onCleanup(() => {
     if (audioEl === undefined || activeAudio() === null) return;
     rememberResumePoint({
@@ -310,29 +340,44 @@ const AudioMiniPlayer: Component = () => {
           }
         }}
       />
-      <Show when={activeAudio() !== null && !playerHidden()}>
-        <div class="audio-mini-player" data-testid="audio-mini-player">
-          <button
-            type="button"
-            class="audio-mini-player-toggle"
-            data-testid="audio-mini-player-toggle"
-            onClick={togglePlay}
-            aria-label={playing() ? "pause" : "play"}
+      {/* #1896 — the chrome goes to the DOCK, the element stays here.
+          Gated on a dock EXISTING rather than letting Portal fall back to
+          `document.body`: a bar appended to the end of the document would be
+          unstyled and unplaceable, and "no dock" is a real state (home / list /
+          mentions render no compose column). The container Portal creates is
+          classed through its `ref` so the stylesheet can take both wrappers out
+          of layout — see `.audio-dock` in default.css. */}
+      <Show when={audioDock()}>
+        {(dock) => (
+          <Portal
+            mount={dock()}
+            ref={(container: HTMLDivElement) => {
+              container.className = "audio-dock-portal";
+            }}
           >
-            {playing() ? "⏸" : "▶"}
-          </button>
-          {/* #682 — the source's name, when it has one. An upload passes
+            <Show when={activeAudio() !== null && !playerHidden()}>
+              <div class="audio-mini-player" data-testid="audio-mini-player">
+                <button
+                  type="button"
+                  class="audio-mini-player-toggle"
+                  data-testid="audio-mini-player-toggle"
+                  onClick={togglePlay}
+                  aria-label={playing() ? "pause" : "play"}
+                >
+                  {playing() ? "⏸" : "▶"}
+                </button>
+                {/* #682 — the source's name, when it has one. An upload passes
               null and this renders nothing; a radio station passes its title,
               which on mobile is the ONLY place naming it (the rail that holds
               the station chrome is a drawer slid off-screen while playing). */}
-          <Show when={activeAudio()?.label}>
-            {(label) => (
-              <span class="audio-mini-player-label" data-testid="audio-mini-player-label">
-                {label()}
-              </span>
-            )}
-          </Show>
-          {/* #1744 — THE NOTICE TAKES THE TRACK'S SLOT. The feed polls
+                <Show when={activeAudio()?.label}>
+                  {(label) => (
+                    <span class="audio-mini-player-label" data-testid="audio-mini-player-label">
+                      {label()}
+                    </span>
+                  )}
+                </Show>
+                {/* #1744 — THE NOTICE TAKES THE TRACK'S SLOT. The feed polls
               `tunedStation()`, which is derived from the SOURCE and knows
               nothing about whether the element decoded it — so a live-updating
               track name keeps scrolling over silence, which is the single
@@ -341,10 +386,10 @@ const AudioMiniPlayer: Component = () => {
               slot rather than adding one.
               The LABEL above deliberately stays. "connection lost" with nothing
               beside it does not tell the operator which station to re-pick. */}
-          <Show
-            when={playbackFailure()}
-            fallback={
-              /* #1698 — what the station is playing, on the surface a phone can
+                <Show
+                  when={playbackFailure()}
+                  fallback={
+                    /* #1698 — what the station is playing, on the surface a phone can
                  actually see. The rail carries the same fact, and on mobile the
                  rail is `translateX(100%)` off-screen while the station plays —
                  the identical argument that put the label above here in #682,
@@ -352,29 +397,29 @@ const AudioMiniPlayer: Component = () => {
                  absent for a station whose feed has gone quiet: the store's
                  `nowPlayingLabel` is null on every arm but `playing`, so the
                  stale rule reaches this row without this row knowing about it. */
-              <Show when={nowPlayingLabel()}>
-                {(track) => (
-                  <span class="audio-mini-player-track" data-testid="audio-mini-player-track">
-                    {track()}
-                  </span>
-                )}
-              </Show>
-            }
-          >
-            {(failure) => (
-              /* `role="status"`: this appears without the operator having done
+                    <Show when={nowPlayingLabel()}>
+                      {(track) => (
+                        <span class="audio-mini-player-track" data-testid="audio-mini-player-track">
+                          {track()}
+                        </span>
+                      )}
+                    </Show>
+                  }
+                >
+                  {(failure) => (
+                    /* `role="status"`: this appears without the operator having done
                  anything, so an assistive technology must be able to learn
                  about it without polling the bar. */
-              <span
-                class="audio-mini-player-error"
-                data-testid="audio-mini-player-error"
-                role="status"
-              >
-                {`⚠ ${audioFailureLabel(failure())}`}
-              </span>
-            )}
-          </Show>
-          {/* THE READOUT, and #1744 gives it a third arm: NONE.
+                    <span
+                      class="audio-mini-player-error"
+                      data-testid="audio-mini-player-error"
+                      role="status"
+                    >
+                      {`⚠ ${audioFailureLabel(failure())}`}
+                    </span>
+                  )}
+                </Show>
+                {/* THE READOUT, and #1744 gives it a third arm: NONE.
               Measured on a source the browser refuses (MediaError code 4):
               `loadedmetadata` never arrives, so `duration` stays at a finite 0,
               so `live()` answers false and this row drew the FILE readout over
@@ -383,40 +428,40 @@ const AudioMiniPlayer: Component = () => {
               exist, and the live arm is no better: an elapsed counter frozen at
               a "live" badge says the stream is still on. A failed source has no
               readout, so it is given none. */}
-          <Show when={playbackFailure() === null}>
-            <Show
-              when={!live()}
-              fallback={
-                <>
-                  <span class="audio-mini-player-live" data-testid="audio-mini-player-live">
-                    live
-                  </span>
-                  {/* Elapsed since tune-in, NOT a position: there is no total
+                <Show when={playbackFailure() === null}>
+                  <Show
+                    when={!live()}
+                    fallback={
+                      <>
+                        <span class="audio-mini-player-live" data-testid="audio-mini-player-live">
+                          live
+                        </span>
+                        {/* Elapsed since tune-in, NOT a position: there is no total
                       to divide it by, so it is shown alone rather than as one
                       half of a "cur / dur" pair with a hollow denominator. */}
-                  <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
-                    {formatTime(current())}
-                  </span>
-                </>
-              }
-            >
-              <input
-                type="range"
-                class="audio-mini-player-seek"
-                data-testid="audio-mini-player-seek"
-                min="0"
-                max={duration() || 0}
-                step="any"
-                value={current()}
-                onInput={onSeek}
-                aria-label="seek"
-              />
-              <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
-                {formatTime(current())} / {formatTime(duration())}
-              </span>
-            </Show>
-          </Show>
-          {/* Same-origin download: the `download` attribute forces a save
+                        <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
+                          {formatTime(current())}
+                        </span>
+                      </>
+                    }
+                  >
+                    <input
+                      type="range"
+                      class="audio-mini-player-seek"
+                      data-testid="audio-mini-player-seek"
+                      min="0"
+                      max={duration() || 0}
+                      step="any"
+                      value={current()}
+                      onInput={onSeek}
+                      aria-label="seek"
+                    />
+                    <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
+                      {formatTime(current())} / {formatTime(duration())}
+                    </span>
+                  </Show>
+                </Show>
+                {/* Same-origin download: the `download` attribute forces a save
               (overriding the server's `inline` Content-Disposition) and
               inherits the server-sent filename — cic has no filename on the
               wire (slug only), so no `download` value is set.
@@ -440,42 +485,45 @@ const AudioMiniPlayer: Component = () => {
               is #682's own second reason spelled as a test rather than
               inferred from the first — out of scope here, and named so it is
               not rediscovered as new. */}
-          <Show when={!live()}>
-            <a
-              class="audio-mini-player-download"
-              data-testid="audio-mini-player-download"
-              href={activeAudio()?.href}
-              download=""
-              aria-label="download"
-            >
-              ⬇
-            </a>
-          </Show>
-          {/* #1697 — HIDE, beside the ✕ and never merged with it. The ✕ is the
+                <Show when={!live()}>
+                  <a
+                    class="audio-mini-player-download"
+                    data-testid="audio-mini-player-download"
+                    href={activeAudio()?.href}
+                    download=""
+                    aria-label="download"
+                  >
+                    ⬇
+                  </a>
+                </Show>
+                {/* #1697 — HIDE, beside the ✕ and never merged with it. The ✕ is the
               STOP verb, and on a phone it is the only reachable one while the
               rail that holds the station chrome is slid off-screen; collapsing
               the two would cost the operator the ability to stop. The glyph is
               a chevron down (the surface leaves downward, past the compose
               box), and the accessible name says what survives the gesture. */}
-          <button
-            type="button"
-            class="audio-mini-player-hide"
-            data-testid="audio-mini-player-hide"
-            onClick={hidePlayer}
-            aria-label="hide player, keep playing"
-          >
-            ⌄
-          </button>
-          <button
-            type="button"
-            class="audio-mini-player-close"
-            data-testid="audio-mini-player-close"
-            onClick={closeAudio}
-            aria-label="close"
-          >
-            ✕
-          </button>
-        </div>
+                <button
+                  type="button"
+                  class="audio-mini-player-hide"
+                  data-testid="audio-mini-player-hide"
+                  onClick={hidePlayer}
+                  aria-label="hide player, keep playing"
+                >
+                  ⌄
+                </button>
+                <button
+                  type="button"
+                  class="audio-mini-player-close"
+                  data-testid="audio-mini-player-close"
+                  onClick={closeAudio}
+                  aria-label="close"
+                >
+                  ✕
+                </button>
+              </div>
+            </Show>
+          </Portal>
+        )}
       </Show>
     </>
   );

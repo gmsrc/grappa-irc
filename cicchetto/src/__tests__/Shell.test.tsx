@@ -66,7 +66,30 @@ const selectionState = vi.hoisted(() => {
 });
 
 // Mutable isMobile ref so individual tests can flip to mobile mode.
-const mobileState = vi.hoisted(() => ({ value: false }));
+//
+// #1896 — a REAL Solid signal (lazy-init, same reason and shape as
+// `userHolder` below), because the regime is no longer only a start-up
+// condition: rotating a phone CROSSES the breakpoint mid-session, and a plain
+// object stored the new value without notifying the `<Show when={isMobile()}>`
+// that switches the two shells. Every pre-#1896 site assigns `.value` before
+// its `render(() => <Shell />)` (measured: 40 assignments, 0 after a render),
+// so making it notify changes nothing for them and is the only way to mount a
+// shell and then rotate it.
+const mobileState = vi.hoisted(() => {
+  let sig: [() => boolean, (v: boolean) => boolean] | null = null;
+  const ensure = () => {
+    if (sig === null) sig = createSignal<boolean>(false);
+    return sig;
+  };
+  return {
+    get value() {
+      return ensure()[0]();
+    },
+    set value(v: boolean) {
+      ensure()[1](v);
+    },
+  };
+});
 // UX-4 bucket M (2026-05-19) — bearer state for the post-login bootstrap
 // effect that loads the upload-TTL preference. Default null = no token
 // yet; tests that exercise the bootstrap set it before mount.
@@ -1620,14 +1643,41 @@ describe("#1701 — the docked player sits below the compose box", () => {
     expect(compose, "the compose box must be mounted").not.toBeNull();
     if (compose === null) return;
 
+    // #1896 — `closest`, not `parentElement`, and the change is forced rather
+    // than chosen: the bar is portalled into `<AudioDock />` now, so between it
+    // and the column sit the dock and the container Solid's <Portal> builds.
+    // The RULING is unchanged and so is what this rejects — a player hoisted
+    // out to a sibling of `.shell-main` has no `.drop-upload-zone` ancestor at
+    // all, which is the shape the original assertion was written against. What
+    // it can no longer see on its own is the two wrappers turning "flex item of
+    // the column" into "grandchild of it", so the sibling assertion below reads
+    // that off the stylesheet: `display: contents` is what keeps document
+    // ancestry and LAYOUT saying the same thing here.
     expect(
-      player.parentElement,
-      "the bar shares the compose box's column — hoisting it out puts it under the bottom bar",
+      player.closest(".drop-upload-zone"),
+      "the bar sits in the compose box's column — hoisting it out puts it under the bottom bar",
     ).toBe(compose.parentElement);
     expect(
       compose.compareDocumentPosition(player) & Node.DOCUMENT_POSITION_FOLLOWING,
       "the bar must come AFTER the compose box, not before it",
     ).toBeTruthy();
+  });
+
+  it("the boxes the dock adds are out of layout, so the bar is still a flex item of that column", () => {
+    // #1896 — the other half of the assertion above. Two wrappers now stand
+    // between `.drop-upload-zone` and `.audio-mini-player`; `display: contents`
+    // removes them from layout so the column lays the bar out directly. Read
+    // off the CSS text for the reason `audioMiniPlayerLayout` gives: jsdom
+    // applies no stylesheet, so a DOM assertion cannot see this at all.
+    //
+    // Asserted through the GROUP, spelled verbatim, the way that file reads its
+    // unshrinkable-controls rule: `nestedRuleBodies` matches the selector list
+    // exactly, so dropping either member throws `CSS rule not found` instead of
+    // quietly measuring a rule that no longer covers both wrappers. One wrapper
+    // left in layout is enough to make the bar a grandchild of the column.
+    const bodies = nestedRuleBodies(".audio-dock,\n.audio-dock-portal");
+    expect(bodies.length, "the dock pair must be declared in exactly one block").toBe(1);
+    expect(bodies[0]).toMatch(/display:\s*contents/);
   });
 
   it("that column is a plain top-to-bottom flex, so document order IS visual order", () => {
@@ -1636,6 +1686,85 @@ describe("#1701 — the docked player sits below the compose box", () => {
     const bodies = nestedRuleBodies(".drop-upload-zone");
     expect(bodies.length, ".drop-upload-zone must be declared in exactly one block").toBe(1);
     expect(bodies[0]).toMatch(/flex-direction:\s*column/);
+  });
+});
+
+// #1896 — ROTATION. The two shells are a JSX branch, not a CSS toggle, and a
+// phone whose landscape CSS width clears 768px crosses it every time it is
+// turned. Solid then destroys one subtree and builds the other, and the player
+// used to be mounted INSIDE both — so the `<audio>` on the far side was a
+// different element, its open effect ran as a first tune, and for a STREAM
+// `mustRefetch()` is true: a new HTTP connection to the station. That is the
+// audible gap the reporter heard, and the autoplay is the "restarts on its own".
+//
+// WHY THE ELEMENT'S IDENTITY IS THE ASSERTION AND NOT `play()` CALL COUNTS.
+// Counting `play()` would pass just as well for a rebuilt element that happened
+// not to autoplay — a green that says nothing about the transport surviving.
+// The element is what holds the connection, so the element is what must be the
+// same object. It is marked before the flip rather than compared by tag: a
+// fresh `<audio>` is `toBeInstanceOf`-identical to the old one and `querySelector`
+// would happily hand back the replacement.
+//
+// The three controls around it are load-bearing:
+//   * the bar must be MOUNTED before the flip (an absent player trivially
+//     survives one);
+//   * the branch must actually have SWITCHED (a resize that does not cross the
+//     breakpoint is the false green this whole file is about);
+//   * the chrome must be present again AFTER the flip — the element surviving
+//     is worthless if the transport it drives went with the old subtree.
+describe("#1896 — crossing the mobile breakpoint does not rebuild the audio element", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    closeAudio();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["portrait → landscape", true],
+    ["landscape → portrait", false],
+  ])("%s keeps the SAME <audio> element and re-docks the bar", async (_turn, startMobile) => {
+    mobileState.value = startMobile;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    // An UPLOAD href, for the same reason #1701's sibling gives: a station href
+    // would tune `nowPlaying`'s poll at a third party from a unit test.
+    playAudio("https://grappa.example/uploads/abc", null);
+    const { container } = render(() => <Shell />);
+
+    const before = await waitFor(() => {
+      const el = container.querySelector("audio");
+      expect(el, "the player must be mounted for a rotation to mean anything").not.toBeNull();
+      expect(
+        container.querySelector(".audio-mini-player"),
+        "the transport must be docked before the flip",
+      ).not.toBeNull();
+      return el as HTMLAudioElement;
+    });
+    before.dataset.rotationProbe = "survived";
+
+    // THE ROTATION.
+    mobileState.value = !startMobile;
+
+    // Control: the branch really did switch. Without this the assertions below
+    // would pass on a rotation that never crossed the breakpoint.
+    expect(
+      container.querySelector(startMobile ? ".shell-mobile" : ".shell:not(.shell-mobile)"),
+      "the shell that was live before the flip must be gone",
+    ).toBeNull();
+
+    const after = container.querySelector("audio");
+    expect(after, "there must still be exactly one player").not.toBeNull();
+    expect(container.querySelectorAll("audio").length).toBe(1);
+    expect(after, "the element must be the SAME object, not a fresh one").toBe(before);
+    expect((after as HTMLAudioElement).dataset.rotationProbe).toBe("survived");
+    expect(
+      container.querySelector(".audio-mini-player"),
+      "the transport must have followed into the other shell's dock",
+    ).not.toBeNull();
   });
 });
 

@@ -12,6 +12,7 @@ import {
 import { Portal } from "solid-js/web";
 import AdminPane from "./AdminPane";
 import ArchiveModal from "./ArchiveModal";
+import AudioDock from "./AudioDock";
 import AudioMiniPlayer from "./AudioMiniPlayer";
 import BanlistModal from "./BanlistModal";
 import BottomBar from "./BottomBar";
@@ -613,94 +614,95 @@ const Shell: Component = () => {
   });
 
   return (
-    <Show
-      when={isMobile()}
-      fallback={
-        // ── Desktop three-pane layout (unchanged from pre-C6) ─────────
-        <div
-          class="shell"
-          classList={{ "shell-no-members": !isActiveChannelJoined(selectedChannel()) }}
-        >
-          <ErrorBanners />
-          <Toasts />
-          <PrivacyModal />
-          <MediaViewerModal />
-          <NamesModal />
-          <ThemeEditor />
-          <WhoModal />
-          <LinksModal />
-          <ModeModal />
-          <BanlistModal />
-          <UmodeModal />
-          <ServerReplyModal />
-          <ServiceModal />
-          <RegistrationWizardModal />
-          <RecoverModal />
-          <ShareSessionModal />
-          {/* #1773 — the credits easter egg. Mounted here, not in the settings
+    <>
+      <Show
+        when={isMobile()}
+        fallback={
+          // ── Desktop three-pane layout (unchanged from pre-C6) ─────────
+          <div
+            class="shell"
+            classList={{ "shell-no-members": !isActiveChannelJoined(selectedChannel()) }}
+          >
+            <ErrorBanners />
+            <Toasts />
+            <PrivacyModal />
+            <MediaViewerModal />
+            <NamesModal />
+            <ThemeEditor />
+            <WhoModal />
+            <LinksModal />
+            <ModeModal />
+            <BanlistModal />
+            <UmodeModal />
+            <ServerReplyModal />
+            <ServiceModal />
+            <RegistrationWizardModal />
+            <RecoverModal />
+            <ShareSessionModal />
+            {/* #1773 — the credits easter egg. Mounted here, not in the settings
               drawer that opens it: `.settings-drawer` animates on `transform`,
               which makes it the containing block for any `position: fixed`
               descendant, so a full-screen modal rendered from inside would be
               clipped to the drawer. Self-gated on `creditsModalOpen()`. */}
-          <CreditsModal />
-          <ConfirmModal />
-          {/* #473 — ArchiveModal is the single archive surface on BOTH form
+            <CreditsModal />
+            <ConfirmModal />
+            {/* #473 — ArchiveModal is the single archive surface on BOTH form
               factors. Mounted here on desktop (was mobile-only); the desktop
               Sidebar `<details class="sidebar-archive">` it replaces is
               removed. Self-gated on `archiveModalOpen()` — renders nothing
               when closed. Opened from the RailActions drawer archive button. */}
-          <ArchiveModal />
-          <aside class="shell-sidebar">
-            <Sidebar />
-            {/* GH #235 — "jump to next active window" affordance, pinned
+            <ArchiveModal />
+            <aside class="shell-sidebar">
+              <Sidebar />
+              {/* GH #235 — "jump to next active window" affordance, pinned
                 bottom-left of the sidebar. Self-hides when nothing is
                 unread. */}
-            <NextActiveButton variant="desktop" />
-            {/* UX-5 bucket BS — drag handle on the inner edge of the
+              <NextActiveButton variant="desktop" />
+              {/* UX-5 bucket BS — drag handle on the inner edge of the
                 left sidebar. Desktop-only (mobile branch never mounts
                 it). Width persists to localStorage via
                 lib/sidebarWidths.ts; CSS var --sidebar-width drives the
                 .shell grid template. */}
-            <ResizeHandle side="left" />
-          </aside>
+              <ResizeHandle side="left" />
+            </aside>
 
-          <Show when={membersOpen()}>
-            <div
-              class="shell-drawer-backdrop open"
-              onClick={() => setMembersOpen(false)}
-              aria-hidden="true"
-            />
-          </Show>
+            <Show when={membersOpen()}>
+              <div
+                class="shell-drawer-backdrop open"
+                onClick={() => setMembersOpen(false)}
+                aria-hidden="true"
+              />
+            </Show>
 
-          <section class="shell-main">
-            {/* #71 INC-2 (R1) — the always-present desktop ShellChrome row was
+            <section class="shell-main">
+              {/* #71 INC-2 (R1) — the always-present desktop ShellChrome row was
                 REMOVED. Its settings cog moved into the permanent right rail
                 (#473: the RailActions drawer mounted in `.shell-members` below),
                 which is reachable from every window kind — so the "cog reachable
                 from every window" rule the row used to satisfy now holds via the
                 rail. Removing the row frees the top of `.shell-main` for the
                 topic (the raised topic clamp, default.css). */}
-            {/* #134 — the Switch fallback only renders when
+              {/* #134 — the Switch fallback only renders when
                 selectedChannel() is null, i.e. the cold-load window
                 before the auto-select effect lands on $home. That IS the
                 loading state, so the fallback is the retro CRT splash;
                 CrtSplash self-gates on the same loading predicate and
                 hands off (renders null) once load completes. */}
-            <Switch fallback={<CrtSplash />}>
-              <Match when={isAdminPaneVisible()}>
-                {/* UX-4 bucket N — AdminPane mount driven by selection +
+              <Switch fallback={<CrtSplash />}>
+                <Match when={isAdminPaneVisible()}>
+                  {/* UX-4 bucket N — AdminPane mount driven by selection +
                     isAdmin guard. #1073 deleted the pane's close × and its
                     `onClose` with it: selection is what unmounts this pane,
                     and the rail the ☰ opens already carries `home`. The
                     demote-redirect effect still lands on that same window. */}
-                <AdminPane
-                  onOpenRail={() =>
-                    toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
-                  }
-                />
-              </Match>
-              <Match when={kindHasScrollback(selKind())}>
-                {/* BUGHUNT-3 D — channel + query + server share ONE Match
+                  <AdminPane
+                    onOpenRail={() =>
+                      toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+                    }
+                  />
+                </Match>
+                <Match when={kindHasScrollback(selKind())}>
+                  {/* BUGHUNT-3 D — channel + query + server share ONE Match
                     so ScrollbackPane stays mounted across kind transitions
                     (channel↔query↔server). The pane's `on(key, prevKey)`
                     effect at ScrollbackPane.tsx:~1142 owns the leave-arm
@@ -711,7 +713,7 @@ const Shell: Component = () => {
                     be stale at the dispose tick). TopicBar is gated
                     inside on the channel-only kind to preserve its
                     channel-window-only contract. */}
-                {/* #351 — the whole conversation pane is one drag-and-drop
+                  {/* #351 — the whole conversation pane is one drag-and-drop
                     file-upload target. DropUploadZone wraps the vertical
                     TopicBar + ScrollbackPane + ComposeBox stack; a file
                     dropped anywhere over it uploads via the SAME shared
@@ -719,21 +721,319 @@ const Shell: Component = () => {
                     It's a transparent pass-through flex column, so the
                     scrollback still grows (flex:1) and compose keeps its
                     natural height — layout is unchanged. */}
+                  <DropUploadZone
+                    networkSlug={selectedChannel()?.networkSlug ?? ""}
+                    channelName={selectedChannel()?.channelName ?? ""}
+                  >
+                    <Show when={selKind() === "channel"}>
+                      <TopicBar
+                        networkSlug={selectedChannel()?.networkSlug ?? ""}
+                        channelName={selectedChannel()?.channelName ?? ""}
+                        onToggleMembers={() => setMembersOpen((v) => !v)}
+                        /* #1766 — desktop has a permanent sidebar, so there is
+                         no window-list door to open and nothing to hide. The
+                         band's ☰ is `display: none` up here anyway; passing
+                         `null` means the button is never MOUNTED rather than
+                         mounted-and-hidden. */
+                        leading={null}
+                      />
+                    </Show>
+                    <ScrollbackPane
+                      networkSlug={selectedChannel()?.networkSlug ?? ""}
+                      channelName={selectedChannel()?.channelName ?? ""}
+                      kind={(selKind() as "channel" | "query" | "server") ?? "channel"}
+                    />
+                    <ComposeBox
+                      networkSlug={selectedChannel()?.networkSlug ?? ""}
+                      channelName={selectedChannel()?.channelName ?? ""}
+                    />
+                    {/* GH #115 — the docked audio mini-player's SLOT, BELOW
+                      compose (#1701). #1896 turned the mount into a dock: the
+                      player itself is mounted once below this <Show>, and only
+                      its chrome is portalled in here, so neither a window
+                      switch nor a rotation across 768px can tear the <audio>
+                      element down. Still inside DropUploadZone, so #351's
+                      whole-pane drop target keeps covering the strip. */}
+                    <AudioDock />
+                  </DropUploadZone>
+                </Match>
+                <Match when={selKind() === "mentions"}>
+                  {/* C8.1 — mentions window. Rendered instead of ScrollbackPane+ComposeBox.
+                    onMentionClicked will navigate to channel + scroll-to-timestamp (C8.2). */}
+                  <MentionsWindow
+                    bundle={
+                      mentionsBundleBySlug()[selectedChannel()?.networkSlug ?? ""] ?? {
+                        network_slug: selectedChannel()?.networkSlug ?? "",
+                        away_started_at: "",
+                        away_ended_at: "",
+                        away_reason: null,
+                        messages: [],
+                      }
+                    }
+                    ownNick={ownNickForSlug(selectedChannel()?.networkSlug ?? "")}
+                    onMentionClicked={handleMentionClicked}
+                    onClose={() => closeToPreviousWindow(selectedChannel()?.networkSlug ?? "")}
+                  />
+                </Match>
+                <Match when={selKind() === "home"}>
+                  {/* UX-4 bucket B — home pane. No TopicBar, no
+                    ComposeBox, no MembersPane (sibling <aside>
+                    already self-gates on isActiveChannelJoined). */}
+                  <HomePane />
+                </Match>
+                <Match when={selKind() === "list"}>
+                  {/* #84 E3 — channel directory pane. No TopicBar, no
+                    ComposeBox, no MembersPane. The $list window is a
+                    view+action pane (browse + join), not a chat pane. */}
+                  <DirectoryPane networkSlug={selectedChannel()?.networkSlug ?? ""} />
+                </Match>
+              </Switch>
+            </section>
+
+            {/* #71 INC-2 (R1) — the right rail is now PERMANENT (decoupled from
+              the members panel). `.shell-no-members` no longer drops this
+              column; it narrows it to fit the rail buttons (default.css), so
+              they are reachable on every window kind. #473 — MembersPane is
+              conditional content at the top; the RailActions drawer (all the
+              labelled buttons) floors at the bottom. */}
+            <aside class="shell-members" classList={{ open: membersOpen() }}>
+              {/* UX-5 bucket BS — drag handle on the inner edge of the
+                right (members) sidebar. Mounted unconditionally even
+                when isActiveChannelJoined(...) is false (the column
+                narrows via .shell-no-members in CSS); the handle is
+                inside the aside so it's hidden together. */}
+              <ResizeHandle side="right" />
+              <Show when={isActiveChannelJoined(selectedChannel()) && selectedChannel()}>
+                {(sel) => (
+                  <MembersPane networkSlug={sel().networkSlug} channelName={sel().channelName} />
+                )}
+              </Show>
+              {/* #474 — the per-window-kind rail context surface (server info
+                today; a /whois card is the deferred follow-on), grafted as a
+                SIBLING of the drawer below. Renders nothing on kinds with no
+                context, so the drawer still floors the rail.
+                #782 — `onScreen` is unconditionally true here: this rail is a
+                PERMANENT grid column (#71 INC-2, `.shell-no-members` narrows
+                it but never drops it), and a query window renders no
+                MembersPane above the card, so it cannot be scrolled out of
+                view either. */}
+              <RailContext onScreen={true} />
+              {/* #473 — the ONE unified rail action drawer, floored at the bottom
+                (CSS `.rail-actions { margin-top: auto }`). Supersedes the desktop
+                top ActionCluster (cog + denoise) and, crucially, brings the
+                window-nav launchers (home / rooms / themes / admin) the desktop
+                rail never had — the desktop rail was "a cog and a monkey" (#473).
+                The mobile drawer mounts the SAME component (below). Archive is
+                now a first-class always-on RailActions button opening the single
+                grouped ArchiveModal (mounted above) — the desktop Sidebar
+                `<details>` and the mobile footer chip it replaced are removed. */}
+              {/* #682 — the radio surface, mounted UNCONDITIONALLY like the drawer
+              below it and deliberately NOT as a `RailContext` arm: that
+              component grafts by the active window's KIND and would drop the
+              panel the moment the operator switched to a query. Idle it renders
+              nothing at all, so #500's vertical budget is untouched until a
+              station is tuned; its picker overlays the whole rail. */}
+              <RailRadio />
+              <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
+            </aside>
+
+            <SettingsDrawer open={settingsOpen()} onClose={() => setSettingsOpen(false)} />
+          </div>
+        }
+      >
+        {/* ── Mobile layout ──────────────────────────────────────────────
+          Spec #10 mobile reshape. Vertical order top→bottom:
+            TopicBar (single hamburger — members only; no channel hamburger)
+            Scrollback (1fr)
+            ComposeBox
+            BottomBar (window picker, horizontal scroll, UNDER compose)
+          Members pane: slide-in-from-right drawer toggled by the single
+          hamburger in TopicBar (aria-label "open members sidebar").
+          Channel sidebar (.shell-sidebar) is not part of this layout —
+          channels are navigated via BottomBar. This is a full JSX branch,
+          not a CSS-display toggle, so the sidebar DOM is absent entirely.
+          #1041 mounts it TRANSIENTLY below, as a `position: fixed` left
+          drawer that exists only while the left-edge swipe has it on
+          screen: it never takes a grid track and it is gone again the
+          moment it hides, so "absent unless on screen" still holds.
+      */}
+        <div
+          class="shell shell-mobile"
+          // #308 INC-A — right-edge swipe (right→center) opens the members drawer;
+          // #1041 — left-edge swipe (left→center) opens the channel sidebar. Both
+          // are ADDITIVE second doors onto a rail (the BottomBar stays the primary
+          // nav — #71 ruling). Bound at element level with a non-passive touchmove
+          // + explicit onCleanup (Solid delegates touch to a passive document
+          // listener, and function refs are not re-invoked at unmount — #308
+          // landmines 1 + 3). Claims late, so a vertical drag is left entirely to
+          // native scroll (the hard constraint). Mobile-only: the ref lives in the
+          // isMobile() JSX branch, so it attaches only here.
+          ref={(el) =>
+            onCleanup(
+              bindEdgeGesture(el, {
+                viewportWidth: () => window.innerWidth,
+                // #1041 — the sidebar joins the panel mutex from THIS side, at the
+                // call site. Once a left drawer can be up, its backdrop is a child
+                // of `.shell-mobile`, so a right-edge touch that lands on it
+                // bubbles here and arms this arm with the other drawer still on
+                // screen. Honour the gesture and retire the sidebar rather than
+                // refuse it (the left arm's posture): a pull toward the members
+                // rail means "show me the members", and a silently dropped
+                // directional gesture is the surprising reading. `closeSidebar` is
+                // a no-op when nothing is mounted, so the plain #308 case is
+                // untouched. It runs FIRST so both animations start on the same
+                // frame — one drawer leaves as the other arrives.
+                onOpenMembers: () => {
+                  closeSidebar();
+                  openMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen });
+                },
+                // #1041 — refuse the gesture while ANY overlay is up rather than
+                // teaching the mobilePanel mutex a fourth member. A backdrop or a
+                // modal is a child of `.shell-mobile`, so its touches still bubble
+                // to this listener and a left swipe would otherwise stack a second
+                // drawer under an open one. `overlayCount()` is the state that
+                // already answers "is something covering the shell" for every
+                // present AND future overlay — derive it, don't mirror it. Read
+                // outside a tracking scope, so this subscribes to nothing.
+                // The asymmetry with the members arm above is deliberate: that arm
+                // faces ONE sibling drawer it can retire, this one faces every
+                // modal in the shell — and "close whatever is covering me" is not
+                // a swipe's decision to make.
+                onOpenSidebar: () => {
+                  if (overlayCount() > 0) return;
+                  openSidebar();
+                },
+              }),
+            )
+          }
+        >
+          {/* UX-6 D6 — DiagFloat lives in a Portal mounted on document.body
+            so it is anchored to the layout viewport independent of this
+            subtree (visible above the on-screen keyboard during
+            convergence probing). NB: `.shell-mobile` is NOT a
+            transform/containing block today (verified #264 — see
+            DESIGN_NOTES); the Portal keeps DiagFloat robust should one
+            ever be added. `position: fixed` descendants (e.g.
+            `.next-active-btn-mobile`) likewise anchor to the viewport —
+            do NOT add a `transform` to `.shell-mobile` without revisiting
+            #264's keyboard-ride. */}
+          <Portal>
+            <DiagFloat />
+          </Portal>
+          <ErrorBanners />
+          <Toasts />
+          <PrivacyModal />
+          <MediaViewerModal />
+          <NamesModal />
+          <ThemeEditor />
+          <WhoModal />
+          <LinksModal />
+          <UmodeModal />
+          <ModeModal />
+          <BanlistModal />
+          <ServerReplyModal />
+          <ServiceModal />
+          <RegistrationWizardModal />
+          <RecoverModal />
+          <ShareSessionModal />
+          {/* #1773 — see the desktop branch above for why it is mounted here. */}
+          <CreditsModal />
+          <ConfirmModal />
+          <Show when={membersOpen()}>
+            <div
+              class="shell-drawer-backdrop open"
+              onClick={() => setMembersOpen(false)}
+              aria-hidden="true"
+            />
+          </Show>
+
+          <section class="shell-main">
+            {/* Mobile-non-channel windows (home / mentions / admin / server /
+              list) render the standalone .shell-chrome row. #71 INC-2 (R1):
+              its settings cog became the ☰ RAIL OPENER — the cog itself moved
+              into the rail (#473: the `.shell-members` drawer's RailActions).
+              This is the opener for non-channel windows (channel windows open the
+              same drawer via the TopicBar hamburger — ONE drawer, one ☰ glyph,
+              per the Opt-A ruling). Mobile-channel still suppresses this row so
+              the scrollback reclaims the ~32px. Earlier history of this surface
+              in the bucket commits (UX-4 L, UX-5 A, UX-5 BT, UX-5 BM). */}
+            {/* Admin redesign (2026-08-07) — the admin kind is excluded too. The
+              row would hold nothing but the ☰ and sit directly above the pane's
+              own "admin console" header: two chrome bands for one title on a
+              phone. AdminPane renders the SAME `RailOpenerButton` inline in that
+              header instead, so the opener stays reachable on the admin window
+              (bucket L, asserted in ux-4-z-cluster-journey) and the testid stays
+              singular — the two mounts are mutually exclusive by this gate. */}
+            {/* #1050 — `list` is the third exclusion, for the same collision the
+              admin note above describes but with the opposite remedy. The
+              directory pane's close ✕ is the LAST child of its header, i.e. the
+              top-right corner the #985 float lands in at z-index 41, so the ☰
+              won the hit test and the tap that should leave the directory
+              opened the rail instead. Admin re-homed the button into its own
+              pane header; here the owner's call is that this window does not
+              want the rail at all, so the row simply goes. Bucket L ("settings
+              reachable from every window kind") is knowingly relaxed for this
+              ONE kind — every other non-channel kind keeps the float. Whole-row
+              and not a `display: none` on the glyph: the row is what carries
+              the z-index, and its zero-height box would stay over the header.
+              Reads `selKind()` — the same memo the mobile `<Match>` below
+              switches on — rather than re-deriving the kind here. */}
+            <Show when={selKind() !== "channel" && selKind() !== "list" && !isAdminPaneVisible()}>
+              <ShellChrome
+                leading={windowsRailOpener()}
+                onOpenRail={() =>
+                  toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+                }
+              />
+            </Show>
+            {/* #134 — CRT loading splash (mobile). Same loading-only
+              contract as desktop: the fallback is the cold-load state. */}
+            <Switch fallback={<CrtSplash />}>
+              <Match when={isAdminPaneVisible()}>
+                <AdminPane
+                  onOpenRail={() =>
+                    toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
+                  }
+                />
+              </Match>
+              <Match when={kindHasScrollback(selKind())}>
+                {/* BUGHUNT-3 D — channel + query + server share ONE Match
+                  so ScrollbackPane stays mounted across kind transitions.
+                  See desktop branch comment for details. */}
+                {/* #351 — whole-pane drag-and-drop upload target (mobile).
+                  Same DropUploadZone wrapper as desktop; see that branch's
+                  comment. It wraps the channel-gated TopicBar Show plus the
+                  scrollback + compose stack, so a drop over the topic header,
+                  the scrollback, or the compose strip all upload identically. */}
                 <DropUploadZone
                   networkSlug={selectedChannel()?.networkSlug ?? ""}
                   channelName={selectedChannel()?.channelName ?? ""}
                 >
                   <Show when={selKind() === "channel"}>
+                    {/* C6.3 / UX-5 bucket A: TopicBar's
+                      `.topic-bar-hamburger` is the single
+                      members-drawer toggle on mobile (CSS-hidden
+                      on desktop via @media). ShellChrome above no
+                      longer renders its own hamburger.
+                      UX-5 bucket BM (2026-05-20) — `inlineChromeSlot`
+                      dropped on mobile-channel: archive + cog
+                      buttons moved INTO the members drawer footer
+                      (see below). TopicBar's right edge now hosts
+                      ONLY the hamburger. onToggleMembers routes
+                      through `toggleMembersPanel` to enforce the
+                      members | settings | archive | none mutex —
+                      opening members closes the sibling surfaces. */}
                     <TopicBar
                       networkSlug={selectedChannel()?.networkSlug ?? ""}
                       channelName={selectedChannel()?.channelName ?? ""}
-                      onToggleMembers={() => setMembersOpen((v) => !v)}
-                      /* #1766 — desktop has a permanent sidebar, so there is
-                         no window-list door to open and nothing to hide. The
-                         band's ☰ is `display: none` up here anyway; passing
-                         `null` means the button is never MOUNTED rather than
-                         mounted-and-hidden. */
-                      leading={null}
+                      onToggleMembers={() =>
+                        toggleMembersPanel({
+                          membersOpen,
+                          setMembersOpen,
+                          setSettingsOpen,
+                        })
+                      }
+                      leading={windowsRailOpener()}
                     />
                   </Show>
                   <ScrollbackPane
@@ -745,18 +1045,14 @@ const Shell: Component = () => {
                     networkSlug={selectedChannel()?.networkSlug ?? ""}
                     channelName={selectedChannel()?.channelName ?? ""}
                   />
-                  {/* GH #115 — docked audio mini-player, BELOW compose (#1701).
-                      Inside this Match so it survives channel↔query↔server
-                      switches (the kindHasScrollback Match stays mounted);
-                      leaving chat for home/list/mentions stops playback.
-                      Still inside DropUploadZone, so #351's whole-pane drop
-                      target keeps covering the strip. */}
-                  <AudioMiniPlayer />
+                  {/* GH #115 — the docked audio mini-player's SLOT. #1701 moved
+                    it BELOW compose, so on mobile it lands between the compose
+                    box and the BottomBar (a sibling of `.shell-main`, further
+                    down). #1896 — a dock, not a mount: see the desktop arm. */}
+                  <AudioDock />
                 </DropUploadZone>
               </Match>
               <Match when={selKind() === "mentions"}>
-                {/* C8.1 — mentions window. Rendered instead of ScrollbackPane+ComposeBox.
-                    onMentionClicked will navigate to channel + scroll-to-timestamp (C8.2). */}
                 <MentionsWindow
                   bundle={
                     mentionsBundleBySlug()[selectedChannel()?.networkSlug ?? ""] ?? {
@@ -773,57 +1069,117 @@ const Shell: Component = () => {
                 />
               </Match>
               <Match when={selKind() === "home"}>
-                {/* UX-4 bucket B — home pane. No TopicBar, no
-                    ComposeBox, no MembersPane (sibling <aside>
-                    already self-gates on isActiveChannelJoined). */}
+                {/* UX-4 bucket B — home pane on mobile. Same HomePane
+                  component as desktop; layout is the only branch
+                  difference. */}
                 <HomePane />
               </Match>
               <Match when={selKind() === "list"}>
-                {/* #84 E3 — channel directory pane. No TopicBar, no
-                    ComposeBox, no MembersPane. The $list window is a
-                    view+action pane (browse + join), not a chat pane. */}
+                {/* #84 E3 — channel directory pane on mobile. Same
+                  DirectoryPane component as desktop. */}
                 <DirectoryPane networkSlug={selectedChannel()?.networkSlug ?? ""} />
               </Match>
             </Switch>
           </section>
 
-          {/* #71 INC-2 (R1) — the right rail is now PERMANENT (decoupled from
-              the members panel). `.shell-no-members` no longer drops this
-              column; it narrows it to fit the rail buttons (default.css), so
-              they are reachable on every window kind. #473 — MembersPane is
-              conditional content at the top; the RailActions drawer (all the
-              labelled buttons) floors at the bottom. */}
+          {/* #1766 — the window bar is opt-OUT (default shown). A MOUNT gate and
+            not `display: none`: BottomBar carries no internal display guard by
+            design, and a CSS-hidden bar would keep running #327's double-rAF
+            scroll-into-view work against a strip nobody can see. Turning it
+            off is survivable because #1041's left-edge swipe exists — and
+            because `windowsRailOpener()` above gives that swipe an
+            affordance, which is what keeps this short of the drawer-only
+            navigation #71's second ruling refused. */}
+          <Show when={getShowBottomBar()}>
+            <BottomBar />
+          </Show>
+
+          {/* GH #235 — "jump to next active window" affordance (mobile).
+            #280: on scrollback windows (channel/query/server) it renders
+            INSIDE ScrollbackPane's float stack — stacked with
+            scroll-to-bottom, anchored to the message container. Here it
+            covers the NON-scrollback windows (home / mentions / list /
+            admin), which have no pane to anchor to and no scroll-to-bottom
+            to collide with, keeping the viewport-fixed placement.
+            Mutually exclusive via `kindHasScrollback` so exactly one
+            mobile next-active mounts. Self-hides when nothing is unread. */}
+          <Show when={!kindHasScrollback(selKind())}>
+            <NextActiveButton variant="mobile" />
+          </Show>
+
+          {/* #473 — ArchiveModal is the single archive surface on BOTH form
+            factors (also mounted in the desktop branch above). Opened from the
+            RailActions drawer archive button; self-gated on `archiveModalOpen()`
+            — renders nothing when closed. */}
+          <ArchiveModal />
+
+          {/* #1041 — the mobile channel sidebar, opened by the left-edge swipe.
+            Its own backdrop instance (the members drawer above has a separate
+            one): each drawer owns the surface that dismisses IT, so a tap can
+            never close the wrong one. Rendered only while the sidebar exists,
+            and it fades on the same 200ms as the panel. */}
+          <Show when={sidebarMounted()}>
+            <div
+              class="shell-drawer-backdrop"
+              classList={{ open: sidebarSlidIn() }}
+              onClick={closeSidebar}
+              aria-hidden="true"
+            />
+            {/* Same `.shell-sidebar` element the desktop grid mounts — the mobile
+              @media block turns it into a fixed left drawer. `<Sidebar />` is
+              mounted BARE here: NextActiveButton already has a mobile variant
+              elsewhere in this branch, and ResizeHandle is desktop-only.
+              #1041 restores Sidebar's `onSelect` prop, dropped in UX-5 bucket A
+              on the grounds that no drawer was left to close — a premise this
+              issue expires. Picking a window dismisses the drawer; the prop
+              fires on EVERY row activation, including a re-tap of the already
+              selected row (which a selection-watching effect would miss). */}
+            <aside
+              class="shell-sidebar"
+              classList={{ open: sidebarSlidIn() }}
+              onTransitionEnd={(e) => {
+                // Dispose at the END of the exit slide, never at the class flip.
+                // Descendants bubble their own transitions through here, hence
+                // the target check; the timer in closeSidebar covers the case
+                // where this never fires at all.
+                if (e.target !== e.currentTarget || e.propertyName !== "transform") return;
+                if (!sidebarSlidIn()) disposeSidebar();
+              }}
+            >
+              <Sidebar onSelect={closeSidebar} />
+            </aside>
+          </Show>
+
+          {/* #473 — the mobile members drawer IS the right rail, reachable on
+            EVERY window (channel: TopicBar ☰; non-channel: ShellChrome ☰ above —
+            ONE drawer). It mounts the SAME `RailActions` drawer as the desktop
+            rail: the post-#71 split (top ActionCluster cog + denoise, plus the
+            old footer's window-nav launchers AND its archive chip) folds into
+            ONE bottom drawer. The mobile-only `.mobile-panel-actions` footer is
+            gone — archive is now a first-class RailActions button. */}
           <aside class="shell-members" classList={{ open: membersOpen() }}>
-            {/* UX-5 bucket BS — drag handle on the inner edge of the
-                right (members) sidebar. Mounted unconditionally even
-                when isActiveChannelJoined(...) is false (the column
-                narrows via .shell-no-members in CSS); the handle is
-                inside the aside so it's hidden together. */}
-            <ResizeHandle side="right" />
             <Show when={isActiveChannelJoined(selectedChannel()) && selectedChannel()}>
               {(sel) => (
-                <MembersPane networkSlug={sel().networkSlug} channelName={sel().channelName} />
+                <MembersPane
+                  networkSlug={sel().networkSlug}
+                  channelName={sel().channelName}
+                  onMemberSelect={() => setMembersOpen(false)}
+                />
               )}
             </Show>
-            {/* #474 — the per-window-kind rail context surface (server info
-                today; a /whois card is the deferred follow-on), grafted as a
-                SIBLING of the drawer below. Renders nothing on kinds with no
-                context, so the drawer still floors the rail.
-                #782 — `onScreen` is unconditionally true here: this rail is a
-                PERMANENT grid column (#71 INC-2, `.shell-no-members` narrows
-                it but never drops it), and a query window renders no
-                MembersPane above the card, so it cannot be scrolled out of
-                view either. */}
-            <RailContext onScreen={true} />
-            {/* #473 — the ONE unified rail action drawer, floored at the bottom
-                (CSS `.rail-actions { margin-top: auto }`). Supersedes the desktop
-                top ActionCluster (cog + denoise) and, crucially, brings the
-                window-nav launchers (home / rooms / themes / admin) the desktop
-                rail never had — the desktop rail was "a cog and a monkey" (#473).
-                The mobile drawer mounts the SAME component (below). Archive is
-                now a first-class always-on RailActions button opening the single
-                grouped ArchiveModal (mounted above) — the desktop Sidebar
-                `<details>` and the mobile footer chip it replaced are removed. */}
+            {/* #474 — per-window-kind rail context (server info today), grafted
+              as a SIBLING of the drawer below; renders nothing off a server
+              window. Same component the desktop rail mounts.
+              #782 — this drawer is MOUNTED whether open or shut (closed is
+              `transform: translateX(100%)`, not an unmount), so `membersOpen`
+              is the only honest answer to "is the card on screen": without it
+              every mobile session would spend a WHOIS on a card behind the
+              right edge. */}
+            <RailContext onScreen={membersOpen()} />
+            {/* #473 — the ONE unified rail action drawer, floored at the bottom.
+              Same component + same handler set the desktop rail mounts (the
+              drawer-closing arm of the mobilePanel helpers is meaningful here on
+              mobile and a harmless no-op on the permanent desktop rail). */}
             {/* #682 — the radio surface, mounted UNCONDITIONALLY like the drawer
               below it and deliberately NOT as a `RailContext` arm: that
               component grafts by the active window's KIND and would drop the
@@ -836,359 +1192,20 @@ const Shell: Component = () => {
 
           <SettingsDrawer open={settingsOpen()} onClose={() => setSettingsOpen(false)} />
         </div>
-      }
-    >
-      {/* ── Mobile layout ──────────────────────────────────────────────
-          Spec #10 mobile reshape. Vertical order top→bottom:
-            TopicBar (single hamburger — members only; no channel hamburger)
-            Scrollback (1fr)
-            ComposeBox
-            BottomBar (window picker, horizontal scroll, UNDER compose)
-          Members pane: slide-in-from-right drawer toggled by the single
-          hamburger in TopicBar (aria-label "open members sidebar").
-          Channel sidebar (.shell-sidebar) is not part of this layout —
-          channels are navigated via BottomBar. This is a full JSX branch,
-          not a CSS-display toggle, so the sidebar DOM is absent entirely.
-          #1041 mounts it TRANSIENTLY below, as a `position: fixed` left
-          drawer that exists only while the left-edge swipe has it on
-          screen: it never takes a grid track and it is gone again the
-          moment it hides, so "absent unless on screen" still holds.
-      */}
-      <div
-        class="shell shell-mobile"
-        // #308 INC-A — right-edge swipe (right→center) opens the members drawer;
-        // #1041 — left-edge swipe (left→center) opens the channel sidebar. Both
-        // are ADDITIVE second doors onto a rail (the BottomBar stays the primary
-        // nav — #71 ruling). Bound at element level with a non-passive touchmove
-        // + explicit onCleanup (Solid delegates touch to a passive document
-        // listener, and function refs are not re-invoked at unmount — #308
-        // landmines 1 + 3). Claims late, so a vertical drag is left entirely to
-        // native scroll (the hard constraint). Mobile-only: the ref lives in the
-        // isMobile() JSX branch, so it attaches only here.
-        ref={(el) =>
-          onCleanup(
-            bindEdgeGesture(el, {
-              viewportWidth: () => window.innerWidth,
-              // #1041 — the sidebar joins the panel mutex from THIS side, at the
-              // call site. Once a left drawer can be up, its backdrop is a child
-              // of `.shell-mobile`, so a right-edge touch that lands on it
-              // bubbles here and arms this arm with the other drawer still on
-              // screen. Honour the gesture and retire the sidebar rather than
-              // refuse it (the left arm's posture): a pull toward the members
-              // rail means "show me the members", and a silently dropped
-              // directional gesture is the surprising reading. `closeSidebar` is
-              // a no-op when nothing is mounted, so the plain #308 case is
-              // untouched. It runs FIRST so both animations start on the same
-              // frame — one drawer leaves as the other arrives.
-              onOpenMembers: () => {
-                closeSidebar();
-                openMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen });
-              },
-              // #1041 — refuse the gesture while ANY overlay is up rather than
-              // teaching the mobilePanel mutex a fourth member. A backdrop or a
-              // modal is a child of `.shell-mobile`, so its touches still bubble
-              // to this listener and a left swipe would otherwise stack a second
-              // drawer under an open one. `overlayCount()` is the state that
-              // already answers "is something covering the shell" for every
-              // present AND future overlay — derive it, don't mirror it. Read
-              // outside a tracking scope, so this subscribes to nothing.
-              // The asymmetry with the members arm above is deliberate: that arm
-              // faces ONE sibling drawer it can retire, this one faces every
-              // modal in the shell — and "close whatever is covering me" is not
-              // a swipe's decision to make.
-              onOpenSidebar: () => {
-                if (overlayCount() > 0) return;
-                openSidebar();
-              },
-            }),
-          )
-        }
-      >
-        {/* UX-6 D6 — DiagFloat lives in a Portal mounted on document.body
-            so it is anchored to the layout viewport independent of this
-            subtree (visible above the on-screen keyboard during
-            convergence probing). NB: `.shell-mobile` is NOT a
-            transform/containing block today (verified #264 — see
-            DESIGN_NOTES); the Portal keeps DiagFloat robust should one
-            ever be added. `position: fixed` descendants (e.g.
-            `.next-active-btn-mobile`) likewise anchor to the viewport —
-            do NOT add a `transform` to `.shell-mobile` without revisiting
-            #264's keyboard-ride. */}
-        <Portal>
-          <DiagFloat />
-        </Portal>
-        <ErrorBanners />
-        <Toasts />
-        <PrivacyModal />
-        <MediaViewerModal />
-        <NamesModal />
-        <ThemeEditor />
-        <WhoModal />
-        <LinksModal />
-        <UmodeModal />
-        <ModeModal />
-        <BanlistModal />
-        <ServerReplyModal />
-        <ServiceModal />
-        <RegistrationWizardModal />
-        <RecoverModal />
-        <ShareSessionModal />
-        {/* #1773 — see the desktop branch above for why it is mounted here. */}
-        <CreditsModal />
-        <ConfirmModal />
-        <Show when={membersOpen()}>
-          <div
-            class="shell-drawer-backdrop open"
-            onClick={() => setMembersOpen(false)}
-            aria-hidden="true"
-          />
-        </Show>
+      </Show>
 
-        <section class="shell-main">
-          {/* Mobile-non-channel windows (home / mentions / admin / server /
-              list) render the standalone .shell-chrome row. #71 INC-2 (R1):
-              its settings cog became the ☰ RAIL OPENER — the cog itself moved
-              into the rail (#473: the `.shell-members` drawer's RailActions).
-              This is the opener for non-channel windows (channel windows open the
-              same drawer via the TopicBar hamburger — ONE drawer, one ☰ glyph,
-              per the Opt-A ruling). Mobile-channel still suppresses this row so
-              the scrollback reclaims the ~32px. Earlier history of this surface
-              in the bucket commits (UX-4 L, UX-5 A, UX-5 BT, UX-5 BM). */}
-          {/* Admin redesign (2026-08-07) — the admin kind is excluded too. The
-              row would hold nothing but the ☰ and sit directly above the pane's
-              own "admin console" header: two chrome bands for one title on a
-              phone. AdminPane renders the SAME `RailOpenerButton` inline in that
-              header instead, so the opener stays reachable on the admin window
-              (bucket L, asserted in ux-4-z-cluster-journey) and the testid stays
-              singular — the two mounts are mutually exclusive by this gate. */}
-          {/* #1050 — `list` is the third exclusion, for the same collision the
-              admin note above describes but with the opposite remedy. The
-              directory pane's close ✕ is the LAST child of its header, i.e. the
-              top-right corner the #985 float lands in at z-index 41, so the ☰
-              won the hit test and the tap that should leave the directory
-              opened the rail instead. Admin re-homed the button into its own
-              pane header; here the owner's call is that this window does not
-              want the rail at all, so the row simply goes. Bucket L ("settings
-              reachable from every window kind") is knowingly relaxed for this
-              ONE kind — every other non-channel kind keeps the float. Whole-row
-              and not a `display: none` on the glyph: the row is what carries
-              the z-index, and its zero-height box would stay over the header.
-              Reads `selKind()` — the same memo the mobile `<Match>` below
-              switches on — rather than re-deriving the kind here. */}
-          <Show when={selKind() !== "channel" && selKind() !== "list" && !isAdminPaneVisible()}>
-            <ShellChrome
-              leading={windowsRailOpener()}
-              onOpenRail={() =>
-                toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
-              }
-            />
-          </Show>
-          {/* #134 — CRT loading splash (mobile). Same loading-only
-              contract as desktop: the fallback is the cold-load state. */}
-          <Switch fallback={<CrtSplash />}>
-            <Match when={isAdminPaneVisible()}>
-              <AdminPane
-                onOpenRail={() =>
-                  toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
-                }
-              />
-            </Match>
-            <Match when={kindHasScrollback(selKind())}>
-              {/* BUGHUNT-3 D — channel + query + server share ONE Match
-                  so ScrollbackPane stays mounted across kind transitions.
-                  See desktop branch comment for details. */}
-              {/* #351 — whole-pane drag-and-drop upload target (mobile).
-                  Same DropUploadZone wrapper as desktop; see that branch's
-                  comment. It wraps the channel-gated TopicBar Show plus the
-                  scrollback + compose stack, so a drop over the topic header,
-                  the scrollback, or the compose strip all upload identically. */}
-              <DropUploadZone
-                networkSlug={selectedChannel()?.networkSlug ?? ""}
-                channelName={selectedChannel()?.channelName ?? ""}
-              >
-                <Show when={selKind() === "channel"}>
-                  {/* C6.3 / UX-5 bucket A: TopicBar's
-                      `.topic-bar-hamburger` is the single
-                      members-drawer toggle on mobile (CSS-hidden
-                      on desktop via @media). ShellChrome above no
-                      longer renders its own hamburger.
-                      UX-5 bucket BM (2026-05-20) — `inlineChromeSlot`
-                      dropped on mobile-channel: archive + cog
-                      buttons moved INTO the members drawer footer
-                      (see below). TopicBar's right edge now hosts
-                      ONLY the hamburger. onToggleMembers routes
-                      through `toggleMembersPanel` to enforce the
-                      members | settings | archive | none mutex —
-                      opening members closes the sibling surfaces. */}
-                  <TopicBar
-                    networkSlug={selectedChannel()?.networkSlug ?? ""}
-                    channelName={selectedChannel()?.channelName ?? ""}
-                    onToggleMembers={() =>
-                      toggleMembersPanel({
-                        membersOpen,
-                        setMembersOpen,
-                        setSettingsOpen,
-                      })
-                    }
-                    leading={windowsRailOpener()}
-                  />
-                </Show>
-                <ScrollbackPane
-                  networkSlug={selectedChannel()?.networkSlug ?? ""}
-                  channelName={selectedChannel()?.channelName ?? ""}
-                  kind={(selKind() as "channel" | "query" | "server") ?? "channel"}
-                />
-                <ComposeBox
-                  networkSlug={selectedChannel()?.networkSlug ?? ""}
-                  channelName={selectedChannel()?.channelName ?? ""}
-                />
-                {/* GH #115 — docked audio mini-player. #1701 moved it BELOW
-                    compose, so on mobile it lands between the compose box and
-                    the BottomBar (a sibling of `.shell-main`, further down). */}
-                <AudioMiniPlayer />
-              </DropUploadZone>
-            </Match>
-            <Match when={selKind() === "mentions"}>
-              <MentionsWindow
-                bundle={
-                  mentionsBundleBySlug()[selectedChannel()?.networkSlug ?? ""] ?? {
-                    network_slug: selectedChannel()?.networkSlug ?? "",
-                    away_started_at: "",
-                    away_ended_at: "",
-                    away_reason: null,
-                    messages: [],
-                  }
-                }
-                ownNick={ownNickForSlug(selectedChannel()?.networkSlug ?? "")}
-                onMentionClicked={handleMentionClicked}
-                onClose={() => closeToPreviousWindow(selectedChannel()?.networkSlug ?? "")}
-              />
-            </Match>
-            <Match when={selKind() === "home"}>
-              {/* UX-4 bucket B — home pane on mobile. Same HomePane
-                  component as desktop; layout is the only branch
-                  difference. */}
-              <HomePane />
-            </Match>
-            <Match when={selKind() === "list"}>
-              {/* #84 E3 — channel directory pane on mobile. Same
-                  DirectoryPane component as desktop. */}
-              <DirectoryPane networkSlug={selectedChannel()?.networkSlug ?? ""} />
-            </Match>
-          </Switch>
-        </section>
-
-        {/* #1766 — the window bar is opt-OUT (default shown). A MOUNT gate and
-            not `display: none`: BottomBar carries no internal display guard by
-            design, and a CSS-hidden bar would keep running #327's double-rAF
-            scroll-into-view work against a strip nobody can see. Turning it
-            off is survivable because #1041's left-edge swipe exists — and
-            because `windowsRailOpener()` above gives that swipe an
-            affordance, which is what keeps this short of the drawer-only
-            navigation #71's second ruling refused. */}
-        <Show when={getShowBottomBar()}>
-          <BottomBar />
-        </Show>
-
-        {/* GH #235 — "jump to next active window" affordance (mobile).
-            #280: on scrollback windows (channel/query/server) it renders
-            INSIDE ScrollbackPane's float stack — stacked with
-            scroll-to-bottom, anchored to the message container. Here it
-            covers the NON-scrollback windows (home / mentions / list /
-            admin), which have no pane to anchor to and no scroll-to-bottom
-            to collide with, keeping the viewport-fixed placement.
-            Mutually exclusive via `kindHasScrollback` so exactly one
-            mobile next-active mounts. Self-hides when nothing is unread. */}
-        <Show when={!kindHasScrollback(selKind())}>
-          <NextActiveButton variant="mobile" />
-        </Show>
-
-        {/* #473 — ArchiveModal is the single archive surface on BOTH form
-            factors (also mounted in the desktop branch above). Opened from the
-            RailActions drawer archive button; self-gated on `archiveModalOpen()`
-            — renders nothing when closed. */}
-        <ArchiveModal />
-
-        {/* #1041 — the mobile channel sidebar, opened by the left-edge swipe.
-            Its own backdrop instance (the members drawer above has a separate
-            one): each drawer owns the surface that dismisses IT, so a tap can
-            never close the wrong one. Rendered only while the sidebar exists,
-            and it fades on the same 200ms as the panel. */}
-        <Show when={sidebarMounted()}>
-          <div
-            class="shell-drawer-backdrop"
-            classList={{ open: sidebarSlidIn() }}
-            onClick={closeSidebar}
-            aria-hidden="true"
-          />
-          {/* Same `.shell-sidebar` element the desktop grid mounts — the mobile
-              @media block turns it into a fixed left drawer. `<Sidebar />` is
-              mounted BARE here: NextActiveButton already has a mobile variant
-              elsewhere in this branch, and ResizeHandle is desktop-only.
-              #1041 restores Sidebar's `onSelect` prop, dropped in UX-5 bucket A
-              on the grounds that no drawer was left to close — a premise this
-              issue expires. Picking a window dismisses the drawer; the prop
-              fires on EVERY row activation, including a re-tap of the already
-              selected row (which a selection-watching effect would miss). */}
-          <aside
-            class="shell-sidebar"
-            classList={{ open: sidebarSlidIn() }}
-            onTransitionEnd={(e) => {
-              // Dispose at the END of the exit slide, never at the class flip.
-              // Descendants bubble their own transitions through here, hence
-              // the target check; the timer in closeSidebar covers the case
-              // where this never fires at all.
-              if (e.target !== e.currentTarget || e.propertyName !== "transform") return;
-              if (!sidebarSlidIn()) disposeSidebar();
-            }}
-          >
-            <Sidebar onSelect={closeSidebar} />
-          </aside>
-        </Show>
-
-        {/* #473 — the mobile members drawer IS the right rail, reachable on
-            EVERY window (channel: TopicBar ☰; non-channel: ShellChrome ☰ above —
-            ONE drawer). It mounts the SAME `RailActions` drawer as the desktop
-            rail: the post-#71 split (top ActionCluster cog + denoise, plus the
-            old footer's window-nav launchers AND its archive chip) folds into
-            ONE bottom drawer. The mobile-only `.mobile-panel-actions` footer is
-            gone — archive is now a first-class RailActions button. */}
-        <aside class="shell-members" classList={{ open: membersOpen() }}>
-          <Show when={isActiveChannelJoined(selectedChannel()) && selectedChannel()}>
-            {(sel) => (
-              <MembersPane
-                networkSlug={sel().networkSlug}
-                channelName={sel().channelName}
-                onMemberSelect={() => setMembersOpen(false)}
-              />
-            )}
-          </Show>
-          {/* #474 — per-window-kind rail context (server info today), grafted
-              as a SIBLING of the drawer below; renders nothing off a server
-              window. Same component the desktop rail mounts.
-              #782 — this drawer is MOUNTED whether open or shut (closed is
-              `transform: translateX(100%)`, not an unmount), so `membersOpen`
-              is the only honest answer to "is the card on screen": without it
-              every mobile session would spend a WHOIS on a card behind the
-              right edge. */}
-          <RailContext onScreen={membersOpen()} />
-          {/* #473 — the ONE unified rail action drawer, floored at the bottom.
-              Same component + same handler set the desktop rail mounts (the
-              drawer-closing arm of the mobilePanel helpers is meaningful here on
-              mobile and a harmless no-op on the permanent desktop rail). */}
-          {/* #682 — the radio surface, mounted UNCONDITIONALLY like the drawer
-              below it and deliberately NOT as a `RailContext` arm: that
-              component grafts by the active window's KIND and would drop the
-              panel the moment the operator switched to a query. Idle it renders
-              nothing at all, so #500's vertical budget is untouched until a
-              station is tuned; its picker overlays the whole rail. */}
-          <RailRadio />
-          <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
-        </aside>
-
-        <SettingsDrawer open={settingsOpen()} onClose={() => setSettingsOpen(false)} />
-      </div>
-    </Show>
+      {/* GH #115 / #1896 — THE player, mounted once, OUTSIDE the regime branch.
+          The two arms above are a JSX split and not a CSS toggle, so a phone
+          crossing 768px on rotation destroys one whole subtree and builds the
+          other: a player mounted inside an arm came back as a NEW <audio>
+          element, which for a stream means re-tuning — a new HTTP connection,
+          heard as a gap and a restart. Mounted here it is untouched by the
+          flip, and its chrome travels to whichever <AudioDock /> is live.
+          AFTER the <Show> on purpose: the branch (and therefore its dock) is
+          built first, so the player finds a dock on its very first render
+          instead of docking a tick later. */}
+      <AudioMiniPlayer />
+    </>
   );
 };
 
