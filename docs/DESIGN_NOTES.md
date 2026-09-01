@@ -44796,3 +44796,95 @@ shapes, not one episode and a shorter version of it.
   lock with no row here. Widening the seam to cover them is a separate
   slice, deliberately not taken in this one: without the bracket above, it
   would produce a row whose only door is the one under suspicion.
+<!-- entry #1889 -->
+
+---
+
+## 2026-09-01 — 1889: a 404 is a fact the client can read, and refused to
+
+`cicchetto`'s media viewer rendered a deleted or expired upload exactly like
+a broken image: `failed to load — try "open in browser"`. Both halves are
+wrong for that case. The browser did not fail, and "open in browser" lands
+on the same route, which serves `{"error":"not_found"}` as JSON. Two
+operators reported it independently, and the message sent both of them
+looking for a client bug.
+
+### Why the status had to be asked for
+
+The `error` event of `<img>` / `<video>` / `<audio>` carries no status.
+There is no response to read off the element that failed, so the option of
+"use the failed element's own response" — which the issue left open — does
+not exist for three of the four viewer kinds. Only the `text` arm fetches,
+and it discards the status inside `fetchTextResource`. That measurement is
+what made the choice, not a preference.
+
+`HEAD`, not `GET`: the question is whether the server still has the file,
+and a 200-but-undecodable response (corrupt image, wrong mime) must not be
+downloaded a second time to be told it is not a 404. `Plug.Head` sits above
+the router in the endpoint, so HEAD shares the GET route and answers with
+the same status the element saw — one server path, not two. One probe for
+all four kinds rather than one probe plus a special case for `text`: the
+round-trip is paid only on the failure path, which is cold.
+
+### Same-origin is a CSP gate, and it was already there
+
+`connect-src` is `'self'` plus the captcha hosts and two audio hosts. It is
+deliberately NOT widened to `https:`, unlike `img-src` / `media-src` — an
+element source can only be rendered, whereas `fetch` can read a response
+body. So a cross-host probe is refused by the policy and raises a
+`securitypolicyviolation` that the e2e `_cspGuard` fixture fails specs on.
+This is the same boundary that keeps `.txt` / `.md` admitted-host only
+(#1764); reusing it beat inventing a scope rule.
+
+It costs no coverage. `classifyMediaLink` re-roots an admitted host (page
+origin ∪ the #324 deployment aliases) onto the page origin, so every own
+upload arrives at the viewer same-origin by construction, and a genuinely
+foreign host keeps its absolute href — another deployment's 404 is not ours
+to interpret anyway.
+
+ORIGIN equality, deliberately not the HOST equality `mediaLink.sameHostHref`
+uses. That one is scheme-agnostic on purpose (legacy `http://` upload links
+live forever in scrollback) and then re-roots; `'self'` is scheme + host +
+port. Reusing host equality here would look right and admit a probe the CSP
+then refuses.
+
+### The rule that matters more than the feature
+
+🔴 **A failure of the probe never produces "gone".** Dead network, CSP
+refusal, an abort when the viewer closes mid-flight, a response we cannot
+read — all answer `unknown`, and the reader keeps the generic text. Saying
+"your upload is gone" because OUR request broke is a worse lie than the
+message this change replaces. Enforced by the return type being a closed
+two-member set where `gone` is earned only by a 404 read off the wire, and
+asserted on two planes: a table over the probe, and the visible outcome in
+the viewer.
+
+### What this message can never say, on purpose
+
+`UploadsController.show/2` answers the same 404 for **five** distinct
+causes: a malformed slug, a missing row, a soft-deleted row, an expired row,
+and a row whose file is gone from disk. It gives no oracle, and that is
+correct and stays. So the client can say the file is not there, and can
+never say which of the five, never say *expired at HH:MM*, and cannot even
+separate "removed" from "a slug that never existed". `(expired or removed)`
+names the two likely causes without claiming to know. The noun is neutral
+rather than "this upload" because classifier rule 3 admits any same-origin
+media, not only `/uploads/`.
+
+### The interpretation, declared
+
+The header's "open in browser" anchor is suppressed in `gone`, and only
+there. The issue says of the 404 case *"No `open in browser` suggestion:
+that route returns JSON, not an image"*, and the anchor is that same
+suggestion in another form — same route, same raw JSON, the exact trap that
+cost two operators their afternoon. Least surprise finishes it: a line
+saying the file is gone, beside a live control that opens it, contradicts
+itself. On a generic `failed` the advice stays, because there "maybe it is
+your browser, try it over there" is still a live hypothesis.
+
+### Scope
+
+Client only. The server behaviour — row gone ⇒ 404, no oracle — is correct
+and untouched. The disk-side half of the same incident (account deletion
+cascades the rows but never unlinks the files) is a separate issue and is
+not addressed here.
