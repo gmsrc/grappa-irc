@@ -612,6 +612,59 @@ export async function listSessionLogSessions(
   return body.session_log_sessions;
 }
 
+// issue 1889 — remove an upload the way an operator removes one, so a spec can
+// drive the REAL 404 the viewer has to tell apart from a broken load.
+// `Admin.UploadsController.delete` unlinks the file first and then soft-deletes
+// the row, which is exactly the state the incident describes; faking it with a
+// `page.route` fulfil would prove the branch and not the behaviour.
+//
+// Two hops because the admin surface keys uploads by `id` while everything a
+// spec can see — the URL in the scrollback, the POST response — carries the
+// `slug`. The listing INCLUDES soft-deleted rows (it is the operator's audit
+// trail), so resolving by slug is unambiguous only before a second upload
+// reuses it, which the 26-char base32 slug rules out.
+export async function adminDeleteUploadBySlug(adminToken: string, slug: string): Promise<void> {
+  const listRes = await fetch(`${GRAPPA_BASE_URL}/admin/uploads`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!listRes.ok) {
+    throw new Error(
+      `grappaApi.adminDeleteUploadBySlug: GET /admin/uploads → ${listRes.status} ${await listRes.text()}`,
+    );
+  }
+  const body = (await listRes.json()) as { uploads: Array<{ id: string; slug: string }> };
+  const row = body.uploads.find((u) => u.slug === slug);
+  // Loud rather than idempotent, deliberately: a spec that reaches the click
+  // without having deleted anything would assert the GONE text against a live
+  // upload and fail somewhere far from the cause.
+  if (row === undefined) {
+    throw new Error(`grappaApi.adminDeleteUploadBySlug: no upload row for slug ${slug}`);
+  }
+
+  const delRes = await fetch(`${GRAPPA_BASE_URL}/admin/uploads/${encodeURIComponent(row.id)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!delRes.ok) {
+    throw new Error(
+      `grappaApi.adminDeleteUploadBySlug: DELETE ${row.id} → ${delRes.status} ${await delRes.text()}`,
+    );
+  }
+}
+
+// issue 1889 — what the PUBLIC upload route answers now, as a precondition a
+// spec can assert before it goes looking for the client's reaction to it.
+//
+// Takes the minted absolute URL and re-roots its path onto `GRAPPA_BASE_URL`
+// rather than fetching it as given: the mint carries whatever host
+// `Endpoint.url/0` is configured with, and the runner reaches grappa by its
+// compose service name. Re-rooting keeps this working wherever the deployment
+// thinks it lives, and the path is the whole of what identifies the upload.
+export async function publicUploadStatus(uploadUrl: string): Promise<number> {
+  const res = await fetch(`${GRAPPA_BASE_URL}${new URL(uploadUrl).pathname}`);
+  return res.status;
+}
+
 // M-cluster M-8 — operator-side delete via admin bearer. Mirrors
 // `Grappa.Operator.delete_visitor/1`. Used by e2e tests that mint
 // a visitor and need teardown cleanup on early-assertion-failure

@@ -30,13 +30,14 @@
 // Unit tests pin the rewrite; device dogfood is the final word.
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import { adminDeleteUploadBySlug, publicUploadStatus } from "../fixtures/grappaApi";
 import {
   closeMediaViewer,
   mediaViewer,
   openMediaViewer,
   uploadImageAndGetLink,
 } from "../fixtures/mediaViewer";
-import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 import { mediaScrollbackRow, uploadViaPicker } from "../fixtures/uploadJourney";
 
@@ -210,6 +211,50 @@ test("viewer load states: failure text on unfetchable media, spinner until bytes
   await expect(spinner).toBeHidden({ timeout: 10_000 });
   const img = viewer.locator("img.media-viewer-media");
   await expect(img).toHaveJSProperty("complete", true, { timeout: 10_000 });
+});
+
+test("a DELETED upload reads as gone, not as a broken load (issue 1889)", async ({ page }) => {
+  // The incident, end to end and with nothing faked: a real upload, removed
+  // the way an operator removes one, clicked from the row it left behind.
+  //
+  // No `page.route` anywhere. The 404 is the server's own — the admin verb
+  // unlinks the file and soft-deletes the row — because the thing under test
+  // is precisely that cic now believes the SERVER instead of guessing from a
+  // silent element error. A fulfilled fake would exercise the branch and prove
+  // nothing about the route it is about.
+  //
+  // The delete happens BEFORE the first open, deliberately: a successfully
+  // fetched image is served from memory cache on a later click (the same
+  // hazard the load-states spec above orders its phases around), and a cached
+  // hit would neither fail nor be probed.
+  const vjt = specUser();
+  await loginAs(page, vjt);
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
+
+  const { slug, url, link } = await uploadImageAndGetLink(page, "gone-upload.png");
+  await adminDeleteUploadBySlug(getSeededAdmin().token, slug);
+
+  // Precondition, asserted rather than assumed: without it a delete that
+  // silently did nothing would surface as "the client did not react", which is
+  // a different bug in a different file. Read from the RUNNER against the
+  // public route, so it is the server's own answer and not the browser's
+  // (which may have cached, and whose failure is the thing under test).
+  expect(await publicUploadStatus(url)).toBe(404);
+
+  const viewer = await openMediaViewer(page, link);
+
+  // The visible outcome, which is the whole point — not "the probe was
+  // called". The generic line is REPLACED: it is the sentence that sent two
+  // operators looking for a client bug.
+  await expect(viewer.getByText(/gone/i)).toBeVisible({ timeout: 10_000 });
+  await expect(viewer.getByText(/failed to load/i)).toBeHidden();
+  await expect(viewer.getByRole("status")).toBeHidden();
+
+  // …and the escape hatch that would have shown them `{"error":"not_found"}`
+  // as raw JSON is not there to click.
+  await expect(viewer.getByRole("link", { name: /open in browser/i })).toBeHidden();
+
+  await closeMediaViewer(viewer);
 });
 
 test("plain web link is NOT intercepted — keeps the default anchor", async ({ page }) => {
