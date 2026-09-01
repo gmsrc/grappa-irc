@@ -38,6 +38,7 @@ defmodule Mix.Tasks.Grappa.UpdateNetworkCredential do
     network: :string,
     nick: :string,
     password: :string,
+    server_pass: :string,
     auth: :string,
     autojoin: :string,
     realname: :string,
@@ -60,7 +61,11 @@ defmodule Mix.Tasks.Grappa.UpdateNetworkCredential do
 
     attrs =
       opts
-      |> Keyword.take([:nick, :password, :realname, :sasl_user])
+      # #1044 — `:server_pass` rides the same wide changeset as the rest; it
+      # is a DIFFERENT secret from `:password`, so rotating one must never
+      # touch the other. Omitting a key keeps the stored value, which is what
+      # makes that true here.
+      |> Keyword.take([:nick, :password, :server_pass, :realname, :sasl_user])
       |> Map.new()
       |> maybe_put_auth(opts)
       |> maybe_put_autojoin(opts)

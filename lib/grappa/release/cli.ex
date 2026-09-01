@@ -63,6 +63,7 @@ defmodule Grappa.Release.CLI do
     auth: :string,
     tls: :boolean,
     password: :string,
+    server_pass: :string,
     autojoin: :string,
     realname: :string,
     sasl_user: :string,
@@ -100,13 +101,17 @@ defmodule Grappa.Release.CLI do
           from the terminal, so it stays out of shell history.
 
       add-network USER NETWORK --server HOST:PORT --nick NICK --auth METHOD
-                  [--tls | --no-tls] [--password PW] [--autojoin '#a,#b']
+                  [--tls | --no-tls] [--password PW] [--server-pass PW]
+                  [--autojoin '#a,#b']
                   [--realname NAME] [--sasl-user USER] [--source IP]
                   [--services-flavor FLAVOR]
           Gives USER access to NETWORK, creating the network and the
           server when they do not exist yet. --auth is one of
           auto|sasl|server_pass|nickserv_identify|none. TLS defaults to
           on for port 6697, off otherwise.
+          --password is the NickServ secret; --server-pass is the server
+          PASS a gated network demands before registration. They are
+          different secrets and may both be given (#1044).
 
       remove-network USER NETWORK
           Revokes that access and stops any live session for it.
@@ -337,6 +342,10 @@ defmodule Grappa.Release.CLI do
     settings = %{
       nick: Keyword.fetch!(opts, :nick),
       password: Keyword.get(opts, :password),
+      # #1044 — the server `PASS`, independent of `--password` (the NickServ
+      # secret). A password-gated network needs both at once; the mix-task
+      # twin `grappa.bind_network` carries the same pair.
+      server_pass: Keyword.get(opts, :server_pass),
       auth_method: auth_method,
       autojoin_channels: parse_autojoin(Keyword.get(opts, :autojoin)),
       realname: Keyword.get(opts, :realname),

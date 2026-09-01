@@ -341,7 +341,11 @@ bind-network --user <name> --network <slug> --server <host:port>
                                nickserv_identify | none
     Optional:
         --tls / --no-tls       force the TLS posture (default: sniffed)
-        --password <secret>    NickServ / server password
+        --password <secret>    NickServ password (the post-001 identify)
+        --server-pass <secret> server PASS for a gated network. A
+                               DIFFERENT secret from --password; both
+                               may be given at once (#1044). Single
+                               wire token: no spaces
         --autojoin <list>      comma-separated channel list
         --realname <text>      IRC realname field
         --sasl-user <name>     SASL account when it differs from the nick
@@ -441,7 +445,11 @@ update-network-credential --user <name> --network <slug> [options]
         --network <slug>       network the credential belongs to
     Optional:
         --nick <nick>          nick to use upstream
-        --password <secret>    NickServ / server password
+        --password <secret>    NickServ password (the post-001 identify)
+        --server-pass <secret> server PASS for a gated network. A
+                               DIFFERENT secret from --password;
+                               rotating one leaves the other alone
+                               (#1044). Single wire token: no spaces
         --auth <mode>          auto | sasl | server_pass |
                                nickserv_identify | none
         --autojoin <list>      REPLACES the channel list (comma-

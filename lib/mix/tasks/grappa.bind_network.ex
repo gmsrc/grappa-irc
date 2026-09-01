@@ -37,6 +37,24 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
   (`sasl`) target different on-the-wire surfaces. `--autojoin` is a
   comma-separated list of channel names.
 
+  ## The two password flags (#1044)
+
+  `--password` is the NickServ secret; `--server-pass` is the server `PASS`
+  a password-gated network demands before it will register you. They are
+  independent, and both may be given at once — which is the point: before
+  #1044 one credential held one secret, so an operator who needed the gate
+  had to keep the NickServ password in the on-connect perform list, in
+  cleartext.
+
+      --auth server_pass --server-pass '<gate secret>' \\
+        --password '<NickServ password>'
+
+  On `--auth server_pass` the `PASS` line carries `--server-pass` and
+  `--password` drives the post-001 identify. On `--auth auto` the handoff
+  spends `--password` on `PASS` itself, so `--server-pass` has no role
+  there. `--server-pass` must be a single wire token: no spaces (the ircd
+  would split it and keep the first), no CR/LF/NUL.
+
   ## TLS default — port-sniffed
 
   When neither `--tls` nor `--no-tls` is passed, the TLS posture is
@@ -72,6 +90,7 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
     tls: :boolean,
     nick: :string,
     password: :string,
+    server_pass: :string,
     auth: :string,
     autojoin: :string,
     realname: :string,
@@ -122,6 +141,10 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
     settings = %{
       nick: nick,
       password: Keyword.get(opts, :password),
+      # #1044 — the server `PASS`, a DIFFERENT secret from `--password`. On a
+      # password-gated network both are needed at once, so the two flags are
+      # independent rather than one flag the auth method reinterprets.
+      server_pass: Keyword.get(opts, :server_pass),
       auth_method: OptionParsing.parse_auth(auth),
       autojoin_channels: OptionParsing.parse_autojoin(Keyword.get(opts, :autojoin)),
       realname: Keyword.get(opts, :realname),
