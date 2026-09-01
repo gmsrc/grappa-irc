@@ -35,13 +35,19 @@ defmodule Mix.Tasks.Grappa.RepairPasswordsTest do
 
   defp bind(user, network, password, auth_method) do
     {:ok, credential} =
-      Credentials.bind_credential(user, network, %{
-        nick: "vjt",
-        password: password,
-        auth_method: auth_method
-      })
+      Credentials.bind_credential(user, network, attrs(password, auth_method))
 
     credential
+  end
+
+  # #1044 — a `:server_pass` row needs its OWN slot filled to be valid; its
+  # `password` is the NickServ secret, which is the value under test here.
+  defp attrs(password, :server_pass) do
+    %{nick: "vjt", password: password, auth_method: :server_pass, server_pass: "gate-secret"}
+  end
+
+  defp attrs(password, auth_method) do
+    %{nick: "vjt", password: password, auth_method: auth_method}
   end
 
   defp reload(%Credential{id: id}), do: Repo.get!(Credential, id)
@@ -92,10 +98,31 @@ defmodule Mix.Tasks.Grappa.RepairPasswordsTest do
       assert RepairPasswords.classify(credential) == {:report, :ambiguous_auth_method}
     end
 
-    test "a :server_pass credential with spaces is reported", %{user: user, network: network} do
+    # #1044 moved this row INTO scope, and the reason is the whole slice: on a
+    # `:server_pass` credential the gate secret now lives in its own column, so
+    # `password_encrypted` means NickServ here exactly as it does on
+    # `:nickserv_identify` — and can be corrupted by the same in-session
+    # rotation. Three tokens is still ambiguous, but ambiguous about WHICH
+    # rotation, not about whose secret it is.
+    test "a :server_pass credential's NickServ secret is judged by the NickServ chain", %{
+      user: user,
+      network: network
+    } do
       credential = bind(user, network, @sasl_passphrase, :server_pass)
 
-      assert RepairPasswords.classify(credential) == {:report, :ambiguous_auth_method}
+      assert RepairPasswords.classify(credential) == {:report, :multiple_rotations}
+    end
+
+    # The discriminating half: a single rotation on such a row is REPAIRABLE.
+    # Pre-#1044 it was dismissed as `:ambiguous_auth_method`, which is what
+    # the task must no longer say now that the column's meaning is settled.
+    test "a single rotation on a :server_pass credential is repairable", %{
+      user: user,
+      network: network
+    } do
+      credential = bind(user, network, "oldpass newpass", :server_pass)
+
+      assert RepairPasswords.classify(credential) == {:repairable, "newpass"}
     end
 
     test "a :none credential with spaces is reported", %{user: user, network: network} do

@@ -64,9 +64,15 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
   credential any more, so a run that DOES find one is the signal of a new
   bug rather than routine maintenance. The output says so.
 
-  The `server_pass_encrypted` slot (#1044) is never read and never written:
-  it holds a different role's secret and was never fed by the `SET PASSWD`
-  capture path, so it is not part of this corruption.
+  The `server_pass_encrypted` slot (#1044) is never read NOR written HERE: it
+  holds a different role's secret and is not fed by the `SET PASSWD` capture
+  path, so it is not part of this corruption. What #1044 did change is which
+  rows are IN scope — on a `:server_pass` credential `password_encrypted` now
+  means NickServ, so such a row can be corrupted exactly like a
+  `:nickserv_identify` one and is judged by the same chain. The method set
+  comes from `Credential.nickserv_secret_methods/0` rather than being spelled
+  again here: a second copy is how this task would come to disagree with the
+  session about which column holds whose secret.
   """
   use Boundary,
     top_level?: true,
@@ -140,7 +146,14 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
   # `newpass` that still holds one, so such a rotation never took upstream
   # and NEITHER token is known to be the live password.
   @spec classify_concatenation(String.t(), String.t() | nil, Credential.auth_method()) :: verdict()
-  defp classify_concatenation(password, nick, :nickserv_identify) do
+  defp classify_concatenation(password, nick, auth_method) when is_atom(auth_method) do
+    if auth_method in Credential.nickserv_secret_methods(),
+      do: classify_nickserv_concatenation(password, nick),
+      else: {:report, :ambiguous_auth_method}
+  end
+
+  @spec classify_nickserv_concatenation(String.t(), String.t() | nil) :: verdict()
+  defp classify_nickserv_concatenation(password, nick) do
     case String.split(password, " ") do
       # Exactly two tokens is the single-rotation case, and it is the only
       # deterministic one. "Keep the LAST token" and "keep the second" agree
@@ -151,8 +164,6 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
       _ -> {:report, :multiple_rotations}
     end
   end
-
-  defp classify_concatenation(_, _, _), do: {:report, :ambiguous_auth_method}
 
   # A repair that services would themselves refuse is not a repair — it just
   # exchanges one silently-never-identifying value for another.
@@ -171,8 +182,11 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
   # `Credentials.update_credential_password/2` applies at the #124 door.
   @spec classify_unusable(NSInterceptor.vet_reject_reason(), Credential.auth_method()) ::
           :healthy | {:report, {:unusable, NSInterceptor.vet_reject_reason()}}
-  defp classify_unusable(reason, :nickserv_identify), do: {:report, {:unusable, reason}}
-  defp classify_unusable(_, _), do: :healthy
+  defp classify_unusable(reason, auth_method) do
+    if auth_method in Credential.nickserv_secret_methods(),
+      do: {:report, {:unusable, reason}},
+      else: :healthy
+  end
 
   @impl Mix.Task
   def run(args) do
