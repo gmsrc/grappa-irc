@@ -291,6 +291,137 @@ describe("MediaViewerModal — loading state", () => {
   });
 });
 
+// issue 1889 — a deleted or expired upload 404s, and the viewer used to render
+// that exactly like a broken image: "failed to load — try open in browser",
+// where "open in browser" lands on the same route and serves
+// `{"error":"not_found"}` as JSON. Two operators went hunting a client bug.
+//
+// The probe's own decision table lives in mediaAvailability.test.ts against a
+// bare function. What is pinned HERE is the wiring only this component can get
+// wrong: that the failure transition asks at all, that a 404 changes what the
+// reader is told, and — the constraint that matters most — that nothing short
+// of a read 404 ever does.
+describe("MediaViewerModal — gone vs broken (issue 1889)", () => {
+  // The probe is same-origin gated, so the href has to BE same-origin for the
+  // component to reach the fetch at all. Built from the live origin rather
+  // than spelled out: jsdom's URL is config, not a fact this suite owns.
+  const OWN_UPLOAD_URL = `${window.location.origin}/uploads/abcdefghijklmnopqrstuvwxyz.png`;
+
+  const stubProbe = (respond: () => Promise<unknown>): Mock => {
+    const fetchMock = vi.fn(respond);
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a 404 on the failed upload says it is GONE, not that the load failed", async () => {
+    stubProbe(() => Promise.resolve({ status: 404 }));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(OWN_UPLOAD_URL, "image");
+    container.querySelector("img")?.dispatchEvent(new Event("error"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/gone/i)).not.toBeNull();
+    });
+    // The generic line is REPLACED, not joined: it is the sentence that sent
+    // two operators after a client bug, and "open in browser" is bad advice
+    // for a route that answers JSON.
+    expect(screen.queryByText(/failed to load/i)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  // 🔴 The hard constraint, from three directions. Saying "gone" when the
+  // upload is fine is worse than the generic message this change replaces.
+  it("a 200 keeps the generic text — the element failed for some other reason", async () => {
+    const fetchMock = stubProbe(() => Promise.resolve({ status: 200 }));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(OWN_UPLOAD_URL, "image");
+    container.querySelector("img")?.dispatchEvent(new Event("error"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    expect(screen.getByText(/failed to load/i)).not.toBeNull();
+    expect(screen.queryByText(/gone/i)).toBeNull();
+  });
+
+  it("a probe that never answers keeps the generic text — a dead network is not a deleted upload", async () => {
+    const fetchMock = stubProbe(() => Promise.reject(new TypeError("Failed to fetch")));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(OWN_UPLOAD_URL, "image");
+    container.querySelector("img")?.dispatchEvent(new Event("error"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    expect(screen.getByText(/failed to load/i)).not.toBeNull();
+    expect(screen.queryByText(/gone/i)).toBeNull();
+  });
+
+  it("a cross-host failure is never probed at all — connect-src would refuse it", async () => {
+    // Not merely "answers unknown": the request must not be ISSUED, because a
+    // blocked fetch is a securitypolicyviolation and the e2e _cspGuard fixture
+    // fails any spec whose journey raises one.
+    const fetchMock = stubProbe(() => Promise.resolve({ status: 404 }));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer("https://elsewhere.example/pic.png", "image");
+    container.querySelector("img")?.dispatchEvent(new Event("error"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load/i)).not.toBeNull();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a media element that LOADS is never probed — the refinement belongs to the failure", async () => {
+    const fetchMock = stubProbe(() => Promise.resolve({ status: 404 }));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(OWN_UPLOAD_URL, "image");
+    container.querySelector("img")?.dispatchEvent(new Event("load"));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/gone/i)).toBeNull();
+  });
+
+  // The header anchor is the SAME advice in another form: it lands on the same
+  // route and shows the reader `{"error":"not_found"}`. A line saying the file
+  // is gone beside a live control that opens it contradicts itself.
+  it("takes 'open in browser' away once the upload is known gone", async () => {
+    stubProbe(() => Promise.resolve({ status: 404 }));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(OWN_UPLOAD_URL, "image");
+    expect(screen.getByRole("link", { name: /open in browser/i })).not.toBeNull();
+
+    container.querySelector("img")?.dispatchEvent(new Event("error"));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: /open in browser/i })).toBeNull();
+    });
+  });
+
+  it("KEEPS 'open in browser' on a generic failure — there the advice is still live", async () => {
+    // The suppression is scoped to `gone` on purpose. On an ordinary failed
+    // load "maybe it is your browser, try it over there" is still a real
+    // hypothesis, and the escape hatch still earns its place.
+    const fetchMock = stubProbe(() => Promise.reject(new TypeError("Failed to fetch")));
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(OWN_UPLOAD_URL, "image");
+    container.querySelector("img")?.dispatchEvent(new Event("error"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    expect(screen.getByText(/failed to load/i)).not.toBeNull();
+    expect(screen.getByRole("link", { name: /open in browser/i })).not.toBeNull();
+  });
+});
+
 // #1438 — swipe up or down to dismiss. The binder's decision table (which
 // drags commit, which spring back, what it refuses to claim) is pinned in
 // mediaViewerGesture.test.ts against a bare element; what is asserted HERE is

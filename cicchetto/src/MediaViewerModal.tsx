@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 import { copyText } from "./lib/clipboard";
 import { errorMessage } from "./lib/friendlyApiError";
+import { probeMediaAvailability } from "./lib/mediaAvailability";
 import { closeMediaViewer, type MediaViewerState, mediaViewerState } from "./lib/mediaViewer";
 import { bindDismissGesture, type DismissDirections } from "./lib/mediaViewerGesture";
 import { createOverlayLock } from "./lib/overlayScrollLock";
@@ -68,7 +69,13 @@ import { fetchTextResource, TEXT_VIEW_MAX_BYTES, type TextResource } from "./lib
 // ONE global keydown listener app-wide. Backdrop is a <button>
 // (UserContextMenu pattern) so close-on-outside needs no a11y lint suppressions.
 
-type MediaLoadStatus = "loading" | "ready" | "failed";
+// issue 1889 — `gone` is a REFINEMENT of `failed`, not a fifth thing that can
+// happen to a load: the element failed either way, and the only difference is
+// that the server was asked afterwards and answered 404. Kept in the same
+// closed set rather than in a second signal so the body has ONE thing to
+// render from — a parallel "is it gone" boolean beside the status would be two
+// values to keep in step for one paragraph of text.
+type MediaLoadStatus = "loading" | "ready" | "failed" | "gone";
 
 // Max gap (ms, event-timeStamp domain) between two single-finger taps for a
 // double-tap zoom toggle. 300ms is the platform double-tap convention.
@@ -404,21 +411,82 @@ const TextPane: Component<{
 // 404 can't spin forever. The failed media element is unmounted —
 // a broken <img> would render its alt text (the raw URL) under the
 // failure line.
+//
+// issue 1889 — that failure text used to be ONE sentence for two situations.
+// A deleted or expired upload 404s, and "failed to load — try open in
+// browser" both blames the reader's browser and sends them to a route that
+// answers `{"error":"not_found"}` as JSON. So on failure this component asks
+// the server what it thinks (lib/mediaAvailability.ts) and, on a read 404 and
+// only then, refines `failed` into `gone`.
 const MediaViewerBody: Component<{
   state: MediaViewerState;
   onScale: (scale: number) => void;
   onTextPaneRef: (el: HTMLDivElement | undefined) => void;
   onTextSource: (source: TextResource | undefined) => void;
+  // issue 1889 — true once the probe has confirmed the server has nothing at
+  // this link. The header's "open in browser" anchor is suppressed on it.
+  onGone: (gone: boolean) => void;
 }> = (props) => {
   const [status, setStatus] = createSignal<MediaLoadStatus>("loading");
-  // Transitions only leave "loading" (review fix): a transient
+
+  // issue 1889 — the probe is cancelled when the viewer closes mid-flight
+  // (TextPane precedent, one component up). An abort resolves to "unknown", so
+  // a viewer that is already gone cannot come back and rewrite its own text.
+  const abort = new AbortController();
+  onCleanup(() => {
+    abort.abort();
+  });
+
+  // ELEMENT events only ever leave "loading" (review fix): a transient
   // mid-playback error must not unmount a ready element, and a suspend
   // arriving after a failure must not resurrect a dead one.
-  const settle = (next: MediaLoadStatus) => (): void => {
-    if (status() === "loading") setStatus(next);
+  const ready = (): void => {
+    if (status() === "loading") setStatus("ready");
   };
-  const ready = settle("ready");
-  const failed = settle("failed");
+
+  // The failure arm is no longer symmetric with `ready`, and that asymmetry is
+  // the point of issue 1889: recording the failure is only half of it, because
+  // "the element could not render this" and "the server does not have this any
+  // more" are the same event to an <img> and two different sentences to the
+  // reader. So the same handler that settles the failure asks the server which
+  // one it was. Fired from HERE and not from an effect on `status()`: the
+  // probe belongs to the transition that started it, exactly once per open,
+  // and an effect would re-run on the transition it is itself about to cause.
+  const failed = (): void => {
+    if (status() !== "loading") return;
+    setStatus("failed");
+    void refineFailure();
+  };
+
+  // The ONLY writer of "gone", and the only new arc in the machine:
+  // `failed → gone`, never from "loading" and never from "ready". The status
+  // is re-read AFTER the await because the arc is a refinement of the failure
+  // this probe was started by — it is the transition rule, stated where it is
+  // enforced, not a defensive re-check.
+  //
+  // 🔴 `probeMediaAvailability` answers "unknown" for every way it can itself
+  // fail, so there is no arm here that turns a broken network into "gone".
+  const refineFailure = async (): Promise<void> => {
+    const availability = await probeMediaAvailability(
+      props.state.href,
+      window.location.origin,
+      abort.signal,
+    );
+    if (availability === "gone" && status() === "failed") setStatus("gone");
+  };
+
+  // issue 1889 — the header's "open in browser" anchor lives one component up,
+  // and it has to go away on a gone upload. Published as the single BIT the
+  // parent needs rather than the whole status: handing `MediaViewerDialog` the
+  // enum would invite a second state machine up there, and there is exactly
+  // one question it has to answer.
+  //
+  // Derived in an effect, so it cannot drift from the status it mirrors — the
+  // `onTextSource` precedent below, and for the same reason: publishing from
+  // the render body would mutate a parent signal mid-commit.
+  createEffect(() => {
+    props.onGone(status() === "gone");
+  });
 
   // video/audio readiness: loadedmetadata is the normal terminator
   // (duration + dimensions; loadeddata never fires under
@@ -436,7 +504,7 @@ const MediaViewerBody: Component<{
         <div role="status" aria-label="Loading media" class="media-viewer-spinner" />
       </Show>
       <Show
-        when={status() === "failed"}
+        when={status() === "failed" || status() === "gone"}
         fallback={
           <Switch>
             <Match when={props.state.kind === "image"}>
@@ -488,7 +556,27 @@ const MediaViewerBody: Component<{
           </Switch>
         }
       >
-        <p class="muted media-viewer-error">failed to load — try "open in browser"</p>
+        {/* issue 1889 — a GONE upload gets its own sentence, and the
+            difference is not cosmetic: the generic line names the reader's
+            browser as the thing that failed and then sends them to a route
+            that serves `{"error":"not_found"}` as JSON. Two operators went
+            hunting a client bug on that advice.
+
+            What this sentence deliberately does NOT say: WHICH of the causes
+            it was, and WHEN. `UploadsController.show/2` answers the same 404
+            for a malformed slug, a missing row, a soft-deleted row, an expired
+            row and a row whose file is gone from disk — it gives no oracle, on
+            purpose, and that stays. So "expired or removed" names the two
+            likely causes without claiming to know, and no wording here may
+            ever grow an "expired at HH:MM". */}
+        <Show
+          when={status() === "gone"}
+          fallback={<p class="muted media-viewer-error">failed to load — try "open in browser"</p>}
+        >
+          <p class="muted media-viewer-error">
+            gone — the server has no file at this link (expired or removed)
+          </p>
+        </Show>
       </Show>
     </div>
   );
@@ -549,6 +637,12 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
   // says what the last attempt did.
   const [textSource, setTextSource] = createSignal<TextResource | undefined>(undefined);
   const [copyOutcome, setCopyOutcome] = createSignal<CopyOutcome>({ kind: "idle" });
+
+  // issue 1889 — has the body's probe confirmed the upload is gone? A signal
+  // because the header RENDERS from it, and fresh per open like everything
+  // else here: the keyed <Show> remounts this component for every viewer
+  // state, so there is no stale "gone" to carry into the next open.
+  const [gone, setGone] = createSignal(false);
 
   // Gating on the RESOURCE and not on `isText` is strictly stronger than the
   // issue asks: it also keeps the button off a pane that is still fetching or
@@ -668,17 +762,33 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
                 copy
               </button>
             </Show>
-            <a
-              href={props.state.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="media-viewer-open-external"
-              onClick={(e) => {
-                maybeEscapePwaClick(e, props.state.href);
-              }}
-            >
-              open in browser
-            </a>
+            {/* issue 1889 — suppressed once the probe has confirmed the
+                server has nothing at this link, and ONLY then. This is an
+                INTERPRETATION of the issue, declared rather than assumed: the
+                issue says of the 404 case *'No "open in browser" suggestion:
+                that route returns JSON, not an image'*, and the header anchor
+                is that same suggestion in another form — it lands on the same
+                route and shows the reader `{"error":"not_found"}`, which is
+                what sent two operators after a client bug.
+
+                Least surprise decides the rest: a line that says the file is
+                gone, sitting beside a LIVE control that opens it, contradicts
+                itself. Deliberately NOT extended to the generic `failed`
+                state, where "maybe it is your browser, try it over there" is
+                still a live hypothesis and the advice still earns its place. */}
+            <Show when={!gone()}>
+              <a
+                href={props.state.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="media-viewer-open-external"
+                onClick={(e) => {
+                  maybeEscapePwaClick(e, props.state.href);
+                }}
+              >
+                open in browser
+              </a>
+            </Show>
           </div>
           <button
             type="button"
@@ -709,6 +819,7 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
             textPane = el;
           }}
           onTextSource={setTextSource}
+          onGone={setGone}
         />
       </div>
     </>
