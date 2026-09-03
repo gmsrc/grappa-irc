@@ -155,7 +155,9 @@ export default defineConfig({
       // by scripts/gen-pwa-icons.mjs): SVG favicon, `any` + `maskable`
       // PNGs, the iOS apple-touch PNG, and the legacy favicon.ico. Listed
       // so the SW precaches them (they're in public/ so Vite copies them
-      // regardless; this adds them to the offline shell).
+      // regardless; this adds them to the offline shell). `badge-96.png` is
+      // the Web Push `badge` silhouette (#1906) — same generator, same shell,
+      // NOT a manifest icon (see `NOTIFICATION_BADGE` in lib/pwaIcons.ts).
       includeAssets: [
         "icon.svg",
         "icon-192.png",
@@ -164,6 +166,7 @@ export default defineConfig({
         "icon-512-maskable.png",
         "apple-touch-icon.png",
         "favicon.ico",
+        "badge-96.png",
       ],
       manifest: {
         // Stable PWA identity per W3C Manifest spec — resolved as a

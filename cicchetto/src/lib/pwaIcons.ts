@@ -44,7 +44,7 @@ export const PWA_ICONS: readonly PwaIcon[] = [
   { src: "/icon-512-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
 ];
 
-// The 192px icon is the Web Push notification `icon` + `badge` source (the
+// The 192px icon is the Web Push notification `icon` source (the
 // notification surface renders small, so the 192 asset is right — the 512
 // is for the home-screen install). It is the FULL-BLEED `any` variant, not
 // the maskable one: the notification chrome does its own framing, so the
@@ -52,3 +52,24 @@ export const PWA_ICONS: readonly PwaIcon[] = [
 // NOT re-derived by array-index, so it stays a stable literal; the test
 // pins it to a declared manifest `src` so it can never drift to a 404 path.
 export const NOTIFICATION_ICON = "/icon-192.png";
+
+// #1906 — the Web Push notification `badge` is a SEPARATE asset, and
+// deliberately NOT a manifest icon. `icon` and `badge` are not two sizes of
+// one picture: `icon` is the large full-colour image, `badge` is the small
+// status-bar glyph, and Android paints the badge through an ALPHA-ONLY mask —
+// colour is discarded, every non-transparent pixel gets the system tint.
+// Measured on `icon-192.png`: 36864 of 36864 pixels fully opaque, so aliased
+// as the badge (the pre-#1906 shape) it could only render as a filled
+// square — the white blob reported from the field. iOS/Safari ignores
+// `badge` entirely, which is why the defect looked Android-specific.
+//
+// This PNG is the mark as a one-colour silhouette on a transparent canvas,
+// minted from the same `public/icon.svg` by `scripts/gen-pwa-icons.mjs` —
+// never traced from the raster (it would drift from the SVG the first time
+// the mark changed) and never keyed out of the flattened PNG (fringe alpha
+// the mask renders as a halo). 96px is 24dp at xxxhdpi, the largest density
+// Android draws the badge at. It carries no manifest `purpose`, so it must
+// never be appended to `PWA_ICONS`: `__tests__/pwaIcons.test.ts` pins that
+// and the icon/badge split, `__tests__/badgeAsset.test.ts` pins the alpha
+// channel of the file itself.
+export const NOTIFICATION_BADGE = "/badge-96.png";

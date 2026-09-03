@@ -10,7 +10,7 @@
 // functions, dedicated vitest. The SW imports from here at runtime;
 // no SW APIs are touched.
 
-import { NOTIFICATION_ICON } from "./pwaIcons";
+import { NOTIFICATION_BADGE, NOTIFICATION_ICON } from "./pwaIcons";
 
 /**
  * Wire shape for a Web Push payload (server → cic SW).
@@ -93,17 +93,21 @@ export type PushTarget = {
  *
  * Extracted from `service-worker.ts` (per this module's precedent) so
  * vitest can assert the notification `icon`/`badge` without instantiating
- * the SW global scope. The `icon` + `badge` derive from the single
- * `NOTIFICATION_ICON` source (shared with the Vite manifest via
- * `pwaIcons.ts`) — S18: they previously hardcoded `/icons/icon-192.png`,
- * a 404 path (icons are served at root) that rendered the blank glyph.
+ * the SW global scope. Both paths come from `pwaIcons.ts` — S18: they
+ * previously hardcoded `/icons/icon-192.png`, a 404 path (icons are served
+ * at root) that rendered the blank glyph.
+ *
+ * `icon` and `badge` are DIFFERENT assets (#1906). `icon` is the large
+ * full-colour image; `badge` is the small status-bar glyph that Android
+ * renders as an alpha mask, so it must be a transparent silhouette — the
+ * full-bleed opaque icon aliased there painted a solid white square.
  */
 export function pushNotificationOptions(payload: PushPayload): NotificationOptions {
   return {
     body: payload.body,
     tag: payload.tag,
     icon: NOTIFICATION_ICON,
-    badge: NOTIFICATION_ICON,
+    badge: NOTIFICATION_BADGE,
     data: { url: payload.url },
   };
 }

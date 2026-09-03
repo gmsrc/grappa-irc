@@ -45057,3 +45057,99 @@ viewports in the spec straddle 768 by construction, they are not a measurement o
 the reporter's device. And nothing here says the audible gap is the ONLY thing a
 rotation costs: the flip rebuilds the whole subtree, and the audio element is the
 casualty that was measured.
+<!-- entry #1906 -->
+
+---
+
+## 2026-09-03 — #1906: the Android push badge is an alpha mask, and the icon was opaque to the last pixel
+
+A phone that had been receiving cic pushes since they shipped showed a solid
+white square in the status bar in place of the grappa-glass mark. Not a
+regression — it had always looked like that — and invisible on iOS, which is
+why it read as device-specific.
+
+### The cause is a spec, not a bug
+
+`pushNotificationOptions()` passed `/icon-192.png` as BOTH `icon` and
+`badge`. The two fields are not two sizes of one picture. `icon` is the large
+full-colour image; `badge` is the small status-bar glyph, and Android draws
+it through the ALPHA channel alone — colour discarded, every non-transparent
+pixel painted with the system tint. `icon-192.png` is the full-bleed `any`
+icon on its own opaque `#0a0a0a` background: measured, 36864 of 36864 pixels
+at alpha 255. Under an alpha-only mask that input can render as exactly one
+thing, a filled square. The platform did what it is specified to do.
+
+### One asset per field, derived from the one SVG
+
+`public/badge-96.png` is new, and `NOTIFICATION_BADGE` names it next to
+`NOTIFICATION_ICON`. It is the mark as a ONE-colour silhouette on a
+transparent canvas, and it is minted by the same `scripts/gen-pwa-icons.mjs`
+from the same `public/icon.svg` as every other raster surface — the generator
+flattens every `fill="#…"` to white and captures on a transparent default
+background instead of the opaque page the six siblings use. Two alternatives
+were refused on purpose: tracing the raster would drift from the SVG the first
+time the mark changed, and keying the background out of the flattened PNG
+leaves fringe pixels at partial alpha that the mask renders as a halo. 96px is
+24dp at xxxhdpi, the largest density Android draws the badge at.
+
+It is NOT a manifest icon. A badge carries no `purpose`, so it never joins
+`PWA_ICONS`; it does join `includeAssets` so the offline shell precaches it
+(the `**/*.png` glob would have caught it regardless — listing it keeps the
+icon set in one place). The Badging-API counter `applyIconBadge()` in the SW
+is an unrelated axis (a number on the home-screen icon) and is untouched.
+
+### The third door: the endpoint's static allowlist
+
+A new root-level public asset has THREE places to be, not two, and the third
+was found by the emulator rather than by reading: `GrappaWeb.Endpoint`'s
+`@cic_static_only` names every top-level dist entry `Plug.Static` may serve,
+and everything else falls through to the SPA history fallback. With the
+bundle deployed and the badge sitting in the dist, `GET /badge-96.png`
+answered `200 text/html` — index.html — exactly the #485 / #1739 regression
+class, and the quietest instance of it yet: no page references the badge, so
+nothing draws a broken image; the service worker precaches whatever bytes it
+is given, and Android paints its own fallback where the glyph should be.
+`badge-96.png` now sits in the allowlist and `spa_serving_test.exs` pins the
+content type, the same lockstep test the icons have. Note for the dev stack:
+the cached `Plug.Static` opts live in `:persistent_term` (#399), so a code
+reload does NOT pick up an allowlist change — the BEAM has to restart.
+
+### The test that passed on the defect, and the two that would not have
+
+`pwaIcons.test.ts` tied `badge` to `NOTIFICATION_ICON` — it asserted the alias
+as the invariant, so it was green on the blob. It now pins `icon` to the
+manifest and `badge` to `NOTIFICATION_BADGE`, DISTINCT from `icon` and ABSENT
+from `PWA_ICONS`; `pushPayload.test.ts` pins the same split from the SW's
+side. The property of the bytes themselves is pinned by a new
+`badgeAsset.test.ts`, which decodes the PNG (IHDR + inflate + unfilter, for the
+one shape the generator writes) and asserts RGBA, 96×96, every corner at alpha
+0, more than half the canvas transparent, an opaque mark between 5% and 50% of
+it, and every painted pixel white. The contrast case decodes `icon-192.png`
+and asserts it is opaque throughout — that is the reason the badge cannot be
+the icon, stated as a test rather than a comment.
+
+### The generator is not byte-stable across Chrome versions — measured
+
+Running `gen-pwa-icons.mjs` under Chrome 151 re-wrote all six existing PNGs
+with different bytes (pixel-identical mark, different encoder output from the
+one that minted them). Only `badge-96.png` is committed here; the siblings were
+reverted. That is also why the asset gate asserts PIXEL PROPERTIES and never a
+digest: a byte pin would go red on every Chrome bump for no change in the mark.
+
+### Verified on the emulator, and what that does and does not prove
+
+Before and after were captured on an Android 17 emulator running Chrome 152
+against the local dev stack. The push was injected through the DevTools
+protocol (`ServiceWorker.deliverPushMessage`, what the DevTools "Push" button
+sends) with a payload shaped like `Grappa.Push.Payload`'s, so cic's real SW
+push handler and its `showNotification` call ran — the layer the defect lives
+in. Before: a white square in the status bar. After: the glass silhouette.
+Not exercised: FCM delivery and the VAPID subscription, which need a Google
+account the emulator does not have; the dedup gate was satisfied by leaving the
+cic tabs hidden behind a blank tab, since Android drops Chrome's DevTools socket
+the moment the browser itself is backgrounded. Two traps for whoever repeats
+this: Chrome's abusive-notification heuristic replaces the toast with a
+"Possible spam" wrapper after a handful of un-tapped test pushes (tap "Show
+notification" to get the real one back), and `Browser.grantPermissions` alone
+left `Notification.permission` at `denied` on Android — `Browser.setPermission`
+did the job.

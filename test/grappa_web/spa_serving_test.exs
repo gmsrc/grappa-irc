@@ -107,6 +107,17 @@ defmodule GrappaWeb.SpaServingTest do
       assert ["image/png" <> _] = get_resp_header(conn, "content-type")
     end
 
+    # #1906 — the Web Push `badge` (the alpha silhouette Android paints into
+    # the status bar) is a root-level public asset with NO page referencing
+    # it: only the service worker fetches it, so an index.html answer draws
+    # nothing anyone sees except the platform's own fallback glyph. Measured
+    # before it joined the allowlist: `text/html; charset=utf-8`.
+    test "GET /badge-96.png serves the push badge as an image, not the SPA shell" do
+      conn = get(build_conn(), "/badge-96.png")
+      assert conn.status == 200
+      assert ["image/png" <> _] = get_resp_header(conn, "content-type")
+    end
+
     test "GET /favicon.ico serves its own bytes, never the text/html SPA shell" do
       conn = get(build_conn(), "/favicon.ico")
       assert conn.status == 200

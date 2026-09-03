@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pushNotificationOptions } from "../lib/pushPayload";
-import { NOTIFICATION_ICON, PWA_ICONS } from "../lib/pwaIcons";
+import { NOTIFICATION_BADGE, NOTIFICATION_ICON, PWA_ICONS } from "../lib/pwaIcons";
 
 // S18 (codebase review 2026-07-08) — the service-worker's Web Push
 // notification pointed `icon`/`badge` at `/icons/icon-192.png`, but icons
@@ -18,15 +18,12 @@ import { NOTIFICATION_ICON, PWA_ICONS } from "../lib/pwaIcons";
 describe("PWA icons — S18 notification icon ↔ manifest tie", () => {
   const opts = pushNotificationOptions({ title: "t", body: "b", tag: "x", url: "/foo" });
 
-  it("the SW notification icon + badge are a declared manifest icon (no drift)", () => {
-    const declared = PWA_ICONS.map((i) => i.src);
-    expect(declared).toContain(opts.icon);
-    expect(declared).toContain(opts.badge);
+  it("the SW notification icon is a declared manifest icon (no drift)", () => {
+    expect(PWA_ICONS.map((i) => i.src)).toContain(opts.icon);
   });
 
-  it("the SW notification icon + badge both resolve to the single NOTIFICATION_ICON source", () => {
+  it("the SW notification icon resolves to the single NOTIFICATION_ICON source", () => {
     expect(opts.icon).toBe(NOTIFICATION_ICON);
-    expect(opts.badge).toBe(NOTIFICATION_ICON);
   });
 
   it("NOTIFICATION_ICON is a manifest-declared icon (root-served path, not /icons/…)", () => {
@@ -72,5 +69,30 @@ describe("PWA icons — #274 any/maskable purpose split", () => {
     const notif = bySrc(NOTIFICATION_ICON);
     expect(notif?.purpose).toBe("any");
     expect(notif?.sizes).toBe("192x192");
+  });
+});
+
+// #1906 — the notification `badge` is NOT the icon. Android renders the
+// badge through an alpha-only mask, so the full-bleed opaque `icon-192.png`
+// aliased into `badge` painted a solid white square in the status bar. The
+// pre-#1906 tie test above asserted `badge === NOTIFICATION_ICON` and so
+// PASSED on the defect; these assertions are the ones that would have
+// caught it. The pixels of the asset itself are pinned in
+// `badgeAsset.test.ts`.
+describe("PWA icons — #1906 the notification badge is its own alpha-mask asset", () => {
+  const opts = pushNotificationOptions({ title: "t", body: "b", tag: "x", url: "/foo" });
+
+  it("the SW notification badge is NOTIFICATION_BADGE, distinct from the icon", () => {
+    expect(opts.badge).toBe(NOTIFICATION_BADGE);
+    expect(opts.badge).not.toBe(opts.icon);
+    expect(NOTIFICATION_BADGE).not.toBe(NOTIFICATION_ICON);
+  });
+
+  it("NOTIFICATION_BADGE is a root-served path (S18) and NOT a manifest icon", () => {
+    expect(NOTIFICATION_BADGE.startsWith("/")).toBe(true);
+    expect(NOTIFICATION_BADGE.startsWith("/icons/")).toBe(false);
+    // A badge carries no manifest `purpose` — appending it to `PWA_ICONS`
+    // would advertise an alpha silhouette as an installable app icon.
+    expect(PWA_ICONS.map((i) => i.src)).not.toContain(NOTIFICATION_BADGE);
   });
 });
