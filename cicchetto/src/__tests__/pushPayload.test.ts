@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import presencePayloads from "../lib/presencePushPayloads.json";
-import { narrowPushPayload, parsePushTargetUrl } from "../lib/pushPayload";
+import { narrowPushPayload, parsePushTargetUrl, pushNotificationOptions } from "../lib/pushPayload";
+import { NOTIFICATION_BADGE, NOTIFICATION_ICON } from "../lib/pwaIcons";
 
 // Push notifications cluster B2 (2026-05-14) — pushPayload helpers.
 //
@@ -68,6 +69,32 @@ describe("narrowPushPayload", () => {
     expect(narrowPushPayload({ ...valid, badge: "nope" })).toEqual(valid);
     expect(narrowPushPayload({ ...valid, badge: -2 })).toEqual(valid);
     expect(narrowPushPayload({ ...valid, badge: Number.NaN })).toEqual(valid);
+  });
+});
+
+describe("pushNotificationOptions", () => {
+  const payload = {
+    title: "vjt",
+    body: "ping in #sbiffo",
+    tag: "azzurra:#sbiffo",
+    url: "/?network=azzurra&channel=%23sbiffo",
+  };
+  const opts = pushNotificationOptions(payload);
+
+  it("carries the payload's body, tag and deep-link url through", () => {
+    expect(opts.body).toBe(payload.body);
+    expect(opts.tag).toBe(payload.tag);
+    expect(opts.data).toEqual({ url: payload.url });
+  });
+
+  // #1906 — `icon` and `badge` are two DIFFERENT assets. The full-colour
+  // icon aliased into `badge` rendered as a solid white square on Android
+  // (alpha-only mask over a fully opaque PNG); a test that only pinned each
+  // field's value passed on that defect. The distinctness is the assertion.
+  it("uses the full-colour icon for `icon` and the alpha silhouette for `badge`", () => {
+    expect(opts.icon).toBe(NOTIFICATION_ICON);
+    expect(opts.badge).toBe(NOTIFICATION_BADGE);
+    expect(opts.badge).not.toBe(opts.icon);
   });
 });
 
