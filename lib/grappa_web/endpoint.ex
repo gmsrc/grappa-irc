@@ -67,10 +67,17 @@ defmodule GrappaWeb.Endpoint do
   # could), so a logo arriving as `index.html` draws the browser's broken glyph
   # with nothing in any gate to say why. Measured on `spa_serving_test.exs`
   # before this line existed: `content-type: text/html; charset=utf-8`.
+  #
+  # #1906 added `badge-96.png` — the Web Push notification `badge`, the alpha
+  # silhouette Android paints into the status bar. Same regression class
+  # again, and quieter still: the SW fetches it with no page to show a broken
+  # glyph on, and the platform's answer to an HTML document where it expected
+  # an image is to draw its own fallback in the status bar. Measured before
+  # this line existed: `text/html; charset=utf-8`, index.html.
   @cic_static_only ~w(assets backgrounds fonts radio-logos manifest.webmanifest
                       icon.svg icon-192.png icon-512.png
                       icon-192-maskable.png icon-512-maskable.png
-                      apple-touch-icon.png favicon.ico)
+                      apple-touch-icon.png favicon.ico badge-96.png)
 
   # #485 — the far-future cache window (10 years, in seconds) for the
   # system-owned, content-keyed `/backgrounds/` assets. Shared by the
