@@ -10,13 +10,27 @@
 //        ├── icon-192-maskable.png   192  purpose:maskable  (80% safe zone)
 //        ├── icon-512-maskable.png   512  purpose:maskable  (80% safe zone)
 //        ├── apple-touch-icon.png    180  iOS home screen   (opaque, no maskable)
-//        └── favicon.ico             16/32/48 packed        (legacy tab)
+//        ├── favicon.ico             16/32/48 packed        (legacy tab)
+//        └── badge-96.png            96   Web Push `badge`  (alpha silhouette, TRANSPARENT bg — #1906)
 //
 // The `any` PNGs render the SVG edge-to-edge. The `maskable` PNGs render it
 // into the central 80% of an opaque canvas so Android's circle/squircle
 // crop can never clip the glyph (W3C maskable safe zone). apple-touch is
 // full-bleed on the SVG's own opaque bg (iOS rounds corners itself and has
 // no maskable/transparency support). The .ico embeds PNG payloads (Vista+).
+//
+// #1906 — `badge-96.png` is the ONE surface that is NOT a picture of the mark
+// but a MASK of it. Android paints the Web Push `badge` (the status-bar glyph)
+// through the alpha channel alone: colour is discarded and every
+// non-transparent pixel gets the system tint. The full-bleed `any` icon is
+// opaque to the last pixel (measured: 36864/36864 at 192²), so aliased as the
+// badge it renders as a filled square. The badge therefore flattens every
+// fill in the SVG to one opaque colour and drops the background — derived
+// HERE, from the same SVG, so it cannot drift from the mark, and never keyed
+// out of a flattened PNG, whose fringe pixels the mask would render as a
+// halo. 96px = 24dp at xxxhdpi, the largest density Android's badge is drawn
+// at. Not a manifest icon: it carries no `purpose`, so it must never join
+// `PWA_ICONS`.
 //
 // WHY headless Chrome and not a node SVG lib: the browser is the one
 // renderer whose SVG output matches what the PWA actually paints, and it is
@@ -64,6 +78,30 @@ const pageMaskable = (n) => {
     `display:flex;align-items:center;justify-content:center}` +
     `.box{width:${inner}px;height:${inner}px}.box>svg{display:block;width:100%;height:100%}</style>` +
     `<div class="pad"><div class="box">${SVG}</div></div>`
+  );
+};
+
+// Badge page (#1906): the mark as a ONE-colour silhouette on a TRANSPARENT
+// canvas. The fill colour is irrelevant to Android (alpha mask) — white keeps
+// it legible wherever a platform does paint it as-is. Every `fill="…"` in the
+// SVG (the accent glass and the accent-2 olive) collapses to the same colour:
+// the olive overlaps the rim, and as a silhouette the two are one shape.
+const BADGE_FILL = "#ffffff";
+const FILL_ATTR = /fill="#[0-9a-fA-F]{3,8}"/g;
+
+const pageBadge = (n) => {
+  const fills = SVG.match(FILL_ATTR)?.length ?? 0;
+  if (fills === 0) {
+    // The flatten matched nothing — the SVG's fill spelling changed and the
+    // badge would come out in the mark's own colours (harmless for the mask,
+    // but the invariant "one colour" is gone). Stop rather than mint it.
+    throw new Error("icon.svg carries no fill=\"#…\" attribute to flatten for the badge");
+  }
+  return (
+    `<!doctype html><meta charset="utf-8">` +
+    `<style>html,body{margin:0;padding:0;background:transparent}` +
+    `.wrap{width:${n}px;height:${n}px}.wrap>svg{display:block;width:100%;height:100%}</style>` +
+    `<div class="wrap">${SVG.replace(FILL_ATTR, `fill="${BADGE_FILL}"`)}</div>`
   );
 };
 
@@ -118,12 +156,19 @@ function connect(wsUrl) {
 }
 
 // Render one HTML page at exactly n×n and return the PNG bytes (dsf=1).
-async function shot(cdp, html, n) {
+// `transparent` swaps Chrome's default white page background for a fully
+// transparent one, so the PNG keeps an alpha channel where the page paints
+// nothing (the badge); every opaque surface passes `false` and lets its own
+// `#0a0a0a` background reach every edge.
+async function shot(cdp, html, n, transparent) {
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width: n,
     height: n,
     deviceScaleFactor: 1,
     mobile: false,
+  });
+  await cdp.send("Emulation.setDefaultBackgroundColorOverride", {
+    color: transparent ? { r: 0, g: 0, b: 0, a: 0 } : { r: 255, g: 255, b: 255, a: 1 },
   });
   const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
   await cdp.send("Page.navigate", { url: dataUrl });
@@ -180,18 +225,20 @@ async function main() {
 
   try {
     // any (full-bleed)
-    write("icon-192.png", await shot(cdp, pageFullBleed(192), 192));
-    write("icon-512.png", await shot(cdp, pageFullBleed(512), 512));
+    write("icon-192.png", await shot(cdp, pageFullBleed(192), 192, false));
+    write("icon-512.png", await shot(cdp, pageFullBleed(512), 512, false));
     // maskable (safe zone)
-    write("icon-192-maskable.png", await shot(cdp, pageMaskable(192), 192));
-    write("icon-512-maskable.png", await shot(cdp, pageMaskable(512), 512));
+    write("icon-192-maskable.png", await shot(cdp, pageMaskable(192), 192, false));
+    write("icon-512-maskable.png", await shot(cdp, pageMaskable(512), 512, false));
     // iOS home screen
-    write("apple-touch-icon.png", await shot(cdp, pageFullBleed(180), 180));
+    write("apple-touch-icon.png", await shot(cdp, pageFullBleed(180), 180, false));
+    // Web Push badge — alpha silhouette (#1906)
+    write("badge-96.png", await shot(cdp, pageBadge(96), 96, true));
     // favicon.ico from 16/32/48
     const icoSizes = [16, 32, 48];
     const pngs = [];
     for (const size of icoSizes) {
-      pngs.push({ size, bytes: await shot(cdp, pageFullBleed(size), size) });
+      pngs.push({ size, bytes: await shot(cdp, pageFullBleed(size), size, false) });
     }
     write("favicon.ico", buildIco(pngs));
   } finally {
