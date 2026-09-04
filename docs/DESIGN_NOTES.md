@@ -45153,3 +45153,103 @@ this: Chrome's abusive-notification heuristic replaces the toast with a
 notification" to get the real one back), and `Browser.grantPermissions` alone
 left `Notification.permission` at `denied` on Android — `Browser.setPermission`
 did the job.
+<!-- entry #1908 -->
+
+---
+
+## 2026-09-04 — #1908: the colour code is the bug, not the control byte
+
+A watchlist keyword never fired on a game bot's `QUACK!` line while the same
+word typed by a human highlighted fine. The reported shape invites the
+generalisation "formatting breaks watchlists", and that generalisation is
+wrong in a way that would have shipped a cure leaving the bug fully intact.
+
+**What actually breaks it.** `matchesWatchlist` and `Grappa.Mentions` both ran
+their word-boundary regex against the RAW wire body, while the operator picks
+the keyword by reading the RENDERED text. The argument-free attribute bytes are
+harmless there: `\x02` `\x0f` `\x11` `\x16` `\x1d` `\x1e` `\x1f` are not word
+characters, so `\b` still has its transition on both sides of a term. The
+COLOUR byte is not: it drags up to four decimal digits into the text, and
+digits ARE word characters, so `\x03` `1` `5` before `QUACK` reads to the regex
+as `...15QUACK` and the term's left anchor has nothing to sit on.
+
+**The contrast case is what pins it, and it is field evidence rather than
+argument.** A URL-title bot on another network formats *every* line and matches
+fine — 872 stored lines, 139 carrying `\x02`, zero carrying `\x03`, and terms
+sitting flush against the bold on both edges all match. Without that half, "a
+formatted line failed" is the only datum and a stripper that removed control
+bytes WITHOUT their arguments would look correct while leaving `15` glued to
+the `Q`.
+
+Colour 15 is light grey and 99 is the default colour: both render as ordinary
+text, which is why nothing on screen suggested formatting was involved and why
+the first theory was case folding.
+
+**Measured, and it killed a premise this slice was handed.** The working
+hypothesis going in was that `mircPlainText()` might strip the control bytes
+without their arguments, and that the real cure would therefore be inside the
+parser. It is not: the shipped `parseMircFormat` already consumes `\x03` plus
+up to two digits plus an optional `,` plus two more, and all nine spellings
+(`15` `04` `4` `04,01` `99` `00`, bare, stray comma, three digits) reduce to
+`QUACK!`. Positive control: the bold byte IS removed, so the instrument is
+alive. Negative control: a bare `15QUACK!` comes back untouched, so it is not
+deleting digits — it consumes them only as arguments. The cure on the client is
+therefore one line: CALL the projection. Reading the parser suggests the same
+conclusion; measuring it is what makes it a fact, and the premise it retired
+was the expensive half of the slice.
+
+**Why the server gets a second implementation, knowingly.** cic's projection is
+derived from the renderer's own parser, which is exactly why it cannot drift
+from what is on screen. The server has no renderer to derive anything from, and
+porting a run-producing parser there would be dead weight — nothing server-side
+styles a message. So `Grappa.IRC.MircFormat.plain_text/1` is a second
+implementation of the consumption rule, and the honest thing is to name that
+rather than pretend the ports share code. What holds them together is the same
+discipline #1786's anchor rule runs under: two shared tables, one for the
+consumption rule (`test/grappa/irc/mirc_format_test.exs`) and one for the
+mention truth table (`test/grappa/mentions_test.exs` and its client twin), each
+carrying the note that a case added on one side without the other IS the drift.
+
+Two details in that rule are load-bearing and neither is obvious. The comma is
+consumed only when digits follow it, so `\x034,foo` keeps `,foo` as literal
+text — mIRC's behaviour, and a naive `\x03\d{0,2}(,\d{0,2})?` would eat the
+bare comma and diverge. And the digit classes are spelled `[0-9]` with no
+`unicode` option, because the client's `isDigit` is a bare `0x30..0x39` range
+test: a `\d` under `unicode` would consume an Arabic-Indic digit the client
+leaves as text, and the two ports would disagree on a body neither author will
+ever type by hand. Byte semantics are also the honest ones for IRC, and they
+are safe on UTF-8 because every sequence removed is ASCII and a continuation
+byte is never below `0x80`.
+
+**One funnel per port, chosen so a later door inherits the fix.** Server-side
+the projection sits in the private `body_matches?/2`, which every mention door
+already reaches: the OS push through `mentioned?/3`, the sidebar badge through
+`matchers/2` + `matches?/2`, and the mentions-while-away bundle through
+`aggregate_mentions/6`. Client-side it sits in `matchesWatchlist` — once per
+call, not inside the per-term `matchesTerm` — which is the single predicate
+behind the visual highlight, the mentions window and the push mirror. Both ports
+change together by construction; splitting them is how the visual highlight and
+the OS push diverged before #370.
+
+The projection is a MATCH-time view only. `aggregate_mentions/6` still returns
+the stored row with its control bytes intact, because cic renders the colours
+from it — pinned by its own test, since a strip that leaked into the returned
+row would be invisible to every predicate test.
+
+**The test that separates the cure from the cheap wrong one.** Every case above
+also passes if the anchor is LOOSENED instead of the body being stripped. One
+case does not: after a genuine strip the body is `QUACK!`, so a term spelling
+the colour ARGUMENTS (`15QUACK`) must now MISS, where a loosened anchor would
+keep matching it against the raw bytes. That case was measured red-before-green
+on both ports in the direction that matters — it is the only one that failed
+with `got true, expected false` rather than the reverse.
+
+**What this does NOT settle.** The cost was not measured: the projection is one
+regex pass per body per predicate call, and on the bulk badge fold that is one
+extra pass per row. It is the same complexity class as the matching already
+being done there and it was left unbenchmarked, deliberately, rather than
+guessed at. Nor does it touch what is STORED or RENDERED — scrollback keeps the
+raw bytes, and every other consumer of a body is unchanged. And the report's
+own reach is one bot on one network: the rule generalises because the mechanism
+is the regex word class rather than any bot's habits, but no survey of senders
+was run to say how many lines in the corpus were affected.
