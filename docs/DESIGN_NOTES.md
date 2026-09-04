@@ -45253,3 +45253,90 @@ raw bytes, and every other consumer of a body is unchanged. And the report's
 own reach is one bot on one network: the rule generalises because the mechanism
 is the regex word class rather than any bot's habits, but no survey of senders
 was run to say how many lines in the corpus were affected.
+<!-- entry #1912 -->
+
+---
+
+## 2026-09-05 — #1912: the Kubernetes manifests, and the egress list that would have bricked the bouncer
+
+Kustomize manifests for the release image, at the repository root: a root
+`kustomization.yaml` importing `base/` (Deployment, Service, PVC, an optional
+Secret template, a NetworkPolicy) plus `overlays/default/` for the PHX_HOST
+patch, an Ingress example and the IRC-egress rule. Root and not `infra/k8s/`
+because that is what was asked for; the layout is not the interesting part.
+
+**Shipped untested, on purpose, and the header says so.** The open question was
+whether to add a kind-based smoke job to CI. We took the other branch — a
+support-status header in every file stating the path is community-maintained
+and not exercised by CI. The two options are not symmetric: a header is
+reversible in one commit, a Kubernetes target in CI is owned forever. The cost
+is real and named rather than hidden: these manifests are reviewed by reading,
+and they can rot without anything going red.
+
+**The egress set was measured from the code, not copied from the request.** The
+list that came with the ask named DNS, IRC, web push and (once OIDC lands) the
+IdP. Enumerating every outbound call site in `lib/` found two more it did not:
+`Grappa.Net.ImageFetcher.Req.fetch/1` (`Req.get/2`), which is load-bearing for
+theme backgrounds and cached peer CTCP AVATAR images, and
+`Grappa.Admission.Captcha.SiteVerifyHttp.verify/4` (`Req.post/2`), dormant until
+`GRAPPA_CAPTCHA_PROVIDER` is set. One candidate was refused with the
+measurement: reverse-DNS is not separate egress —
+`Grappa.Net.PtrResolver.resolve/1` issues a PTR query through `:inet_res` to the
+cluster resolver and never dials the address it is naming, so the DNS rule
+already covers it. DNS itself needs UDP *and* TCP 53, because a truncated answer
+retries over TCP and a UDP-only rule turns that into intermittent resolution
+failure.
+
+**Why `base/` allows any port to the public internet rather than 443.** A
+NetworkPolicy that selects a pod and declares `policyTypes: [Ingress, Egress]`
+makes everything it does not list denied — so on a permissive cluster the object
+does not *describe* a posture, it *creates* one. A 443-only base would therefore
+ship a bouncer that cannot reach IRC to every cluster that applied it, and IRC
+ports are the operator's (6697, 6667, anything). Pinning the hosts in `base/` is
+impossible for the same reason. The boundary that is worth enforcing here is not
+the port but the direction: everything public is allowed on any port, everything
+private or in-cluster is denied — which is also, exactly, the posture
+`Grappa.Net.Ssrf` already enforces application-side for the image fetcher. The
+per-network tightening, and the rule an operator with a private ircd MUST add,
+ship commented in the overlay; a NetworkPolicy is purely additive, so that patch
+REPLACES `spec.egress` rather than extending it (measured by rendering it, not
+assumed).
+
+The failure mode is why this is prose and not a bullet list: an incomplete
+egress allowlist does not look like a firewall problem. grappa reports itself
+up, `/healthz` stays green, and every network sits in `connecting` forever —
+indistinguishable, from the operator's chair, from an upstream outage.
+
+**Three image-shaped traps Kubernetes exposes that no other substrate does.**
+`Dockerfile.release` says `USER grappa`, a NAME: adding the reflexive
+`runAsNonRoot: true` makes the kubelet refuse the pod outright, because it
+cannot verify a non-numeric user is non-root. A freshly provisioned PVC is
+root-owned, so without an `fsGroup` the non-root entrypoint dies on its first
+write to `/data` — and the value is arbitrary, since the kubelet chowns the
+volume to that GID *and* adds it to the pod's supplementary groups. And
+`PEER_AVATARS_STORAGE_ROOT` is the one state root the release image does NOT
+bake: `config/runtime.exs` defaults it to the relative `runtime/peer_avatars`,
+which resolves against WORKDIR `/app` — the container's ephemeral layer, not the
+volume. It is only a cache, so this is durability rather than correctness, but
+it means the claim "everything in `/data`" is true of the database, the uploads
+and the secrets, and not of the avatars.
+
+**`/healthz` is a deep check, and the probes are set accordingly.** It sits
+outside both router pipelines (`pipe_through []`) and answers under any auth
+state, which is what makes it usable at all — but `Grappa.Health.check/0` runs
+`Repo.query("SELECT 1")` and asserts the singleton ETS tables exist. That is
+right for readiness and needs a long leash on liveness: a transient SQLite lock
+must not get the single writer killed. Hence ~3 minutes of sustained failure
+before a restart, and a startup probe to cover first-boot migrations plus theme
+seeding.
+
+**What this does NOT settle.** Nothing was applied to a cluster. The manifests
+render (`kubectl kustomize` on both the root and the overlay, and on the
+commented Secret, Ingress and IRC-egress templates with their comments stripped),
+which proves they parse and compose; it proves nothing about admission, about
+whether any particular CNI accepts an IPv6 `ipBlock`, or about whether the pod
+actually boots. `kubectl apply --dry-run=client` could not stand in for that —
+it fetches the OpenAPI schema from an API server, and there is none here. The
+Kanidm example the request asked for is absent and stays absent until the OIDC
+client exists (#1911): a Kanidm deployed next to a grappa with no OIDC client
+has nothing to talk to.
