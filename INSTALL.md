@@ -83,6 +83,88 @@ Elastic IP). Nothing is retained.
 > at a git ref and execs it — it is never inlined). Operator runbook for the AWS
 > box: [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
+## Kubernetes (`kubectl apply -k`)
+
+> **Support status: community-maintained, and NOT tested in CI.** Nothing in
+> this repository exercises Kubernetes — no kind cluster, no `apply -k` smoke
+> job, no `/healthz` wait. These manifests are reviewed by reading, not by
+> running, and they can rot without anything going red. Every other path on
+> this page is exercised somewhere; this one is not.
+
+Kustomize manifests for the pre-built release image live in the repository
+root:
+
+```
+kustomization.yaml     # the plain install path — imports base/
+base/
+  kustomization.yaml
+  deployment.yaml      # 1 replica, Recreate, /healthz probes
+  service.yaml         # ClusterIP :4000, plain HTTP
+  pvc.yaml             # RWO, mounted at /data
+  secret.yaml          # OPTIONAL, shipped commented out
+  networkpolicy.yaml   # read its header before applying it
+overlays/default/
+  kustomization.yaml   # PHX_HOST patch + Ingress example + IRC egress rule
+```
+
+**Install:** set `PHX_HOST` — the public hostname clients reach — then apply.
+
+```sh
+# Edit the PHX_HOST value in base/deployment.yaml, then:
+kubectl apply -k .
+```
+
+Or, without editing `base/`, use the overlay (it patches `PHX_HOST` from its
+own `kustomization.yaml` and carries the Ingress example):
+
+```sh
+# Edit overlays/default/kustomization.yaml, then:
+kubectl apply -k overlays/default
+```
+
+`PHX_HOST` is the **only** value you must supply. Everything else the image
+either bakes (`DATABASE_PATH`, `UPLOADS_STORAGE_ROOT`, `CIC_DIST_ROOT`, `PORT`)
+or generates on first boot onto the `/data` volume — `SECRET_KEY_BASE`,
+`SECRET_SIGNING_SALT`, `RELEASE_COOKIE`, `GRAPPA_ENCRYPTION_KEY` and the VAPID
+pair — before creating the database directory and the uploads root and running
+pending migrations. Left empty, the container **refuses to boot**, on purpose.
+Supplying your own key material instead is optional; see the commented
+`base/secret.yaml`.
+
+There is **one** Deployment and **one** Service because the cicchetto PWA is
+served by the same BEAM that runs the bouncer. TLS terminates in front of the
+pod, exactly as on every other path.
+
+**Read `base/networkpolicy.yaml`'s header before applying on a cluster that is
+not already default-deny.** A NetworkPolicy that selects a pod makes everything
+it does not list *denied*, and an incomplete egress list does not look like a
+firewall problem: grappa reports itself up, `/healthz` stays green, and every
+network sits in `connecting` forever. If your IRC server is private —
+in-cluster, on the LAN, behind a VPN — the base policy denies it and you must
+add the rule the overlay carries.
+
+**Updates on this path are always COLD**, for the same reason as the Docker
+image path: the release image ships no `CodeReloader`, so there is nothing to
+hot-swap. Moving the image tag is not enough on its own — the pod has to be
+recreated:
+
+```sh
+kubectl set image deployment/grappa grappa=ghcr.io/vjt/grappa:vX.Y.Z
+# or, when the tag itself moved (e.g. :latest):
+kubectl rollout restart deployment/grappa
+```
+
+The Deployment uses `strategy: Recreate`, not a rolling update, because SQLite
+is a single-writer store and a rolling update would briefly run two pods on one
+volume. So the old pod is fully gone before its replacement starts: **IRC
+sessions drop for the seconds of the recreate.** The database and uploads on
+the volume are untouched.
+
+> **Back up the `/data` volume whole.** It holds the database, the uploads
+> *and* `/data/grappa.env`, which holds `GRAPPA_ENCRYPTION_KEY` — the key that
+> decrypts every stored upstream credential. Restoring the database without it
+> restores nothing usable.
+
 ## Prerequisites
 
 - **Docker Engine** with the **Compose v2** plugin (`docker compose
