@@ -108,7 +108,7 @@ defmodule Grappa.Mentions do
 
   import Ecto.Query
 
-  alias Grappa.IRC.Identifier
+  alias Grappa.IRC.{Identifier, MircFormat}
   alias Grappa.Repo
   alias Grappa.Scrollback.Message
 
@@ -320,10 +320,30 @@ defmodule Grappa.Mentions do
 
   # Returns true if body matches ANY compiled pattern.
   # `nil` body (e.g. for presence kinds that slip through) never matches.
+  #
+  # issue 1908 — the match runs against the DE-FORMATTED body, because that is
+  # the text the operator read when they typed the keyword into the settings
+  # pane. This is the ONE place the projection is applied, deliberately: every
+  # server-side mention door reaches the predicate through here — the OS push
+  # via `mentioned?/3`, the sidebar badge via `matchers/2` + `matches?/2`, and
+  # the mentions-while-away bundle via `aggregate_mentions/6` — so a door added
+  # later inherits it instead of having to remember it.
+  #
+  # The defect is narrower than "control bytes in the body" and the narrow
+  # reading is what forces a projection rather than an anchor change: `\x02`
+  # and the other argument-free bytes are not word characters, so a bold-only
+  # sender always matched fine. The COLOUR byte drags its numeric arguments
+  # into the text, and digits ARE word characters, so `\x0315QUACK!` reads as
+  # `...15QUACK!` and the term's left `\b` has no transition to sit on. See
+  # `Grappa.IRC.MircFormat` for the consumption rule and its client twin.
+  #
+  # A MATCH-time view only: what `aggregate_mentions/6` returns is the stored
+  # row, control bytes intact, because cic renders the colours from it.
   @spec body_matches?(String.t() | nil, [Regex.t()]) :: boolean()
   defp body_matches?(nil, _), do: false
 
   defp body_matches?(body, compiled) do
-    Enum.any?(compiled, &Regex.match?(&1, body))
+    plain = MircFormat.plain_text(body)
+    Enum.any?(compiled, &Regex.match?(&1, plain))
   end
 end

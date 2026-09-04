@@ -8,8 +8,11 @@ defmodule Grappa.IRC do
   (`Grappa.IRC.AuthFSM`), identifier validators
   (`Grappa.IRC.Identifier`), the shared IRC-registration identity tuple
   validators (`Grappa.IRC.Identity`, #211 phase 2), the measured
-  JOIN-failure numeric set (`Grappa.IRC.JoinFailure`, #1345), and CTCP
-  framing classification (`Grappa.IRC.CTCP`). Phase 6's IRCv3 listener facade
+  JOIN-failure numeric set (`Grappa.IRC.JoinFailure`, #1345), CTCP
+  framing classification (`Grappa.IRC.CTCP`), and the mIRC formatting
+  projection (`Grappa.IRC.MircFormat`, issue 1908 — the de-formatted view
+  of a body, kept in lockstep with cic's `mircFormat.ts`).
+  Phase 6's IRCv3 listener facade
   reuses the parser + message struct directly and reuses the AuthFSM
   SHAPE (pure FSM with `(state, [iodata])` step contract) for a peer
   server-side registration FSM. The module set is intentionally
@@ -23,5 +26,15 @@ defmodule Grappa.IRC do
   use Boundary,
     top_level?: true,
     deps: [Grappa.OutboundV6Pool],
-    exports: [AuthFSM, Client, CTCP, Identifier, Identity, JoinFailure, LineSplit, Message]
+    exports: [
+      AuthFSM,
+      Client,
+      CTCP,
+      Identifier,
+      Identity,
+      JoinFailure,
+      LineSplit,
+      Message,
+      MircFormat
+    ]
 end

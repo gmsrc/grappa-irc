@@ -116,6 +116,82 @@ describe("matchesWatchlist — a punctuated edge still anchors (#1786)", () => {
   });
 });
 
+// issue 1908 — a colour code glued to the term deletes the boundary the term
+// needs, so a watchlist keyword never matches a bot that colours its output.
+//
+// The defect is NOT "control bytes in the body". `\x02` and friends carry no
+// arguments and are not word characters, so `\b` still has its transition on
+// both sides of the term — measured in the field on `rex`, a bold-only bot
+// whose 139 bold lines match fine. It is specifically the COLOUR byte dragging
+// its numeric arguments into the text: `\x03` `1` `5` before `QUACK` reads to
+// the regex as `...15QUACK`, and the digits ARE word characters.
+//
+// The cure is a projection, not an anchor change: match against
+// `mircPlainText(body)`, the SAME `parseMircFormat` the render uses, so there
+// is no second stripper to drift from. The #1786 anchor rule is untouched.
+//
+// THE TRUTH TABLE BELOW IS SHARED with `test/grappa/mentions_test.exs` — a
+// case added here without its server twin is exactly how the two ports drift,
+// and here that drift would put the visual highlight and the OS push back into
+// disagreement, which is the divergence #370 closed.
+describe("matchesWatchlist — mIRC formatting is stripped before matching (1908)", () => {
+  it("matches through a colour code glued to the term — the field case", () => {
+    // The duck bot's real body: \x03 1 5 immediately before the Q.
+    expect(matchesWatchlist("\x0315QUACK!", null, ["QUACK"])).toBe(true);
+  });
+
+  it("strips every colour-code spelling from the report", () => {
+    for (const args of ["04", "4", "04,01", "99", "00"]) {
+      expect(matchesWatchlist(`\x03${args}QUACK!`, null, ["QUACK"])).toBe(true);
+    }
+  });
+
+  it("leaves a bare colour byte harmless, as it already was", () => {
+    expect(matchesWatchlist("\x03QUACK!", null, ["QUACK"])).toBe(true);
+  });
+
+  it("keeps matching the plain line from the same bot — no regression", () => {
+    expect(matchesWatchlist("\\o< *quack* The duck waddles away safely.", null, ["QUACK"])).toBe(
+      true,
+    );
+  });
+
+  it("keeps bold harmless: the contrast bot matches on every edge", () => {
+    const body = "Title: \x02Merry Sky Weather Forecast\x02";
+    for (const term of ["Merry", "Weather", "Forecast"]) {
+      expect(matchesWatchlist(body, null, [term])).toBe(true);
+    }
+  });
+
+  it("removes the argument-free attribute bytes too", () => {
+    expect(matchesWatchlist("\x0fQUACK!", null, ["QUACK"])).toBe(true);
+  });
+
+  // ── the discriminating case ────────────────────────────────────────────
+  // Everything above also passes if the "cure" were to loosen the anchor
+  // instead of stripping. This one does not: after a genuine strip the body is
+  // `QUACK!`, so a term that includes the colour ARGUMENTS must now MISS. A
+  // loosened anchor would keep matching it against the raw bytes.
+  it("strips rather than loosening — a term spelling the colour args now misses", () => {
+    expect(matchesWatchlist("\x0315QUACK!", null, ["15QUACK"])).toBe(false);
+  });
+
+  // ── the rules that must NOT move ───────────────────────────────────────
+  it("keeps the #1786 discriminating pair, formatted or not", () => {
+    expect(matchesWatchlist("foo!list", null, ["!list"])).toBe(false);
+    expect(matchesWatchlist("\x0315foo!list", null, ["!list"])).toBe(false);
+  });
+
+  it("still refuses a substring match on a formatted body", () => {
+    expect(matchesWatchlist("\x0315QUACKING!", null, ["QUACK!"])).toBe(false);
+  });
+
+  it("does not remove digits that are real text", () => {
+    // The projection consumes digits only as colour ARGUMENTS.
+    expect(matchesWatchlist("15 ducks seen", null, ["15"])).toBe(true);
+  });
+});
+
 // #1674 — the SENDER half of the mention rule. Mirror of
 // `Grappa.Mentions.mentionable_sender?/1`. Keyed on the sender because
 // neither of the alternatives survives: excluding `:notice` silences a
