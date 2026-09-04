@@ -1,0 +1,30 @@
+# grappa — the single Service in front of the single pod.
+#
+# Plain HTTP on 4000. TLS terminates in front of this, exactly as on every
+# other deploy path: the container serves cleartext and owns its own CSP and
+# security headers (`GrappaWeb.Plugs.SecurityHeaders`).
+#
+# WebSockets need nothing here — `/socket` is an ordinary HTTP upgrade on the
+# same port. Session affinity is likewise unnecessary: there is one pod, so
+# there is nothing to be sticky to.
+#
+# ClusterIP and not LoadBalancer/NodePort: reaching this from outside the
+# cluster is the Ingress's job (see `overlays/default/kustomization.yaml`).
+#
+# SUPPORT STATUS: community-maintained, not tested in CI. See the repository
+# root `kustomization.yaml`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grappa
+  labels:
+    app.kubernetes.io/name: grappa
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grappa
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http
+      protocol: TCP

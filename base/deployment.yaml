@@ -1,0 +1,173 @@
+# grappa — the whole application, in one pod.
+#
+# ONE Deployment and ONE Service, not two: the cicchetto PWA is served by the
+# same BEAM that runs the bouncer. `Dockerfile.release` bakes
+# `CIC_DIST_ROOT=/app/cicchetto-dist`, `config/runtime.exs` reads it into
+# `:cic_dist_root`, and `GrappaWeb.SpaController` + the endpoint's
+# `:serve_cic_static` plug serve the bundle from there. There is no separate
+# frontend image to deploy.
+#
+# SUPPORT STATUS: community-maintained, not tested in CI. See the repository
+# root `kustomization.yaml`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grappa
+  labels:
+    app.kubernetes.io/name: grappa
+spec:
+  # ONE replica, and never an HPA. The database is SQLite (`ecto_sqlite3`) with
+  # a single writer at the file lock; two pods on one volume corrupt state.
+  replicas: 1
+
+  # `Recreate`, not the default `RollingUpdate`, for the same reason: a rolling
+  # update briefly runs the old and the new pod at once, both holding /data.
+  # The cost is the honest one — the pod is fully gone before its replacement
+  # starts, so IRC sessions drop for the seconds of the recreate.
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grappa
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grappa
+    spec:
+      securityContext:
+        # The image runs as the non-root user `grappa` (`USER grappa` in
+        # Dockerfile.release), and a freshly provisioned PVC is normally
+        # root-owned 0755 — so without this the entrypoint dies on its first
+        # write with "cannot create /data/grappa.env — is /data writable by
+        # this container?".
+        #
+        # The VALUE is arbitrary and does not have to match the image's group:
+        # the kubelet chowns the volume to this GID *and* adds it to the pod's
+        # supplementary groups, so whatever uid the image runs as gains write
+        # access. Storage drivers that ignore fsGroup (some NFS provisioners)
+        # need the directory pre-chowned instead.
+        fsGroup: 1000
+        # Avoid a recursive chown of the whole volume on every pod start once
+        # the root already has the right group.
+        fsGroupChangePolicy: OnRootMismatch
+
+        # 🔴 Do NOT add `runAsNonRoot: true` here. The image's `USER grappa` is
+        # a NAME, not a numeric uid, and the kubelet cannot verify a
+        # non-numeric user is non-root: the pod fails with
+        # CreateContainerConfigError before it ever starts. The image is
+        # already non-root; this flag would only break it.
+
+      containers:
+        - name: grappa
+          # `latest` follows every release. Pin the tag you actually reviewed
+          # (ghcr.io/vjt/grappa:vX.Y.Z) if you would rather choose when to move.
+          # Moving the tag is NOT enough on its own — see the cold-update note
+          # in INSTALL.md.
+          image: ghcr.io/vjt/grappa:latest
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+
+          env:
+            # 🔴 THE ONE VALUE YOU MUST SET, and the only one. Everything else
+            # the image either bakes (`DATABASE_PATH=/data/grappa.db`,
+            # `UPLOADS_STORAGE_ROOT=/data/uploads`, `CIC_DIST_ROOT`,
+            # `GRAPPA_SUBSTRATE`, `PORT=4000`) or generates on first boot
+            # (`infra/docker/release-entrypoint.sh` writes SECRET_KEY_BASE,
+            # SECRET_SIGNING_SALT, RELEASE_COOKIE, GRAPPA_ENCRYPTION_KEY and the
+            # VAPID pair into /data/grappa.env, creates the database directory
+            # and the uploads root, then runs pending migrations).
+            #
+            # Left empty the container REFUSES TO BOOT, on purpose: a wrong
+            # PHX_HOST mints dead upload links into permanent IRC scrollback and
+            # rejects every WebSocket handshake, so `config/runtime.exs` raises
+            # rather than guessing. Nothing can invent your hostname.
+            - name: PHX_HOST
+              value: ""
+
+            # Cached peer CTCP AVATAR images. Set here because the image does
+            # NOT bake it: `config/runtime.exs` defaults
+            # PEER_AVATARS_STORAGE_ROOT to the RELATIVE `runtime/peer_avatars`,
+            # which resolves against WORKDIR /app — i.e. the container's
+            # ephemeral layer, wiped on every pod recreate. It is only a cache
+            # (`Grappa.Avatars.Reaper` mkdir_p's it at boot and the images
+            # re-fetch), so this is durability, not correctness; the alternative
+            # is re-downloading every peer avatar after each restart.
+            - name: PEER_AVATARS_STORAGE_ROOT
+              value: /data/peer_avatars
+
+          # OPTIONAL, and absent by default — `optional: true` means the pod
+          # starts fine when no such Secret exists. Create `grappa-secrets`
+          # (see the commented `secret.yaml`) only if you want to supply your
+          # own key material: the entrypoint's rule is OPERATOR ENV WINS, so a
+          # value present here is used as-is and never overwritten, and a value
+          # absent here is generated onto /data and reused byte-for-byte on
+          # every later boot.
+          envFrom:
+            - secretRef:
+                name: grappa-secrets
+                optional: true
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+
+          # `GET /healthz` is mounted OUTSIDE both router pipelines
+          # (`scope "/" do pipe_through [] ... get "/healthz"` in
+          # `GrappaWeb.Router`), so it answers under any auth state — no bearer
+          # token, no session.
+          #
+          # 🔴 It is a DEEP check, not a ping: `Grappa.Health.check/0` runs
+          # `Repo.query("SELECT 1")` and asserts the singleton ETS tables exist,
+          # and returns 503 naming the failing check. That is exactly right for
+          # readiness and needs a slack leash on liveness — a transient SQLite
+          # lock or a saturated connection pool must not get the pod killed.
+          # Hence the failure thresholds below: ~3 minutes of *sustained*
+          # failure before a restart, rather than the 30 seconds a naive
+          # liveness probe would allow.
+          startupProbe:
+            # First boot runs pending migrations and seeds the built-in theme
+            # gallery before the endpoint listens; on a slow node that is
+            # minutes, not seconds. The startup probe is what buys that time
+            # without loosening the two probes below.
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 5
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 6
+            timeoutSeconds: 5
+
+          resources:
+            # Requests only, deliberately. A CPU limit throttles the BEAM's
+            # schedulers at exactly the moments it has work, and a memory limit
+            # turns a burst into an OOMKill of the single writer. Set limits if
+            # your cluster requires them, with headroom you have measured.
+            requests:
+              cpu: 100m
+              memory: 512Mi
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grappa-data

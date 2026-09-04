@@ -1,0 +1,37 @@
+# grappa — Kubernetes install, the plain path.
+#
+#   kubectl apply -k .
+#
+# after setting PHX_HOST in `base/deployment.yaml`. That is the whole
+# procedure; everything else the release image generates for itself on first
+# boot (see `base/deployment.yaml` for the measurement).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SUPPORT STATUS: COMMUNITY-MAINTAINED, NOT TESTED IN CI.
+#
+# Nothing in this repository's CI exercises Kubernetes. There is no kind
+# cluster, no `apply -k` smoke job, no `/healthz` wait — so these manifests are
+# reviewed by reading, not by running, and they can rot without anything going
+# red. Every other deploy path (Docker Compose, the .deb/.rpm, the CloudFormation
+# one-click) is exercised somewhere; this one is not. Treat it as a starting
+# point you own, not as a supported product surface.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# What this composes:
+#
+#   base/          Deployment + Service + PVC + NetworkPolicy (+ an optional
+#                  Secret template, shipped commented out).
+#   overlays/default/
+#                  The same base with PHX_HOST patched from the overlay instead
+#                  of edited in place, an Ingress example, and the tightened
+#                  IRC-egress rule an operator fills in. Apply it with
+#                  `kubectl apply -k overlays/default` INSTEAD of this file.
+#
+# No namespace is pinned: this lands wherever your context points. Use
+# `kubectl apply -k . -n grappa` (and create the namespace first) if you want it
+# elsewhere.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - base

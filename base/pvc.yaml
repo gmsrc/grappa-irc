@@ -1,0 +1,40 @@
+# grappa — the one volume, and the one thing worth backing up.
+#
+# /data holds THREE things, and the third is why losing this volume is not a
+# recoverable event:
+#
+#   * the SQLite database (`DATABASE_PATH=/data/grappa.db`, baked in the image),
+#   * the uploads root (`UPLOADS_STORAGE_ROOT=/data/uploads`, likewise), and
+#   * the generated secrets (`/data/grappa.env`, written by
+#     `infra/docker/release-entrypoint.sh` on first boot).
+#
+# GRAPPA_ENCRYPTION_KEY lives in that third file and decrypts every stored
+# upstream credential. Restoring the database without it restores nothing
+# usable. Back the volume up whole.
+#
+# ReadWriteOnce, and not by accident: SQLite is a single-writer store and the
+# Deployment is pinned to one replica with `strategy: Recreate` to match.
+# RWX would only make it possible to get this wrong.
+#
+# SUPPORT STATUS: community-maintained, not tested in CI. See the repository
+# root `kustomization.yaml`.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grappa-data
+  labels:
+    app.kubernetes.io/name: grappa
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Scrollback plus uploads. 10Gi is a starting point, not a measurement:
+      # the database grows with message volume and the uploads root with
+      # whatever your users post. Size it for your install, and prefer a
+      # storage class that can expand.
+      storage: 10Gi
+
+  # Left unset on purpose — the cluster's default StorageClass is used. Name
+  # yours here if you do not have a default, or if you want a specific one.
+  # storageClassName: ""

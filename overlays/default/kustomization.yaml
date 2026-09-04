@@ -1,0 +1,167 @@
+# grappa — the worked example overlay.
+#
+#   kubectl apply -k overlays/default
+#
+# Same `base/`, but PHX_HOST is patched from HERE instead of edited in place,
+# which is the shape you want if you track this repository and keep your own
+# values in a fork or a sibling overlay. Everything else in this file is
+# commented: an Ingress example, and the IRC-egress rule.
+#
+# SUPPORT STATUS: community-maintained, not tested in CI. See the repository
+# root `kustomization.yaml`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # ── PHX_HOST ────────────────────────────────────────────────────────────
+  # The one value nothing can invent, and the only one you must set. A
+  # strategic-merge patch on `env` merges by the entry's `name`, so this
+  # replaces PHX_HOST alone and leaves the rest of the container untouched.
+  #
+  # It is the PUBLIC hostname clients reach — the name on your TLS certificate
+  # and in the Ingress rule below, not the Service name. Get it wrong and
+  # uploads mint dead links into permanent IRC scrollback and every WebSocket
+  # handshake is rejected by the `check_origin` gate.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: grappa
+      spec:
+        template:
+          spec:
+            containers:
+              - name: grappa
+                env:
+                  - name: PHX_HOST
+                    value: grappa.example.org
+
+  # ── IRC egress ──────────────────────────────────────────────────────────
+  # 🔴 THE RULE AN OPERATOR EDITS. Two reasons to uncomment it:
+  #
+  #   1. Your IRC server is PRIVATE — in-cluster, on the LAN, behind a VPN.
+  #      `base/networkpolicy.yaml` denies every private range, so grappa will
+  #      sit in `connecting` forever and look like an upstream outage. This is
+  #      the rule that lets it out.
+  #
+  #   2. You want to TIGHTEN the base posture from "any public host, any port"
+  #      down to the networks you actually use.
+  #
+  # A NetworkPolicy is purely additive — you cannot narrow one by adding
+  # another — so this REPLACES the base egress list rather than extending it.
+  # A strategic-merge patch does exactly that here: `spec.egress` has no merge
+  # key, so the list below is substituted wholesale. Which means it must
+  # restate DNS too, or name resolution dies with it.
+  #
+  # Fill in your own hosts. `ipBlock` takes CIDRs, not names: NetworkPolicy
+  # cannot match a DNS name, so resolve your networks first and accept that a
+  # round-robin IRC network moving addresses will need this list revisited.
+  #
+  # - patch: |-
+  #     apiVersion: networking.k8s.io/v1
+  #     kind: NetworkPolicy
+  #     metadata:
+  #       name: grappa
+  #     spec:
+  #       egress:
+  #         # DNS — restated, because this list replaces the base one.
+  #         - to:
+  #             - namespaceSelector:
+  #                 matchLabels:
+  #                   kubernetes.io/metadata.name: kube-system
+  #               podSelector:
+  #                 matchLabels:
+  #                   k8s-app: kube-dns
+  #           ports:
+  #             - protocol: UDP
+  #               port: 53
+  #             - protocol: TCP
+  #               port: 53
+  #         # Your IRC networks. 6697 is TLS, 6667 is plaintext; some networks
+  #         # listen on neither.
+  #         - to:
+  #             - ipBlock:
+  #                 cidr: 198.51.100.0/24
+  #           ports:
+  #             - protocol: TCP
+  #               port: 6697
+  #             - protocol: TCP
+  #               port: 6667
+  #         # Web push vendors, captcha site-verify, theme + avatar image
+  #         # fetches. Drop this block only if you are prepared to lose push
+  #         # notifications and remote images — see base/networkpolicy.yaml.
+  #         - to:
+  #             - ipBlock:
+  #                 cidr: 0.0.0.0/0
+  #                 except:
+  #                   - 10.0.0.0/8
+  #                   - 172.16.0.0/12
+  #                   - 192.168.0.0/16
+  #                   - 100.64.0.0/10
+  #                   - 169.254.0.0/16
+  #                   - 127.0.0.0/8
+  #           ports:
+  #             - protocol: TCP
+  #               port: 443
+
+# ── Ingress example ───────────────────────────────────────────────────────
+# Commented, because an Ingress cannot ship working: the host, the
+# `ingressClassName` and the TLS secret are all yours. Copy this into a file of
+# its own (`overlays/default/ingress.yaml`), add it to `resources:` above, and
+# fill it in.
+#
+# WebSockets: nothing special is required for the `/socket` upgrade on
+# ingress-nginx — it proxies an upgrade by default. What DOES bite is the
+# proxy read timeout, 60s by default, which tears down an idle Channels socket
+# once a minute; the annotation below raises it. Other controllers (Traefik,
+# HAProxy, Contour) spell their timeouts differently — check yours rather than
+# assuming this annotation carried over.
+#
+# No session affinity is needed or wanted. There is exactly one pod, and there
+# is nothing to be sticky to.
+#
+# TLS terminates HERE. The container serves plain HTTP on 4000 and owns its own
+# CSP and security headers (`GrappaWeb.Plugs.SecurityHeaders`) — do not add a
+# second set at the proxy.
+#
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: grappa
+#   labels:
+#     app.kubernetes.io/name: grappa
+#   annotations:
+#     # Keep idle Channels WebSockets alive past the 60s default.
+#     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+#     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+#     # Match the 128MiB body ceiling the BEAM itself enforces
+#     # (`Plug.Parsers` in GrappaWeb.Endpoint), or large uploads 413 at the
+#     # proxy before the app's own per-type caps ever apply.
+#     nginx.ingress.kubernetes.io/proxy-body-size: "128m"
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#     - hosts:
+#         - grappa.example.org
+#       secretName: grappa-tls
+#   rules:
+#     - host: grappa.example.org
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: grappa
+#                 port:
+#                   name: http
+
+# ── Kanidm ────────────────────────────────────────────────────────────────
+# The issue asked for a Kanidm example in this overlay. It is NOT here, and
+# deliberately: grappa carries no OIDC client today, so a Kanidm deployed
+# alongside it would have nothing to talk to. It arrives with #1911, together
+# with the IdP egress rule (discovery + JWKS + token endpoint, HTTPS 443) that
+# `base/networkpolicy.yaml` therefore does not carry either.

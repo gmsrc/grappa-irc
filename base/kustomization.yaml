@@ -1,0 +1,28 @@
+# grappa — base resources. One file per component, no transformers.
+#
+# Labels are written out on every object rather than injected by a
+# `commonLabels`/`labels` transformer on purpose: the transformer's spelling and
+# its `includeSelectors` default have moved between kustomize releases, and
+# `kubectl apply -k` ships whatever kustomize its own version embedded. Explicit
+# labels read the same on every one of them.
+#
+# SUPPORT STATUS: community-maintained, not tested in CI. See the repository
+# root `kustomization.yaml` for what that means.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - pvc.yaml
+  - service.yaml
+  - deployment.yaml
+  - networkpolicy.yaml
+
+  # OPTIONAL — `secret.yaml` is a template, shipped entirely commented out. The
+  # release image generates every secret it needs on first boot onto the /data
+  # volume and never rotates one it already wrote, so an operator who does not
+  # want to manage key material supplies nothing. Uncomment BOTH this line and
+  # the body of `secret.yaml` (kustomize fails loudly on a resource file with no
+  # `kind:` if you uncomment only one) to supply your own values instead.
+  # The Deployment already references it with `optional: true`, so no other edit
+  # is needed.
+  # - secret.yaml

@@ -1,0 +1,176 @@
+# grappa — NetworkPolicy. Read this header before you apply it.
+#
+# ─── WHAT THIS OBJECT DOES DEPENDS ON YOUR CLUSTER ──────────────────────────
+#
+# On a cluster that already runs a default-deny policy, this is the ALLOW list
+# that makes grappa work at all.
+#
+# On a permissive cluster it is the opposite: a NetworkPolicy that selects a
+# pod and declares `policyTypes: [Ingress, Egress]` makes everything not listed
+# below DENIED for that pod. Applying it therefore RESTRICTS a pod that was
+# previously unrestricted.
+#
+# Either way the failure mode is the nasty one, which is why this file is
+# mostly prose: an incomplete egress list does not look like a firewall
+# problem. grappa reports itself up, `/healthz` stays green, and every network
+# sits in `connecting` forever — indistinguishable, from the operator's chair,
+# from an upstream outage.
+#
+# ─── THE MEASURED EGRESS SET ────────────────────────────────────────────────
+#
+# Enumerated from the code, not from a wishlist. Every outbound call site in
+# `lib/`, by name:
+#
+#   DNS         `Grappa.IRC.Client` (`:inet_res.lookup/3` for AAAA,
+#               `:inet.getaddr/2`), `Grappa.Net.PtrResolver.resolve/1`
+#               (`:inet_res.resolve/5`), `Grappa.Net.Ssrf.resolve_safe/1`
+#               (`:inet.getaddrs/2`). Both UDP and TCP 53 — a truncated
+#               answer retries over TCP, and a UDP-only rule turns that into
+#               an intermittent resolution failure.
+#
+#   IRC         `Grappa.IRC.Client.default_connect/5` → `:gen_tcp.connect/4`
+#               (plaintext) or `:ssl.connect/4` (TLS). Operator-chosen hosts on
+#               operator-chosen ports — 6697 typically, 6667 on some networks,
+#               anything on others. This is the whole point of the product.
+#
+#   Web push    `Grappa.Push.Sender.deliver/2` → `ExNudge.send_notification/3`
+#               (HTTPoison), HTTPS 443. The endpoint host comes from the
+#               browser's own subscription (Mozilla / Google / Apple), so it is
+#               not knowable in advance. Blocked, push notifications silently
+#               never arrive.
+#
+#   Image fetch `Grappa.Net.ImageFetcher.Req.fetch/1` → `Req.get/2`. NOT named
+#               in the issue's egress list, and load-bearing for two features:
+#               theme background images (`Grappa.Themes.BackgroundImage`) and
+#               cached peer CTCP AVATAR images (`Grappa.Avatars`). Accepts any
+#               `http`/`https` URL, so any port the URL carries — not just 443.
+#               Already SSRF-guarded application-side: `Grappa.Net.Ssrf`
+#               resolves the host and refuses every non-public address, so the
+#               private-range denials below MIRROR a guard the code already
+#               enforces rather than adding a new constraint.
+#
+#   Captcha     `Grappa.Admission.Captcha.SiteVerifyHttp.verify/4` → `Req.post/2`,
+#               HTTPS 443 to hCaptcha or Cloudflare Turnstile. Also not named in
+#               the issue. Dormant unless `GRAPPA_CAPTCHA_PROVIDER` is set —
+#               it defaults to `disabled` in `config/runtime.exs`.
+#
+#   IdP         Does not exist yet. grappa carries no OIDC client today; it
+#               arrives with issue 1911. Nothing here needs a rule for it.
+#
+#   Reverse DNS Named in the issue as a candidate, and REFUSED with the
+#               measurement: `Grappa.Net.PtrResolver` issues an ordinary PTR
+#               query through `:inet_res` to the cluster resolver. It never
+#               dials the address it is naming, so it needs no rule beyond DNS.
+#
+# ─── WHY THE PUBLIC RULE IS ALL PORTS, NOT 443 ──────────────────────────────
+#
+# Because IRC is the product and its ports are the operator's. A 443-only
+# egress rule in `base/` would ship a bouncer that cannot bounce, on every
+# cluster that applied it, with the silent-failure signature described above.
+# Pinning the IRC hosts here is equally impossible — nobody knows them at the
+# time this file is written.
+#
+# So the base posture is: everything grappa can legitimately reach on the
+# public internet is allowed on any port, and everything INSIDE the cluster or
+# on a private network is denied. That is the boundary worth enforcing here —
+# it is lateral movement, not the port number, that a NetworkPolicy buys you.
+#
+# 🔴 THE ONE RULE AN OPERATOR MUST EDIT: if your IRC server is private —
+# in-cluster, on the LAN, behind a VPN, anywhere in the ranges excluded below —
+# base DENIES it and every network will sit in `connecting`. Add an egress rule
+# for it. `overlays/default/kustomization.yaml` carries the template, together
+# with the tightened per-host variant for operators who do want to enumerate
+# their networks.
+#
+# 🔴 SECOND EDIT WORTH CHECKING: the `except:` list below assumes the
+# conventional private ranges. If your cluster's pod or service CIDR lies
+# outside them (some managed clusters use public-range addressing), the pod can
+# reach the cluster and the denial you think you have is not there.
+#
+# SUPPORT STATUS: community-maintained, not tested in CI. See the repository
+# root `kustomization.yaml`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grappa
+  labels:
+    app.kubernetes.io/name: grappa
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grappa
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # TCP 4000 from the ingress controller's namespace, and nothing else.
+    # Nothing in the cluster has business reaching this pod directly.
+    #
+    # EDIT the namespace name to match your controller — `ingress-nginx` is the
+    # ingress-nginx chart's default. `kubernetes.io/metadata.name` is the label
+    # the API server sets on every namespace automatically, so no extra
+    # labelling is needed.
+    #
+    # (The release also opens epmd on 4369 for Erlang distribution, since the
+    # release boots with a node name. Denying it here is correct and costs
+    # nothing: `bin/grappa remote` runs inside the pod, over loopback, which
+    # NetworkPolicy does not police.)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 4000
+
+  egress:
+    # ── DNS ──────────────────────────────────────────────────────────────
+    # UDP *and* TCP 53 to the cluster resolver. `k8s-app: kube-dns` is the
+    # label CoreDNS carries in a stock cluster even though the name says
+    # kube-dns; check yours if name resolution fails from the pod.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # ── The public internet, any port ────────────────────────────────────
+    # IRC upstreams, web push vendors, theme/avatar image fetches, captcha
+    # site-verify. See the header for why this is not narrowed to 443.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8          # RFC 1918
+              - 172.16.0.0/12       # RFC 1918
+              - 192.168.0.0/16      # RFC 1918
+              - 100.64.0.0/10       # RFC 6598 CGNAT — pod/node CIDR on some clouds
+              - 169.254.0.0/16      # link-local, and the cloud metadata service
+              - 127.0.0.0/8         # loopback
+
+    # ── The public internet over IPv6, any port ──────────────────────────
+    # Not decoration: `Grappa.IRC.Client` looks up AAAA records
+    # (`:inet_res.lookup(host, :in, :aaaa)`) and connects over v6 when that is
+    # what the network publishes. On a dual-stack cluster without this rule, a
+    # v6-only IRC network is silently unreachable while v4 ones work — the
+    # hardest shape of this failure to diagnose.
+    #
+    # Harmless on a v4-only cluster (there is no v6 traffic to match). If your
+    # CNI rejects an IPv6 ipBlock outright it will say so at apply time, which
+    # is the loud failure; delete this rule then.
+    - to:
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7            # unique local
+              - fe80::/10           # link-local
+              - ::1/128             # loopback
