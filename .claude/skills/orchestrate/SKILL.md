@@ -1773,6 +1773,31 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   ho cercato, ed e' lo stesso insieme di cui parla la tesi?** I rami aperti, le PR non mergiate e
   il working tree altrui **non stanno in `git log`**. ⚠️ **E vale doppio quando lo zero serve a
   correggere qualcun altro**: li' la ricompensa e' massima e il controllo salta.
+- 🔴🔴 **SU m42 OGNI SONDA DI ESISTENZA-PROCESSO FATTA COME `vjt` È UN FALSO NEGATIVO
+  GARANTITO PER TUTTO CIÒ CHE È DI root — e la macchina è sanissima (orch, 2026-09-11).**
+  `ssh m42 'service nginx status'` → **`nginx is not running`, rc=1**, mentre nginx gira da
+  luglio (pid 83812, `*:80`/`*:443`, `nginx_enable=YES`). **Non è l'host sbagliato:**
+  `hostname = m42.openssl.it`, **`sysctl security.jail.jailed = 0`** ⇒ JID 0. **La variabile
+  è l'UTENTE:** `security.bsd.see_other_uids = 0` **e** `see_other_gids = 0` ⇒ un utente non
+  privilegiato vede **solo i propri processi** (misurato: `ps ax` = `ps -U vjt` = 19 righe).
+  Quindi `service X status`, `pgrep`, `ps -p`, `sockstat` sugli altrui **mentono tutti nello
+  stesso verso**, e il pidfile intanto si legge benissimo (`-rw-r--r-- root:wheel`, contiene
+  proprio l'`83812` che root vede).
+  🥇🥇 **IL POS CTRL CHE LO BECCA IN UN COLPO, E VALE COME MODELLO: `pgrep -l init` → 0.**
+  `init` **non può** non girare, quindi quello zero condanna lo STRUMENTO senza sapere una
+  riga di nginx. **Un controllo positivo va scelto fra le cose che NON POSSONO essere assenti**
+  — non fra quelle che ti aspetti presenti: `sshd` (anch'esso 0, mentre ci parlavo sopra) è già
+  più debole, perché un `sshd` assente è concepibile e invita a discutere.
+  ⇒ **Forma che regge: `sudo -n` per le sonde di processo, oppure leggi un artefatto leggibile
+  (il pidfile), e in ogni caso il pos ctrl DENTRO la stessa cattura.** ⚠️ La ricetta di
+  verifica del deploy prod si salva **per fortuna, non per progetto**: usa `sudo -n jexec 11`.
+  🪞 **E la diagnosi sbagliata era più pericolosa dell'errore:** un peer aveva concluso *"il
+  tuo ssh è finito dentro un jail"* — plausibile e falso. Archiviata così, la volta dopo si
+  controlla l'host (già giusto) e **la sonda torna a mentire identica**. **Una correzione
+  giusta nel merito e sbagliata nella causa non è una correzione: è la stessa trappola
+  riarmata.** *Ennesima faccia dello zero falso e plausibile: non lo strumento rotto, non
+  l'artefatto sbagliato, ma il PRIVILEGIO insufficiente — e l'unica cosa che lo rivela è un
+  controllo a risposta IMPOSSIBILE da sbagliare.*
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
