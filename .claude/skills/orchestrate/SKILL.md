@@ -2103,6 +2103,16 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   puo' spiegare: vale piu' di sei conferme.**
   ✅ **Dove si legge DAVVERO chi ha agito** — canali che **non passano dal token**: `#grappa-live`.
   Altrimenti **si chiede a chi ha agito.**
+  🔧 **PRECISAZIONE MISURATA 2026-09-12, E RESTRINGE LA REGOLA INVECE DI ALLARGARLA: la costante e'
+  UNA PROPRIETA' DEL TOKEN, NON DEL CAMPO.** Su **PR #2095** `mergedBy` legge **`gmsrc`** — un
+  contributor con account proprio (`write`, 13 PR mergiate), che ha mergiato la PR da se'. ⇒
+  **cardinalita' > 1 osservata**: il campo **discrimina benissimo quando l'attore NON e' il nostro
+  token**, ed e' cieco **solo** sulle azioni della fleet (Pi + worker + ircbot, che spendono tutte
+  il token di vjt). 🥇 **Quindi la lettura giusta non e' *"`mergedBy` non e' mai evidenza"*, e'
+  *"`mergedBy=vjt` non e' evidenza"***: un valore **diverso** da `vjt` e' informazione vera, un
+  `vjt` non distingue lui da noi. Leggere la regola nella forma larga fa buttare via un dato buono —
+  ed e' lo stesso difetto gia' registrato qui sotto: *"«e' un'etichetta» e' una proprieta' del
+  SINGOLO PORTATORE, non della classe."*
   🔴🔴 **IL NOME DEL RAMO NON IDENTIFICA IL PANE — misurato 2026-08-30, e questa riga diceva il
   contrario.** Dispatchata la #1877 al pane **`%16`** (titolo `grappa-worker`, cioè w1 per
   l'handoff), un minuto dopo sull'host compare la worktree **`w2-1877`**. Sembrava che il lavoro
