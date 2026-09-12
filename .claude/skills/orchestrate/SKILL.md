@@ -360,6 +360,23 @@ is DELETE-then-write, never append-only:
   riuscire, o la worker successiva ripeterà i tre passi inutili.
   🥇 **E w1 si è FERMATA prima di `-D` chiedendo la mia parola, invece di alzare da sola: è la
   posizione giusta** — il divieto era mio, e togliere un divieto non è compito di chi lo subisce.
+  🔴🔴 **MA `-d` HA **DUE** RAMI DI RIFIUTO E TUTTA LA RICETTA SOPRA NE COPRE UNO SOLO — misurato
+  da w1 il 2026-09-12 contro un mio ordine, e l'ordine era INESEGUIBILE.** Il secondo è
+  **`error: cannot delete branch 'X' used by worktree at …`**: parla di **CHECKOUT**, non di
+  **MERGE**, e **nessun upstream lo sposta di un millimetro** — ripuntare `branch.X.merge` lì è una
+  mossa che risponde all'altra domanda. Di contorno lei ha misurato che quel ramo **non aveva
+  upstream affatto** (`fatal: no upstream configured for branch 'X'`), quindi *"**ri**puntalo"*
+  presupponeva una cosa inesistente: semmai lo si **IMPOSTA** (`--set-upstream-to`), e serve perché
+  **senza upstream `-d` ripiega su HEAD**, cioè il `main` LOCALE stantio di voyager ⇒ falso rosso.
+  🥇🥇 **E la parte che genera l'errore: L'ORDINE ERA INVERTITO. Finché la worktree vive, il ramo
+  NON si cancella ⇒ `--force` non è un extra concesso a parte, è il PREREQUISITO della
+  cancellazione** — e la chiave ce l'ha l'orchestratrice, che così ordina una sequenza che non può
+  chiudere. ⇒ **Sequenza corretta e unica: `remove` NUDO → LEGGI IL TESTO dell'rc=128 → `--force`
+  solo sul ramo *submodule* → `-d` NUDO → SOLO SE ora dice *"not fully merged"*,
+  `--set-upstream-to=origin/main` e `-d` NUDO di nuovo.**
+  🥇 *Una worker che rifiuta un passo dicendo "questo rimedio non si applica a QUESTO ramo
+  dell'albero, e te lo dimostro col testo dell'errore" ha fatto la cosa giusta: il difetto non era
+  nel comando, era nella mia diagnosi di quale domanda il comando stesse rispondendo.*
   ⚠️ **E `git worktree remove` senza `--force` rifiuta (rc=128, *"contains modified or untracked
   files"*) su una worktree sporca**: lì `--force` è **necessario**, non un'abitudine — ma solo dopo
   che lo sporco è stato misurato e preservato fuori.
