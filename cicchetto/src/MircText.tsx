@@ -202,9 +202,11 @@ const renderRun = (
         "scrollback-mirc-strikethrough": run.strikethrough,
         "scrollback-mirc-monospace": run.monospace,
         "scrollback-mirc-reverse": run.reverse && run.fg === undefined && run.bg === undefined,
-        // issue 2086 — the quoted head, dimmed to `--muted` (the token every
-        // theme already defines for secondary text, so the gallery themes and
-        // the theme editor follow for free; a literal grey would not).
+        // issue 2086 — the quoted head, dimmed by the stylesheet; issue 2112
+        // moved that grey off `--muted` and onto the one the presence rows read
+        // as on screen. This layer only MARKS the region — the colour, and why
+        // it is a `color-mix` and not an `opacity`, live on the rule in
+        // `themes/default.css`.
         //
         // Withheld from a run that carries an EXPLICIT colour, on the same
         // fg/bg test the reverse line above uses. The dimming must LOSE to a

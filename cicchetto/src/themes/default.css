@@ -4016,18 +4016,66 @@ button.topic-bar-windows-opener {
 }
 
 /* issue 2086 — the quoted head of a reply (`<nick> …body… << `), dimmed so the
-   answer typed after it carries the weight. `--muted` is the token every theme
-   already defines for secondary text, and it is the SAME pair timestamps run
-   against `--bg`, so the contrast floor is one that was already accepted — a
-   literal grey here would break the gallery themes and the theme editor, and
-   anything dimmer than `--muted` would owe a measurement.
+   answer typed after it carries the weight.
+
+   issue 2112 — the grey is the one the PRESENCE rows read as ON SCREEN, not the
+   `--muted` this shared with timestamps until now. Asked for by peluche and
+   Fairy on #grappa. Reading the stylesheet says those two were already one
+   colour, and the stylesheet is wrong: `.scrollback-line.scrollback-muted`
+   damps the whole presence row with `opacity`, and `.scrollback-body` declares
+   `color: var(--fg)` on ITSELF, so the join text beats the `--muted` it
+   inherits from `.scrollback-presence` and lands at `--fg` damped — the
+   BRIGHTEST of the three greys on screen, not a dimmer one.
+
+   `color-mix` rather than an `opacity` on the fragment. MEASURED first, because
+   the two are NOT the different paints they look like: on a uniform backdrop
+   they are the same colour at EVERY coverage — `0.75a·fg + (1-0.75a)·bg` either
+   way, identical to the last decimal across a = .1 … .9 — and in a real
+   Chromium the painted inks came out 1.17/255 apart. So the pixels do not pick
+   the winner; these do:
+     - `opacity` makes the fragment its own compositing group, which costs it
+       LCD subpixel antialiasing while the full-brightness answer beside it on
+       the SAME line keeps it. A weight discontinuity at `<< ` is what an inline
+       fragment cannot afford. NOT falsifiable on our bench — headless Chromium
+       renders grayscale AA throughout (measured: zero channel spread on every
+       region, both candidates) — so this is the argument that was left standing
+       rather than the one that was proven.
+     - `opacity` dims everything the fragment carries rather than its colour: a
+       link's underline and its `:hover` accent included.
+     - `opacity` cannot be beaten by an inline `color`. Nothing rides on that
+       today, since the class is withheld from an explicitly-coloured run (see
+       below) — but a `color` degrades safely if that withholding ever regresses
+       and an `opacity` would repaint the sender's colour regardless.
+   What `opacity` would have bought: it composites over the ACTUAL backdrop, so
+   on a `.scrollback-mention` row it tracks the tint where this mixes against
+   the `--bg` TOKEN (8/255 apart on irssi-dark, 15.75 on mirc-light — derived,
+   not measured). Accepted: presence rows are never mention rows, so the grey
+   being matched was only ever defined over the plain one.
+
+   `in srgb`, not the `in oklab` the `--adm-*` block above uses: the grey being
+   matched is produced by an `opacity` composite, which the compositor performs
+   in the device space. A perceptual mix at the same percentage lands elsewhere.
+
+   Still relative to `--fg`/`--bg`, so the gallery themes and the theme editor
+   follow for free and no new token is owed. An engine without `color-mix` drops
+   this declaration at computed-value time and the head inherits
+   `.scrollback-body`'s `--fg` — undimmed and fully readable. That is a
+   degradation this rule can afford, unlike the `--adm-*` mixes above, where the
+   same failure took the console's structure with it and had to be backstopped.
+
+   Contrast, since #2086 owed a measurement for anything dimmer than `--muted`:
+   this is BRIGHTER, so the homework is not owed — and it repairs a floor
+   failure rather than risking one. Measured in Chromium on mirc-light against
+   this rule as it ships, the quote goes 3.81:1 → 9.48:1 against its background;
+   `--muted` sits at 4.00:1 by derivation on BOTH shipped themes, i.e. under the
+   4.5 floor it was assumed to have cleared.
 
    Colour ONLY: muted, never hidden. A sender can type the shape by hand (the
    detector says "quote-shaped", not "we emitted it") and must still be able to
    read every character back. The renderer withholds this class from a run that
    carries an explicit mIRC colour — see MircText's renderRun. */
 .scrollback-reply-quote {
-  color: var(--muted);
+  color: color-mix(in srgb, var(--fg) 75%, var(--bg));
 }
 
 .scrollback-presence {

@@ -55710,3 +55710,124 @@ a slice of this one.
   header, which matches the rows it sits above. The divergence is between the
   archive surface and the navs, it predates this change on both of the
   archive's other two levels, and closing it would move #2096's number too.
+<!-- entry #2112 -->
+
+---
+
+## 2026-09-13 — issue 2112: the reply-quote grey, and an open question that measurement took away from taste
+
+peluche and Fairy asked on #grappa that the quoted head of a reply
+(`.scrollback-reply-quote`, #2086) read as the grey the presence rows have —
+the `* nick … has joined #chan` grey — instead of the `--muted` it shared with
+timestamps. vjt: "proviamo".
+
+### The stylesheet lies about this, and the lie is in the cascade
+
+Three selectors declare `color: var(--muted)`: `.scrollback-reply-quote`,
+`.scrollback-presence` and `.scrollback-time`. Reading that and concluding the
+quote already wore the presence grey is wrong twice, and neither half lives in
+a declaration:
+
+- `.scrollback-line.scrollback-muted` damps the whole presence ROW with
+  `opacity`.
+- `.scrollback-body` declares `color: var(--fg)` on ITSELF. The presence body
+  text is a DESCENDANT, so its own declaration beats the `--muted` inherited
+  from `.scrollback-presence` — the join text is never `--muted` at all.
+
+The wanted colour is therefore `--fg` damped by the row opacity: the
+BRIGHTEST of the three greys on screen, not a dimmer one, and reachable from
+tokens every theme already defines. Measured in Chromium through the e2e bench
+— ink being the 5% of a region's pixels furthest in luminance from that
+region's own dominant colour, the issue's methodology:
+
+| region (`mirc-light`, dsf 1) | before | after |
+|---|---|---|
+| reply quote head | 130.62 — 3.81:1 | **69.71 — 9.48:1** |
+| timestamp, same row | 128.31 — 3.93:1 | 128.31 — 3.93:1 |
+| `has joined` text | 71.60 — 9.20:1 | 71.60 — 9.20:1 |
+| quote → timestamp distance | 2.31 | 58.60 |
+| quote → presence distance | 59.02 | **1.89** |
+
+The defect is the first column read across: the quote sat 2.31 from the
+timestamp and 59.02 from the text it was supposed to match.
+
+On `irssi-dark` — the theme the issue itself measured, reached in the same spec
+by writing the `data-theme` attribute `applyTheme` writes — the quote resolves
+to `color(srgb 0.668627 …)`, i.e. **170.5/255, the issue's predicted value to
+the digit**, and its timestamp inks at 110.63 against the issue's measured 112.
+
+### The open question was not the one the issue posed
+
+The issue left `opacity` on the fragment versus `color-mix(in srgb, …)` to
+whoever took the work, on the grounds that the two "are not equivalent on
+subpixel-antialiased text". Half of that premise is false and the false half is
+the arithmetic:
+
+- **On a uniform backdrop they are the same paint at EVERY coverage.**
+  `opacity` composites `0.75a·fg + (1 − 0.75a)·bg`; a solid mix at coverage `a`
+  gives `a·(0.75fg + 0.25bg) + (1 − a)·bg`, which is the same expression.
+  Derived across `a` = .1 … .9 on both shipped themes: `|A − B| = 0.00` at every
+  step; painted in a real Chromium they came out 1.17/255 apart, which is
+  quantisation and not a mechanism.
+- **The subpixel-AA half is UNFALSIFIABLE on our bench and stays an argument.**
+  Headless Chromium renders grayscale antialiasing throughout — channel spread
+  measured 0 on every region under both candidates — so the LCD-AA
+  discontinuity the issue worried about cannot be produced here at all. It is
+  recorded as the reason that was left standing, never as one that was proven.
+
+So the pixels do not pick the winner. `color-mix` ships on grounds that are
+structural: `opacity` makes the fragment its own compositing group (the AA
+argument above), it dims everything the fragment carries rather than its colour
+(a link's underline and its `:hover` accent included), and it cannot be beaten
+by an inline `color` — which matters not today, since the class is withheld
+from an explicitly-coloured run, but as the safe direction to fail if that
+withholding ever regresses. What `opacity` would have bought and this gives up:
+it composites over the ACTUAL backdrop, so on a `.scrollback-mention` row it
+tracks the tint where this mixes against the `--bg` TOKEN — 8/255 apart on
+irssi-dark, 15.75 on mirc-light, derived and not measured. Accepted: presence
+rows are never mention rows, so the grey being matched was only ever defined
+over the plain one.
+
+`in srgb` and not the `in oklab` the `--adm-*` block uses, because the grey
+being matched is produced by an `opacity` composite and the compositor works in
+the device space.
+
+### The contrast question answered itself in the other direction
+
+#2086 demanded a measurement for anything dimmer than `--muted`, and the issue
+predicted none was owed because the target is brighter. True — and the
+measurement turned up what neither claimed: **the `--muted` spelling was itself
+under the WCAG 4.5:1 text floor.** 3.81:1 measured in Chromium, 4.00:1 by
+derivation on BOTH shipped themes. This is not a change that merely avoids
+owing contrast homework; it repairs a floor failure. #2086's own comment
+reasoned that `--muted` "is the SAME pair timestamps run against `--bg`, so the
+contrast floor is one that was already accepted" — the pair was never accepted
+on evidence, it was assumed.
+
+⚠️ **Out of scope and deliberately untouched: the timestamps are still there.**
+`.scrollback-time` inks at 3.93:1 on mirc-light and 3.92:1 on irssi-dark, under
+the same floor, and every other `--muted` surface inherits the question.
+Whether a timestamp is "incidental" text under WCAG is a call this issue has no
+mandate to make, and making it here would move a token every theme depends on.
+Recorded so the next reader finds a measurement rather than rediscovering it.
+
+### Where it is pinned, and what each leg cannot see
+
+- `src/__tests__/replyQuoteGrey.test.ts` — source-level over `default.css`: the
+  colour derives from `--fg`/`--bg` with no literal and no new token, the mix
+  percentage equals the presence row's `opacity` (the two numbers live in two
+  rules and nothing else keeps them in step), and the premise is pinned too —
+  `.scrollback-body` still forces `--fg`, without which the target moves. Reads
+  no pixels: jsdom resolves neither `var()` nor `color-mix()`.
+- `e2e/tests/issue2112-reply-quote-presence-grey.spec.ts` — a real engine, both
+  themes, two legs. RESOLVED: the quote's computed colour equals a probe
+  painted with `--fg` damped by the presence row's own opacity, so no literal
+  75 appears in the spec and the RELATIONSHIP is what goes red. PAINTED: the
+  quote must sit far closer to the presence ink than to its own row's timestamp
+  ink (relative, so no tuned constant decides it) and clear 4.5:1 (the one
+  threshold that is not ours to pick).
+- Known softness in the painted leg, on `irssi-dark` only: the presence
+  region's ink reads (168.71, 165.29, 157.17) rather than a neutral grey,
+  because `.scrollback-body` contains the colour-coded nick and the brightest
+  5% catches it. The relative assertion still separates by 6.5×, and the
+  resolved leg is untouched by it.
