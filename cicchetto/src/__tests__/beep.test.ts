@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NOTIFICATION_SOUND_PRESETS } from "../lib/notificationSound";
+import {
+  NOTIFICATION_SOUND_PRESETS,
+  NOTIFICATION_SOUNDS,
+  type NotificationSound,
+  type SoundVoice,
+} from "../lib/notificationSound";
 
 // #1480 — the preset player.
 //
@@ -13,6 +18,14 @@ import { NOTIFICATION_SOUND_PRESETS } from "../lib/notificationSound";
 // that hardcoded 440 would pin this file's opinion of the table instead of the
 // wiring under test. The one exception is the silent/stamp contract, which is
 // the ruling and is asserted as literals.
+//
+// The fake records the GainNode AUTOMATION too — every `setValueAtTime` /
+// `linearRampToValueAtTime` / `exponentialRampToValueAtTime` with its time —
+// because the envelope is the only part of a preset that is inaudible from
+// the recipe: `tone` kept its 440 Hz and its 80 ms across #1480 and still
+// changed sound, since the shared envelope decayed it from the onset (issue
+// 2119). A final-value assertion cannot see that — both shapes end at
+// silence — so what is asserted is WHEN the peak is abandoned.
 
 type StartedOsc = {
   type: OscillatorType;
@@ -22,12 +35,17 @@ type StartedOsc = {
   stoppedAt: number;
 };
 
+/** One scheduled gain event, in the order the player scheduled it. */
+type GainEvent = { op: "set" | "linear" | "exponential"; value: number; at: number };
+type GainRec = { automation: GainEvent[]; value: number };
+
 type FakeContext = {
   state: AudioContextState;
   currentTime: number;
   constructed: number;
   resumes: number;
   oscillators: StartedOsc[];
+  gains: GainRec[];
   bufferSources: Array<{ buffer: AudioBuffer | null; started: boolean }>;
   decoded: ArrayBuffer[];
 };
@@ -35,15 +53,26 @@ type FakeContext = {
 let fake: FakeContext;
 let decodeFails: boolean;
 
-const makeGain = () => ({
-  gain: {
-    setValueAtTime: () => {},
-    linearRampToValueAtTime: () => {},
-    exponentialRampToValueAtTime: () => {},
-    value: 0,
-  },
-  connect: (next: unknown) => next,
-});
+const makeGain = () => {
+  const rec: GainRec = { automation: [], value: 0 };
+  fake.gains.push(rec);
+  return {
+    gain: {
+      setValueAtTime: (value: number, at: number) => rec.automation.push({ op: "set", value, at }),
+      linearRampToValueAtTime: (value: number, at: number) =>
+        rec.automation.push({ op: "linear", value, at }),
+      exponentialRampToValueAtTime: (value: number, at: number) =>
+        rec.automation.push({ op: "exponential", value, at }),
+      set value(v: number) {
+        rec.value = v;
+      },
+      get value() {
+        return rec.value;
+      },
+    },
+    connect: (next: unknown) => next,
+  };
+};
 
 function installFakeAudio(): void {
   fake = {
@@ -52,6 +81,7 @@ function installFakeAudio(): void {
     constructed: 0,
     resumes: 0,
     oscillators: [],
+    gains: [],
     bufferSources: [],
     decoded: [],
   };
@@ -140,6 +170,19 @@ const at = <T>(xs: readonly T[], i: number): T => {
   return v;
 };
 
+// Narrow a preset to its voices. The throw is the point: if a preset stops
+// being a synth the tests below are testing nothing, and should say so rather
+// than skip themselves.
+const synthVoices = (name: NotificationSound): readonly SoundVoice[] => {
+  const preset = NOTIFICATION_SOUND_PRESETS[name];
+  if (preset.kind !== "synth") throw new Error(`${name} must stay a synth preset`);
+  return preset.voices;
+};
+
+const SYNTH_PRESETS = NOTIFICATION_SOUNDS.filter(
+  (name) => NOTIFICATION_SOUND_PRESETS[name].kind === "synth",
+);
+
 // Every test needs a module instance whose lazily-built AudioContext (and
 // whose sample cache) is its own — both are module-level singletons, so a
 // shared import would let one test's decode satisfy the next one's assertion.
@@ -203,9 +246,7 @@ describe("playBeep — synthesised presets (#1480)", () => {
 
     playBeep("tone");
 
-    const preset = NOTIFICATION_SOUND_PRESETS.tone;
-    if (preset.kind !== "synth") throw new Error("tone must stay a synth preset");
-    const voice = at(preset.voices, 0);
+    const voice = at(synthVoices("tone"), 0);
 
     expect(fake.oscillators).toHaveLength(1);
     const osc = at(fake.oscillators, 0);
@@ -220,15 +261,14 @@ describe("playBeep — synthesised presets (#1480)", () => {
 
     playBeep("chime");
 
-    const preset = NOTIFICATION_SOUND_PRESETS.chime;
-    if (preset.kind !== "synth") throw new Error("chime must stay a synth preset");
+    const voices = synthVoices("chime");
 
-    expect(fake.oscillators).toHaveLength(preset.voices.length);
+    expect(fake.oscillators).toHaveLength(voices.length);
     // The second note is what makes it a chime rather than a tone: if the
     // offset were dropped both voices would fire together and the preset
     // would be an interval, not a sequence.
     expect(at(fake.oscillators, 1).startedAt - at(fake.oscillators, 0).startedAt).toBeCloseTo(
-      at(preset.voices, 1).atMs / 1000,
+      at(voices, 1).atMs / 1000,
       6,
     );
   });
@@ -238,10 +278,7 @@ describe("playBeep — synthesised presets (#1480)", () => {
 
     playBeep("blip");
 
-    const preset = NOTIFICATION_SOUND_PRESETS.blip;
-    if (preset.kind !== "synth") throw new Error("blip must stay a synth preset");
-
-    const voice = at(preset.voices, 0);
+    const voice = at(synthVoices("blip"), 0);
     expect(at(at(fake.oscillators, 0).freqAt, 0).value).toBe(voice.fromHz);
     expect(at(at(fake.oscillators, 0).ramps, 0).value).toBe(voice.toHz);
     expect(voice.toHz).not.toBe(voice.fromHz);
@@ -262,6 +299,90 @@ describe("playBeep — synthesised presets (#1480)", () => {
     playBeep("tone");
 
     expect(fake.resumes).toBe(1);
+  });
+});
+
+describe("playBeep — the gain envelope (issue 2119)", () => {
+  it("holds tone at its peak for the body of the note instead of decaying from the onset", async () => {
+    const { playBeep } = await freshBeep();
+
+    playBeep("tone");
+
+    const voice = at(synthVoices("tone"), 0);
+    expect(fake.gains).toHaveLength(1);
+    const env = at(fake.gains, 0).automation;
+
+    // The third event is the whole bug. Without it the exponential ramp
+    // starts where the 5 ms attack ends, so the note is ~20 dB down a third
+    // of the way through its 80 ms and inaudible long before it stops — the
+    // "same numbers, half the sound" Lucy reported.
+    expect(env.map((e) => e.op)).toEqual(["set", "linear", "set", "exponential"]);
+    const onset = at(env, 0);
+    const attack = at(env, 1);
+    const hold = at(env, 2);
+    const release = at(env, 3);
+
+    expect(attack.value).toBe(voice.gain);
+    expect(hold.value).toBe(voice.gain);
+    // The player holds for exactly the sustain the table declares — not a
+    // number this file invents, or it would pin its own opinion of the recipe.
+    expect(hold.at - attack.at).toBeCloseTo(voice.sustainMs / 1000, 6);
+    expect(release.at - onset.at).toBeCloseTo(voice.durationMs / 1000, 6);
+
+    // The perceptual claim, as a number a future table edit cannot quietly
+    // undo: the peak survives nearly to the end. Pre-fix this ratio was
+    // 0.0625 — the peak existed for one sixteenth of the note.
+    expect((hold.at - onset.at) / (release.at - onset.at)).toBeGreaterThan(0.8);
+    // ...and a release still exists, so the note fades instead of clicking
+    // off the way the flat pre-#1480 gain did.
+    expect(release.at).toBeGreaterThan(hold.at);
+  });
+
+  it.each(["chime", "blip", "pop"] as const)(
+    "leaves a preset that declares no sustain exactly as #1480 shipped it — %s",
+    async (name) => {
+      const { playBeep } = await freshBeep();
+
+      playBeep(name);
+
+      const voices = synthVoices(name);
+      expect(fake.gains).toHaveLength(voices.length);
+      voices.forEach((voice, i) => {
+        // These presets WANT the decay — a chime that held its peak and then
+        // cut is not a chime. 2119 is about the one preset whose contract is
+        // "what shipped before", so a zero sustain must reproduce the old
+        // three-event envelope event for event.
+        expect(voice.sustainMs).toBe(0);
+        const env = at(fake.gains, i).automation;
+        expect(env.map((e) => e.op)).toEqual(["set", "linear", "exponential"]);
+        expect(at(env, 1).value).toBe(voice.gain);
+        expect(at(env, 2).at - at(env, 0).at).toBeCloseTo(voice.durationMs / 1000, 6);
+      });
+    },
+  );
+
+  it("leaves every synth preset a release, so no sustain can swallow its own ramp", async () => {
+    const { playBeep } = await freshBeep();
+    expect(SYNTH_PRESETS.length).toBeGreaterThan(1);
+
+    for (const name of SYNTH_PRESETS) {
+      fake.gains = [];
+      playBeep(name);
+
+      expect(fake.gains).toHaveLength(synthVoices(name).length);
+      for (const rec of fake.gains) {
+        const last = at(rec.automation, rec.automation.length - 1);
+        const prev = at(rec.automation, rec.automation.length - 2);
+        // `attack + sustain > duration` is an arithmetic mistake TypeScript
+        // cannot catch, and it lands as an out-of-order automation event —
+        // which a real AudioContext throws on and `playBeep` then swallows,
+        // turning a typo into silence. The table is the only place voices are
+        // born, so the invariant is checked over ALL of it rather than argued
+        // for whichever preset is being added.
+        expect(last.op).toBe("exponential");
+        expect(last.at).toBeGreaterThan(prev.at);
+      }
+    }
   });
 });
 

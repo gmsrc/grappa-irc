@@ -50,6 +50,14 @@ import {
 // Shared amplitude envelope, in seconds. A bare gain step clicks at both ends;
 // a 5 ms attack and a decay to (near) zero is the cheapest fix that costs no
 // extra node. `exponentialRampToValueAtTime` cannot reach 0, hence the epsilon.
+//
+// The attack and the epsilon are shared because no preset has an opinion on
+// them. How much of the voice stays AT the peak is a per-preset decision —
+// `SoundVoice.sustainMs` — because a chime wants to ring out and a plain tone
+// wants to hold and then stop (issue 2119). There is no shared release
+// constant: the release is whatever the duration has left after the attack
+// and the sustain, which keeps `durationMs` meaning the same thing for every
+// voice whatever shape it asks for.
 const ATTACK_S = 0.005;
 const SILENCE_GAIN = 0.0001;
 
@@ -87,7 +95,15 @@ function playVoice(context: AudioContext, voice: SoundVoice, startAt: number): v
   osc.frequency.linearRampToValueAtTime(voice.toHz, end);
 
   gain.gain.setValueAtTime(SILENCE_GAIN, at);
-  gain.gain.linearRampToValueAtTime(voice.gain, at + ATTACK_S);
+  const peakAt = at + ATTACK_S;
+  gain.gain.linearRampToValueAtTime(voice.gain, peakAt);
+  // Restating the peak late in the voice is what turns the decay into a
+  // hold: the exponential ramp below starts from the LAST scheduled event,
+  // so pinning the peak at `peakAt + sustain` leaves only the remainder for
+  // the release. A voice with no sustain schedules no extra event and gets
+  // the byte-identical three-event envelope #1480 shipped — the guard is
+  // load-bearing, not a micro-optimisation (issue 2119).
+  if (voice.sustainMs > 0) gain.gain.setValueAtTime(voice.gain, peakAt + voice.sustainMs / 1000);
   gain.gain.exponentialRampToValueAtTime(SILENCE_GAIN, end);
 
   osc.connect(gain).connect(context.destination);

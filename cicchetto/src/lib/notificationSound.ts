@@ -60,6 +60,28 @@ export type SoundVoice = {
   readonly durationMs: number;
   /** Peak linear gain, before the shared envelope. */
   readonly gain: number;
+  /**
+   * How long to HOLD the peak after the attack, in ms, before the envelope
+   * releases into silence at `durationMs`. `0` is decay-from-onset — the
+   * shape every preset had when #1480 landed, and the right one for a chime
+   * or a sweep.
+   *
+   * `tone` is why this exists (issue 2119): its contract is "the sound cic
+   * played before the preset pack", which was a FLAT gain for the whole
+   * burst, and folding it under a decay envelope halved it at the ear
+   * without moving a single number in this row.
+   *
+   * Stated on every voice rather than optional, for the reason `toHz` is:
+   * the player gets one rule to follow instead of a "did the author mean a
+   * hold?" branch, and a new preset has to decide which shape it wants
+   * rather than inherit one.
+   *
+   * `attack + sustainMs` must leave room before `durationMs` for the
+   * release — an overrun schedules the ramp before the hold, which a real
+   * AudioContext throws on. TypeScript cannot express that, so
+   * `__tests__/beep.test.ts` checks it over every preset in this table.
+   */
+  readonly sustainMs: number;
 };
 
 export type SoundPreset =
@@ -125,13 +147,23 @@ const SAMPLE_GAIN = 0.6;
 export const NOTIFICATION_SOUND_PRESETS: Readonly<Record<NotificationSound, SoundPreset>> = {
   none: { kind: "silent", label: "silent (default)" },
 
-  // The pre-#1480 sound, unchanged to the Hz: a bare 440 Hz sine for 80 ms at
-  // gain 0.1. Kept exactly because it is what `/beep on` promises and what an
-  // existing user who opts back in expects to hear.
+  // The pre-#1480 sound: a bare 440 Hz sine for 80 ms at gain 0.1. Kept
+  // exactly because it is what `/beep on` promises and what an existing user
+  // who opts back in expects to hear.
+  //
+  // 🔴 The Hz and the ms were never the hard part, and this comment used to
+  // stop at them (issue 2119). What the old code played was a FLAT gain for
+  // all 80 ms; under the shared envelope the same row decayed from the onset
+  // and came out audibly shorter. `sustainMs: 65` is the compensation —
+  // 5 ms attack + 65 ms at peak + a 10 ms release fills exactly the 80 ms the
+  // old burst occupied, and spends the last 10 of them fading instead of
+  // cutting, which is the click the envelope exists to avoid.
   tone: {
     kind: "synth",
     label: "tone (440 Hz)",
-    voices: [{ wave: "sine", fromHz: 440, toHz: 440, atMs: 0, durationMs: 80, gain: 0.1 }],
+    voices: [
+      { wave: "sine", fromHz: 440, toHz: 440, atMs: 0, durationMs: 80, gain: 0.1, sustainMs: 65 },
+    ],
   },
 
   // A falling two-note interval — the shape everyone reads as "message", and
@@ -142,8 +174,24 @@ export const NOTIFICATION_SOUND_PRESETS: Readonly<Record<NotificationSound, Soun
     kind: "synth",
     label: "chime",
     voices: [
-      { wave: "triangle", fromHz: 988, toHz: 988, atMs: 0, durationMs: 110, gain: 0.09 },
-      { wave: "triangle", fromHz: 659, toHz: 659, atMs: 100, durationMs: 220, gain: 0.09 },
+      {
+        wave: "triangle",
+        fromHz: 988,
+        toHz: 988,
+        atMs: 0,
+        durationMs: 110,
+        gain: 0.09,
+        sustainMs: 0,
+      },
+      {
+        wave: "triangle",
+        fromHz: 659,
+        toHz: 659,
+        atMs: 100,
+        durationMs: 220,
+        gain: 0.09,
+        sustainMs: 0,
+      },
     ],
   },
 
@@ -152,7 +200,17 @@ export const NOTIFICATION_SOUND_PRESETS: Readonly<Record<NotificationSound, Soun
   blip: {
     kind: "synth",
     label: "blip",
-    voices: [{ wave: "square", fromHz: 660, toHz: 1320, atMs: 0, durationMs: 60, gain: 0.05 }],
+    voices: [
+      {
+        wave: "square",
+        fromHz: 660,
+        toHz: 1320,
+        atMs: 0,
+        durationMs: 60,
+        gain: 0.05,
+        sustainMs: 0,
+      },
+    ],
   },
 
   // A fast downward sweep: the bubble-pop shape, and the least intrusive of
@@ -160,7 +218,9 @@ export const NOTIFICATION_SOUND_PRESETS: Readonly<Record<NotificationSound, Soun
   pop: {
     kind: "synth",
     label: "pop",
-    voices: [{ wave: "sine", fromHz: 1200, toHz: 300, atMs: 0, durationMs: 70, gain: 0.12 }],
+    voices: [
+      { wave: "sine", fromHz: 1200, toHz: 300, atMs: 0, durationMs: 70, gain: 0.12, sustainMs: 0 },
+    ],
   },
 
   icq: { kind: "sample", label: 'ICQ "uh-oh"', url: "/sounds/icq-uh-oh.mp3", gain: SAMPLE_GAIN },
