@@ -56064,3 +56064,79 @@ design and took 344/345 by hand.
   bundle's `channel_display` comes from the priming call, so the numeric's own
   channel casing never reaches a key or a display. Leaving 344 out keeps it
   consistent with its two siblings rather than with 367.
+<!-- entry #2119 -->
+
+---
+
+## 2026-09-13 — issue 2119: `tone` got its body back — the envelope grew a per-voice sustain
+
+Lucy reported on `#grappa` that cic's `tone` preset "is too short" next to the
+sound it played before the #1480 preset pack. The recipe was innocent: still a
+sine, still 440 Hz, still 80 ms, still gain 0.1, and the comment above it in
+`notificationSound.ts` said so. What changed was the thing the recipe does not
+describe. Pre-#1480 `beep.ts` played that burst at a FLAT gain
+(`gain.gain.value = BEEP_GAIN`) and cut; #1480 folded every preset under one
+shared envelope — a 5 ms attack, then `exponentialRampToValueAtTime` to the
+epsilon at the END of the voice. So the ramp started where the attack ended
+and the note was ~20 dB down about a third of the way in. Same numbers on
+paper, a click at the ear.
+
+### The envelope is right; hard-coding decay-from-onset was not
+
+The envelope earns its place — a bare gain step clicks at both ends, and
+`chime` and the two sweeps genuinely want to ring out. The defect is narrower:
+a preset whose entire contract is "what shipped before" was given a shape it
+never asked for, and the table had no way to say otherwise. So the fix is a
+knob on the DATA, `SoundVoice.sustainMs`: how long to hold the peak after the
+attack before releasing into silence at `durationMs`. `tone` takes 65 (5 ms
+attack + 65 ms at peak + a 10 ms release fills exactly the 80 ms the old burst
+occupied, and fades over the last 10 instead of cutting); every other voice
+takes 0, which IS decay-from-onset.
+
+Three things about the shape, each a choice against an easier one.
+
+- **Required, not optional.** The issue proposed `sustainMs?`. This file's own
+  `toHz` field already rejects that reasoning in writing — "stated rather than
+  optional so the player has one code path and no *did the author mean a
+  glide?* branch" — and the same argument holds here. Five voices exist and
+  they all live in one table, so the cost is five literals and the gain is
+  that a new preset must DECIDE its shape rather than inherit one.
+- **The release is derived, never declared.** There is no `RELEASE_S`
+  constant and no `releaseMs` field: the release is whatever `durationMs` has
+  left after the attack and the sustain. That keeps `durationMs` meaning the
+  same thing for every voice whatever shape it asks for, and it is why a
+  zero sustain reproduces the old envelope exactly instead of approximately.
+- **No clamp.** `attack + sustainMs` overrunning `durationMs` would schedule
+  the ramp before the hold, which a real `AudioContext` throws on and
+  `playBeep` then swallows — a typo turning into silence. Clamping would hide
+  it; TypeScript cannot express it; so `beep.test.ts` asserts a strictly
+  positive release over EVERY synth preset in the table, which is the only
+  place voices are born.
+
+The alternative the issue listed second — lengthen `tone`'s `durationMs` until
+the decay lands where the old cut did — was declined. It leaves the body
+decaying, and it makes the table's duration column mean something different
+for one row than for the others.
+
+### The sustain event is guarded, and the guard is load-bearing
+
+`playVoice` emits `setValueAtTime(peak, peakAt + sustain)` only when the
+sustain is non-zero. Mathematically the event is a no-op at zero — it would
+restate the peak at the instant the attack ramp already reached it — but
+emitting it unconditionally would change the recorded automation of `chime`,
+`blip` and `pop`, and "unchanged" is the claim being made about them. Measured
+rather than argued: the gain automation of all three is identical event for
+event before and after (dumped from both players against the same table), and
+`tone`'s gains exactly one event, the hold at 0.070 s.
+
+### What the test had to be able to see
+
+A final-value assertion cannot tell these two envelopes apart — both end at
+the epsilon. The oracle therefore records the GainNode automation with its
+times and asserts WHEN the peak is abandoned: the ratio
+`(hold − onset) / (release − onset)` is above 0.8, where it was 0.0625 before.
+Mutated to confirm the gate moves: stripping the guard from `playVoice`, and
+separately zeroing `tone`'s sustain in the table, each turn that one test red
+and leave the other eighteen green; setting the sustain to the full 80 ms
+instead reddens the release invariant. A test that stays green under its own
+cure is watching nothing.
