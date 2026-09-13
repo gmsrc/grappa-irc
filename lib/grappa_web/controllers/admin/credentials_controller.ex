@@ -334,6 +334,14 @@ defmodule GrappaWeb.Admin.CredentialsController do
   # and `auth_command_template` to the pre-existing M-6 set. Password
   # changes route through `update_credential_with_session_lifecycle/3`
   # which kills the live session per A-2.
+  #
+  # `server_pass` is ABSENT DELIBERATELY (issue 2107), not forgotten. Adding it
+  # would open a new write door for a secret, which is a security-surface
+  # decision and not something a bugfix gets to take — the same posture that
+  # keeps `tls_verify` (#1677) out of this list and READ-ONLY on the wire. The
+  # way back from a stomped `:server_pass` is the validator spending the secret
+  # the row already holds (`Credential.validate_secret_present/4`), not a
+  # second door through which to re-type it.
   @allowed_update_keys ~w(autojoin_channels nick ident sasl_user realname auth_method
                           auth_command_template password)
 

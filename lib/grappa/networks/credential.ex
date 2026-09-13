@@ -623,16 +623,52 @@ defmodule Grappa.Networks.Credential do
   Keyed as a distinct changeset (not a flag on `password_changeset/2`) so the
   SET PASSWD path can NEVER accidentally flip a SASL/server-pass credential's
   auth method — the two operations are genuinely different verbs.
+
+  ⚠️ issue 2107 — that separation was necessary and NOT sufficient: this
+  changeset used to cast the flip UNCONDITIONALLY, so registering a nick on a
+  `:server_pass` credential stomped the method the operator had configured
+  (reported by morph, with the stored `server_pass_encrypted` left intact and
+  every REST door shut behind it). The flip now runs through the same
+  `promote_none_to_nickserv_identify/1` step the sibling promotion door has
+  always used. Consequence worth naming: registering a nick on a credential
+  that already authenticates some OTHER way stores the REGISTER password but
+  does NOT arm auto-identify, so that nick can still be services-enforced —
+  the enum has no "server PASS *and* NickServ IDENTIFY" value to express the
+  combination, and inventing one is a separate design question.
   """
   @spec registration_changeset(t(), String.t()) :: Ecto.Changeset.t()
   def registration_changeset(credential, password) when is_binary(password) do
     credential
-    |> cast(%{password: password, auth_method: :nickserv_identify}, [:password, :auth_method])
+    |> cast(%{password: password}, [:password])
+    |> promote_none_to_nickserv_identify()
     |> validate_required([:password, :auth_method])
     # Same wire-hygiene guard as password_changeset/2 — the stored password is
     # re-interpolated into `PRIVMSG NickServ :IDENTIFY` on the next connect.
     |> validate_change(:password, &Identity.safe_line_token/2)
     |> put_encrypted_password()
+  end
+
+  @doc """
+  Changeset step: promote an ANON (`:none`) binding to `:nickserv_identify`,
+  and leave every other value alone.
+
+  A password typed into a credential configured not to identify would
+  otherwise sit there inert. ONLY `:none`: rewriting `:sasl`, `:auto` or
+  `:server_pass` would change what the stored secret is SPENT ON and break a
+  working handshake — and, since the admin PATCH whitelist carries no
+  `server_pass`, could strand the row with no way back (issue 2107).
+
+  Public because it is shared, not because it is a general-purpose verb: both
+  promotion doors — `Credentials.update_credential_password/2` (#124, the
+  typed-password door) and `registration_changeset/2` (#349, the +r commit) —
+  need exactly this gate, and having it once is what keeps them from drifting
+  apart again.
+  """
+  @spec promote_none_to_nickserv_identify(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def promote_none_to_nickserv_identify(cs) do
+    if get_field(cs, :auth_method) == :none,
+      do: put_change(cs, :auth_method, :nickserv_identify),
+      else: cs
   end
 
   @doc """
@@ -927,29 +963,52 @@ defmodule Grappa.Networks.Credential do
   # legitimately has no NickServ secret at all. Every other method still
   # requires `password`; the pairing is a table rather than a branch so a new
   # method cannot silently inherit the wrong one.
+  #
+  # issue 2107 — the same table also answers WHOSE secret a stored value is,
+  # which is the question the re-supply guard above is really asking. A slot
+  # with exactly ONE spender cannot hold a secret that was meant for some
+  # other method: `server_pass_encrypted` is only ever written as a server
+  # PASS, so switching INTO `:server_pass` spends it for precisely what it was
+  # stored for. `password_encrypted` has three spenders across two upstream
+  # surfaces (NickServ IDENTIFY vs SASL PLAIN), so a change into that slot is
+  # exactly the typo the guard was written to catch. Hence `:dedicated` vs
+  # `:shared` — carried from the table rather than re-derived, so a sixth
+  # method has to declare which kind of slot it spends.
   @spec validate_password_for_auth_method(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp validate_password_for_auth_method(cs) do
     case get_field(cs, :auth_method) do
       :none -> cs
-      :server_pass -> validate_secret_present(cs, :server_pass, :server_pass_encrypted)
-      _ -> validate_secret_present(cs, :password, :password_encrypted)
+      :server_pass -> validate_secret_present(cs, :server_pass, :server_pass_encrypted, :dedicated)
+      _ -> validate_secret_present(cs, :password, :password_encrypted, :shared)
     end
   end
 
-  @spec validate_secret_present(Ecto.Changeset.t(), atom(), atom()) :: Ecto.Changeset.t()
-  defp validate_secret_present(cs, virtual, stored_field) do
+  @spec validate_secret_present(Ecto.Changeset.t(), atom(), atom(), :dedicated | :shared) ::
+          Ecto.Changeset.t()
+  defp validate_secret_present(cs, virtual, stored_field, slot) do
     new_secret = get_field(cs, virtual)
     stored = get_field(cs, stored_field)
+    stored? = is_binary(stored) and byte_size(stored) > 0
     auth_method_changed? = Map.has_key?(cs.changes, :auth_method)
 
     cond do
       is_binary(new_secret) and byte_size(new_secret) > 0 ->
         cs
 
+      # issue 2107 — THE WAY BACK. Without this arm a row whose `auth_method`
+      # was moved off `:server_pass` could never be moved back through any
+      # REST door: the admin PATCH whitelist carries no `server_pass` (a write
+      # door for a secret is a security-surface decision, deliberately not
+      # taken here — same posture as `tls_verify`/#1677), so the secret could
+      # not be re-supplied, and this validator would not accept the one
+      # already stored. Both doors shut at once; only the validator may open.
+      stored? and slot == :dedicated ->
+        cs
+
       auth_method_changed? ->
         add_error(cs, virtual, "must be re-supplied when auth_method changes")
 
-      is_binary(stored) and byte_size(stored) > 0 ->
+      stored? ->
         cs
 
       true ->

@@ -597,6 +597,73 @@ defmodule Grappa.NetworksTest do
     end
   end
 
+  # issue 2107, defect 2 — morph's row: `server_pass_encrypted` still stored
+  # and untouched, `auth_method` moved off `:server_pass`, and every REST door
+  # shut. The admin PATCH whitelist deliberately does not carry `server_pass`
+  # (a write door for a secret is vjt's call, not a side effect of a bugfix —
+  # same posture as `tls_verify`/#1677), so the ONLY way back is for the
+  # validator to spend the secret the row already holds.
+  describe "update_credential!/3 — restoring :server_pass from the stored secret" do
+    setup do
+      user = user_fixture()
+      net = network_fixture()
+
+      {:ok, _} =
+        Credentials.bind_credential(user, net, %{
+          nick: "gated",
+          auth_method: :server_pass,
+          server_pass: "gatepass"
+        })
+
+      # The state the +r registration flip left behind: the gate secret is
+      # intact, only `auth_method` moved.
+      {:ok, cred} =
+        Credentials.update_credential!(user, net, %{
+          auth_method: :nickserv_identify,
+          password: "nspass"
+        })
+
+      assert cred.server_pass_encrypted == "gatepass"
+
+      %{user: user, network: net}
+    end
+
+    test "accepts the switch back without re-supplying it", %{user: user, network: net} do
+      assert {:ok, cred} =
+               Credentials.update_credential!(user, net, %{auth_method: :server_pass})
+
+      assert cred.auth_method == :server_pass
+      assert cred.server_pass_encrypted == "gatepass"
+    end
+
+    test "still demands a fresh secret when the slot is SHARED", %{user: user, network: net} do
+      # `:nickserv_identify` → `:sasl` keeps spending `password_encrypted`, so
+      # the stored value would be re-purposed onto a different upstream
+      # surface — the case the guard was written for, and untouched here.
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Credentials.update_credential!(user, net, %{auth_method: :sasl})
+
+      assert "must be re-supplied when auth_method changes" in errors_on(cs).password
+    end
+
+    test "still rejects :server_pass when the row holds no gate secret" do
+      user = user_fixture()
+      net = network_fixture()
+
+      {:ok, _} =
+        Credentials.bind_credential(user, net, %{
+          nick: "ungated",
+          auth_method: :nickserv_identify,
+          password: "nspass"
+        })
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Credentials.update_credential!(user, net, %{auth_method: :server_pass})
+
+      assert "must be re-supplied when auth_method changes" in errors_on(cs).server_pass
+    end
+  end
+
   describe "update_credential/3 (M-6 typed sibling)" do
     setup do
       user = user_fixture()

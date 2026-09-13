@@ -949,7 +949,7 @@ defmodule Grappa.Networks.Credentials do
     changeset =
       credential
       |> Credential.password_changeset(password)
-      |> promote_none_to_nickserv_identify()
+      |> Credential.promote_none_to_nickserv_identify()
       |> vet_nickserv_password(credential, password)
 
     case Repo.update(changeset) do
@@ -958,13 +958,6 @@ defmodule Grappa.Networks.Credentials do
     end
   rescue
     Ecto.StaleEntryError -> {:error, :not_found}
-  end
-
-  @spec promote_none_to_nickserv_identify(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  defp promote_none_to_nickserv_identify(changeset) do
-    if Ecto.Changeset.get_field(changeset, :auth_method) == :none,
-      do: Ecto.Changeset.put_change(changeset, :auth_method, :nickserv_identify),
-      else: changeset
   end
 
   # Reads auth_method off the CHANGESET, not the row, so it sees the promotion

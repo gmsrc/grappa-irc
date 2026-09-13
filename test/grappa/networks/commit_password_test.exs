@@ -22,6 +22,17 @@ defmodule Grappa.Networks.CommitPasswordTest do
     )
   end
 
+  # The minimum bind attrs each non-`:none` `auth_method` needs to pass the
+  # wide changeset's `validate_password_for_auth_method/1`. No catch-all
+  # clause on purpose: a SIXTH auth method makes the 2107 guard test below
+  # raise FunctionClauseError instead of quietly dropping out of coverage.
+  @spec bindable_attrs(Credential.auth_method()) :: map()
+  defp bindable_attrs(:server_pass), do: %{auth_method: :server_pass, server_pass: "gatepass"}
+  defp bindable_attrs(:sasl), do: %{auth_method: :sasl, sasl_user: "vjt", password: "saslpass"}
+
+  defp bindable_attrs(method) when method in [:auto, :nickserv_identify],
+    do: %{auth_method: method, password: "nspass"}
+
   describe "Credentials.commit_password/3" do
     test "rotates the stored password and round-trips on read (Cloak decrypt)" do
       {_, _, cred} = rotating_credential(%{})
@@ -133,6 +144,44 @@ defmodule Grappa.Networks.CommitPasswordTest do
       assert {:error, :not_found} =
                Credentials.commit_registration_password(Ecto.UUID.generate(), 999_999, "regpass")
     end
+
+    # issue 2107 — reported by morph: registering a nick flipped a
+    # `:server_pass` credential to `:nickserv_identify`, and the REST surface
+    # had no way back. The promotion is for `--auth none` bindings (the
+    # docstring says so); on a row that already declares how it authenticates,
+    # the REGISTER password lands and the method stays put.
+    test "does NOT stomp a :server_pass binding — the +r flip is :none-only" do
+      {_, _, cred} =
+        user_with_credential(6667, %{auth_method: :server_pass, server_pass: "gatepass"})
+
+      assert {:ok, %Credential{}} =
+               Credentials.commit_registration_password(cred.user_id, cred.network_id, "regpass")
+
+      assert reload_credential(cred).auth_method == :server_pass
+    end
+
+    test "still lands the REGISTER password on a :server_pass binding" do
+      {_, _, cred} =
+        user_with_credential(6667, %{auth_method: :server_pass, server_pass: "gatepass"})
+
+      assert {:ok, %Credential{}} =
+               Credentials.commit_registration_password(cred.user_id, cred.network_id, "regpass")
+
+      reloaded = reload_credential(cred)
+      assert reloaded.password_encrypted == "regpass"
+      # The gate secret lives in its own #1044 slot and is not collateral.
+      assert reloaded.server_pass_encrypted == "gatepass"
+    end
+
+    test "does NOT stomp a :sasl binding either — the guard is on the VALUE" do
+      {_, _, cred} =
+        user_with_credential(6667, %{auth_method: :sasl, sasl_user: "vjt", password: "saslpass"})
+
+      assert {:ok, %Credential{}} =
+               Credentials.commit_registration_password(cred.user_id, cred.network_id, "regpass")
+
+      assert reload_credential(cred).auth_method == :sasl
+    end
   end
 
   describe "Credential.registration_changeset/2" do
@@ -162,6 +211,28 @@ defmodule Grappa.Networks.CommitPasswordTest do
       refute Credential.registration_changeset(cred, "re\x00gpass").valid?
       # A space is legal (rest-of-line password).
       assert Credential.registration_changeset(cred, "reg pass").valid?
+    end
+
+    # issue 2107 — the sibling promotion door
+    # (`Credentials.update_credential_password/2`) has always been `:none`-gated;
+    # this one was not, and that asymmetry is the defect. Asserting on
+    # `changes` rather than `get_field` is deliberate: the row must be left
+    # UNWRITTEN, not merely written with the same value.
+    test "promotes :none, and ONLY :none, to :nickserv_identify" do
+      {_, _, anon} = rotating_credential(%{auth_method: :none, password: nil})
+
+      assert Ecto.Changeset.get_change(
+               Credential.registration_changeset(anon, "regpass"),
+               :auth_method
+             ) == :nickserv_identify
+
+      for method <- Credential.auth_methods(), method != :none do
+        {_, _, cred} = rotating_credential(bindable_attrs(method))
+        cs = Credential.registration_changeset(cred, "regpass")
+
+        assert cs.valid?, "#{method}: #{inspect(errors_on(cs))}"
+        refute Map.has_key?(cs.changes, :auth_method), "#{method}: auth_method was stomped"
+      end
     end
   end
 end
