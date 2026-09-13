@@ -55480,3 +55480,135 @@ Not established here: both mutants were run before the anchoring commit, so
 their line numbers have moved. The verdicts carry across it — the anchor was
 inserted *above* the discriminator and does not touch the row count M-B dies
 on — but no mutant was re-run afterwards.
+<!-- entry #2107 -->
+
+---
+
+## 2026-09-13 — issue 2107: the guard one promotion door had and the other did not, and the door that has to open because the other one stays shut
+
+Reported by morph on a self-hosted instance: registering a nick flipped a
+credential's `auth_method` from `:server_pass` to `:nickserv_identify`, and
+every attempt to set it back answered
+`server_pass: must be re-supplied when auth_method changes`. The stored
+`server_pass_encrypted` was intact the whole time. Two independent defects
+sitting on top of each other; either alone is an annoyance, together they are
+a dead end by construction.
+
+### Defect 1 — the promotion that did not ask
+
+`Credential.registration_changeset/2` (#349, the wizard's commit-on-`+r`) cast
+`auth_method: :nickserv_identify` unconditionally. Its own docstring already
+said what it was for — a `--auth none` credential that has just registered a
+nick and must auto-identify from now on — and its own docstring already
+explained why it is a SEPARATE changeset from `password_changeset/2`: *"so the
+SET PASSWD path can NEVER accidentally flip a SASL/server-pass credential's
+auth method"*. That separation was necessary and not sufficient. Keeping the
+flip out of the sibling verb does nothing about the verb that carries it.
+
+The sibling promotion door has been guarded since #124:
+`Credentials.update_credential_password/2` promotes only when the current
+value is `:none`, with the reason written out — *"rewriting `:sasl` or
+`:server_pass` would change what the password is SPENT ON and break a working
+handshake"*. That is the same sentence this path needed. Rather than copy the
+three-line `if` into the schema, the guard MOVED: it is now
+`Credential.promote_none_to_nickserv_identify/1`, public on the schema module,
+and `Credentials.update_credential_password/2` calls it. Two doors, one gate,
+one place to change it. The net line count goes down.
+
+This is the #1028 / #1032 / #1044 family reappearing on a different column.
+Those were `password_encrypted`: a fold path overwrote the secret on
+`:server_pass` / `:sasl` rows while the promotion path checked first. The
+shape is identical — *the guard one path has, the other does not* — and the
+cure is the same one, applied one field over. The fold is not involved here,
+and the mechanism is different; only the shape repeats.
+
+**Named consequence, not a side effect.** Registering a nick on a credential
+that already authenticates some other way now stores the REGISTER password and
+leaves the method alone, so that nick is NOT armed for auto-identify and can
+still be services-enforced on the next reconnect. That is the correct trade —
+a stomped `:server_pass` breaks a working handshake immediately, and used to
+be unrecoverable — but it is a real gap and the enum is why: there is no value
+that means "server PASS *and* NickServ IDENTIFY". Inventing one is a design
+question, not a bugfix, and is deliberately not answered here.
+
+### The class, measured
+
+`registration_changeset/2` is one site. Census of every place in `lib/` that
+writes a FIXED `auth_method` value onto an existing row (as opposed to
+accepting one from operator input, or setting one at bind time where there is
+nothing to stomp):
+
+| site | guard |
+| --- | --- |
+| `Credential.registration_changeset/2` | none — this defect |
+| `Credentials.commit_visitor_password/3` | none |
+| `Credentials.update_credential_password/2` | `:none`-gated since #124 |
+
+Three sites, one guarded. The census command was run with both controls: it
+finds the guarded site (positive — an unfiltered grep that cannot see the one
+known-good case is measuring nothing), and returns rc=1 on an `auth_method`
+value that does not exist (negative).
+
+**`commit_visitor_password/3` is the same SHAPE and is not a defect, and the
+reason is reachability rather than a guard.** Every write of a visitor
+credential's `auth_method` in `lib/grappa/visitors*` is `:none` (creation) or
+the derived in-memory session plan; the only DB promotion is that one, to
+`:nickserv_identify`. So the reachable set for a visitor row is
+`{:none, :nickserv_identify}` and the unconditional `put_change` is idempotent
+by construction, exactly as its comment claims. `:server_pass` is additionally
+blocked structurally by `validate_server_pass_is_user_only/1` (#1044). It is
+left alone ON PURPOSE: adding a gate there would assert a property the code
+already has, and would read as if the visitor path had once been able to reach
+`:sasl`. If a future door ever gives a visitor a second auth method, that site
+becomes a defect the same day — it is listed here so that day is not a
+rediscovery.
+
+### Defect 2 — and why only the validator was allowed to move
+
+With the method stomped, the row could not be moved back through any REST
+door, because BOTH doors were shut at once:
+
+* the admin PATCH whitelist (`@allowed_update_keys`) does not carry
+  `server_pass`, and extra keys are rejected outright — so the secret cannot
+  be re-supplied;
+* `validate_secret_present/3` hard-errored on ANY `auth_method` change unless
+  the virtual secret was present in that same changeset — so the change cannot
+  be made without re-supplying it.
+
+Only one of those may move here. **Adding `server_pass` to the admin PATCH
+whitelist would open a NEW WRITE DOOR FOR A SECRET**, which is a
+security-surface decision and not a side effect of a bugfix. This repo already
+excludes fields from that whitelist on purpose — `tls_verify` (#1677) is
+projected READ-ONLY for exactly this reason. So the whitelist is deliberately
+left as it is; if the way back should also carry a fresh secret, that is a
+separate, explicit call.
+
+### Why the validator's relaxation is slot-aware and not blanket
+
+The obvious cure is "accept a stored secret whenever the target method already
+has one on the row" — move the stored-secret arm above the
+`auth_method`-changed arm. **Measured: that breaks two tests that were already
+green on `origin/main`** (`update_credential!/3 rejects auth_method change
+without a fresh password`, and `update_credential/3 … returns {:error, …} on
+invalid attrs`). It is not test noise; those tests are the guard, and the
+blanket form deletes it silently. The guard's stated purpose is to stop an
+operator *"accidentally promot[ing] a NickServ-IDENTIFY password into a SASL
+credential — different upstream auth surface, almost certainly a typo"*.
+
+The discriminator that reopens morph's door without deleting that is already
+in the file: **#1044's slot table.** `server_pass_encrypted` has exactly ONE
+spender, so a value stored there can only ever have been written as a server
+PASS — switching INTO `:server_pass` spends it for precisely what it was
+stored for, and there is nothing to re-purpose. `password_encrypted` has
+THREE spenders (`:auto`, `:sasl`, `:nickserv_identify`) across TWO upstream
+surfaces (NickServ IDENTIFY vs SASL PLAIN), so a change into that slot is the
+typo the guard exists to catch. `validate_secret_present/4` therefore takes
+the slot's kind — `:dedicated | :shared` — from the same table that already
+picks WHICH secret to require, so a sixth auth method has to declare which
+kind of slot it spends instead of inheriting an answer.
+
+Stated plainly because it is a deviation: the instruction was the blanket
+form. The blanket form was written, run, and produced the two reds above; the
+slot-aware form is the same cure with the one discriminator that keeps the
+pre-existing guard alive, and it is four lines longer than the swap it
+replaces.
