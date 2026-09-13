@@ -824,8 +824,8 @@ defmodule Grappa.IRC.Client do
   @doc """
   Sends `MODE <channel> <mode>\\r\\n` — the type-A list QUERY form (no sign,
   just the mode letter). The ircd answers with that list's row numerics and
-  its terminator (`b` → 367/368, `e` → 348/349, `I` → 346/347, `z`/`q` →
-  728/729; see `Grappa.Session.ListModes`).
+  its terminator (`b` → 367/368, `e` → 348/349, `I` → 346/347, `R` → 344/345,
+  `z`/`q` → 728/729; see `Grappa.Session.ListModes`).
 
   Validates the channel syntax AND the mode letter with
   `{:error, :invalid_line}` on rejection: `mode` reaches here from a client

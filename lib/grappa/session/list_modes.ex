@@ -16,6 +16,7 @@ defmodule Grappa.Session.ListModes do
   | `b`  | 367  | 368 | both (bahamut `src/s_err.c:414`, solanum `include/messages.h:129`) |
   | `e`  | 348  | 349 | solanum (`:114`) — bahamut has no `+e`            |
   | `I`  | 346  | 347 | solanum (`:112`) — bahamut has no `+I`            |
+  | `R`  | 344  | 345 | ircnet reop list (`ircd/s_err.c:379-380`)         |
   | `z`  | 728  | 729 | bahamut restrict list (`src/s_err.c:812`)         |
   | `q`  | 728  | 729 | solanum quiet list (`include/messages.h:231`)     |
 
@@ -24,9 +25,19 @@ defmodule Grappa.Session.ListModes do
   format string as a literal middle param — bahamut
   `":%s 728 %s %s z %s %s %lu"`, solanum `":%s 728 %s %s q %s %s %lu"` — so
   the reply itself says which list it is, and `EventRouter` reads it from
-  `params` instead of assuming. The 346/348/367 rows carry no letter (their
-  numeric IS the letter). The issue text's `z → 728/729` was true only for
-  bahamut; reading the param covers both networks with one clause.
+  `params` instead of assuming. The 344/346/348/367 rows carry no letter
+  (their numeric IS the letter). The issue text's `z → 728/729` was true only
+  for bahamut; reading the param covers both networks with one clause.
+
+  **344/345 is IRCnet's alone (issue 2116), which is why `R` needs no such
+  trick.** Measured across the three ircds grappa talks to: ircnet/ircd
+  spends the pair on the channel reop list
+  (`":%s 344 %s %s %s!%s@%s"` / `":%s 345 %s %s :End of Channel Reop List"`),
+  solanum's table jumps 341 → 346, and bahamut's two slots are `NULL`. No
+  collision, so the numeric identifies the letter. IRCnet's row is also the
+  SHORTEST of the family — channel + mask, no setter and no set timestamp —
+  which the shared 367/348/346 clause already absorbs (setter/set_ts are
+  read with `Enum.at/2` and stay `nil`).
 
   ## Silent degradation
 
@@ -41,9 +52,10 @@ defmodule Grappa.Session.ListModes do
   alias Grappa.Session.ISupport
 
   @typedoc """
-  A single-character channel list-mode letter (`"b"`, `"e"`, `"I"`, `"z"`,
-  `"q"`). Case is significant — `I` (invite exception) and `i` (invite-only,
-  a type-D flag) are different modes.
+  A single-character channel list-mode letter (`"b"`, `"e"`, `"I"`, `"R"`,
+  `"z"`, `"q"`). Case is significant — `I` (invite exception) and `i`
+  (invite-only, a type-D flag) are different modes, and so are `R` (IRCnet's
+  reop list) and `r` (a type-D registered-only flag on the same network).
   """
   @type mode :: String.t()
 
@@ -54,6 +66,7 @@ defmodule Grappa.Session.ListModes do
     "b" => {367, 368},
     "e" => {348, 349},
     "I" => {346, 347},
+    "R" => {344, 345},
     "z" => {728, 729},
     "q" => {728, 729}
   }

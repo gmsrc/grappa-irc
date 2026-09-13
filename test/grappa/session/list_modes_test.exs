@@ -17,6 +17,7 @@ defmodule Grappa.Session.ListModesTest do
                "b" => {367, 368},
                "e" => {348, 349},
                "I" => {346, 347},
+               "R" => {344, 345},
                "z" => {728, 729},
                "q" => {728, 729}
              }
@@ -54,6 +55,16 @@ defmodule Grappa.Session.ListModesTest do
       isupport = ISupport.merge_isupport(["CHANMODES=eIbq,k,flj,CFLMPQScgimnprstuz"], ISupport.default())
 
       assert ListModes.queryable(isupport) == ["e", "I", "b", "q"]
+    end
+
+    # issue 2116 — IRCnet's own 005: `CHANMODES=beIR,k,l,imnpstaqrzZ`. `R`
+    # (the channel reop list, 344/345) is a fourth type-A letter no other
+    # ircd grappa talks to defines, and before this it was the ONE list an
+    # IRCnet user could not open — advertised, dropped by `known?/1`.
+    test "IRCnet (CHANMODES=beIR,…) offers R alongside b, e and I" do
+      isupport = ISupport.merge_isupport(["CHANMODES=beIR,k,l,imnpstaqrzZ"], ISupport.default())
+
+      assert ListModes.queryable(isupport) == ["b", "e", "I", "R"]
     end
 
     test "a type-A letter with no known pair degrades quietly — advertised, not offered" do

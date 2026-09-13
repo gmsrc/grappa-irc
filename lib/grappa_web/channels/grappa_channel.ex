@@ -89,7 +89,8 @@ defmodule GrappaWeb.GrappaChannel do
     `%{"network_id" => id, "channel" => chan}`, plus an OPTIONAL
     `"mode" => letter` (#1251) which defaults to `"b"`. Issues
     `MODE #chan <letter>` (no sign); the ircd replies with that list's row +
-    end numerics (`b` 367/368, `e` 348/349, `I` 346/347, `z`/`q` 728/729).
+    end numerics (`b` 367/368, `e` 348/349, `I` 346/347, `R` 344/345,
+    `z`/`q` 728/729).
     The letter must be in the network's `list_modes_queryable` (published on
     `isupport_changed`), else `unsupported_list_mode`.
 

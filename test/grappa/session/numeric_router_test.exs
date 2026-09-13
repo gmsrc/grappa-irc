@@ -14,7 +14,7 @@ defmodule Grappa.Session.NumericRouterTest do
 
   alias Grappa.IRC.{JoinFailure, Message}
   alias Grappa.IRC.Parser
-  alias Grappa.Session.NumericRouter
+  alias Grappa.Session.{ListModes, NumericRouter}
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -196,6 +196,9 @@ defmodule Grappa.Session.NumericRouterTest do
     # #1251 — the rest of the type-A list family: 348/349 EXCEPT (+e),
     # 346/347 INVITE (+I), and the SHARED 728/729 (bahamut +z restrict,
     # solanum +q quiet). Same delegation reason as 367/368 above.
+    # issue 2116 — 344/345 REOP (+R), IRCnet's alone.
+    344,
+    345,
     346,
     347,
     348,
@@ -725,20 +728,31 @@ defmodule Grappa.Session.NumericRouterTest do
       assert :delegated = NumericRouter.route(m, state())
     end
 
-    # #1251 — the other three pairs, same leak shape. 728 is the sharp one:
-    # its params carry the mode letter, so an undelegated 728 would scan to
-    # the CHANNEL window and persist the set-timestamp there.
+    # #1251 — the rest of the type-A list family, same leak shape. 728 is the
+    # sharp one: its params carry the mode letter, so an undelegated 728 would
+    # scan to the CHANNEL window and persist the set-timestamp there.
+    #
+    # issue 2116 — DERIVED from `ListModes.pairs/0`, not restated. It used to
+    # be six hand-written rows, which is the fourth hand-maintained mirror of
+    # a class table this file already argues against (see the #911 note on the
+    # channel-prefix property). A letter added to the table without its two
+    # `@delegated_numerics` entries now goes red HERE, naming the numeric,
+    # instead of shipping a list whose every row lands in $server as a bare
+    # notice. 367/368 keep their own named tests above; the loop covers them
+    # too, and that overlap is the positive control for the derivation.
     test "the whole type-A list family is delegated (#1251)" do
-      for {numeric, params} <- [
-            {346, ["vjt", "#test", "*!*@invited", "op", "1"]},
-            {347, ["vjt", "#test", "End of Channel Invite List"]},
-            {348, ["vjt", "#test", "*!*@exempt", "op", "1"]},
-            {349, ["vjt", "#test", "End of Channel Exception List"]},
-            {728, ["vjt", "#test", "z", "*!*@rogue", "op", "1"]},
-            {729, ["vjt", "#test", "z", "End of Channel Restrict List"]}
+      pairs = ListModes.pairs()
+
+      # Non-vacuity: an empty table would assert nothing at all.
+      assert map_size(pairs) > 0
+
+      for {mode, {row, fin}} <- pairs,
+          {numeric, params} <- [
+            {row, if(row == 728, do: ["vjt", "#t", mode, "*!*@m", "op", "1"], else: ["vjt", "#t", "*!*@m", "op", "1"])},
+            {fin, if(fin == 729, do: ["vjt", "#t", mode, "End of list"], else: ["vjt", "#t", "End of list"])}
           ] do
         assert :delegated = NumericRouter.route(msg(numeric, params), state()),
-               "numeric #{numeric} is not delegated — its rows will leak as $server notices"
+               "numeric #{numeric} (mode #{mode}) is not delegated — its rows will leak as $server notices"
       end
     end
 

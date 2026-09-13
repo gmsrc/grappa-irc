@@ -621,6 +621,17 @@ defmodule Grappa.Session.NumericRouter do
                         # (+z), solanum on the quiet list (+q) — which is why
                         # the EventRouter clause reads the mode letter off the
                         # wire rather than assuming it.
+                        #
+                        # issue 2116 — 344/345 REOP (+R) is IRCnet's alone
+                        # (ircnet/ircd `ircd/s_err.c:379-380`; solanum jumps
+                        # 341 → 346 and bahamut's slots are NULL). It lands
+                        # here for the same reason as the rest and NOT as an
+                        # afterthought: an undelegated 344 scans to the
+                        # CHANNEL window and persists the mask as a bare
+                        # :notice row, so the letter would become queryable
+                        # and leak its whole list into scrollback at once.
+                        344,
+                        345,
                         346,
                         347,
                         348,

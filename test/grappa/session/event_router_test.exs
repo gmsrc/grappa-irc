@@ -20,6 +20,7 @@ defmodule Grappa.Session.EventRouterTest do
     ISupport,
     LinksAccum,
     ListModeAccum,
+    ListModes,
     LusersAccum,
     WhoisAccum,
     WhowasAccum,
@@ -6567,7 +6568,7 @@ defmodule Grappa.Session.EventRouterTest do
   # letter as a middle param because bahamut spends the pair on `z` (restrict)
   # and solanum on `q` (quiet) — measured in both sources, see
   # `Grappa.Session.ListModes`.
-  describe "#1251 — every type-A list mode (346/347, 348/349, 728/729)" do
+  describe "#1251 — every type-A list mode (344/345, 346/347, 348/349, 728/729)" do
     test "348 RPL_EXCEPTLIST appends under mode e, 349 flushes it" do
       state = list_mode_pending_state("#test", "e")
 
@@ -6594,6 +6595,30 @@ defmodule Grappa.Session.EventRouterTest do
       m347 = msg({:numeric, 347}, ["vjt", "#test", "End of Channel Invite List"], {:server, "irc.t"})
       {:cont, _, [{:list_mode_bundle, "#test", "I", accum, _}]} = EventRouter.route(m347, s1)
       assert length(accum.entries) == 1
+    end
+
+    # issue 2116 — ircnet/ircd `ircd/s_err.c:379-380`:
+    # `":%s 344 %s %s %s!%s@%s"` and `":%s 345 %s %s :End of Channel Reop
+    # List"`. IRCnet is the only ircd grappa talks to that spends 344/345
+    # (solanum's table jumps 341 → 346; bahamut's two slots are NULL), so
+    # the NUMERIC is the letter here, same as 367/348/346 and unlike 728.
+    # The row is SHORT — channel + mask, no setter and no set_ts — which is
+    # why this test pins both `nil`s rather than a setter/ts pair.
+    test "344 RPL_REOPLIST appends under mode R, 345 flushes it" do
+      state = list_mode_pending_state("#test", "R")
+
+      m344 = msg({:numeric, 344}, ["vjt", "#test", "*!*@reop.host"], {:server, "irc.t"})
+      {:cont, s1, []} = EventRouter.route(m344, state)
+
+      assert entries_for(s1, "#test", "R") == [
+               %ListModeAccum.Entry{mask: "*!*@reop.host", setter: nil, set_ts: nil}
+             ]
+
+      m345 = msg({:numeric, 345}, ["vjt", "#test", "End of Channel Reop List"], {:server, "irc.t"})
+      {:cont, s2, [{:list_mode_bundle, "#test", "R", accum, _}]} = EventRouter.route(m345, s1)
+
+      assert length(accum.entries) == 1
+      assert s2.list_mode_pending == %{}
     end
 
     # bahamut src/s_err.c:812 — `":%s 728 %s %s z %s %s %lu"`.
@@ -6664,12 +6689,39 @@ defmodule Grappa.Session.EventRouterTest do
       assert Map.keys(s3.list_mode_pending) == [{"#test", "e"}]
     end
 
+    # issue 2116 — the ROW half of the anti-drift pair below. The terminator
+    # test alone cannot see a letter whose END clause exists and whose ROW
+    # clause does not: such a list flushes an EMPTY bundle and every entry
+    # the ircd streamed is silently dropped. Both halves now read the same
+    # production table.
+    #
+    # Non-vacuity control: the loop asserts nothing if the table is empty,
+    # so pin that the letter this pair was extended for is actually in it.
+    test "every mode in ListModes.pairs/0 has a row clause that accumulates it" do
+      assert Map.has_key?(ListModes.pairs(), "R")
+
+      for {mode, {row, _}} <- ListModes.pairs() do
+        state = list_mode_pending_state("#test", mode)
+
+        params =
+          if row == 728,
+            do: ["vjt", "#test", mode, "*!*@probe"],
+            else: ["vjt", "#test", "*!*@probe"]
+
+        assert {:cont, next, []} =
+                 EventRouter.route(msg({:numeric, row}, params, {:server, "irc.t"}), state)
+
+        assert Enum.map(entries_for(next, "#test", mode), & &1.mask) == ["*!*@probe"],
+               "no EventRouter row clause appends mode #{mode} on numeric #{row}"
+      end
+    end
+
     # Anti-drift: the table and the router clauses are two halves of one
     # fact. Adding a letter to `ListModes.pairs/0` without its clause here
     # would ship a query whose terminator nothing recognises — exactly the
     # never-terminating request the mode gate exists to prevent.
     test "every mode in ListModes.pairs/0 has a terminator clause that flushes it" do
-      for {mode, {_, fin}} <- Grappa.Session.ListModes.pairs() do
+      for {mode, {_, fin}} <- ListModes.pairs() do
         state = list_mode_pending_state("#test", mode)
 
         params =

@@ -2402,21 +2402,23 @@ defmodule Grappa.Session.EventRouter do
   #
   # The pairs (`Grappa.Session.ListModes`, cited to both ircds' sources)
   # split into TWO wire shapes, which is why there are two clause pairs:
-  #   * 367 `b` / 348 `e` / 346 `I` — the NUMERIC is the letter.
+  #   * 367 `b` / 348 `e` / 346 `I` / 344 `R` — the NUMERIC is the letter.
   #   * 728 / 729 — bahamut's restrict list (`z`) and solanum's quiet list
   #     (`q`) share the pair, and BOTH hardcode their letter into the format
   #     string as a middle param, so the letter is read off the WIRE.
 
-  # 367 RPL_BANLIST / 348 RPL_EXCEPTLIST / 346 RPL_INVITELIST:
-  # `:server <n> own_nick #chan <mask> [setter] [set_ts]`.
+  # 367 RPL_BANLIST / 348 RPL_EXCEPTLIST / 346 RPL_INVITELIST /
+  # 344 RPL_REOPLIST: `:server <n> own_nick #chan <mask> [setter] [set_ts]`.
   # setter/set_ts are OPTIONAL — older ircds may send only the mask (see
-  # reference_solanum_vs_bahamut_shapes). Skips when no accumulator exists
-  # (unsolicited row — the operator never asked; not actionable).
+  # reference_solanum_vs_bahamut_shapes), and IRCnet's 344 is exactly that
+  # short shape (issue 2116): `":%s 344 %s %s %s!%s@%s"`, mask and nothing
+  # else. Skips when no accumulator exists (unsolicited row — the operator
+  # never asked; not actionable).
   defp do_route(
          %Message{command: {:numeric, numeric}, params: [_, channel, mask | rest]},
          state
        )
-       when numeric in [367, 348, 346] and is_binary(channel) and is_binary(mask) do
+       when numeric in [367, 348, 346, 344] and is_binary(channel) and is_binary(mask) do
     entry = %ListModeAccum.Entry{mask: mask, setter: Enum.at(rest, 0), set_ts: Enum.at(rest, 1)}
     {:cont, list_mode_append_entry(state, channel, numeric_list_mode(numeric), entry), []}
   end
@@ -2434,7 +2436,8 @@ defmodule Grappa.Session.EventRouter do
     {:cont, list_mode_append_entry(state, channel, mode, entry), []}
   end
 
-  # 368 RPL_ENDOFBANLIST / 349 RPL_ENDOFEXCEPTLIST / 347 RPL_ENDOFINVITELIST:
+  # 368 RPL_ENDOFBANLIST / 349 RPL_ENDOFEXCEPTLIST / 347 RPL_ENDOFINVITELIST /
+  # 345 RPL_ENDOFREOPLIST:
   # `:server <n> own_nick #chan :End of Channel … List`. Emits the bundle
   # (carrying the case-preserved `channel_display`) + drops the pending entry.
   # Silently ignored if no accumulator exists (unsolicited terminator).
@@ -2442,7 +2445,7 @@ defmodule Grappa.Session.EventRouter do
          %Message{command: {:numeric, numeric}, params: [_, channel | _]},
          state
        )
-       when numeric in [368, 349, 347] and is_binary(channel) do
+       when numeric in [368, 349, 347, 345] and is_binary(channel) do
     flush_list_mode(state, channel, numeric_list_mode(numeric))
   end
 
@@ -4958,13 +4961,19 @@ defmodule Grappa.Session.EventRouter do
   # #1251 — the mode letter a row/end numeric names by ITSELF (the 728/729
   # pair is excluded on purpose: it carries its letter as a param, because
   # bahamut spends it on `z` and solanum on `q`).
-  @spec numeric_list_mode(346 | 347 | 348 | 349 | 367 | 368) :: ListModes.mode()
+  @spec numeric_list_mode(344 | 345 | 346 | 347 | 348 | 349 | 367 | 368) ::
+          ListModes.mode()
   defp numeric_list_mode(367), do: "b"
   defp numeric_list_mode(368), do: "b"
   defp numeric_list_mode(348), do: "e"
   defp numeric_list_mode(349), do: "e"
   defp numeric_list_mode(346), do: "I"
   defp numeric_list_mode(347), do: "I"
+  # issue 2116 — ircnet/ircd `ircd/s_err.c:379-380`. 344/345 is IRCnet's
+  # alone (solanum jumps 341 → 346, bahamut's slots are NULL), so the
+  # numeric names the letter here as well.
+  defp numeric_list_mode(344), do: "R"
+  defp numeric_list_mode(345), do: "R"
 
   # #376/#1251 — append one entry to
   # `list_mode_pending[{folded_chan, mode}].entries`. Entries are stored
