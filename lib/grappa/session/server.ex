@@ -549,6 +549,15 @@ defmodule Grappa.Session.Server do
           # a non-empty autojoin set arms it. See `maybe_autojoin_or_defer/1`.
           autojoin_defer_ms: pos_integer(),
           autojoin_defer_timer: reference() | nil,
+          # issue 2114 — JOINs the door accepted while the transport was not
+          # there yet, oldest-last (prepend + reverse at flush), one entry per
+          # network-folded channel with its optional +k key. `state.autojoin` is
+          # the OPERATOR's boot set and stays untouched: folding user intent
+          # into it would also hand it to `maybe_request_chanserv_invite/3`'s
+          # `in_autojoin?` gate, which is a different question. Emptied by
+          # `fire_join_plan/1`. Read via `Map.get` — a live pre-2114 process
+          # hot-reloaded mid-session has no such key.
+          queued_joins: [{String.t(), String.t() | nil}],
           client: pid() | nil,
           # #550 — the upstream peer the live socket connected to, captured
           # once from the Client at connect (`{:irc_peer, _}`) and invalidated
@@ -1163,6 +1172,8 @@ defmodule Grappa.Session.Server do
       # nil until 001 arms it (only for :nickserv_identify with autojoin).
       autojoin_defer_ms: Map.get(opts, :autojoin_defer_ms, @autojoin_defer_ms),
       autojoin_defer_timer: nil,
+      # issue 2114 — empty at spawn: a fresh process has refused nothing yet.
+      queued_joins: [],
       client: nil,
       # #550 — nil until the Client pushes {:irc_peer, _} at connect.
       peer_address: nil,
@@ -2868,14 +2879,51 @@ defmodule Grappa.Session.Server do
 
         {:reply, err, state}
 
-      # Transport-level failure: client has no live socket (upstream
-      # TLS handshake failed, k-line tore down the connection, Session
-      # is in backoff between reconnect attempts, etc.). Surface as
-      # `{:error, :not_connected}` so FallbackController emits a clean
-      # 400 with the existing `not_connected` wire body instead of
-      # bubbling a CaseClauseError that 500s the cic /join request.
-      # Don't crash the Session — it's mid-reconnect and the next
-      # backoff tick will retry the socket.
+      # issue 2114 — THE TRANSPORT IS NOT THERE YET. `:no_socket` is the one
+      # transport error this process will outlive: it means `state.client` is
+      # nil (or its socket is), which for a Registry-registered session is the
+      # reconnect ladder itself — `handle_continue({:start_client, _})` defers
+      # the Client spawn by `Backoff.wait_ms/2`, so the session answers every
+      # REST verb through the whole delay with nothing to write on. The prod
+      # journal caught ten JOINs in that window, 1 ms after
+      # `event=backoff delay_ms=3975` and five seconds before
+      # `event=connected`; the door logged all ten and forgot all ten, so the
+      # channels never came back and no error said so.
+      #
+      # So keep them: queue, and let `fire_join_plan/1` put them on the wire at
+      # the SAME seam the autojoin set rides (001, or the #347 +r defer). Not a
+      # retry timer and not a flush at `:irc_connected` — the first duplicates
+      # the backoff ladder, and the second fires before registration, where an
+      # ircd ignores a JOIN. `record_in_flight_join/2` opens the window
+      # `:pending` exactly as the accepted path does, and the reply is `:ok`
+      # (202), because "queued, not yet joined" is what `:pending` already
+      # means and a 400 would now be false.
+      {:error, :no_socket} ->
+        # `info`, not `warning`: this is now a handled, expected state of the
+        # reconnect ladder, and prod runs at `:info` so the operator still sees
+        # it. Promoting it would inflate a level whose value is that it means
+        # something went wrong — the same argument #1677 makes for its
+        # strict-TLS line. No queue-depth key: one global Logger metadata atom
+        # for one line is heavier than the fact, and `channel` already says
+        # which JOIN this is.
+        Logger.info("send_join queued until the transport is up",
+          channel: inspect(channels)
+        )
+
+        state =
+          Enum.reduce(channels, state, fn channel, acc ->
+            acc |> queue_join(channel, key) |> record_in_flight_join(channel)
+          end)
+
+        {:reply, :ok, state}
+
+      # Any OTHER transport failure (`:closed`, an `:inet.posix()`): the socket
+      # WAS there and the write failed, so the Client is on its way down and
+      # this process with it — an in-memory queue would die before it flushed,
+      # and replying `:ok` would be the silent drop issue 2114 is about, told
+      # to the caller as success. Surface `{:error, :not_connected}` so
+      # FallbackController emits the existing 400 `not_connected` body instead
+      # of a CaseClauseError 500ing the cic /join.
       {:error, reason} ->
         Logger.warning("send_join call rejected: transport unavailable",
           channel: inspect(channels),
@@ -6943,29 +6991,39 @@ defmodule Grappa.Session.Server do
   #
   # Everything else fires immediately: SASL identifies BEFORE 001 (so the 001
   # autojoin already sees +r), and `:none`/`:server_pass`/`:auto` have no
-  # identify step to wait on. An empty autojoin set also fires now (the loop is
-  # a no-op) rather than arming a pointless timer.
+  # identify step to wait on. An empty PLAN also fires now (the loop is a
+  # no-op) rather than arming a pointless timer.
+  #
+  # issue 2114 — the guard tests the PLAN, not `state.autojoin`. A queued JOIN
+  # needs the +r wait for exactly the reason the operator set does (a +R
+  # channel 477s an unidentified user), and a credential with an EMPTY autojoin
+  # set is the common one at the REST door — gating on `autojoin` would have
+  # fired those queued JOINs straight past the identify.
   #
   # There is deliberately no "already +r, skip the defer" shortcut: `state.umodes`
   # is empty until the 221 RPL_UMODEIS reply (queried at 001, lands after), so
   # there is no honest signal to test here.
   @spec maybe_autojoin_or_defer(t()) :: t()
-  defp maybe_autojoin_or_defer(%{autojoin: [_ | _]} = state) do
-    if identify_expected?(state) do
-      # Cancel + drain any prior fallback for the defensive re-welcome case (a
-      # second 001 without an intervening crash) so we never leak a stale fire —
-      # symmetric with the sibling `:connection_stable` timer armed just above in
-      # the numeric-1 handler. The latch already makes an orphaned timer a no-op,
-      # but re-arming cleanly keeps the two 001 timers on one pattern.
-      :ok = cancel_and_drain(state.autojoin_defer_timer, :autojoin_defer)
-      timer = Process.send_after(self(), :autojoin_defer, state.autojoin_defer_ms)
-      %{state | autojoin_defer_timer: timer}
-    else
-      fire_autojoin(state)
+  defp maybe_autojoin_or_defer(state) do
+    case join_plan(state) do
+      [] ->
+        state
+
+      [_ | _] ->
+        if identify_expected?(state) do
+          # Cancel + drain any prior fallback for the defensive re-welcome case (a
+          # second 001 without an intervening crash) so we never leak a stale fire —
+          # symmetric with the sibling `:connection_stable` timer armed just above in
+          # the numeric-1 handler. The latch already makes an orphaned timer a no-op,
+          # but re-arming cleanly keeps the two 001 timers on one pattern.
+          :ok = cancel_and_drain(state.autojoin_defer_timer, :autojoin_defer)
+          timer = Process.send_after(self(), :autojoin_defer, state.autojoin_defer_ms)
+          %{state | autojoin_defer_timer: timer}
+        else
+          fire_join_plan(state)
+        end
     end
   end
-
-  defp maybe_autojoin_or_defer(state), do: fire_autojoin(state)
 
   # GH #347 / #509 / #124 / #1044 — an identify is expected at 001 (so autojoin
   # must wait for the +r echo) whenever an effective NickServ secret exists. It
@@ -7014,35 +7072,45 @@ defmodule Grappa.Session.Server do
   defp fire_deferred_autojoin(%{autojoin_defer_timer: timer} = state)
        when is_reference(timer) do
     :ok = cancel_and_drain(timer, :autojoin_defer)
-    fire_autojoin(%{state | autojoin_defer_timer: nil})
+    fire_join_plan(%{state | autojoin_defer_timer: nil})
   end
 
-  # The autojoin JOIN loop — records each JOIN in-flight (CP15 window-state
+  # The registration JOIN loop — records each JOIN in-flight (CP15 window-state
   # tracking) and tolerates transport loss / invalid names. Single source of
-  # truth for "put the autojoin JOINs on the wire," called from the 001 handler
+  # truth for "put the planned JOINs on the wire," called from the 001 handler
   # for identify-before-001 methods and from the deferred triggers for
   # `:nickserv_identify` (#347).
-  @spec fire_autojoin(t()) :: t()
-  defp fire_autojoin(state) do
-    Enum.reduce(state.autojoin, state, fn channel, acc ->
-      # Autojoin channels are operator-configured (or persisted from
-      # last_joined_channels at reboot). Keys are NOT persisted — operator must
-      # re-join with /join #chan key for +k channels. UX-4 bucket F: explicit
-      # nil here keeps the autojoin wire frame shape stable (`JOIN #chan\r\n`).
-      case Client.send_join(acc.client, channel, nil) do
+  #
+  # issue 2114 widened WHAT it fires from `state.autojoin` to `join_plan/1` —
+  # the operator set PLUS the JOINs the door queued while the transport was
+  # down. One loop, because the 20% that differs is the +k key and nothing
+  # else: same in-flight tracking, same +r defer, same failure numerics.
+  #
+  # The queue is emptied BEFORE the loop, not after. A transport error inside
+  # the loop means the socket we just registered on is already gone, so this
+  # process is going down and an in-memory re-queue would go with it; clearing
+  # first also makes a re-entry (a second 001) unable to double-fire the same
+  # queued JOIN.
+  @spec fire_join_plan(t()) :: t()
+  defp fire_join_plan(state) do
+    plan = join_plan(state)
+
+    Enum.reduce(plan, Map.put(state, :queued_joins, []), fn {channel, key}, acc ->
+      case Client.send_join(acc.client, channel, key) do
         :ok ->
           record_in_flight_join(acc, channel)
 
         {:error, :invalid_line} ->
-          Logger.warning("autojoin skipped: invalid channel name", channel: inspect(channel))
+          Logger.warning("planned JOIN skipped: invalid channel name", channel: inspect(channel))
           acc
 
         # Transport gone between RPL_WELCOME and this iteration — extremely
         # rare (we just received a 001 numeric ON this socket) but possible if
         # upstream tore the connection down. Skip + log; next reconnect's
-        # RPL_WELCOME will re-fire the autojoin loop from scratch.
+        # RPL_WELCOME will re-fire the autojoin half of the plan from scratch.
+        # The QUEUED half is not re-queued here, deliberately: see above.
         {:error, reason} ->
-          Logger.warning("autojoin skipped: transport unavailable",
+          Logger.warning("planned JOIN skipped: transport unavailable",
             channel: inspect(channel),
             reason: inspect(reason)
           )
@@ -7051,6 +7119,56 @@ defmodule Grappa.Session.Server do
       end
     end)
   end
+
+  # issue 2114 — what this registration owes the wire, as `{channel, key}`
+  # pairs. Two sources, and they carry different keys by nature:
+  #
+  #   * `state.autojoin` — operator-configured (or persisted from
+  #     `last_joined_channels` at reboot), ALWAYS keyless. Keys are not
+  #     persisted; the operator re-joins a +k channel with `/join #chan key`.
+  #     UX-4 bucket F: the explicit nil keeps the wire frame `JOIN #chan\r\n`.
+  #   * `queued_joins` — refused by a dead transport at the REST door, each
+  #     carrying the +k key the caller supplied. A queued entry WINS a
+  #     collision with the autojoin set precisely because of that key: the
+  #     autojoin copy would frame the same channel keyless and earn a 475.
+  #
+  # Autojoin first, then the queue oldest-first — the operator's set is the
+  # older intent and the order is what an observer reads on the wire.
+  @spec join_plan(t()) :: [{String.t(), String.t() | nil}]
+  defp join_plan(state) do
+    queued = Enum.reverse(queued_joins(state))
+    queued_keys = MapSet.new(queued, fn {channel, _} -> fold_key(state, channel) end)
+
+    autojoin =
+      state.autojoin
+      |> Enum.reject(&MapSet.member?(queued_keys, fold_key(state, &1)))
+      |> Enum.map(&{&1, nil})
+
+    autojoin ++ queued
+  end
+
+  # issue 2114 — remember a JOIN the transport refused, newest-first. Deduped
+  # on the network-folded channel KEY with the newest entry winning, so a
+  # re-issued JOIN supersedes its predecessor (a corrected +k key is the case
+  # that matters) and the list stays bounded by the number of DISTINCT channels
+  # the subject asked for during one backoff window. No separate cap: that is
+  # the same bound `window_state` and `in_flight_joins` already grow under from
+  # the same door, so this adds no new unbounded axis.
+  @spec queue_join(t(), String.t(), String.t() | nil) :: t()
+  defp queue_join(state, channel, key) do
+    chan_key = fold_key(state, channel)
+    kept = Enum.reject(queued_joins(state), fn {c, _} -> fold_key(state, c) == chan_key end)
+
+    Map.put(state, :queued_joins, [{channel, key} | kept])
+  end
+
+  # `Map.get`, not `state.queued_joins`: the hot-reload shim this file applies
+  # to every new state key (`Map.get(state, :isupport, …)`, `Map.get(state,
+  # :umodes, [])`). A live pre-2114 process reloaded mid-session has no such
+  # key, and `Deploy.Preflight` cannot catch it — `state` is a plain map, so
+  # there is no `defstruct` change for it to refuse the hot deploy on.
+  @spec queued_joins(t()) :: [{String.t(), String.t() | nil}]
+  defp queued_joins(state), do: Map.get(state, :queued_joins, [])
 
   # One-shot send + clear of the synchronous-login readiness signal
   # (Task 8). Pattern-matches both fields populated to avoid

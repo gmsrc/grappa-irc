@@ -114,6 +114,50 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # Condition-poll until at least `want` sent lines match `pred`, or the
+  # deadline elapses. `IRCServer.wait_for_line/3` can only match the FIRST
+  # buffered line, so a RE-EMIT assertion (#417 same-process reconnect, where a
+  # second AWAY must appear; issue 2114's second 001, where a second JOIN must)
+  # needs a count, not a first-match wait.
+  #
+  # Lived inside the `away_state transitions (S3.2)` describe until issue 2114
+  # gained a second caller — `defp` is module-scoped regardless of the describe
+  # it is written in, so the old home only hid that from the reader.
+  defp await_sent_line_count(server, pred, want, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_await_sent_line_count(server, pred, want, deadline)
+  end
+
+  defp do_await_sent_line_count(server, pred, want, deadline) do
+    count = server |> IRCServer.sent_lines() |> Enum.count(pred)
+
+    cond do
+      count >= want ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        {:error, {:timeout, count}}
+
+      true ->
+        Process.sleep(10)
+        do_await_sent_line_count(server, pred, want, deadline)
+    end
+  end
+
+  # issue 2114 — re-welcome a session with its socket restored, and prove the
+  # instrument before reading it. `#control` is the operator autojoin set of the
+  # issue-2114 describe below, so a SECOND `JOIN #control` on the wire is the
+  # POSITIVE CONTROL that this 001 really reached `maybe_autojoin_or_defer/1`.
+  # Without it, a red in the caller could equally mean the re-welcome never
+  # landed — a broken instrument reported as a defect.
+  defp rewelcome_with_autojoin_control(server, pid, client) do
+    _ = :sys.replace_state(pid, fn state -> %{state | client: client} end)
+    IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
+    assert await_sent_line_count(server, &(&1 == "JOIN #control\r\n"), 2, 2_000) == :ok,
+           "instrument broken: the second 001 never re-fired the autojoin seam"
+  end
+
   # #543 INC-6 — the connect plan production builds, with two keys
   # overridden. `source_address` is `nil` so the loopback connect actually
   # binds: INC-6 acquire/release keys on `managed_source_alias`, which the
@@ -10751,31 +10795,6 @@ defmodule Grappa.Session.ServerTest do
     # the AWAY lines sent upstream. The handler accepts the handshake and
     # echos back 001 so the session reaches :connected state.
 
-    # Condition-poll until at least `want` sent lines match `pred`, or the
-    # deadline elapses. `IRCServer.wait_for_line/3` can only match the FIRST
-    # buffered line, so a RE-EMIT assertion (#417 same-process reconnect,
-    # where a second AWAY must appear) needs a count, not a first-match wait.
-    defp await_sent_line_count(server, pred, want, timeout_ms) do
-      deadline = System.monotonic_time(:millisecond) + timeout_ms
-      do_await_sent_line_count(server, pred, want, deadline)
-    end
-
-    defp do_await_sent_line_count(server, pred, want, deadline) do
-      count = server |> IRCServer.sent_lines() |> Enum.count(pred)
-
-      cond do
-        count >= want ->
-          :ok
-
-        System.monotonic_time(:millisecond) >= deadline ->
-          {:error, {:timeout, count}}
-
-        true ->
-          Process.sleep(10)
-          do_await_sent_line_count(server, pred, want, deadline)
-      end
-    end
-
     test "set_explicit_away issues AWAY :reason upstream and returns :ok" do
       {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
       {user, network, _} = setup_user_and_network(port)
@@ -14082,6 +14101,128 @@ defmodule Grappa.Session.ServerTest do
 
       assert log =~ "scrollback row dropped"
       assert Process.alive?(pid)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
+  describe "issue 2114 — a JOIN refused by a dead transport survives to the next registration" do
+    # The refusal window is not exotic, it is the reconnect ladder itself:
+    # `handle_continue({:start_client, _})` reads `Backoff.wait_ms/2` and DEFERS
+    # the Client spawn by that many ms, so a live, Registry-registered
+    # Session.Server sits at `client: nil` — and still answers every REST verb —
+    # for the whole delay. The prod journal on issue 2114 caught ten JOINs
+    # inside exactly that window: 1 ms after `event=backoff delay_ms=3975`, five
+    # seconds before `event=connected`. Every one was refused `:no_socket`, and
+    # nothing ever put them back on the wire.
+    #
+    # `client: nil` is the seam #1390's dropped-RecoverIdentity test already
+    # uses (`Client.send_line/2`'s nil clause → `{:error, :no_socket}`): the
+    # door's transport-error branch without the socket-teardown dance.
+    #
+    # The second 001 is not a test contrivance — `maybe_autojoin_or_defer/1`
+    # carries no once-only latch and the numeric-1 handler documents the
+    # "defensive re-welcome" case by name. It is the in-process shape of the
+    # reconnect the journal shows.
+
+    setup do
+      handler = IRCServer.welcome_handler(":irc.test.org", "grappa-test")
+      {server, port} = IRCServer.start_server(handler)
+      {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#control"]})
+      pid = start_session_for(user, network)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "JOIN #control\r\n"), 1_000)
+
+      %{server: server, user: user, network: network, pid: pid}
+    end
+
+    test "a JOIN refused while the transport was down is JOINed at the next 001", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      client = SessionStateHelpers.client(SessionStateHelpers.fetch(pid))
+      _ = :sys.replace_state(pid, fn state -> %{state | client: nil} end)
+
+      # The return value is deliberately ignored here: this test is about the
+      # WIRE, not the door's reply. The door contract has its own test below,
+      # and asserting it first would mask the class behind a reply mismatch.
+      _ = Session.send_join({:user, user.id}, network.id, "#refused", nil)
+
+      rewelcome_with_autojoin_control(server, pid, client)
+
+      assert await_sent_line_count(server, &(&1 == "JOIN #refused\r\n"), 1, 2_000) == :ok,
+             "a JOIN the transport refused was dropped and never retried"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the +k key rides the deferral — the autojoin set has none to lend", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # The journal's own dropped line was `JOIN #chan10 <key>`. `fire_autojoin/1`
+      # frames every channel keyless (keys are never persisted), so a deferred
+      # JOIN that loses its key rejoins a +k channel straight into a 475.
+      client = SessionStateHelpers.client(SessionStateHelpers.fetch(pid))
+      _ = :sys.replace_state(pid, fn state -> %{state | client: nil} end)
+
+      _ = Session.send_join({:user, user.id}, network.id, "#locked", "s3cret")
+
+      rewelcome_with_autojoin_control(server, pid, client)
+
+      assert await_sent_line_count(server, &(&1 == "JOIN #locked s3cret\r\n"), 1, 2_000) == :ok,
+             "the deferred JOIN lost its +k key"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a JOIN the transport ACCEPTED is not replayed at the next 001", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # NEGATIVE CONTROL for the same mechanism: the deferral must capture only
+      # what the wire REFUSED. A queue that swallowed every JOIN would pass the
+      # test above and double-JOIN every channel on every reconnect.
+      client = SessionStateHelpers.client(SessionStateHelpers.fetch(pid))
+      assert :ok = Session.send_join({:user, user.id}, network.id, "#accepted", nil)
+      assert await_sent_line_count(server, &(&1 == "JOIN #accepted\r\n"), 1, 2_000) == :ok
+
+      rewelcome_with_autojoin_control(server, pid, client)
+
+      assert Enum.count(IRCServer.sent_lines(server), &(&1 == "JOIN #accepted\r\n")) == 1,
+             "an accepted JOIN was replayed at the next registration"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the door accepts the JOIN and opens the window :pending", %{
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # The door's reply is the other half of the cure: a 400 `not_connected`
+      # tells cic the JOIN did not happen, which stops being true the moment the
+      # session keeps it. 202 + `window_pending` is the state the session now
+      # actually holds — and `window_pending` is the origination edge cic
+      # subscribes per-channel off, so the queued window is reachable.
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+      _ = :sys.replace_state(pid, fn state -> %{state | client: nil} end)
+
+      assert :ok = Session.send_join({:user, user.id}, network.id, "#refused", nil)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :window_pending, channel: "#refused"}
+                     },
+                     1_000
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end

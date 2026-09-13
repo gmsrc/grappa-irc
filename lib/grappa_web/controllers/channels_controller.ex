@@ -107,9 +107,16 @@ defmodule GrappaWeb.ChannelsController do
   ERR_BADCHANNELKEY through the existing join-failure pipeline →
   `:join_failed` event with numeric=475 → cic surfaces the failure
   in the synthetic pseudo-row (state=:failed).
+
+  issue 2114 — a JOIN that arrives while the session has no socket yet
+  (the reconnect backoff window) is 202 as well, not 400: the session
+  queues it and flushes at the next registration, and the `:pending`
+  window this returns behind is the honest state either way. The 400
+  `not_connected` is left to the case the session cannot outlive.
   """
   @spec create(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | :no_session | :invalid_line}
+          Plug.Conn.t()
+          | {:error, :bad_request | :no_session | :invalid_line | :not_connected | :timeout}
   def create(conn, %{"name" => name} = params)
       when is_binary(name) and name != "" do
     subject = Subject.to_session(conn.assigns.current_subject)

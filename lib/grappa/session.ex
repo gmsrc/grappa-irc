@@ -947,15 +947,24 @@ defmodule Grappa.Session do
   prefix) OR the key contains CR/LF/NUL/space. Returns `:ok` once the
   broadcast has fired.
 
+  issue 2114 — `:ok` ALSO covers "the session has no socket yet": the
+  Session.Server queues the JOIN and puts it on the wire at the next
+  registration, opening the window `:pending` in the same breath. The
+  caller cannot tell the two apart, and should not: `:pending` is the
+  server-owned state for "asked for, not joined", and both paths reach
+  it. `{:error, :not_connected}` is now only a transport error on a
+  socket that WAS there (the Client is on its way down with the write).
+
   UX-4 bucket F — `key` is the optional +k channel key. Pass `nil`
   (or `""`, normalised) for keyless channels. The key never reaches
   scrollback or storage; it's only forwarded to the upstream JOIN
-  wire frame. Server-side 475 ERR_BADCHANNELKEY (when the key is
-  wrong/missing) flows through the existing join-failure numeric
-  pipeline → `:join_failed` event with numeric=475.
+  wire frame (a queued JOIN keeps its key for that frame). Server-side
+  475 ERR_BADCHANNELKEY (when the key is wrong/missing) flows through
+  the existing join-failure numeric pipeline → `:join_failed` event
+  with numeric=475.
   """
   @spec send_join(subject(), integer(), String.t(), String.t() | nil) ::
-          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+          :ok | {:error, :no_session | :invalid_line | :not_connected | :timeout}
   def send_join(subject, network_id, channel, key)
       when is_subject(subject) and is_integer(network_id) and is_binary(channel) and
              (is_nil(key) or is_binary(key)) do
