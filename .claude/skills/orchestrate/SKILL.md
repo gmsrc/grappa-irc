@@ -1511,6 +1511,21 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   stampa nulla. In dubbio: **campiona a mano N volte e guarda la serie**, che costa un comando e non
   può mentire in silenzio. *Ennesima faccia dello zero falso e plausibile: non un check che guarda la
   cosa sbagliata, ma uno che guarda la cosa GIUSTA con un righello storto.*
+  🔴🔴 **E LA FACCIA SPECULARE, MISURATA IL 2026-09-13: UN `OLD` CATTURATO **TROPPO TARDI** FA
+  LEGGERE UNA CONSEGNA RIUSCITA COME INGOIATA — e la direzione dell'errore è quella che costa.**
+  Mandato l'ordine di hold a w2, campionato il costo subito dopo (`$9.50`), poi armato in un turno
+  SUCCESSIVO un waiter che si ricattura l'`OLD` da sé: nel frattempo lei aveva già processato
+  l'ordine, quindi l'`OLD` del waiter era **`$9.65`** e il verdetto è uscito **`FLAT dopo 120s`**.
+  Letto da solo = *"non è arrivato"* ⇒ re-invio ⇒ **doppia/tripla sottomissione**, che è esattamente
+  il danno già registrato sul pane corto.
+  🥇 **La regola non è "chiava sul costo" (giusta ma insufficiente): è che l'`OLD` deve essere
+  catturato NELLO STESSO BLOCCO DEL SEND, e passato al waiter come argomento** — un waiter che si
+  misura il proprio `OLD` misura il costo di quando è partito LUI, non di prima dell'ordine.
+  🥇 **E il `FLAT` non si legge mai da solo: si legge contro il campione preso al send.** Qui la
+  prova della consegna è la coppia `$9.50 → $9.65` letta **fra due blocchi**, non dentro il waiter.
+  ⚠️ Un `FLAT` legittimo (ordine davvero ingoiato) e questo sono lo stesso osservabile **se hai
+  buttato via il campione iniziale** — quindi il campione al send non è un lusso, è l'unica cosa che
+  li separa.
 - 🔴🔴 **UN WARNING PUO' AVERE LA FORMA DI UN ERRORE, E IN CODA A UN LOG SI LEGGE COME IL FALLIMENTO
   (misurato 25-08-2026).** `tail -3` del log di `check.sh` mostrava uno stack trace bats
   (`from function 'run' ... in test file ..., line 308`) **immediatamente sopra `rc=0`** — cioe' la
