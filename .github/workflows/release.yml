@@ -1761,3 +1761,41 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --notes "$new_body"
           fi
+
+  apt-repo:
+    name: refresh the apt and rpm repositories
+    needs: [publish]
+    # grappa.chat/debian and grappa.chat/rpm are built from the RELEASE ASSETS,
+    # read back from the GitHub API, so this can only run once publish attached
+    # them. It is a doorbell, not a deploy: the body is empty and the publisher
+    # rebuilds from whatever the releases currently hold, which makes a replayed
+    # or duplicated call a no-op. It never gates the release either — if m42 is
+    # down or the password rotated, the nightly cron there picks up the same work
+    # and the only cost is a few hours of staleness.
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ring the doorbell
+        env:
+          # The URL carries an unguessable path and is therefore a credential in
+          # its own right: it lives in a secret, not in this file.
+          DOORBELL_URL: ${{ secrets.APT_PUBLISH_URL }}
+          DOORBELL_PASSWORD: ${{ secrets.APT_PUBLISH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DOORBELL_URL}" ] || [ -z "${DOORBELL_PASSWORD}" ]; then
+            echo "No doorbell configured — the repositories will catch up from cron."
+            exit 0
+          fi
+          code="$(curl -sS -o body.txt -w '%{http_code}' \
+                    --retry 3 --retry-all-errors --max-time 30 \
+                    -u "github-actions:${DOORBELL_PASSWORD}" \
+                    -X POST "${DOORBELL_URL}")"
+          cat body.txt || true
+          case "$code" in
+            202) echo "publishing chain started" ;;
+            # Someone else got there first: the run in flight publishes the same
+            # state this call would have asked for.
+            409) echo "a run is already in flight, nothing to do" ;;
+            *)   echo "the doorbell answered ${code}"; exit 1 ;;
+          esac
