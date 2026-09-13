@@ -701,6 +701,23 @@ describe("errorBanners dcc-offer (#2089)", () => {
     expect(entry?.message).not.toContain("$server");
   });
 
+  it("does not stop at the destination: it promises the link the transfer earns", () => {
+    // issue 2120 — naming where the file goes and stopping there leaves the
+    // reader believing it landed somewhere they cannot reach. It is reachable:
+    // `Grappa.Dcc.Report.render({:delivered, …})` writes a scrollback row
+    // carrying the file's `/api/dcc_files/:slug` link, so the banner owes them
+    // that half of the sentence.
+    //
+    // Pinned as the two FACTS rather than the phrase: a word-for-word assert
+    // would go red on the next copy tweak and would not say anything this one
+    // does not. First expect is the destination, second is the payoff.
+    holdDccOffer(offer());
+    const entry = activeBanners().find((e) => e.source === "dcc-offer");
+
+    expect(entry?.message).toContain("not to this device");
+    expect(entry?.message).toMatch(/link/i);
+  });
+
   it("emits ONE entry per held offer, not one aggregate", () => {
     holdDccOffer(offer());
     holdDccOffer(offer({ offer_id: OTHER_ID, from: "alice", filename: "notes.txt" }));

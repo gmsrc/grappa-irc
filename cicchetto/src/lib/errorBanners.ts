@@ -417,6 +417,17 @@ function inviteEntry(invite: InvitedWindow): BannerEntry {
 //     frequently `$server` — an offer from someone with no open conversation
 //     routes there (the #546 rule: a stranger's CTCP mints no window) — and
 //     "in $server" names an implementation detail as if it were a room.
+//   * and it must not STOP at the destination (issue 2120). "to grappa, not to
+//     this device" is where the file goes and nothing more, which leaves the
+//     reader thinking it landed somewhere they cannot reach. It is reachable:
+//     on delivery `Grappa.Dcc.Report.render({:delivered, …})` writes a
+//     scrollback row carrying the file's link, built by
+//     `Session.Server.dcc_file_route/2` — cited by its builder and not by a
+//     path, because a path copied into a comment is one route change away
+//     from being a lie. Naming
+//     the payoff is what makes the destination read as a detour rather than a
+//     dead end — and "your scrollback" keeps the bullet above intact, because
+//     it is true wherever the row lands and names no room.
 //
 // The id is network-qualified like the invite's. `offer_id` is already
 // server-minted and opaque, but two networks mint independently, and the
@@ -427,7 +438,7 @@ function dccOfferEntry(offer: DccOffer): BannerEntry {
     source: "dcc-offer",
     id: `dcc-offer:${offer.network}:${offer.offer_id}`,
     severity: "info",
-    message: `${offer.from} is offering you a file: ${offer.filename} (${formatBytes(offer.size)}, the sender's claim). Accepting downloads it to grappa, not to this device.`,
+    message: `${offer.from} is offering you a file: ${offer.filename} (${formatBytes(offer.size)}, the sender's claim). Accepting downloads it to grappa, not to this device; when the transfer finishes, a link to it arrives in your scrollback.`,
     actionHint: {
       label: "Accept",
       onAction: () => acceptDccOffer(offer.network, offer.offer_id),
