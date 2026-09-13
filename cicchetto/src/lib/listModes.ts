@@ -13,6 +13,9 @@ const LABELS: Record<string, string> = {
   b: "Bans",
   e: "Exempts",
   I: "Invites",
+  // ircnet: the channel reop list (344/345 RPL_REOPLIST), issue 2116. The
+  // one list IRCnet advertises that no other ircd grappa talks to defines.
+  R: "Reops",
   // bahamut/Azzurra: the restrict list (728/729 RPL_RESTRICTLIST).
   z: "Restricted",
   // solanum/Libera: the quiet list, same numerics, different letter.
