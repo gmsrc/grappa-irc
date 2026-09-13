@@ -1248,6 +1248,13 @@ Four results in one night, and what made each credible:
   counts seven catches, not six; #762's defect 3 is simply WRONG (measured: reordering the enum already
   reddened the OLD test). **A worker that refuses one of the issue's own claims, with a measurement, is the
   standard — say so.**
+- 🥇🥇 **MUOVI IL CANCELLO INVECE DI CREDERE AL SUO VERDE — e chiedilo nei brief (w2, #2116,
+  2026-09-13).** `mix grappa.wire_pin --check` passava; invece di archiviarlo, w2 ha **infilato un
+  campo fasullo** accanto a quello vero (sotto `list_modes_queryable`) ⇒ **pin ROSSO con il digest
+  che cambia** ⇒ revert ⇒ **digest byte-identico a prima**. Cioè ha provato che il gate discrimina
+  **IN QUEL VICINATO**, non in generale e non per fama. 🥇 *Un verde da un cancello che non si è
+  mosso non vale niente* — è la stessa famiglia del controllo negativo che non può fallire, vista
+  dal lato del GATE invece che dello script: **la mutazione è il controllo negativo di un gate.**
 🥇 **And the highest one: a worker that names a thing and in the SAME comment withdraws its own previous
 claim about that thing.** w2 named the plateau and immediately demoted it from cause to symptom (~99 %
 post-decision tail), retracting its own earlier timing table as having measured the wrong quantity.
