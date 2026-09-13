@@ -55831,3 +55831,146 @@ Recorded so the next reader finds a measurement rather than rediscovering it.
   because `.scrollback-body` contains the colour-coded nick and the brightest
   5% catches it. The relative assertion still separates by 6.5×, and the
   resolved leg is untouched by it.
+<!-- entry #2114 -->
+
+---
+
+## 2026-09-13 — issue 2114: a JOIN the transport refused is kept, and the premise that named the wrong door
+
+A cold deploy left one network in its old buffers with no traffic. The journal
+on the issue shows ten JOINs at `15:19:28.7xx`, every one refused
+`reason=:no_socket`, and the socket coming up at `15:19:33.402` — five seconds
+later. Nothing put those ten channels back, and the client stayed desynced from
+the ircd's idea of its membership until the user re-JOINed by hand.
+
+### Two premises the code contradicts, and one it does not
+
+The issue reads the ten lines as the bouncer's own rejoin racing its own
+socket. They are not. `Session.Server` has two producers of a JOIN at
+registration and they log DIFFERENT strings: `fire_autojoin/1` (as it then was)
+says `autojoin skipped: transport unavailable`, and
+`handle_call({:send_join, …})` — the REST door, reached only from
+`ChannelsController.create/2` via `Session.send_join/4` — says `send_join call
+rejected: transport unavailable`. Only the second string appears, ten times.
+The dropped line in the preceding `disconnected` reason carries a +k key
+(`JOIN #chan10 <key>`), and the autojoin loop frames every channel keyless, so
+that half agrees. These were CLIENT-issued JOINs landing inside the reconnect
+backoff window, not the bouncer re-joining itself.
+
+It matters, because it decides where the cure goes: the autojoin loop already
+self-heals (it re-reads `state.autojoin` at every 001), and a fix written there
+would have left the door exactly as it was.
+
+Second: "no error surfaced to the client" is not what the door did. It returned
+`{:error, :not_connected}`, which `FallbackController` renders as a 400. What
+was missing is a RETRY — and the 400 stopped being true four seconds later,
+when the session registered without the channel.
+
+What the issue gets exactly right is the window. It is not exotic: it is the
+ladder itself. `handle_continue({:start_client, _})` reads `Backoff.wait_ms/2`
+and DEFERS the Client spawn by that many ms, so a live, Registry-registered
+session answers every REST verb for the whole delay with `client: nil` and
+nothing to write on.
+
+### Why a queue, and why it flushes at 001 rather than at `connected`
+
+The issue offered three forms. "Don't attempt JOIN until connected" is what
+already happened — the refusal IS the non-attempt; it changes nothing about the
+loss. "Retry on `:no_socket`" wants a timer, a bound and a cancel, to decide a
+question the backoff ladder exists to answer: duplicated state that has to be
+kept in step with the thing it duplicates.
+
+So: queue, in `queued_joins`, and flush at the seam the autojoin set already
+rides. NOT at `event=connected` as the issue suggests — `:irc_connected` means
+TCP/TLS is up and NICK/USER went out, and an ircd ignores a JOIN before
+registration. 001 is where the loop already fires, and riding it inherits the
+#347 +r defer for free: a queued JOIN to a `+R` channel would otherwise 477 for
+exactly the reason the operator's set is made to wait.
+
+`fire_autojoin/1` became `fire_join_plan/1` over `join_plan/1` — the operator
+set plus the queue. One loop, because the only thing that differs is the +k
+key: same in-flight tracking, same defer, same failure numerics. A queued entry
+WINS a collision with the autojoin set, precisely because of that key; the
+autojoin copy would frame the same channel keyless and earn a 475. The guard on
+`maybe_autojoin_or_defer/1` moved from `state.autojoin` to the plan, because a
+credential with an EMPTY autojoin set is the common one at the REST door and
+gating on `autojoin` would have fired those queued JOINs straight past the
+identify.
+
+The queued channels do NOT go into `state.autojoin`, though the loop would then
+have needed no change at all. `maybe_request_chanserv_invite/3` reads that field
+as `in_autojoin?` to decide whether a 473/475 earns a ChanServ self-INVITE, and
+that is a different question about a different set — the shared-data-model-with-
+a-flag shape CLAUDE.md's design rule (6) names.
+
+### `:no_socket` only, and what the reply now means
+
+The transport-error arm split. `:no_socket` is the one error this process
+outlives: it means there is no socket YET, which for a registered session is the
+backoff wait. `:closed` and the `:inet.posix()` family mean the socket WAS there
+and the write failed, so the Client is on its way down and this process with it
+— an in-memory queue would die before flushing, and replying `:ok` there would
+turn a silent drop into a success claim. That arm keeps its warning and its 400.
+
+The `:no_socket` arm replies `:ok` (202) and opens the window `:pending` through
+the same `record_in_flight_join/2` the accepted path uses. `:pending` is already
+the server-owned state for "asked for, not joined", both paths reach it
+honestly, and leaving the 400 in place beside a queued JOIN would have made the
+door's answer and the session's state disagree.
+
+### What it is not
+
+The queue is in-memory and dies with the process, deliberately. That covers the
+measured incident — the crash is BEFORE the ten refusals, so the refusals and
+the recovery happen inside ONE process — and the general shape, since a
+mid-session socket loss kills the Client and the Session with it rather than
+parking at `:no_socket`. It is NOT a durable rejoin list: a user-subject manual
+/join is still absent from `autojoin` and still will not survive a restart.
+That gap is older than this issue and untouched by it.
+
+### Not measured, and not asserted
+
+- **Whether the ten channels were also in `state.autojoin`.** If they were, the
+  registration at `15:19:33` would have rejoined them regardless and the report
+  would be about something else. The journal in the issue is truncated after the
+  `perform` line and shows no JOINs either way; prod is not reachable from the
+  worker host, so this stayed unmeasured rather than being argued from the
+  issue's prose.
+- **Whether this is the `#1796` reconnect-bounce family.** The sightings file
+  the brief names lives under the gitignored, machine-local `.orchestrate/` and
+  is not present on this host. Nothing here claims a relation either way.
+- **Why the `{:send, "JOIN #chan10 <key>"}` call timed out at 5 s** and killed
+  the previous process. That is the line ABOVE the ten, a different defect — the
+  Session.Server exits when its Client is slow to answer a send — and it is
+  untouched here.
+- **`apply_effects([{:rejoin_invited, channel} | …])`** discards
+  `Client.send_join/3`'s result outright (`_ =`) and then records the window
+  `:pending` regardless, so a ChanServ-relayed re-JOIN on a dead transport
+  leaves a window that claims to be pending forever. Same class, different
+  trigger; left alone to keep this change inside the issue's mandate, and
+  reported out rather than folded in.
+
+### Where it is pinned
+
+`test/grappa/session/server_test.exs`, one describe, with both controls inside
+the instrument rather than beside it:
+
+- **Positive control, in `rewelcome_with_autojoin_control/3`**: `#control` is
+  the operator autojoin set, so a SECOND `JOIN #control` proves the re-welcome
+  really reached `maybe_autojoin_or_defer/1`. Without it a red in any of the
+  three callers could equally have meant the 001 never landed — a broken
+  instrument reported as a defect. It passed on the unfixed code, which is what
+  makes the three reds attributable.
+- **Negative control, its own test**: a JOIN the transport ACCEPTED must NOT be
+  replayed at the next 001. Green before AND after, and it is what stops a queue
+  that swallowed every JOIN from passing the other three.
+- The class itself, and the +k key — the journal's dropped line carried one, and
+  `fire_join_plan/1`'s autojoin half has none to lend.
+
+`await_sent_line_count/4` moved out of the `away_state transitions (S3.2)`
+describe to module scope on the way: `defp` is module-scoped wherever it is
+written, so the old home only hid the sharing from the reader. It exists for
+#417's same-process reconnect for the same reason issue 2114 needs it —
+`IRCServer.wait_for_line/3` scans the whole buffer, so it cannot tell a second
+JOIN from the first one still sitting there, and a re-registration test lives on
+exactly that distinction.
