@@ -8,6 +8,7 @@ import {
   setArchiveModalOpen,
   visibleArchiveForNetwork,
 } from "./lib/archive";
+import { archivedUnreadForSlug } from "./lib/archiveRollup";
 import { token } from "./lib/auth";
 import { casemappingForSlug } from "./lib/casemapping";
 import { type ChannelKey, channelKey } from "./lib/channelKey";
@@ -182,6 +183,10 @@ const ArchiveModal: Component = () => {
               // before the rows arrive — mirroring the retired Sidebar
               // `<details>`, which rendered an empty list during load.
               const loaded = () => archivedBySlug()[network.slug] !== undefined;
+              // issue 2109 — this group's own rollup, read as a signal so the
+              // header follows a read / JOIN / PART / archive delete with no
+              // refetch, exactly like the launcher's total it is a term of.
+              const groupUnread = () => archivedUnreadForSlug(network.slug);
               return (
                 <details
                   class="archive-modal-group"
@@ -192,7 +197,45 @@ const ArchiveModal: Component = () => {
                     }
                   }}
                 >
-                  <summary class="archive-modal-group-summary">{network.slug}</summary>
+                  <summary class="archive-modal-group-summary">
+                    {/* issue 2109 — the slug is its OWN element now that the
+                        summary has a second child. The `<summary>`'s
+                        textContent used to BE the label, and an e2e asserting
+                        that equality (issue473-rail-actions-drawer) would have
+                        started reading "bahamut-test3" the moment the network
+                        held archived unread — a red that appears only when the
+                        fixture happens to leave something behind. Same lesson
+                        as `feedback_css_block_button_wraps_inline_prefix`: the
+                        thing under assertion gets a node of its own. */}
+                    <span class="archive-modal-group-slug">{network.slug}</span>
+                    {/* issue 2109 — what this group is hiding. The rows below
+                        carry badges (#532 B) and the launcher that opened the
+                        modal carries the cross-network rollup (#2096), but the
+                        header in between said only the slug — and every group
+                        starts COLLAPSED (the list is lazy), so the operator had
+                        to expand each network in turn to find the one holding
+                        the unread the launcher had just announced.
+
+                        Same two tiers, from the same derivation as the
+                        launcher: `archivedUnreadForSlug` is one key of the memo
+                        `archivedUnread` folds, so "the launcher equals the sum
+                        of the groups" cannot drift. No fetch and no eager load
+                        — the badge is the seed minus what the nav draws, so it
+                        is readable while the group is still closed. */}
+                    <Show when={groupUnread().messages > 0 || groupUnread().events > 0}>
+                      <span
+                        class="archive-modal-group-unread"
+                        data-testid={`archive-group-unread-${network.slug}`}
+                      >
+                        <Show when={groupUnread().messages > 0}>
+                          <span class="sidebar-msg-unread">{groupUnread().messages}</span>
+                        </Show>
+                        <Show when={groupUnread().events > 0}>
+                          <span class="sidebar-events-unread">{groupUnread().events}</span>
+                        </Show>
+                      </span>
+                    </Show>
+                  </summary>
                   <Show
                     when={entries().length > 0}
                     fallback={

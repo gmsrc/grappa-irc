@@ -55612,3 +55612,101 @@ form. The blanket form was written, run, and produced the two reds above; the
 slot-aware form is the same cure with the one discriminator that keeps the
 pre-existing guard alive, and it is four lines longer than the swap it
 replaces.
+<!-- entry #2109 -->
+
+---
+
+## 2026-09-13 — issue 2109: the middle link of the archive unread chain, and why the per-network split is the primitive rather than a second sum
+
+`ArchiveModal` draws one collapsible `<details>` per network. The rows inside
+a group have carried unread badges since #532 B and the launcher that opens
+the modal has carried the cross-network rollup since #2096 — and the
+`<summary>` between them carried nothing but the slug. Every group starts
+COLLAPSED, because the rows are lazy (`onToggle` → `loadArchive(slug)`), so
+the launcher announced "something is unread behind this door" and the operator
+then had to expand each network in turn to learn which one. With more than a
+couple of networks that is the same blind hunt #2096 removed, one level
+deeper.
+
+Measured before the cure, on the artefact rather than on the source: the
+`ArchiveModal` component test asserting a badge on the header failed with
+`Unable to find an element by: [data-testid="archive-group-unread-freenode"]`,
+and the DOM it printed alongside reads `<summary
+class="archive-modal-group-summary">freenode</summary>` — the slug, and
+nothing else.
+
+### The split is the primitive; the launcher's total is its fold
+
+The issue's invariant is stated as a chain: a group's badge equals the sum of
+the row badges that group would draw, and the launcher's badge equals the sum
+of the group badges. Three numbers that contradict each other are worse than
+the missing badge, and the second half of that chain is the half a second
+traversal would eventually break — both numbers are on screen at the same
+instant, the group headers under the launcher that opened them.
+
+So `rollupArchivedUnreadBySlug/1` does the traversal and
+`rollupArchivedUnread/1` is now `sumRollups(rollupArchivedUnreadBySlug(input))`
+— nine lines, O(networks), and the launcher cannot disagree with the groups
+because it has no independent way to count. The reactive half mirrors it: ONE
+memo over the live signals, and `archivedUnread` folds that memo rather than
+re-running the subtraction. Every exclusion #2096 encoded is inherited
+unchanged and re-pinned per group (`$server`, a live channel, an open query, a
+pseudo-row, a slug with no rendered group, and issue 1985's parked network
+whose nav draws nothing and whose entries therefore all count).
+
+A slug holding no archived unread is ABSENT from the record rather than
+present at zero: the badge renders on `> 0`, so a zero entry would buy nothing
+and would turn "which networks are holding something" into a filter at every
+call site instead of a key test.
+
+### The slug became its own element, and that was not cosmetic
+
+`issue473-rail-actions-drawer.spec.ts` asserted
+`toHaveText(NETWORK_SLUG)` on the `<summary>` — i.e. on its whole
+`textContent`. A badge appended to that summary makes the assertion read
+`bahamut-test3` **only when the network happens to be holding archived
+unread**, which in a suite sharing one account across specs is a red that
+appears and disappears with whatever ran before it. The slug now lives in
+`<span class="archive-modal-group-slug">` and the spec asserts on that span:
+the claim it makes is "the group is LABELLED with the slug", and that is what
+the span holds. Same lesson as the `::before`-sigil rule the modal's own
+moduledoc already carries — the thing under assertion gets a node of its own,
+or a sibling node silently redefines it.
+
+### The class, and the one member left open
+
+The class is "a surface that draws unread for windows the operator cannot see
+without a further interaction." The first instrument tried for the census —
+grep for the components that iterate `channelsBySlug()` / `queryWindowsByNetwork()`
+— **failed its positive control**: it does not name `ArchiveModal`, a known
+member, because the modal reaches its rows through `visibleArchiveForNetwork`.
+The instrument that passes both controls is a grep for the render sites of the
+unread pills themselves (`sidebar-msg-unread` / `bottom-bar-msg-unread` /
+`<WindowBadges`), which finds exactly five files: `WindowBadges` (the shared
+triad), `Sidebar` and `BottomBar` (whose rows are always on screen),
+`ArchiveModal`, and `RailActions`.
+
+That leaves one uncovered link, and it is one level ABOVE this issue rather
+than below it: `RailActions` renders `.rail-actions-menu` under
+`<Show when={expanded() || open()}>`, and `expanded()` is true only on the
+`home` and `admin` window kinds. On every channel, query and server window the
+menu is collapsed by default, so #2096's launcher badge — and now this one,
+behind it — is itself concealed behind the `rail-actions-launcher` ☰ button,
+which carries no badge. Recorded, deliberately not fixed here: a badge on a
+generic "window actions" toggle would have to aggregate every badge-bearing
+action inside it rather than just the archive, which is a design call and not
+a slice of this one.
+
+### What is NOT rolled up, at either level
+
+- **The mention tier.** The modal's ROWS draw three pills (`@N` included,
+  #267); the group header and the launcher draw two. This is inherited from
+  #2096 rather than introduced here, and it is why the invariant above is
+  stated per-tier: the group's message total equals the sum of the rows'
+  message totals, and likewise for events.
+- **The `show_event_badge` preference.** `WindowBadges` zeroes its events pill
+  when the operator has opted out (#2037 B). No archive surface consults that
+  preference — not the rows (#532 B), not the launcher (#2096), and not this
+  header, which matches the rows it sits above. The divergence is between the
+  archive surface and the navs, it predates this change on both of the
+  archive's other two levels, and closing it would move #2096's number too.

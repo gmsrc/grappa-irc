@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ArchiveSuppression } from "../lib/archive";
-import { type ArchiveNetworkFacts, rollupArchivedUnread } from "../lib/archiveRollup";
+import {
+  type ArchiveNetworkFacts,
+  rollupArchivedUnread,
+  rollupArchivedUnreadBySlug,
+} from "../lib/archiveRollup";
 import { type ChannelKey, channelKey } from "../lib/channelKey";
 import { DEFAULT_CHANTYPES } from "../lib/chantypes";
 import { normalizeNick } from "../lib/nickEquals";
@@ -224,5 +228,122 @@ describe("rollupArchivedUnread", () => {
         factsForSlug: oneNetwork(suppression({})),
       }),
     ).toEqual({ messages: 0, events: 4 });
+  });
+});
+
+// issue 2109 — the SAME subtraction, split by network slug.
+//
+// `ArchiveModal` renders one collapsible `<details>` per network and the
+// group header carried nothing but the slug, so the operator had to expand
+// every group one by one to find which network was holding the unread the
+// launcher had just announced. The middle of the chain was missing.
+//
+// The split is not a second summation: `rollupArchivedUnread` is now the
+// FOLD of this function's output, so "the launcher equals the sum of the
+// groups" holds by construction rather than by agreement between two
+// traversals that could drift. The cases below pin the half that does NOT
+// come for free — that each group keeps every exclusion the total had.
+describe("rollupArchivedUnreadBySlug", () => {
+  const twoNetworks = (slug: string): ArchiveNetworkFacts | null =>
+    slug === "alpha" || slug === "beta" ? facts(suppression({})) : null;
+
+  it("attributes each window's unread to its own network", () => {
+    expect(
+      rollupArchivedUnreadBySlug({
+        messages: {
+          [ck("alpha", "#a")]: 2,
+          [ck("beta", "#b")]: 5,
+        },
+        events: { [ck("beta", "#b")]: 1 },
+        factsForSlug: twoNetworks,
+      }),
+    ).toEqual({
+      alpha: { messages: 2, events: 0 },
+      beta: { messages: 5, events: 1 },
+    });
+  });
+
+  it("omits a slug holding no archived unread rather than seeding a zero", () => {
+    // The group badge renders on `> 0`, so an explicit zero entry would buy
+    // nothing and would make "which networks are holding something" a
+    // filter at every call site instead of a key test.
+    expect(
+      rollupArchivedUnreadBySlug({
+        messages: { [ck("alpha", "#a")]: 2, [ck("beta", "#quiet")]: 0 },
+        events: {},
+        factsForSlug: twoNetworks,
+      }),
+    ).toEqual({ alpha: { messages: 2, events: 0 } });
+  });
+
+  it("the launcher total IS the sum of the group totals", () => {
+    // The invariant the issue puts above the feature: three numbers that
+    // contradict each other are worse than the missing badge. Asserted on
+    // one input that exercises every exclusion at once — a live channel, a
+    // $server row, an unknown slug — so the two answers are compared where
+    // they have the most room to disagree.
+    const input = {
+      messages: {
+        [ck("alpha", "#a")]: 2,
+        [ck("alpha", "#live")]: 7,
+        [ck("alpha", SERVER_WINDOW_NAME)]: 40,
+        [ck("beta", "#b")]: 5,
+        [ck("nosuch", "#orphan")]: 99,
+      },
+      events: { [ck("beta", "#b")]: 3 },
+      factsForSlug: (slug: string): ArchiveNetworkFacts | null =>
+        slug === "alpha"
+          ? facts(suppression({ channels: ["#live"] }))
+          : slug === "beta"
+            ? facts(suppression({}))
+            : null,
+    };
+    const bySlug = rollupArchivedUnreadBySlug(input);
+    const summed = Object.values(bySlug).reduce(
+      (acc, r) => ({ messages: acc.messages + r.messages, events: acc.events + r.events }),
+      { messages: 0, events: 0 },
+    );
+    expect(summed).toEqual(rollupArchivedUnread(input));
+    // …and the value itself, so a bug that zeroed BOTH sides still fails.
+    expect(summed).toEqual({ messages: 7, events: 3 });
+  });
+
+  it("keeps every exclusion per group: $server, a live surface, an unknown slug", () => {
+    expect(
+      rollupArchivedUnreadBySlug({
+        messages: {
+          [ck("alpha", SERVER_WINDOW_NAME)]: 40,
+          [ck("alpha", "#live")]: 7,
+          [ck("alpha", "livepeer")]: 6,
+          [ck("alpha", "#kicked")]: 4,
+          [ck("alpha", "#gone")]: 1,
+          [ck("nosuch", "#orphan")]: 99,
+        },
+        events: {},
+        factsForSlug: (slug) =>
+          slug === "alpha"
+            ? facts(
+                suppression({ channels: ["#live"], queries: ["livepeer"], pseudo: ["#kicked"] }),
+              )
+            : null,
+      }),
+    ).toEqual({ alpha: { messages: 1, events: 0 } });
+  });
+
+  it("counts EVERYTHING on a network whose nav draws no row at all", () => {
+    // issue 1985, per group: the modal DOES render a group for a parked
+    // network, and `visibleArchiveForNetwork` hands it every entry, so the
+    // group badge has to count them or the badge and the rows it sits above
+    // disagree on the one network the archive is the only door to.
+    expect(
+      rollupArchivedUnreadBySlug({
+        messages: counts([
+          ["#autojoin-but-parked", 2],
+          ["#gone", 1],
+        ]),
+        events: {},
+        factsForSlug: oneNetwork(null),
+      }),
+    ).toEqual({ net: { messages: 3, events: 0 } });
   });
 });

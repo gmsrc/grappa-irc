@@ -9394,8 +9394,16 @@ button.topic-bar-windows-opener {
 
 /* #532 B — unread badge cluster on an archived row. Reuses the sidebar
    badge pills (.sidebar-msg-unread / -events-unread / -mention) and pushes
-   them to the row's trailing edge so the count is discoverable per entry. */
-.archive-modal-unread {
+   them to the row's trailing edge so the count is discoverable per entry.
+
+   issue 2109 — the network group header carries the same cluster for its
+   whole group, so it shares this rule rather than restating it: the two are
+   one chain (row → group → launcher) and a group badge that sat differently
+   from the rows under it would read as a different kind of thing. The
+   `<summary>` is already `display: flex`, so `margin-left: auto` parks it at
+   the trailing edge, clear of the UA disclosure caret on the leading one. */
+.archive-modal-unread,
+.archive-modal-group-unread {
   display: inline-flex;
   align-items: center;
   margin-left: auto;

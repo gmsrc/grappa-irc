@@ -182,7 +182,12 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
     // lazily on first expand). The seeded network's group is present + closed.
     const group = page.getByTestId(`archive-modal-group-${NETWORK_SLUG}`);
     await expect(group).toBeVisible();
-    await expect(group.locator("summary.archive-modal-group-summary")).toHaveText(NETWORK_SLUG);
+    // issue 2109 — scoped to the slug's own `<span>`, not the summary's whole
+    // textContent: the summary also carries this group's unread rollup now, so
+    // the old equality would have read "bahamut-test3" whenever a sibling spec
+    // left something archived and unread behind. The claim here is "the group
+    // is LABELLED with the slug", and that is what the span holds.
+    await expect(group.locator("summary .archive-modal-group-slug")).toHaveText(NETWORK_SLUG);
     expect(await group.getAttribute("open")).toBeNull();
   });
 

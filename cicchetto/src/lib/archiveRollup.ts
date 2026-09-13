@@ -14,6 +14,7 @@ import { eventsUnread, messagesUnread } from "./selection";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
 
 // issue 2096 — the unread rollup behind the archive launcher.
+// issue 2109 — the same rollup, per network, on each `ArchiveModal` group.
 //
 // ## Where the numbers come from, and why nothing new is fetched
 //
@@ -91,23 +92,27 @@ export type ArchiveRollupInput = {
 };
 
 /**
- * Sum the unread of every window that has NO surface in the nav — i.e. the
- * windows `ArchiveModal` would list.
+ * The same subtraction, attributed to the network each window belongs to —
+ * i.e. what `ArchiveModal` would list UNDER EACH `<details>` group.
  *
- * The invariant: this must equal the sum of the badges the modal draws behind
- * the launcher. It cannot over-count by construction — a key here carries
- * unread, unread implies rows, and `Scrollback.list_archive/3` returns every
- * non-active target that has rows — with the two exceptions handled below
- * (`$server`, which the server excludes unconditionally, and a slug with no
- * rendered group).
+ * Keyed by slug; a network holding no archived unread is ABSENT rather than
+ * present at zero, because the badge renders on `> 0` and a zero entry would
+ * turn "which networks are holding something" into a filter at every call
+ * site.
+ *
+ * issue 2109 — this is the primitive and `rollupArchivedUnread` is its fold,
+ * not the other way round. Both numbers are on screen at once (the group
+ * header and the launcher above it), and two traversals agreeing today is not
+ * the same thing as two traversals that cannot disagree.
  */
-export function rollupArchivedUnread(input: ArchiveRollupInput): ArchiveRollup {
+export function rollupArchivedUnreadBySlug(
+  input: ArchiveRollupInput,
+): Record<string, ArchiveRollup> {
   const { messages, events, factsForSlug } = input;
   // One resolve per slug, not per key: `factsForSlug` reaches three stores and
   // a window can repeat a slug dozens of times.
   const factsBySlug = new Map<string, ArchiveNetworkFacts | null>();
-  let unreadMessages = 0;
-  let unreadEvents = 0;
+  const bySlug: Record<string, ArchiveRollup> = {};
 
   for (const rawKey of new Set([...Object.keys(messages), ...Object.keys(events)])) {
     const key = rawKey as ChannelKey;
@@ -135,20 +140,56 @@ export function rollupArchivedUnread(input: ArchiveRollupInput): ArchiveRollup {
       if (archiveTargetSuppressed(facts.suppression, folded, kind)) continue;
     }
 
-    unreadMessages += keyMessages;
-    unreadEvents += keyEvents;
+    const acc = bySlug[slug] ?? { messages: 0, events: 0 };
+    acc.messages += keyMessages;
+    acc.events += keyEvents;
+    bySlug[slug] = acc;
   }
 
-  return { messages: unreadMessages, events: unreadEvents };
+  return bySlug;
 }
 
-// Reactive, memoised rollup for the `RailActions` archive launcher. Every
-// input is a live signal, so the badge follows a read, a JOIN, a PART, an
-// archive delete and a network parking with no refetch of its own.
+/**
+ * Sum the unread of every window that has NO surface in the nav — i.e. the
+ * windows `ArchiveModal` would list.
+ *
+ * The invariant: this must equal the sum of the badges the modal draws behind
+ * the launcher. It cannot over-count by construction — a key here carries
+ * unread, unread implies rows, and `Scrollback.list_archive/3` returns every
+ * non-active target that has rows — with the two exceptions handled above
+ * (`$server`, which the server excludes unconditionally, and a slug with no
+ * rendered group).
+ */
+export function rollupArchivedUnread(input: ArchiveRollupInput): ArchiveRollup {
+  return sumRollups(rollupArchivedUnreadBySlug(input));
+}
+
+function sumRollups(bySlug: Record<string, ArchiveRollup>): ArchiveRollup {
+  let messages = 0;
+  let events = 0;
+  for (const group of Object.values(bySlug)) {
+    messages += group.messages;
+    events += group.events;
+  }
+  return { messages, events };
+}
+
+/** The absent-slug reading, shared so no call site spells a zero of its own. */
+const NOTHING_ARCHIVED: ArchiveRollup = { messages: 0, events: 0 };
+
+// Reactive, memoised rollup for the `RailActions` archive launcher and the
+// `ArchiveModal` group headers. Every input is a live signal, so both badges
+// follow a read, a JOIN, a PART, an archive delete and a network parking with
+// no refetch of their own.
+//
+// ONE memo does the traversal and the launcher folds its output (issue 2109):
+// the modal draws every group header while the launcher sits above them, so a
+// second memo over the same signals would be a second chance to disagree on
+// screen, at no saving — the fold is O(networks).
 const root = moduleRoot(() => {
-  const archivedUnread = createMemo(
-    (): ArchiveRollup =>
-      rollupArchivedUnread({
+  const archivedUnreadBySlug = createMemo(
+    (): Record<string, ArchiveRollup> =>
+      rollupArchivedUnreadBySlug({
         messages: messagesUnread(),
         events: eventsUnread(),
         factsForSlug: (slug) => {
@@ -162,7 +203,15 @@ const root = moduleRoot(() => {
         },
       }),
   );
-  return { archivedUnread };
+  const archivedUnread = createMemo((): ArchiveRollup => sumRollups(archivedUnreadBySlug()));
+  return { archivedUnread, archivedUnreadBySlug };
 });
 
 export const archivedUnread = root.archivedUnread;
+
+/**
+ * One network's archived-unread rollup — what the `ArchiveModal` group for
+ * `slug` is hiding while it is collapsed. Zero for a network holding nothing.
+ */
+export const archivedUnreadForSlug = (slug: string): ArchiveRollup =>
+  root.archivedUnreadBySlug()[slug] ?? NOTHING_ARCHIVED;

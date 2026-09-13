@@ -28,6 +28,14 @@ vi.mock("../lib/mentions", () => ({
   mentionCounts: () => mockMentionCounts(),
 }));
 
+// issue 2109 — the group header's rollup. Mocked at the module edge exactly
+// like `visibleArchiveForNetwork` above: what the SUBTRACTION computes is
+// pinned in `archiveRollup.test.ts` without a reactive context, and what this
+// file owns is whether the `<summary>` renders the number it is handed.
+vi.mock("../lib/archiveRollup", () => ({
+  archivedUnreadForSlug: (slug: string) => mockGroupUnread(slug),
+}));
+
 vi.mock("../lib/networks", () => ({
   // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
   // through this map, so the mock has to carry it.
@@ -76,6 +84,7 @@ const {
   mockEventsUnread,
   mockMentionCounts,
   mockOpenQueryNicks,
+  mockGroupUnread,
 } = vi.hoisted(() => ({
   mockOpen: vi.fn<() => boolean>(() => false),
   mockEntries: vi.fn<
@@ -95,6 +104,10 @@ const {
   mockEventsUnread: vi.fn<() => Record<string, number>>(() => ({})),
   mockMentionCounts: vi.fn<() => Record<string, number>>(() => ({})),
   mockOpenQueryNicks: vi.fn<() => string[]>(() => []),
+  mockGroupUnread: vi.fn<(slug: string) => { messages: number; events: number }>(() => ({
+    messages: 0,
+    events: 0,
+  })),
 }));
 
 vi.mock("../lib/archive", () => ({
@@ -119,6 +132,7 @@ beforeEach(() => {
   mockEventsUnread.mockReturnValue({});
   mockMentionCounts.mockReturnValue({});
   mockOpenQueryNicks.mockReturnValue([]);
+  mockGroupUnread.mockReturnValue({ messages: 0, events: 0 });
 });
 
 describe("ArchiveModal (#473 grouped)", () => {
@@ -318,6 +332,73 @@ describe("ArchiveModal (#473 grouped)", () => {
     render(() => <ArchiveModal />);
 
     expect(screen.queryByTestId("archive-unread-libera-quietpeer")).toBeNull();
+  });
+
+  // issue 2109 — the group header's own badge. The rows inside carry one
+  // (#532 B) and the launcher above carries the cross-network rollup (#2096);
+  // the `<summary>` in between showed only the slug, so a COLLAPSED group —
+  // which is every group until the operator expands it, the list being lazy —
+  // said nothing about what it was hiding.
+  it("renders the group's unread rollup on the network <summary>", () => {
+    mockOpen.mockReturnValue(true);
+    mockGroupUnread.mockImplementation((slug) =>
+      slug === "freenode" ? { messages: 3, events: 2 } : { messages: 0, events: 0 },
+    );
+
+    render(() => <ArchiveModal />);
+
+    const badge = screen.getByTestId("archive-group-unread-freenode");
+    // The badge sits ON the summary, not somewhere in the group's body: a
+    // collapsed <details> hides everything but the summary, and hiding the
+    // badge is precisely the bug.
+    expect(badge.closest("summary.archive-modal-group-summary")).not.toBeNull();
+    expect(badge.querySelector(".sidebar-msg-unread")?.textContent).toBe("3");
+    expect(badge.querySelector(".sidebar-events-unread")?.textContent).toBe("2");
+  });
+
+  it("renders NO group badge for a network holding nothing archived (#2109)", () => {
+    mockOpen.mockReturnValue(true);
+    mockGroupUnread.mockReturnValue({ messages: 0, events: 0 });
+    render(() => <ArchiveModal />);
+    expect(screen.queryByTestId("archive-group-unread-freenode")).toBeNull();
+    expect(screen.queryByTestId("archive-group-unread-libera")).toBeNull();
+  });
+
+  it("keeps the group's messages and events on SEPARATE tiers (#2109)", () => {
+    // #265/#532's rule, carried to the group header: presence churn is its own
+    // tier and must not inflate the message number, exactly as on the rows
+    // below and the launcher above.
+    mockOpen.mockReturnValue(true);
+    mockGroupUnread.mockImplementation((slug) =>
+      slug === "libera" ? { messages: 0, events: 9 } : { messages: 0, events: 0 },
+    );
+
+    render(() => <ArchiveModal />);
+
+    const badge = screen.getByTestId("archive-group-unread-libera");
+    expect(badge.querySelector(".sidebar-msg-unread")).toBeNull();
+    expect(badge.querySelector(".sidebar-events-unread")?.textContent).toBe("9");
+  });
+
+  it("badges each group with ITS OWN network's rollup (#2109)", () => {
+    // The modal draws every network, so a rollup wired to the cross-network
+    // total (the launcher's number) would paint the same figure on each
+    // header and send the operator into the wrong group.
+    mockOpen.mockReturnValue(true);
+    mockGroupUnread.mockImplementation((slug) =>
+      slug === "freenode" ? { messages: 4, events: 0 } : { messages: 11, events: 0 },
+    );
+
+    render(() => <ArchiveModal />);
+
+    expect(
+      screen.getByTestId("archive-group-unread-freenode").querySelector(".sidebar-msg-unread")
+        ?.textContent,
+    ).toBe("4");
+    expect(
+      screen.getByTestId("archive-group-unread-libera").querySelector(".sidebar-msg-unread")
+        ?.textContent,
+    ).toBe("11");
   });
 
   it("first click on × delete arms; second calls deleteArchiveEntry with token + slug + target", async () => {
