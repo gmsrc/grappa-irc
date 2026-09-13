@@ -1526,6 +1526,20 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   ⚠️ Un `FLAT` legittimo (ordine davvero ingoiato) e questo sono lo stesso osservabile **se hai
   buttato via il campione iniziale** — quindi il campione al send non è un lusso, è l'unica cosa che
   li separa.
+  🔴🔴 **E LA TERZA FACCIA, MISURATA POCHE ORE DOPO LE ALTRE DUE: SU UN PANE **BUSY** IL COSTO NON È
+  IL METRO, PUNTO — nemmeno con l'`OLD` catturato al momento giusto.** Mandato a w1, che stava dentro
+  un `sleep 420` sul suo banco di misura, un ordine di stop; `OLD=$12.55` preso NELLO STESSO BLOCCO
+  del send (la forma corretta), e il waiter ha comunque risposto **`FLAT dopo 120s`**. **L'ordine era
+  arrivato**: una tool call bloccante non consuma token, quindi il costo **non può** muoversi finché
+  non ritorna, e l'ordine resta legittimamente **IN CODA**.
+  🥇 **Su un pane BUSY il metro è l'indicatore di coda, e si legge in UNA cattura con dentro il
+  proprio controllo:** `Press up to edit queued messages` presente **E** il testo dell'ordine
+  renderizzato in `^[[38;5;231m` su `^[[48;5;237m` (bianco su evidenziato = input REALE) invece che
+  in `^[[2m` (ghost). Misurato: entrambi presenti ⇒ accodato, non ingoiato.
+  ⇒ **Scegli il metro dallo STATO DEL PANE prima di armare il waiter:** pane **IDLE** ⇒ costo/ctx;
+  pane **BUSY** ⇒ indicatore di coda + attributo SGR. Armare il metro sbagliato produce un `FLAT` che
+  invita al re-invio, e un re-invio su un pane che ha già l'ordine in coda è la **doppia/tripla
+  sottomissione** che questo file registra come danno reale.
 - 🔴🔴 **UN WARNING PUO' AVERE LA FORMA DI UN ERRORE, E IN CODA A UN LOG SI LEGGE COME IL FALLIMENTO
   (misurato 25-08-2026).** `tail -3` del log di `check.sh` mostrava uno stack trace bats
   (`from function 'run' ... in test file ..., line 308`) **immediatamente sopra `rc=0`** — cioe' la
