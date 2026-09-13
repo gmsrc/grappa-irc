@@ -55974,3 +55974,93 @@ written, so the old home only hid the sharing from the reader. It exists for
 `IRCServer.wait_for_line/3` scans the whole buffer, so it cannot tell a second
 JOIN from the first one still sitting there, and a re-registration test lives on
 exactly that distinction.
+<!-- entry #2116 -->
+
+---
+
+## 2026-09-13 — issue 2116: the missing table row, and the fourth site the shape did not name
+
+IRCnet advertises `CHANMODES=beIR,k,l,imnpstaqrzZ`. `b`, `e` and `I` were
+queryable there; `R`, the channel reop list, was not — the one list an IRCnet
+user could not open. Not a gate failure: `ListModes.queryable/1` intersects the
+advertised type-A set with `@pairs`, and `@pairs` had no `R` row, so the #1251
+silent-degradation rule did exactly its job and never offered a letter whose
+terminator nothing would recognise. The cure is the row, and the rule is
+untouched.
+
+### What the numeric pair buys, and why no letter-on-the-wire trick
+
+344/345 is IRCnet's alone across the three ircds grappa talks to —
+ircnet/ircd `ircd/s_err.c:379-380` spends it on the reop list
+(`":%s 344 %s %s %s!%s@%s"` / `":%s 345 %s %s :End of Channel Reop List"`),
+solanum's table jumps 341 to 346, bahamut's two slots are `NULL`. No collision,
+so the NUMERIC identifies the letter, the same as 367/348/346 and unlike the
+728/729 pair that bahamut spends on `z` and solanum on `q`. IRCnet's row is also
+the shortest of the family, channel plus mask with no setter and no set
+timestamp, which the shared clause already absorbed: setter/set_ts are read with
+`Enum.at/2` and stay `nil`.
+
+### The fourth site, and why it was the sharp one
+
+The issue named three: the table row, the two `EventRouter` guards plus
+`numeric_list_mode/1`, and a cic label. There is a fourth —
+`NumericRouter`'s `@delegated_numerics` — and it is not an optional tidy-up.
+Every other member of the family is in that set for the #376 reason: undelegated,
+`param_derived_route/3` falls through to `scan_params/2` and `Session.Server`
+persists each row as a bare `:notice` whose body is a scan-picked param. Here the
+consequence is worse than the one #376 fixed, because the table row is what makes
+the letter QUERYABLE in the first place: shipping items 1 to 3 alone would not
+have left an old leak in place, it would have built a new one, and it would have
+fired only on IRCnet and only when somebody opened the list the same change had
+just made openable. The 344/345 rows go in with their `EventRouter` clauses in
+the same commit, per the delegation contract already written above them.
+
+### Measured: this is not a wire-shape change
+
+The issue asserted it and the assertion is right, but `mix grappa.wire_pin
+--check` is the judge, not the prose. Green on this tree at protocol 20 —
+`list_modes_queryable` is `[String.t()]` and gains a VALUE, not a field, and the
+pin digests the generated `wireTypes.ts` + `wireSchema.ts` + the JSON views'
+`@spec` text, none of which can see which letters the runtime puts in an array.
+A green from a gate that cannot move is worth nothing, so the gate was moved on
+purpose: a throwaway `probe_2116_negative_control: [String.t()]` added to
+`Wire.isupport_changed_payload` immediately below `list_modes_queryable` turned
+the pin RED with a digest diff and the bump instructions, and reverting it
+restored the pinned digest byte for byte. So the gate responds in this exact
+neighbourhood, and `@protocol_version` stays at 20.
+
+### The anti-drift pair had only one half
+
+`event_router_test.exs` already asserted that every mode in `ListModes.pairs/0`
+has a TERMINATOR clause. That test cannot see a letter whose end clause exists
+and whose row clause does not — such a list flushes an empty bundle and every
+entry the ircd streamed is dropped, quietly, on the one network that has the
+mode. The row half is now its sibling, reading the same production table, with a
+non-vacuity assertion inside it so an empty table cannot pass by asserting
+nothing.
+
+`numeric_router_test.exs`'s "whole type-A list family is delegated" test was six
+hand-written rows; it is derived from `ListModes.pairs/0` now, which is the same
+argument the #911 note in that file already makes against its third hand-kept
+mirror. A letter added to the table without its two `@delegated_numerics`
+entries now goes red there, naming the numeric. The exhaustive
+`@delegated_numerics` mirror at the top of the file stays a literal list by
+design and took 344/345 by hand.
+
+### Not measured, and not asserted
+
+- **No live IRCnet link.** The `CHANMODES=beIR` line is the issue's, from the
+  reporter's own connection; prod is not reachable from the worker host. What is
+  measured here is that grappa's table, router and delegation agree on `R` — not
+  that an IRCnet server answered one.
+- **The ircd sources are cited from the issue body, not re-fetched.** They are
+  file-and-line citations to three named trees; nothing in this change turns on
+  a line number holding.
+- **`e` and `I` were reported missing on IRCnet and are not.** Both have been in
+  `@pairs` since #1251 and IRCnet advertises them in the same group, so they were
+  queryable there already. Only `R` was absent, and only `R` was added.
+- **No `@channel_param1_numerics` entry.** 348/346 have none either and work:
+  the accumulator key is folded by `list_mode_append_entry/4` itself and the
+  bundle's `channel_display` comes from the priming call, so the numeric's own
+  channel casing never reaches a key or a display. Leaving 344 out keeps it
+  consistent with its two siblings rather than with 367.
