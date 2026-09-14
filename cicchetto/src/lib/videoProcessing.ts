@@ -4,8 +4,28 @@
 // `prepareVideo` sees the File the bytes have already been compressed once;
 // cic's own transcode is a second pass over them, paid for in battery and
 // wall-clock on the device least able to afford it. This switch turns that
-// pass off. Default ON — today's behaviour for every browser that has never
-// been told otherwise.
+// pass off.
+//
+// ## Default OFF (issue 2173, owner's ruling — it shipped ON under #2157)
+//
+// The cost is real and is paid rather than hidden: the transcode is the only
+// client-side mechanism that shrinks an over-cap clip, so a desktop operator
+// dragging a long screen capture now gets a REFUSAL where they used to get an
+// upload. `uploadOrchestrator`'s cap refusal therefore names this switch by
+// the label below (the issue's option A) — the recourse rides the only
+// message the operator will see, because with the transcode off there is no
+// "processing failed (reason)" line to carry it and on iOS Safari there is no
+// console to read either.
+//
+// Option B — default OFF on iOS, ON elsewhere — was declined, and NOT for the
+// reason the issue offered ("it costs a UA check the codebase avoids"):
+// `platform.ts` already exports `isIos()`, so B would have cost one import.
+// It was declined because it does not CURE the cost, it only narrows who pays
+// it — and it narrows it away from the desktop and onto iOS, which is both
+// the platform the switch was aimed at and the one with no console. A
+// per-device default would also make "the default" two answers decided by a
+// `maxTouchPoints` heuristic, which is exactly the kind of silent drift
+// #1869/#2014 moved cic's other platform decisions off.
 //
 // ## Why localStorage and NOT the synced `displayPrefs` bundle
 //
@@ -35,19 +55,31 @@
 
 export const VIDEO_PROCESSING_STORAGE_KEY = "cicchetto.videoProcessing";
 
-const DEFAULT_ON = true;
+/**
+ * The user-facing name of this switch, in ONE place because two surfaces
+ * render it: the Settings checkbox, and the over-cap upload refusal that
+ * tells the operator where to go (#2173 option A). Same shape and the same
+ * reason as `SHARE_SESSION_LABEL` — a name spelled twice is a name that will
+ * eventually disagree with itself, and here the disagreement would send
+ * someone looking for a control that is not called that.
+ */
+export const VIDEO_PROCESSING_LABEL = "Shrink videos before sending";
+
+const DEFAULT_ON = false;
 
 /** Whether cic should transcode a video before uploading it. Device-local. */
 export function getVideoProcessingEnabled(): boolean {
-  // Deliberately NOT `stored === "true"`, the spelling colorNicklist.ts uses.
-  // That one is right for an OFF-default pref, where an unparseable value
-  // lands on the default anyway. This pref defaults ON, so the same spelling
-  // would let a corrupt value silently disable the only mechanism that shrinks
-  // an over-cap clip — a failure that presents as "Grappa suddenly refuses my
-  // videos" with nothing in the UI to explain it. Only the exact string
-  // "false" turns it off; everything else is the default.
-  const stored = localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY);
-  return stored === "false" ? false : DEFAULT_ON;
+  // `v === "true"` — the OFF-default family (colorNicklist.ts, eventBadge.ts,
+  // hideNextActive.ts), NOT the `v !== "false"` one (showBottomBar.ts) this
+  // pref used while it defaulted ON. The two families differ only on values
+  // that are neither literal, and that is the whole point: under the old
+  // spelling every corrupt or unknown value read ON, which with the default
+  // now OFF would be the opposite of the ruling, silently. Falling to the
+  // default is the safe side in both directions here — an unrequested
+  // transcode costs battery, and the refusal it would have avoided now names
+  // the switch.
+  const v = localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY);
+  return v === null ? DEFAULT_ON : v === "true";
 }
 
 export function setVideoProcessingEnabled(on: boolean): void {

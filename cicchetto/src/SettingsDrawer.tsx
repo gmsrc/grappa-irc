@@ -117,7 +117,11 @@ import {
   putVhostSelection,
   type VhostSettingsView,
 } from "./lib/userSettings";
-import { getVideoProcessingEnabled, setVideoProcessingEnabled } from "./lib/videoProcessing";
+import {
+  getVideoProcessingEnabled,
+  setVideoProcessingEnabled,
+  VIDEO_PROCESSING_LABEL,
+} from "./lib/videoProcessing";
 import PerformSettings from "./PerformSettings";
 import ThemeGallery from "./ThemeGallery";
 import TotpSettings from "./TotpSettings";
@@ -1989,7 +1993,7 @@ const SettingsDrawer: Component<Props> = (props) => {
                     setVideoProcessing(on);
                   }}
                 />
-                Shrink videos before sending
+                {VIDEO_PROCESSING_LABEL}
               </label>
               {/* Says what it COSTS, not just what it does. Turning it off
                   does not make big clips upload — it makes them get refused,

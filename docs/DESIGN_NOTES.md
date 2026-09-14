@@ -14753,3 +14753,71 @@ as restored after it. The one worth naming is the COLLAPSE mutant: routing
 `.scrollback-highlight`'s weight through the same custom property, i.e. the
 edit that would actually undo the ruling's constraint. It goes red. See the
 pull request for the table.
+<!-- entry #2173 -->
+
+---
+
+## 2026-09-14 — issue 2173: the default moved, so the spelling had to move with it
+
+**Owner's ruling: cic's client-side video transcode defaults OFF.** It shipped
+ON under #2157 three weeks ago. The flip is one constant; everything below is
+what the constant drags behind it.
+
+### The parse was not incidental, it was the other half of the default
+
+`getVideoProcessingEnabled` read `stored === "false" ? false : DEFAULT_ON` and
+said so in a comment: only the literal `"false"` turns the switch off, because
+with an ON default a corrupt value must not silently disable the one mechanism
+that shrinks an over-cap clip. That argument is sound and it **inverts** with
+the ruling. Left in place next to `DEFAULT_ON = false` the expression becomes
+constant-`false` — the switch could never be turned on at all — and the family
+it belongs to (`v !== "false"`, `showBottomBar.ts`) would read every unknown
+value as ON, which is the opposite of what was ruled, in silence.
+
+So the reader moved families rather than had its spelling tweaked: from the
+ON-default family to the OFF-default one, `v === null ? DEFAULT_ON : v ===
+"true"`, byte-identical to `colorNicklist.ts`, `eventBadge.ts` and
+`hideNextActive.ts`. cic has exactly two such families and the choice between
+them is decided by the default, not by taste. **A pref that flips its default
+must flip its reader in the same commit**, and the test that proves it is not
+the default test — it is the one that feeds a value nobody wrote (`"yes-please"`,
+`""`, `"1"`, `"TRUE"`) and demands OFF. Under either rejected shape every one of
+those reads ON.
+
+### The cost, and why option A rather than B
+
+The transcode is the only client-side thing that shrinks an over-cap clip; the
+server refuses a video over 50MiB. With the pass off by default a desktop
+operator dragging a long screen capture gets a refusal where they used to get
+an upload, and nothing told them why. The issue offered two ways not to pay
+that, A (name the switch in the refusal) and B (default OFF on iOS only), and
+left the choice to the worker.
+
+**A**, and the issue's own reason for preferring it is wrong: it says B "costs
+a UA check, which the codebase avoids elsewhere", but `platform.ts` already
+exports `isIos()` and three modules call it, so B would have cost one import.
+The reason to decline B is that **it does not cure the cost, it relocates it** —
+onto iOS, which is both the platform the switch was aimed at and the one with
+no console to read. It would also make "the default" two answers selected by a
+`maxTouchPoints` heuristic, the kind of silent per-device divergence #1869 and
+#2014 moved cic's other platform decisions away from.
+
+A is implemented as `overCapRecourse(category)`, appended to the cap refusal in
+`dispatchUpload`. Both of its conditions are load-bearing and both have a
+negative control in the suite: off the video category the advice is a dead end,
+and with the switch already ON the transcode has run and still failed the cap,
+so the advice would be a lie. In both the plain copy is the honest one.
+
+The label is now `VIDEO_PROCESSING_LABEL` in `videoProcessing.ts`, rendered by
+the Settings checkbox and quoted by the refusal — the `SHARE_SESSION_LABEL`
+shape and the same reason: a pointer whose name has drifted from its target
+sends someone hunting for a control that is not called that.
+
+### What was not established
+
+No e2e and no real-device run: the change is a stored-value read, a string, and
+a checkbox's initial state, all three of which jsdom observes directly. The
+server side is untouched — the 50MiB cap, the upload controller and the wire
+are all as they were, so no protocol bump is in scope. Whether the Settings
+blurb should now announce that the switch ships off was **not** decided; the
+checkbox renders its own state and the issue did not ask.
