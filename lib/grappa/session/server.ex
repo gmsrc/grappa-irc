@@ -150,8 +150,10 @@ defmodule Grappa.Session.Server do
   # Gives the user generous room to close a tab / lock the phone / switch
   # apps without the bouncer flapping them AWAY and back — 30s was too
   # twitchy for real mobile usage (a screen-lock immediately read as away).
-  # The auto-away reason string itself lives on `AwayState.auto_away_reason/0`
-  # (moved there in cluster #7 — single injection site is `set_auto_away/1`).
+  # The DEFAULT auto-away reason lives on `AwayState.auto_away_reason/0`
+  # (moved there in cluster #7); since issue 2150 the text actually sent is
+  # `state.auto_away_reason`, resolved over that default at the spawn
+  # boundary from the subject's own setting.
   #
   # This is the PRODUCTION DEFAULT, injectable per the CLAUDE.md
   # start_link-opts pattern (#671): `boot/0` reads
@@ -440,6 +442,13 @@ defmodule Grappa.Session.Server do
           # integration env may substitute a short window. `:disabled` is
           # the #348 OFF state — no debounce timer is ever armed.
           optional(:auto_away_debounce_ms) => non_neg_integer() | :disabled,
+          # issue 2150 — the text this session sends when the debounce above
+          # fires. Injected by `Grappa.Session.start_session/3`, which
+          # resolves the subject's stored reason over
+          # `AwayState.auto_away_reason/0`; an omitted opt (test seam)
+          # defaults to that same constant, so a session built without the
+          # key behaves exactly as it did before the setting existed.
+          optional(:auto_away_reason) => String.t(),
           # M2 — the subject's opt-in to peer CTCP USERINFO/AVATAR queries
           # (source of the member-list gender badge). Normally injected by
           # `Grappa.Session.start_session/3`, mirror of the debounce opt
@@ -615,6 +624,12 @@ defmodule Grappa.Session.Server do
           # (#348) means auto-away is off for this subject: the arm site
           # arms nothing rather than arming a very long timer.
           auto_away_debounce_ms: non_neg_integer() | :disabled,
+          # issue 2150 — the reason sent with the automatic `AWAY`, resolved
+          # at the spawn boundary next to the window above and re-tuned live
+          # by `{:auto_away_reason_changed, _}`. Always a binary: the
+          # resolver substitutes `AwayState.auto_away_reason/0` when the
+          # subject stored none, so no consumer has a nil case to handle.
+          auto_away_reason: String.t(),
           # S4.2: IRCv3 caps confirmed active by upstream CAP ACK. Keys are
           # lowercase cap names (e.g. "labeled-response"). Empty until the
           # upstream ACKs at least one cap. Added on ACK and retired on a
@@ -972,6 +987,38 @@ defmodule Grappa.Session.Server do
   end
 
   @doc """
+  Turns a stored auto-away reason into the text a session sends
+  (issue 2150).
+
+  `nil` — no preference — resolves to `AwayState.auto_away_reason/0`, so
+  a subject who never touched the setting is BYTE-IDENTICAL on the wire
+  to one from before it existed. That equivalence is the contract; it is
+  why the resolver substitutes here rather than leaving `nil` to be
+  handled at the emit site, where a missed clause would send `AWAY :`.
+
+  The single resolver for both entry points, mirroring
+  `resolve_auto_away_debounce/1`: the spawn boundary, which reads the
+  stored value, and the live refresh, which is handed the new one by the
+  settings broadcast.
+  """
+  @spec resolve_auto_away_reason(UserSettings.leave_reason()) :: String.t()
+  def resolve_auto_away_reason(nil), do: AwayState.auto_away_reason()
+  def resolve_auto_away_reason(reason) when is_binary(reason), do: reason
+
+  @doc """
+  The auto-away reason for `subject`: their stored preference resolved
+  over the default. Read at the spawn boundary
+  (`Grappa.Session.start_session/3`), the twin of
+  `auto_away_debounce_for/1`.
+  """
+  @spec auto_away_reason_for(Grappa.Subject.t()) :: String.t()
+  def auto_away_reason_for({_, _} = subject) do
+    subject
+    |> UserSettings.get_auto_away_reason()
+    |> resolve_auto_away_reason()
+  end
+
+  @doc """
   Returns the registry key for `(subject, network_id)`. Single source
   of truth for the `{:session, subject, network_id}` shape — every
   caller that needs to look up or terminate a session by key must go
@@ -1236,6 +1283,11 @@ defmodule Grappa.Session.Server do
       # (`start_session/3`); an explicit opt still wins so a unit test can
       # substitute a short window without runtime config tricks.
       auto_away_debounce_ms: Map.get(opts, :auto_away_debounce_ms, @auto_away_debounce_ms),
+      # issue 2150 — same shape and same reason as the window above: the
+      # spawn boundary resolves the subject's stored reason, an explicit
+      # opt still wins for tests, and the fallback is the constant every
+      # session sent before the setting existed.
+      auto_away_reason: Map.get(opts, :auto_away_reason, AwayState.auto_away_reason()),
       caps_active: MapSet.new(),
       labels_pending: %{},
       # S10 — sibling prime-stamp map for the labels_pending lazy TTL sweep.
@@ -3277,6 +3329,28 @@ defmodule Grappa.Session.Server do
   # knob turned now applies now, not at the session's next restart.
   def handle_info({:auto_away_debounce_changed, preference}, state) do
     {:noreply, apply_auto_away_debounce(state, resolve_auto_away_debounce(preference))}
+  end
+
+  # issue 2150 — the subject rewrote the auto-away reason, from any of
+  # their devices. Same bridge topic and same "applies now, not at the
+  # next restart" contract as the debounce above.
+  #
+  # The re-emit is the half that is easy to leave out. If this session is
+  # ALREADY `:away_auto`, the network is holding the OLD text and nothing
+  # else will ever correct it — the next `AWAY` fires only on the next
+  # present -> away transition, which for a parked-and-idle session may be
+  # days. That is precisely the "saved but not applied" gap this issue
+  # refuses for the QUIT/PART default, so it gets refused here too.
+  #
+  # `:away_explicit` and `:present` are NOT touched, and the two exclusions
+  # are different arguments rather than one. Explicit away always wins
+  # (`handle_info(:auto_away_debounce_fire, _)` already encodes that
+  # precedence) so overwriting the user's own `/away` text with an
+  # auto-away string would be a regression of #417. `:present` has no AWAY
+  # on the wire at all, and sending one would mark a live subject away for
+  # editing a text field.
+  def handle_info({:auto_away_reason_changed, preference}, state) do
+    {:noreply, apply_auto_away_reason(state, resolve_auto_away_reason(preference))}
   end
 
   # KVIrc-style CTCP USERINFO profile — a live edit via
@@ -7837,6 +7911,40 @@ defmodule Grappa.Session.Server do
     arm_auto_away_debounce(%{state | auto_away_debounce_ms: debounce_ms, auto_away_timer: nil})
   end
 
+  # issue 2150 — the reason's twin of `apply_auto_away_debounce/2`, and it
+  # sits here rather than by its `handle_info` clause so the clauses of
+  # that function stay grouped (the compiler says so).
+  #
+  # The RE-EMIT is the half that is easy to leave out. If this session is
+  # already `:away_auto`, the network is holding the OLD text and nothing
+  # else will ever correct it — the next AWAY fires only on the next
+  # present -> away transition, which for an idle session may be days.
+  # That is the "saved but not applied" gap this issue refuses for the
+  # QUIT/PART default, refused here too.
+  #
+  # `:away_explicit` and `:present` are untouched, and for DIFFERENT
+  # reasons. Explicit away always wins (`handle_info(:auto_away_debounce_fire, _)`
+  # already encodes that precedence), so overwriting the user's own
+  # `/away` text with an auto-away string would regress #417. A `:present`
+  # session has no AWAY on the wire at all, and sending one would mark a
+  # live subject away for editing a text field.
+  @spec apply_auto_away_reason(t(), String.t()) :: t()
+  defp apply_auto_away_reason(%{away_state: %AwayState{state: :away_auto}} = state, reason) do
+    maybe_log_send_failure("retune_auto_away", Client.send_away(state.client, reason))
+
+    %{
+      state
+      | auto_away_reason: reason,
+        # `set_auto_away/2` would re-stamp `started_at` to now, and the
+        # away window is what the `/back` mentions bundle aggregates over
+        # — retuning the text must not silently shorten it. Only the
+        # reason moves.
+        away_state: %{state.away_state | reason: reason}
+    }
+  end
+
+  defp apply_auto_away_reason(state, reason), do: %{state | auto_away_reason: reason}
+
   @spec cancel_and_drain(reference() | nil, atom()) :: :ok
   def cancel_and_drain(nil, _), do: :ok
 
@@ -8049,16 +8157,18 @@ defmodule Grappa.Session.Server do
   end
 
   # Set auto-away: only when not already `:away_explicit` (caller guards).
-  # Issues `AWAY :<auto_away_reason>` upstream. The constant is fixed
-  # wire protocol — see `AwayState.auto_away_reason/0`.
+  # Issues `AWAY :<state.auto_away_reason>` upstream — the subject's own
+  # text since issue 2150, resolved at the spawn boundary over
+  # `AwayState.auto_away_reason/0` and re-tuned live by
+  # `{:auto_away_reason_changed, _}`.
   @spec set_auto_away_internal(t()) :: t()
   defp set_auto_away_internal(state) do
     maybe_log_send_failure(
       "set_auto_away",
-      Client.send_away(state.client, AwayState.auto_away_reason())
+      Client.send_away(state.client, state.auto_away_reason)
     )
 
-    %{state | away_state: AwayState.set_auto_away(state.away_state)}
+    %{state | away_state: AwayState.set_auto_away(state.away_state, state.auto_away_reason)}
   end
 
   # Clear any active away state (explicit or auto). Issues bare `AWAY` upstream

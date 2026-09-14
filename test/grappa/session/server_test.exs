@@ -11381,6 +11381,147 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # -------------------------------------------------------------------
+    # issue 2150 — the auto-away reason is the SUBJECT's, not a constant
+    # -------------------------------------------------------------------
+    #
+    # Two halves, and the second is the one with teeth. The spawn half is
+    # ordinary plumbing: resolve at `start_session/3`, carry on state,
+    # emit. The LIVE half exists because a session already `:away_auto`
+    # is holding the OLD text on the network and nothing else would ever
+    # correct it — the next AWAY fires on the next present→away edge,
+    # which for an idle session may be days away. That is the same
+    # "saved but not applied" gap this issue refuses for the QUIT/PART
+    # default, so it is refused here.
+
+    test "a stored auto-away reason is what reaches the wire, not the default" do
+      {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
+      {user, network, _} = setup_user_and_network(port)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_reason(
+          {:user, user.id},
+          "sono a pranzo",
+          Grappa.Subject.label({:user, user.name})
+        )
+
+      pid = start_session_for(user, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      assert :ok = Session.set_auto_away({:user, user.id}, network.id)
+
+      assert {:ok, "AWAY :sono a pranzo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "with nothing stored the wire carries the BYTE-IDENTICAL legacy constant" do
+      {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      assert :ok = Session.set_auto_away({:user, user.id}, network.id)
+
+      # Byte-for-byte, built from the production constant rather than
+      # retyped: the equivalence with pre-2150 behaviour IS the contract,
+      # and a hand-copied literal here could drift away from it silently.
+      expected = "AWAY :#{AwayState.auto_away_reason()}\r\n"
+
+      assert {:ok, ^expected} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "rewriting the reason while :away_auto RE-EMITS AWAY with the new text" do
+      {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      :ok = Session.set_auto_away({:user, user.id}, network.id)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :"), 1_000)
+
+      # The write goes through the CONTEXT, not by poking the mailbox: the
+      # bridge broadcast is part of what is under test, and a hand-sent
+      # message would pass on an implementation that never announces.
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_reason(
+          {:user, user.id},
+          "ancora a pranzo",
+          Grappa.Subject.label({:user, user.name})
+        )
+
+      assert {:ok, "AWAY :ancora a pranzo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :ancora"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "rewriting the reason while :away_explicit does NOT touch the user's own away" do
+      {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      :ok = Session.set_explicit_away({:user, user.id}, network.id, "explicit reason")
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :explicit"), 1_000)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_reason(
+          {:user, user.id},
+          "auto text",
+          Grappa.Subject.label({:user, user.name})
+        )
+
+      # Explicit away always wins (#417 precedence). Overwriting it here
+      # would replace text the user typed with text a timer would have used.
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto text"), 200)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "rewriting the reason while :present emits nothing at all" do
+      {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_reason(
+          {:user, user.id},
+          "idle text",
+          Grappa.Subject.label({:user, user.name})
+        )
+
+      # A present session has no AWAY on the wire; sending one would mark a
+      # live user away for editing a text field.
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :"), 200)
+
+      # But the session DID adopt it — the next auto-away uses the new text
+      # with no respawn. Without this half the test would also pass on a
+      # handler that dropped the message on the floor.
+      :ok = Session.set_auto_away({:user, user.id}, network.id)
+
+      assert {:ok, "AWAY :idle text\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "set_explicit_away when :away_auto overwrites (explicit always wins)" do
       {server, port} = IRCServer.start_server(IRCServer.welcome_handler(":server", "grappa-test"))
       {user, network, _} = setup_user_and_network(port)

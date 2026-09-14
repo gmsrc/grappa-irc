@@ -117,17 +117,26 @@ defmodule Grappa.Session.AwayState do
 
   defstruct state: :present, started_at: nil, reason: nil
 
-  # The auto-away reason string is fixed and documented. Changing it
-  # would invalidate any client-side text matching; treat it as a
-  # protocol constant. Pre-extraction this lived as
-  # `@auto_away_reason` on Session.Server; it moves here because
-  # `set_auto_away/1` is now the single injection site.
+  # The DEFAULT auto-away reason — what a subject who has never set one
+  # of their own gets, byte for byte what every subject got before issue
+  # 2150 made the string a value.
+  #
+  # The old comment here called it "fixed wire protocol" and warned that
+  # changing it "would invalidate any client-side text matching". That was
+  # measured on `origin/main` before this change and found false: the
+  # literal appears exactly TWICE in the tree — this definition and one
+  # test assertion — and ZERO times in `cicchetto/src`. Nothing matches on
+  # it, so it was free to become a default rather than a constant.
   @auto_away_reason "auto-away (web client disconnected)"
 
   @doc """
-  Returns the fixed auto-away reason string. Exposed as a function
-  so call sites (`Session.Server` for the upstream `AWAY :<reason>`
-  emit, tests for assertions) reference one source of truth.
+  Returns the DEFAULT auto-away reason — the text used when the subject
+  has stored none of their own (`Grappa.UserSettings.get_auto_away_reason/1`
+  returning `nil`).
+
+  Exposed as a function so the resolver
+  (`Grappa.Session.Server.auto_away_reason_for/1`) and the tests
+  reference one source of truth instead of restating the literal.
   """
   @spec auto_away_reason() :: String.t()
   def auto_away_reason, do: @auto_away_reason
@@ -180,19 +189,26 @@ defmodule Grappa.Session.AwayState do
   end
 
   @doc """
-  Transitions to `:away_auto`, recording the fixed
-  `auto_away_reason/0` constant and stamping `started_at` to now.
-  Called by `Session.Server.set_auto_away_internal/1` after the
-  30s WS-disconnect debounce fires.
+  Transitions to `:away_auto`, recording `reason` and stamping
+  `started_at` to now. Called by `Session.Server.set_auto_away_internal/1`
+  after the WS-disconnect debounce fires.
+
+  `reason` is RESOLVED BY THE CALLER (issue 2150) — the subject's stored
+  auto-away reason, else `auto_away_reason/0`. There is deliberately no
+  arity-1 clause defaulting to the constant: that would be a silent
+  degradation path (CLAUDE.md), where the next call site added gets the
+  default instead of the subject's choice and nothing says so. The
+  session resolves once at spawn and carries the answer, so every caller
+  already holds it.
 
   No precedence guard here — the Server's `handle_call({:set_auto_away}, _)`
   + `handle_info(:auto_away_debounce_fire, _)` arms guard against
   the `:away_explicit` precedence case. If you reach this function
   the caller has already decided auto is appropriate.
   """
-  @spec set_auto_away(t()) :: t()
-  def set_auto_away(%__MODULE__{} = as) do
-    %{as | state: :away_auto, started_at: DateTime.utc_now(), reason: @auto_away_reason}
+  @spec set_auto_away(t(), String.t()) :: t()
+  def set_auto_away(%__MODULE__{} = as, reason) when is_binary(reason) do
+    %{as | state: :away_auto, started_at: DateTime.utc_now(), reason: reason}
   end
 
   @doc """

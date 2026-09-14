@@ -318,6 +318,10 @@ defmodule Grappa.Session do
           # both-subjects, kept-in-sync-with-the-Server-twin shape as
           # `:restored_profile` above.
           optional(:restored_avatar_url) => String.t() | nil,
+          # issue 2150 — the text sent with the automatic AWAY, resolved at
+          # the spawn boundary below next to the window above. Kept in sync
+          # with the `Grappa.Session.Server.init_opts/0` twin.
+          optional(:auto_away_reason) => String.t(),
           # M2 — the subject's `show_peer_profiles` opt-in (peer CTCP
           # USERINFO/AVATAR queries), resolved at the spawn boundary below
           # exactly like `auto_away_debounce_ms`. Kept in sync with the
@@ -387,6 +391,13 @@ defmodule Grappa.Session do
       |> Map.put(:network_id, network_id)
       |> Map.put_new_lazy(:auto_away_debounce_ms, fn ->
         Server.auto_away_debounce_for(subject)
+      end)
+      # issue 2150 — the TEXT that debounce eventually sends, resolved at
+      # the same choke point and with the same `put_new_lazy` posture. A
+      # subject with nothing stored resolves to the constant every session
+      # used before the setting existed, so the wire is unchanged for them.
+      |> Map.put_new_lazy(:auto_away_reason, fn ->
+        Server.auto_away_reason_for(subject)
       end)
       |> Map.put_new_lazy(:show_peer_profiles, fn ->
         UserSettings.get_show_peer_profiles(subject)

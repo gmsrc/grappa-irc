@@ -11,10 +11,13 @@ defmodule Grappa.Session.AwayStateTest do
       the data module. Server.ex enforces precedence at handle_call
       level (auto is no-op when explicit is set; explicit overwrites
       auto). The data module is mechanical: whatever you set, sticks.
-    * `set_auto_away/1` records the fixed `@auto_away_reason` constant
-      AND the auto state — Server.ex guards against calling this from
+    * `set_auto_away/2` records the reason the CALLER resolved AND the
+      auto state — Server.ex guards against calling this from
       `:away_explicit` (the precedence rule), but the data module
-      itself does not — it's pure mutation.
+      itself does not — it's pure mutation. Since issue 2150 the reason
+      is a parameter rather than the `@auto_away_reason` constant:
+      `auto_away_reason/0` is now the DEFAULT a resolver substitutes,
+      not a value this module stamps by itself.
     * `unset_away/1` clears all three away fields (state /
       started_at / reason) back to idle defaults. Used by both
       explicit and auto unset paths on Server.
@@ -58,7 +61,7 @@ defmodule Grappa.Session.AwayStateTest do
     test "overwrites a prior :away_auto (data module is mechanical, no precedence)" do
       as =
         AwayState.new()
-        |> AwayState.set_auto_away()
+        |> AwayState.set_auto_away(AwayState.auto_away_reason())
         |> AwayState.set_explicit_away("manual")
 
       assert AwayState.state_of(as) == :away_explicit
@@ -95,10 +98,22 @@ defmodule Grappa.Session.AwayStateTest do
     end
   end
 
-  describe "set_auto_away/1" do
+  describe "set_auto_away/2" do
+    test "records the reason the caller resolved, not a constant of its own" do
+      as = AwayState.set_auto_away(AwayState.new(), "gone to lunch")
+
+      assert AwayState.state_of(as) == :away_auto
+      assert AwayState.reason(as) == "gone to lunch"
+
+      # The discriminating half: the default must NOT have been stamped
+      # over the caller's text. Without it this test passes on an
+      # implementation that ignores its argument entirely.
+      refute AwayState.reason(as) == AwayState.auto_away_reason()
+    end
+
     test "transitions to :away_auto, records the fixed auto-away reason" do
       before = DateTime.utc_now()
-      as = AwayState.set_auto_away(AwayState.new())
+      as = AwayState.set_auto_away(AwayState.new(), AwayState.auto_away_reason())
       after_ = DateTime.utc_now()
 
       assert AwayState.state_of(as) == :away_auto
@@ -114,7 +129,7 @@ defmodule Grappa.Session.AwayStateTest do
       as =
         AwayState.new()
         |> AwayState.set_explicit_away("manual")
-        |> AwayState.set_auto_away()
+        |> AwayState.set_auto_away(AwayState.auto_away_reason())
 
       assert AwayState.state_of(as) == :away_auto
       assert AwayState.reason(as) == AwayState.auto_away_reason()
@@ -136,7 +151,7 @@ defmodule Grappa.Session.AwayStateTest do
     test "from :away_auto returns to :present and clears reason + started_at" do
       as =
         AwayState.new()
-        |> AwayState.set_auto_away()
+        |> AwayState.set_auto_away(AwayState.auto_away_reason())
         |> AwayState.unset_away()
 
       assert AwayState.state_of(as) == :present
@@ -166,14 +181,14 @@ defmodule Grappa.Session.AwayStateTest do
       assert AwayState.state_of(AwayState.set_explicit_away(AwayState.new(), "x")) ==
                :away_explicit
 
-      assert AwayState.state_of(AwayState.set_auto_away(AwayState.new())) == :away_auto
+      assert AwayState.state_of(AwayState.set_auto_away(AwayState.new(), AwayState.auto_away_reason())) == :away_auto
     end
 
     test "reason/1 returns the recorded reason string or nil" do
       assert AwayState.reason(AwayState.new()) == nil
       assert AwayState.reason(AwayState.set_explicit_away(AwayState.new(), "brb")) == "brb"
 
-      assert AwayState.reason(AwayState.set_auto_away(AwayState.new())) ==
+      assert AwayState.reason(AwayState.set_auto_away(AwayState.new(), AwayState.auto_away_reason())) ==
                AwayState.auto_away_reason()
     end
 
@@ -183,7 +198,7 @@ defmodule Grappa.Session.AwayStateTest do
       explicit_at = AwayState.started_at(AwayState.set_explicit_away(AwayState.new(), "x"))
       assert %DateTime{} = explicit_at
 
-      auto_at = AwayState.started_at(AwayState.set_auto_away(AwayState.new()))
+      auto_at = AwayState.started_at(AwayState.set_auto_away(AwayState.new(), AwayState.auto_away_reason()))
       assert %DateTime{} = auto_at
     end
   end
