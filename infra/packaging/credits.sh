@@ -54,6 +54,7 @@ REPO_ROOT="$(CDPATH= cd "${SCRIPT_DIR}/../.." && pwd)"
 sha=""
 date=""
 shortlog=""
+shallow=""
 
 # `.git` is a directory in a normal checkout and a FILE in a `git worktree`
 # (it points at the shared gitdir); either is a source build. Absent entirely
@@ -68,10 +69,34 @@ if [ -e "${REPO_ROOT}/.git" ]; then
 	# broken build.
 	sha="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || true)"
 	date="$(git -C "${REPO_ROOT}" log -1 --format=%cI 2>/dev/null || true)"
-	# `--no-merges` so a merge does not credit the merger with the work of
-	# whoever authored the branch; HEAD is named explicitly so shortlog reads
-	# the revision instead of waiting on stdin.
-	shortlog="$(git -C "${REPO_ROOT}" shortlog -sn --no-merges HEAD 2>/dev/null || true)"
+	# 🔴 A SHALLOW clone is the one case where a probe can answer CONFIDENTLY
+	# WRONG rather than emptily, so it is the one case that gets a gate
+	# (issue 1773). `sha` and `date` above are exact in a shallow repo — HEAD
+	# is HEAD — but `shortlog` aggregates over HISTORY, and a truncated
+	# history is not a smaller answer, it is a false one: it credits the whole
+	# project to whoever authored the commits that happened to be fetched.
+	# Measured on this repo's CI, where `actions/checkout` defaults to
+	# `fetch-depth: 1`: every green `integration` run baked
+	# `[{"name":"Marcello Barnaba","commits":1}]` for an author with 5667, and
+	# nothing was ever red, because a wrong roll has the same shape as a right
+	# one. Withholding the list is what makes the truncation VISIBLE — the
+	# consumer that refuses an empty roll (cicchetto/e2e's #1773 spec) then
+	# catches the shallow wrapper instead of rendering its lie.
+	#
+	# Only the aggregate is withheld. Reporting sha/date as null too would
+	# claim the build has no history at all, which is the AUR/tarball case and
+	# a different fact.
+	#
+	# An older git has no `--is-shallow-repository` (2.15+) and leaves this
+	# empty, which reads as not-shallow and preserves the previous behaviour
+	# exactly — the gate can only ever be absent, never inverted.
+	shallow="$(git -C "${REPO_ROOT}" rev-parse --is-shallow-repository 2>/dev/null || true)"
+	if [ "${shallow}" != "true" ]; then
+		# `--no-merges` so a merge does not credit the merger with the work of
+		# whoever authored the branch; HEAD is named explicitly so shortlog
+		# reads the revision instead of waiting on stdin.
+		shortlog="$(git -C "${REPO_ROOT}" shortlog -sn --no-merges HEAD 2>/dev/null || true)"
+	fi
 fi
 
 # The nick table (#1927) — `<author name>\t<handle>`, documented in its own

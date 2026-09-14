@@ -441,3 +441,58 @@ write_nicks() {
     [[ "$output" == *'{"name":"Marcello Barnaba","nick":"vjt","commits":'* ]]
     refute grep -q '"nick":null' <<< "$output"
 }
+
+@test "issue 1773 — a SHALLOW repo yields no contributor list, because it cannot have one" {
+    # The defect this case exists for: a shallow checkout has a real HEAD and a
+    # real date, so two of the three probes answer correctly, and `shortlog`
+    # answers CONFIDENTLY WRONG — it credits the whole project to whoever
+    # authored the one commit that was fetched. Measured on CI: every green
+    # `integration` run baked `[{"name":"Marcello Barnaba","commits":1}]` for a
+    # repository where that author has 5667. Nothing was red, because a wrong
+    # roll and a right one have the same shape.
+    #
+    # So shallowness is NOT the no-git case and is not treated as one: sha and
+    # date stay, because a shallow repo knows them exactly. Only the aggregate
+    # over history is withheld, because that is the only fact the truncation
+    # destroys.
+    init_repo
+    commit_as "Ada Lovelace" "ada@example.invalid" "one"
+    commit_as "Ada Lovelace" "ada@example.invalid" "two"
+    commit_as "Grace Hopper" "grace@example.invalid" "three"
+
+    local shallow="$BATS_TEST_TMPDIR/shallow"
+    # `file://` is load-bearing, not decoration: `git clone --depth=1 <path>`
+    # IGNORES the depth for a local clone and hands back the full history, with
+    # only a warning. This case would then assert the shallow behaviour against
+    # a complete repo and pass whatever the script does — the control below is
+    # what makes the fixture's shallowness a measured fact rather than a hope.
+    git clone -q --depth=1 "file://$REPO" "$shallow"
+    mkdir -p "$shallow/infra/packaging"
+    cp "$SCRIPT" "$shallow/infra/packaging/credits.sh"
+    chmod +x "$shallow/infra/packaging/credits.sh"
+
+    # POSITIVE CONTROL — the fixture is really shallow and really truncated.
+    [ "$(git -C "$shallow" rev-parse --is-shallow-repository)" = "true" ]
+    [ "$(git -C "$shallow" rev-list --count HEAD)" -eq 1 ]
+
+    run "$shallow/infra/packaging/credits.sh"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"contributors":[]'* ]]
+    # The two facts a truncated history still holds are NOT withheld with it.
+    [[ "$output" != *'"sha":null'* ]]
+    [[ "$output" != *'"date":null'* ]]
+    # The wrong answer, named, so this case fails if the refusal ever decays
+    # back into a confident one-commit roll.
+    [[ "$output" != *'"commits":1'* ]]
+
+    # NEGATIVE CONTROL — the same fixture, unshallowed, DOES produce the roll.
+    # Without this the emptiness above could equally mean "the script broke",
+    # and a refusal that is really a breakage is not a cure.
+    git -C "$shallow" fetch -q --unshallow
+    [ "$(git -C "$shallow" rev-parse --is-shallow-repository)" = "false" ]
+    run "$shallow/infra/packaging/credits.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'{"name":"Ada Lovelace","nick":null,"commits":2}'* ]]
+    [[ "$output" == *'{"name":"Grace Hopper","nick":null,"commits":1}'* ]]
+}
