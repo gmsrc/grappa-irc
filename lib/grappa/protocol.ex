@@ -599,6 +599,17 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
+  #
+  # 🔴 A REBASE IS THE CASE THE TRIPWIRE IS FOR, and it is silent. The
+  # number lives in TWO places ~10 lines apart, and two branches that both
+  # bump it conflict on the attribute — whose neighbouring prose diverged —
+  # while the `@spec` line is IDENTICAL on both sides and merges clean.
+  # Measured on issue 2150 rebasing onto v22: git raised the conflict on
+  # `@protocol_version` alone, took the base's `:: 22` for the spec without
+  # a marker, and the tree compiled. Resolving the conflict is NOT resolving
+  # the bump — grep the whole file for the OLD number before continuing a
+  # rebase, because a conflict on one site is positive evidence the other
+  # site was decided for you.
   @spec version() :: 23
   def version, do: @protocol_version
 
