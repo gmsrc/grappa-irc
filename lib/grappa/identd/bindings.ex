@@ -68,11 +68,12 @@ defmodule Grappa.Identd.Bindings do
 
   defstruct bindings: %{}, monitors: %{}, waiters: %{}
 
-  @typep state :: %__MODULE__{
-           bindings: %{Grappa.Identd.binding_key() => {String.t(), reference()}},
-           monitors: %{reference() => Grappa.Identd.binding_key()},
-           waiters: %{Grappa.Identd.binding_key() => [GenServer.from()]}
-         }
+  @typedoc "The table, its monitors, and the lookups parked on a binding that has not landed yet."
+  @type t :: %__MODULE__{
+          bindings: %{Grappa.Identd.binding_key() => {String.t(), reference()}},
+          monitors: %{reference() => Grappa.Identd.binding_key()},
+          waiters: %{Grappa.Identd.binding_key() => [GenServer.from()]}
+        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -108,7 +109,7 @@ defmodule Grappa.Identd.Bindings do
   end
 
   @impl GenServer
-  @spec init(keyword()) :: {:ok, state()}
+  @spec init(keyword()) :: {:ok, t()}
   def init(_), do: {:ok, %__MODULE__{}}
 
   @impl GenServer
@@ -164,7 +165,7 @@ defmodule Grappa.Identd.Bindings do
     end
   end
 
-  @spec bind(state(), Grappa.Identd.binding_key(), String.t(), pid()) :: state()
+  @spec bind(t(), Grappa.Identd.binding_key(), String.t(), pid()) :: t()
   defp bind(state, key, ident, owner) do
     state = forget(state, key)
     ref = Process.monitor(owner)
@@ -180,7 +181,7 @@ defmodule Grappa.Identd.Bindings do
 
   # Replacing a key drops its previous monitor with `:flush`, so the old
   # owner's DOWN can never arrive later and delete the NEW binding.
-  @spec forget(state(), Grappa.Identd.binding_key()) :: state()
+  @spec forget(t(), Grappa.Identd.binding_key()) :: t()
   defp forget(state, key) do
     case Map.pop(state.bindings, key) do
       {nil, _} ->
@@ -192,7 +193,7 @@ defmodule Grappa.Identd.Bindings do
     end
   end
 
-  @spec wake(state(), Grappa.Identd.binding_key(), String.t()) :: state()
+  @spec wake(t(), Grappa.Identd.binding_key(), String.t()) :: t()
   defp wake(state, key, ident) do
     {parked, waiters} = Map.pop(state.waiters, key, [])
     Enum.each(parked, &GenServer.reply(&1, {:ok, ident}))
