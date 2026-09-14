@@ -91,6 +91,12 @@ defmodule Grappa.UserSettings do
   | `"auto_away_debounce_seconds"` | `auto_away_debounce()` | `get_auto_away_debounce_seconds/1`, |
   |                        | (`0` on the JSON side  | `put_auto_away_debounce_seconds/2`  |
   |                        | = `:disabled`)         | (#348)                          |
+  | `"quit_part_reason"`   | `leave_reason()`       | `get_quit_part_reason/1`,       |
+  |                        | (`""` clears the key)  | `put_quit_part_reason/3`        |
+  |                        |                        | (issue 2150)                    |
+  | `"auto_away_reason"`   | `leave_reason()`       | `get_auto_away_reason/1`,       |
+  |                        | (`""` clears the key)  | `put_auto_away_reason/3`        |
+  |                        |                        | (issue 2150)                    |
 
   ## Boundary
 
@@ -1401,6 +1407,231 @@ defmodule Grappa.UserSettings do
         "must be an integer between #{@auto_away_debounce_seconds_min} and " <>
           "#{@auto_away_debounce_seconds_max} seconds, 0 to disable, or null"
       )
+
+    {:error, cs}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Leave-reason accessors (issue 2150)
+  # ---------------------------------------------------------------------------
+
+  # issue 2150 — the remembered QUIT/PART message, and the reason the
+  # bouncer sends when IT marks the subject away. Two keys, ONE shape and
+  # ONE validator: both are free text bound for a single IRC line, both
+  # refuse CR/LF/NUL at SAVE time, and for both the empty string is the
+  # same state as no key at all.
+  @quit_part_reason_key "quit_part_reason"
+  @auto_away_reason_key "auto_away_reason"
+
+  # Structural bound on either leave reason — the same treatment
+  # `@alias_expansion_max_bytes` gives its own user-writable string: a
+  # subject-writable blob carries a ceiling at the write boundary or it is
+  # a storage vector. 512 is RFC 1459's whole-line cap, which is the
+  # largest number that can mean anything here.
+  #
+  # It is NOT a promise the reason arrives intact: the ircd prepends a
+  # source prefix whose length we cannot know, so a reason near the cap is
+  # truncated upstream. The bound exists to keep the STORE finite; the
+  # wire's own limit is the wire's business.
+  #
+  # Bytes, not graphemes — `String.length/1` would admit up to four times
+  # the material for the same number, and the framing layer counts bytes.
+  @leave_reason_max_bytes 512
+
+  @typedoc """
+  issue 2150 — one remembered leave reason.
+
+    * `nil` — nothing stored. The caller keeps whatever it does today: the
+      `"user-disconnect"` fallback for QUIT, a bare PART, and
+      `Grappa.Session.AwayState.auto_away_reason/0` for the timed away.
+    * `String.t()` — the text to send instead.
+
+  There is no third state. The empty string is NOT one: it is normalised
+  to `nil` at the write boundary and the key is deleted, so "no default"
+  has exactly one spelling in storage and every reader downstream can test
+  for `nil` alone.
+  """
+  @type leave_reason :: String.t() | nil
+
+  @doc """
+  The byte ceiling on one leave reason. Public so callers and tests read
+  the bound from the constant that enforces it instead of restating it.
+  """
+  @spec leave_reason_max_bytes() :: unquote(@leave_reason_max_bytes)
+  def leave_reason_max_bytes, do: @leave_reason_max_bytes
+
+  @doc """
+  The subject's remembered QUIT/PART message, or `nil` when they have
+  none.
+
+  `nil` is also what a malformed stored value reads back as — a corrupted
+  row degrades to "no default" rather than to a value no writer of ours
+  could have produced, mirroring `get_upload_ttl_seconds/1`.
+  """
+  @spec get_quit_part_reason(Subject.t()) :: leave_reason()
+  def get_quit_part_reason({_, _} = subject),
+    do: read_leave_reason(subject, @quit_part_reason_key)
+
+  @doc """
+  Stores the subject's QUIT/PART default and announces it to their other
+  devices.
+
+  Pass `nil` or `""` to clear it — both delete the key (see
+  `t:leave_reason/0`). Anything carrying CR/LF/NUL, exceeding
+  `leave_reason_max_bytes/0`, or that is not a binary at all is a
+  changeset error on `:quit_part_reason`.
+
+  ## Why the guard runs HERE and not at `/quit` time
+
+  A reason refused only when it is USED would leave the subject with a
+  setting that looks saved and never applies — the failure is invisible
+  at exactly the moment they cannot see it, since a QUIT is the last
+  thing their client does. Refusing at save time makes the 422 land in
+  the drawer, next to the field that caused it.
+
+  `subject_label` is the user-rooted PubSub topic root
+  (`Grappa.Subject.label/1`), taken as an argument for the same reason
+  `put_auto_away_debounce_seconds/3` takes it: routing is the caller's
+  knowledge.
+
+  ## One surface, not two
+
+  Unlike the auto-away pair, this announces ONLY on the user topic. The
+  value is resolved per-REQUEST at the web edge, so no live
+  `Session.Server` holds a copy that could go stale, and a bridge
+  broadcast would be a message with no reader. Nothing is announced when
+  the write is rejected.
+  """
+  @spec put_quit_part_reason(Subject.t(), term(), String.t()) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def put_quit_part_reason({_, _} = subject, value, subject_label)
+      when is_binary(subject_label) do
+    with {:ok, stored} <- validate_leave_reason(value, :quit_part_reason, subject),
+         {:ok, saved} <- write_leave_reason(subject, @quit_part_reason_key, stored) do
+      :ok =
+        Grappa.PubSub.broadcast_event(
+          Topic.user(subject_label),
+          Wire.quit_part_reason_changed(stored)
+        )
+
+      {:ok, saved}
+    end
+  end
+
+  @doc """
+  The subject's remembered auto-away reason, or `nil` when they have none.
+
+  `nil` means the caller keeps `Grappa.Session.AwayState.auto_away_reason/0`
+  — so a subject who never touched this is byte-identical on the wire to
+  one from before the setting existed.
+  """
+  @spec get_auto_away_reason(Subject.t()) :: leave_reason()
+  def get_auto_away_reason({_, _} = subject),
+    do: read_leave_reason(subject, @auto_away_reason_key)
+
+  @doc """
+  Stores the subject's auto-away reason and announces it on BOTH surfaces.
+
+  Same validation and same empty-string-clears rule as
+  `put_quit_part_reason/3`; errors land on `:auto_away_reason`.
+
+  The extra surface is the point: this value is carried on live session
+  state (resolved once at spawn, like `auto_away_debounce_ms`), so a
+  write that only reached the other devices would leave every running
+  session sending the old text until it restarts. The bridge term is what
+  makes "a knob turned now applies now" true here — the same contract
+  `put_auto_away_debounce_seconds/3` keeps for the delay.
+  """
+  @spec put_auto_away_reason(Subject.t(), term(), String.t()) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def put_auto_away_reason({_, _} = subject, value, subject_label)
+      when is_binary(subject_label) do
+    with {:ok, stored} <- validate_leave_reason(value, :auto_away_reason, subject),
+         {:ok, saved} <- write_leave_reason(subject, @auto_away_reason_key, stored) do
+      # AFTER the transaction returned, never inside it — a retried attempt
+      # would re-announce a change that had been rolled back (the
+      # `put_auto_away_debounce_seconds/3` rule).
+      :ok =
+        Phoenix.PubSub.broadcast(
+          Grappa.PubSub,
+          Topic.user_settings(subject_label),
+          {:auto_away_reason_changed, stored}
+        )
+
+      :ok =
+        Grappa.PubSub.broadcast_event(
+          Topic.user(subject_label),
+          Wire.auto_away_reason_changed(stored)
+        )
+
+      {:ok, saved}
+    end
+  end
+
+  # Lenient reader, one shape: anything that is not the non-empty binary a
+  # writer of ours could have produced reads as "no default". A stored `""`
+  # cannot arise through `validate_leave_reason/3`, but a hand-edited row
+  # can carry one and it must mean the same thing as absence.
+  @spec read_leave_reason(Subject.t(), String.t()) :: leave_reason()
+  defp read_leave_reason(subject, key) do
+    case fetch_existing_or_nil(subject) do
+      nil ->
+        nil
+
+      %Settings{data: data} ->
+        case data[key] do
+          "" -> nil
+          reason when is_binary(reason) -> reason
+          _ -> nil
+        end
+    end
+  end
+
+  @spec write_leave_reason(Subject.t(), String.t(), leave_reason()) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  defp write_leave_reason(subject, key, stored),
+    do: update_data(subject, &put_or_delete(&1, key, stored))
+
+  # Returns the value to STORE, so the `""` → `nil` normalisation happens
+  # once, here, rather than at each of the two call sites. Both setters
+  # then hand `put_or_delete/3` a value it already knows how to delete on.
+  @spec validate_leave_reason(term(), atom(), Subject.t()) ::
+          {:ok, leave_reason()} | {:error, Ecto.Changeset.t()}
+  defp validate_leave_reason(nil, _, _), do: {:ok, nil}
+  defp validate_leave_reason("", _, _), do: {:ok, nil}
+
+  defp validate_leave_reason(value, field, subject) when is_binary(value) do
+    cond do
+      byte_size(value) > @leave_reason_max_bytes ->
+        leave_reason_error(
+          field,
+          subject,
+          "must be at most #{@leave_reason_max_bytes} bytes"
+        )
+
+      not Identifier.safe_line_token?(value) ->
+        leave_reason_error(
+          field,
+          subject,
+          "must not contain CR, LF or NUL"
+        )
+
+      true ->
+        {:ok, value}
+    end
+  end
+
+  defp validate_leave_reason(_, field, subject),
+    do: leave_reason_error(field, subject, "must be a string, or null to clear it")
+
+  @spec leave_reason_error(atom(), Subject.t(), String.t()) :: {:error, Ecto.Changeset.t()}
+  defp leave_reason_error(field, subject, message) do
+    attrs = Subject.put_subject_id(%{data: %{}}, subject)
+
+    cs =
+      %Settings{}
+      |> Settings.changeset(attrs)
+      |> Ecto.Changeset.add_error(field, message)
 
     {:error, cs}
   end

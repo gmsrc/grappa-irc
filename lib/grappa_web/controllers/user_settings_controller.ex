@@ -231,6 +231,82 @@ defmodule GrappaWeb.UserSettingsController do
 
   def update_auto_away_debounce_seconds(_, _), do: {:error, :bad_request}
 
+  @doc """
+  `GET /me/settings/quit-part-reason` — the subject's remembered
+  QUIT/PART message (issue 2150), or `null` when they have none.
+  """
+  @spec show_quit_part_reason(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show_quit_part_reason(conn, _) do
+    subject = Subject.from_assigns(conn.assigns)
+    render(conn, :quit_part_reason, reason: UserSettings.get_quit_part_reason(subject))
+  end
+
+  @doc """
+  `PUT /me/settings/quit-part-reason` — persists the default applied when
+  the subject issues `/quit` or `/part` without a reason of their own.
+
+  Body: `{"quit_part_reason": "<text>" | null}`. The empty string clears
+  it, exactly as `null` does — "no default" has one meaning, not two.
+
+  422 + `field_errors.quit_part_reason` when the text carries CR/LF/NUL
+  or exceeds the byte ceiling; a non-string, non-null body is a 400.
+  The guard runs at SAVE time deliberately — see
+  `Grappa.UserSettings.put_quit_part_reason/3`.
+  """
+  @spec update_quit_part_reason(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
+  def update_quit_part_reason(conn, %{"quit_part_reason" => reason})
+      when is_binary(reason) or is_nil(reason) do
+    subject = Subject.from_assigns(conn.assigns)
+    subject_label = GrappaWeb.Subject.topic_label(conn.assigns.current_subject)
+
+    with {:ok, _} <- UserSettings.put_quit_part_reason(subject, reason, subject_label) do
+      render(conn, :quit_part_reason, reason: UserSettings.get_quit_part_reason(subject))
+    end
+  end
+
+  def update_quit_part_reason(_, _), do: {:error, :bad_request}
+
+  @doc """
+  `GET /me/settings/auto-away-reason` — the reason the bouncer sends when
+  IT marks the subject away (issue 2150), or `null` when they have none.
+
+  `null` means the server keeps its own constant. This endpoint does NOT
+  disclose that constant, for the same reason the debounce endpoint does
+  not disclose the server-wide delay: a copy in the client drifts.
+  """
+  @spec show_auto_away_reason(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show_auto_away_reason(conn, _) do
+    subject = Subject.from_assigns(conn.assigns)
+    render(conn, :auto_away_reason, reason: UserSettings.get_auto_away_reason(subject))
+  end
+
+  @doc """
+  `PUT /me/settings/auto-away-reason` — persists the timed-away reason.
+
+  Body: `{"auto_away_reason": "<text>" | null}`, same clearing rule and
+  same 422 shape as `update_quit_part_reason/2`, on
+  `field_errors.auto_away_reason`.
+
+  Unlike its sibling this one reaches LIVE sessions: the context
+  announces on the settings bridge topic, so a session already
+  `:away_auto` re-issues `AWAY` with the new text rather than waiting for
+  its next restart.
+  """
+  @spec update_auto_away_reason(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
+  def update_auto_away_reason(conn, %{"auto_away_reason" => reason})
+      when is_binary(reason) or is_nil(reason) do
+    subject = Subject.from_assigns(conn.assigns)
+    subject_label = GrappaWeb.Subject.topic_label(conn.assigns.current_subject)
+
+    with {:ok, _} <- UserSettings.put_auto_away_reason(subject, reason, subject_label) do
+      render(conn, :auto_away_reason, reason: UserSettings.get_auto_away_reason(subject))
+    end
+  end
+
+  def update_auto_away_reason(_, _), do: {:error, :bad_request}
+
   # `0` is the OFF sentinel on the wire (JSON has no atoms); the context
   # speaks `:disabled`. Every other integer travels untouched so the
   # range verdict — including a negative one — stays the context's to

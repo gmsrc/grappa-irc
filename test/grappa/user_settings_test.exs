@@ -2096,6 +2096,322 @@ defmodule Grappa.UserSettingsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Leave reasons (issue 2150) — the remembered QUIT/PART message and the
+  # auto-away reason
+  # ---------------------------------------------------------------------------
+  #
+  # Two keys, ONE shape, because they answer the same question in two
+  # voices: free text the subject wants on the wire when they leave, or
+  # when the bouncer marks them away for them. Both are `String.t() | nil`,
+  # both refuse CR/LF/NUL AT SAVE TIME, and for both the empty string is
+  # the SAME state as no key at all.
+  #
+  # The empty-string rule is the one worth a test of its own: were `""`
+  # stored, "no default" would have two spellings and every reader
+  # downstream would owe a second check. The store answers that here, once,
+  # by deleting the key.
+
+  describe "get/put_quit_part_reason — the remembered leave message" do
+    test "returns nil when no settings row exists" do
+      assert UserSettings.get_quit_part_reason({:user, Ecto.UUID.generate()}) == nil
+    end
+
+    test "returns nil when the row exists but has no quit_part_reason key" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.get_or_init({:user, user.id})
+
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+    end
+
+    test "persists a reason and reads it back byte-identical" do
+      user = user_fixture()
+
+      assert {:ok, %Settings{}} =
+               UserSettings.put_quit_part_reason({:user, user.id}, "gone fishing", label(user))
+
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == "gone fishing"
+    end
+
+    test "the empty string CLEARS the key rather than storing \"\"" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "bbl", label(user))
+
+      assert {:ok, %Settings{} = saved} =
+               UserSettings.put_quit_part_reason({:user, user.id}, "", label(user))
+
+      # Both halves matter: the accessor says "no default", AND the key is
+      # physically absent from `data`. Asserting only the first would pass
+      # on a stored `""` that some later reader treats as a real value.
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+      refute Map.has_key?(saved.data, "quit_part_reason")
+    end
+
+    test "nil clears the key too, the same state the empty string leaves" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "bbl", label(user))
+
+      assert {:ok, %Settings{} = saved} =
+               UserSettings.put_quit_part_reason({:user, user.id}, nil, label(user))
+
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+      refute Map.has_key?(saved.data, "quit_part_reason")
+    end
+
+    test "refuses CR/LF/NUL at SAVE time, so no stored value can smuggle a line" do
+      user = user_fixture()
+
+      for smuggled <- ["bye\r\nJOIN #evil", "bye\nJOIN #evil", "bye\rJOIN #evil", "bye\x00"] do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 UserSettings.put_quit_part_reason({:user, user.id}, smuggled, label(user))
+
+        assert Keyword.has_key?(cs.errors, :quit_part_reason)
+      end
+
+      # Nothing was stored on the way to those rejections.
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+    end
+
+    test "refuses a value past the byte ceiling, and accepts one exactly at it" do
+      user = user_fixture()
+      max = UserSettings.leave_reason_max_bytes()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               UserSettings.put_quit_part_reason(
+                 {:user, user.id},
+                 String.duplicate("a", max + 1),
+                 label(user)
+               )
+
+      assert Keyword.has_key?(cs.errors, :quit_part_reason)
+
+      at_cap = String.duplicate("a", max)
+      assert {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, at_cap, label(user))
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == at_cap
+    end
+
+    test "the ceiling counts BYTES, not graphemes" do
+      user = user_fixture()
+      max = UserSettings.leave_reason_max_bytes()
+
+      # Each `è` is two bytes: a grapheme count would admit twice the
+      # material the wire has room for.
+      over = String.duplicate("è", div(max, 2) + 1)
+      assert byte_size(over) > max
+      assert String.length(over) <= max
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.put_quit_part_reason({:user, user.id}, over, label(user))
+    end
+
+    test "refuses a non-binary, non-nil value" do
+      user = user_fixture()
+
+      for bogus <- [42, :bye, %{"reason" => "bye"}, ["bye"]] do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 UserSettings.put_quit_part_reason({:user, user.id}, bogus, label(user))
+
+        assert Keyword.has_key?(cs.errors, :quit_part_reason)
+      end
+    end
+
+    test "preserves other data keys (merge semantics, not replace)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo"])
+
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "bbl", label(user))
+
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo"]
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == "bbl"
+    end
+
+    test "works for visitor subjects (visitor-parity at the store layer)" do
+      visitor = visitor_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_quit_part_reason({:visitor, visitor.id}, "ciao", label(visitor))
+
+      assert UserSettings.get_quit_part_reason({:visitor, visitor.id}) == "ciao"
+    end
+
+    test "a malformed stored value reads back as nil rather than crashing" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      for bogus <- [42, %{"a" => 1}, ["bye"], true] do
+        Repo.update!(Settings.changeset(settings, %{data: %{"quit_part_reason" => bogus}}))
+
+        assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+      end
+    end
+  end
+
+  describe "get/put_auto_away_reason — the timed-away message" do
+    test "returns nil when nothing is stored, so the caller keeps its constant" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.get_or_init({:user, user.id})
+
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == nil
+    end
+
+    test "persists a reason and reads it back byte-identical" do
+      user = user_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_auto_away_reason({:user, user.id}, "afk, back later", label(user))
+
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == "afk, back later"
+    end
+
+    test "the empty string CLEARS the key rather than storing \"\"" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "afk", label(user))
+
+      assert {:ok, %Settings{} = saved} =
+               UserSettings.put_auto_away_reason({:user, user.id}, "", label(user))
+
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == nil
+      refute Map.has_key?(saved.data, "auto_away_reason")
+    end
+
+    test "refuses CR/LF/NUL at SAVE time" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               UserSettings.put_auto_away_reason({:user, user.id}, "afk\r\nQUIT", label(user))
+
+      assert Keyword.has_key?(cs.errors, :auto_away_reason)
+    end
+
+    test "the two leave-reason keys are independent of one another" do
+      user = user_fixture()
+
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "leaving", label(user))
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "idle", label(user))
+
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == "leaving"
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == "idle"
+
+      # Clearing one must not disturb the other — they share a JSON blob and
+      # a write path, which is exactly where a careless `Map.put` would fuse
+      # them.
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "", label(user))
+
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == "leaving"
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The leave-reason announcements (issue 2150)
+  # ---------------------------------------------------------------------------
+  #
+  # The two keys do NOT have the same audience, and that asymmetry is the
+  # design rather than an oversight:
+  #
+  #   * `quit_part_reason` is resolved per-REQUEST at the web edge, so no
+  #     live `Session.Server` holds a copy that could go stale. It needs the
+  #     user topic (other devices) and nothing else. A bridge broadcast
+  #     would be a message with no reader.
+  #   * `auto_away_reason` IS carried on session state, so it needs both —
+  #     the bridge term for the live sessions and the wire event for the
+  #     devices. That is the #348 shape exactly.
+
+  describe "leave-reason broadcasts (issue 2150)" do
+    setup do
+      user = user_fixture()
+      label = label(user)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user_settings(label))
+
+      {:ok, user: user, label: label}
+    end
+
+    test "a quit/part reason reaches the devices as a wire event", %{user: user, label: label} do
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "bbl", label)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :quit_part_reason_changed, quit_part_reason: "bbl"}
+      }
+    end
+
+    test "a quit/part reason sends NO bridge term — no session holds it", %{
+      user: user,
+      label: label
+    } do
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "bbl", label)
+
+      # The positive control is the assertion in the test above: the wire
+      # event DID go out for this same write, so silence here is the bridge
+      # being deliberately quiet, not the broadcast machinery being asleep.
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{kind: :quit_part_reason_changed}}
+      refute_receive {:quit_part_reason_changed, _}, 100
+    end
+
+    test "clearing is announced too, as null", %{user: user, label: label} do
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "bbl", label)
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{quit_part_reason: "bbl"}}
+
+      {:ok, _} = UserSettings.put_quit_part_reason({:user, user.id}, "", label)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :quit_part_reason_changed, quit_part_reason: nil}
+      }
+    end
+
+    test "an auto-away reason reaches sessions as a term AND devices as an event", %{
+      user: user,
+      label: label
+    } do
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "idle", label)
+
+      assert_receive {:auto_away_reason_changed, "idle"}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :auto_away_reason_changed, auto_away_reason: "idle"}
+      }
+    end
+
+    test "clearing the auto-away reason announces nil on both surfaces", %{
+      user: user,
+      label: label
+    } do
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "idle", label)
+      assert_receive {:auto_away_reason_changed, "idle"}
+
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "", label)
+
+      assert_receive {:auto_away_reason_changed, nil}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :auto_away_reason_changed, auto_away_reason: nil}
+      }
+    end
+
+    test "a rejected value announces nothing on either key", %{user: user, label: label} do
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.put_quit_part_reason({:user, user.id}, "bye\r\nJOIN #evil", label)
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.put_auto_away_reason({:user, user.id}, "idle\r\nJOIN #evil", label)
+
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :quit_part_reason_changed}}, 100
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :auto_away_reason_changed}}, 100
+      refute_receive {:auto_away_reason_changed, _}, 100
+    end
+
+    test "another subject's bridge topic stays silent", %{user: user, label: label} do
+      other_label = label(user_fixture())
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user_settings(other_label))
+
+      {:ok, _} = UserSettings.put_auto_away_reason({:user, user.id}, "idle", label)
+
+      assert_receive {:auto_away_reason_changed, "idle"}
+      refute_receive {:auto_away_reason_changed, _}, 100
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # #1374 P-S7 — the in-transaction (`!`) seam
   # ---------------------------------------------------------------------------
 

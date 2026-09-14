@@ -1147,4 +1147,200 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # The two leave reasons (issue 2150)
+  # ---------------------------------------------------------------------------
+  #
+  # Both endpoints have the same contract, so both get the same four
+  # questions: null when unset, 200 round-trip, 422 on a value the wire
+  # cannot carry, and the empty string clearing rather than storing.
+  #
+  # The 422 is the one that earns its keep. The guard runs at SAVE time
+  # precisely so the rejection is visible in the drawer; a suite that only
+  # checked the happy path would pass on an implementation that stored the
+  # newline and discovered it at `/quit`, with nobody watching.
+
+  describe "GET /me/settings/quit-part-reason" do
+    test "401 without bearer", %{conn: conn} do
+      assert json_response(get(conn, "/me/settings/quit-part-reason"), 401) ==
+               %{"error" => "unauthorized"}
+    end
+
+    test "returns null when never persisted", %{conn: conn} do
+      {_, session} = user_and_session()
+
+      conn = conn |> put_bearer(session.id) |> get("/me/settings/quit-part-reason")
+
+      assert json_response(conn, 200) == %{"quit_part_reason" => nil}
+    end
+
+    test "renders a stored reason", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      {:ok, _} =
+        UserSettings.put_quit_part_reason(
+          {:user, user.id},
+          "gone fishing",
+          Grappa.Subject.label({:user, user.name})
+        )
+
+      conn = conn |> put_bearer(session.id) |> get("/me/settings/quit-part-reason")
+
+      assert json_response(conn, 200) == %{"quit_part_reason" => "gone fishing"}
+    end
+  end
+
+  describe "PUT /me/settings/quit-part-reason" do
+    test "401 without bearer", %{conn: conn} do
+      conn = put(conn, "/me/settings/quit-part-reason", %{"quit_part_reason" => "bbl"})
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 + persisted for a plain reason", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/quit-part-reason", %{"quit_part_reason" => "bbl"})
+
+      assert json_response(conn, 200) == %{"quit_part_reason" => "bbl"}
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == "bbl"
+    end
+
+    test "the empty string clears it and the response says so", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      {:ok, _} =
+        UserSettings.put_quit_part_reason(
+          {:user, user.id},
+          "bbl",
+          Grappa.Subject.label({:user, user.name})
+        )
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/quit-part-reason", %{"quit_part_reason" => ""})
+
+      assert json_response(conn, 200) == %{"quit_part_reason" => nil}
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+    end
+
+    test "422 + field_errors on a reason carrying CRLF, and NOTHING is stored", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/quit-part-reason", %{
+          "quit_part_reason" => "bye\r\nJOIN #evil"
+        })
+
+      assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
+      assert Map.has_key?(fe, "quit_part_reason")
+
+      # The half that matters: a refused reason must not be half-saved.
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == nil
+    end
+
+    test "422 past the byte ceiling", %{conn: conn} do
+      {_, session} = user_and_session()
+      over = String.duplicate("a", UserSettings.leave_reason_max_bytes() + 1)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/quit-part-reason", %{"quit_part_reason" => over})
+
+      assert %{"error" => "validation_failed"} = json_response(conn, 422)
+    end
+
+    test "400 when the body carries a non-string", %{conn: conn} do
+      {_, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/quit-part-reason", %{"quit_part_reason" => 42})
+
+      assert json_response(conn, 400)
+    end
+
+    test "200 + persisted for a visitor (visitor-parity at the API)", %{conn: conn} do
+      {visitor, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/quit-part-reason", %{"quit_part_reason" => "ciao"})
+
+      assert json_response(conn, 200) == %{"quit_part_reason" => "ciao"}
+      assert UserSettings.get_quit_part_reason({:visitor, visitor.id}) == "ciao"
+    end
+  end
+
+  describe "GET/PUT /me/settings/auto-away-reason" do
+    test "401 without bearer on both verbs", %{conn: conn} do
+      assert json_response(get(conn, "/me/settings/auto-away-reason"), 401)
+
+      assert json_response(
+               put(conn, "/me/settings/auto-away-reason", %{"auto_away_reason" => "idle"}),
+               401
+             )
+    end
+
+    test "returns null when never persisted — the server keeps its own constant", %{conn: conn} do
+      {_, session} = user_and_session()
+
+      conn = conn |> put_bearer(session.id) |> get("/me/settings/auto-away-reason")
+
+      # Explicitly NOT the constant: publishing it here would put a second
+      # copy of a server-owned string in the client, to drift later.
+      assert json_response(conn, 200) == %{"auto_away_reason" => nil}
+    end
+
+    test "200 + persisted, then readable back through GET", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-reason", %{"auto_away_reason" => "afk"})
+
+      assert json_response(conn, 200) == %{"auto_away_reason" => "afk"}
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == "afk"
+    end
+
+    test "422 + field_errors on a reason carrying CRLF", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-reason", %{"auto_away_reason" => "afk\r\nQUIT"})
+
+      assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
+      assert Map.has_key?(fe, "auto_away_reason")
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == nil
+    end
+
+    test "the two keys are written independently through their own doors", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn
+      |> put_bearer(session.id)
+      |> put("/me/settings/quit-part-reason", %{"quit_part_reason" => "leaving"})
+      |> json_response(200)
+
+      build_conn()
+      |> put_bearer(session.id)
+      |> put("/me/settings/auto-away-reason", %{"auto_away_reason" => "idle"})
+      |> json_response(200)
+
+      assert UserSettings.get_quit_part_reason({:user, user.id}) == "leaving"
+      assert UserSettings.get_auto_away_reason({:user, user.id}) == "idle"
+    end
+  end
 end

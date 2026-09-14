@@ -431,6 +431,21 @@ defmodule GrappaWeb.Router do
         UserSettingsController,
         :update_auto_away_debounce_seconds
 
+    # issue 2150 — the remembered QUIT/PART message. Applied SERVER-side
+    # when the subject leaves without giving a reason of their own, so the
+    # stored default reaches the wire through every door and not only
+    # through a client that happens to have hydrated it. `""` and `null`
+    # both clear it.
+    get "/me/settings/quit-part-reason", UserSettingsController, :show_quit_part_reason
+    put "/me/settings/quit-part-reason", UserSettingsController, :update_quit_part_reason
+
+    # issue 2150 — the reason the bouncer sends when IT marks the subject
+    # away after the debounce above fires. Unlike its sibling this one is
+    # carried on live session state, so a write re-tunes running sessions
+    # over the settings bridge topic rather than waiting for a respawn.
+    get "/me/settings/auto-away-reason", UserSettingsController, :show_auto_away_reason
+    put "/me/settings/auto-away-reason", UserSettingsController, :update_auto_away_reason
+
     # #228 — per-subject vhost (source-bind) self-selection. GET returns
     # the allowed set (generally-available ∪ granted) + current selection
     # + pin; PUT persists a selection authz-clamped to the allowed set.

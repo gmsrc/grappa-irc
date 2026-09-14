@@ -38,6 +38,23 @@ defmodule GrappaWeb.UserSettingsJSON do
         }
 
   @typedoc """
+  Wire shape for the quit_part_reason envelope (issue 2150).
+
+  `null` = no remembered message. Always present as a key, because
+  `null` is the value "cleared", not a field the server forgot.
+  """
+  @type quit_part_reason_response :: %{quit_part_reason: String.t() | nil}
+
+  @typedoc """
+  Wire shape for the auto_away_reason envelope (issue 2150).
+
+  `null` = no preference, so the bouncer keeps its own constant — which
+  this envelope deliberately does NOT disclose, for the same reason the
+  debounce envelope does not disclose the server-wide default.
+  """
+  @type auto_away_reason_response :: %{auto_away_reason: String.t() | nil}
+
+  @typedoc """
   One allowed vhost in the self-service view (#228, #251, #252).
 
   `name` is the address's reverse-DNS (cloak) string — the human label
@@ -119,6 +136,19 @@ defmodule GrappaWeb.UserSettingsJSON do
 
   def auto_away_debounce_seconds(%{debounce: seconds}),
     do: %{auto_away_debounce_seconds: seconds}
+
+  @doc """
+  Renders the `:quit_part_reason` action — GET/PUT 200 shape (issue 2150).
+
+  A pass-through: the context already returns `String.t() | nil`, and
+  `nil` is a value here rather than a missing field.
+  """
+  @spec quit_part_reason(%{reason: UserSettings.leave_reason()}) :: quit_part_reason_response()
+  def quit_part_reason(%{reason: reason}), do: %{quit_part_reason: reason}
+
+  @doc "Renders the `:auto_away_reason` action — GET/PUT 200 shape (issue 2150)."
+  @spec auto_away_reason(%{reason: UserSettings.leave_reason()}) :: auto_away_reason_response()
+  def auto_away_reason(%{reason: reason}), do: %{auto_away_reason: reason}
 
   @doc "Renders the `:vhost` action — GET/PUT 200 response shape (#228, #251)."
   @spec vhost(%{available: [vhost_option()], selection: [String.t()]}) ::
