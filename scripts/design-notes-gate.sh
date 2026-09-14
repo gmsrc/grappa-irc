@@ -19,9 +19,10 @@
 # it. Four occurrences on 2026-08-13 alone, each caught only because a human
 # pinned `git diff --numstat` before the rebase and compared after.
 #
-# This gate is that ritual, automated. It is DIFF-SCOPED on purpose: it judges
-# only the entry headings the branch ADDS relative to its merge base, so it
-# carries no opinion about the 426 historical headings that predate the
+# This gate is that ritual, automated. The SHAPE checks are DIFF-SCOPED on
+# purpose (check 0, the rollover, is not — see below): they judge
+# only the entry headings the branch ADDS relative to its merge base, so they
+# carry no opinion about the 426 historical headings that predate the
 # convention (measured on efa69e35: 645 level-2 headings, 219 in the canonical
 # shape). A file-wide rule would have had to either rewrite the shape of old
 # entries or carry an exemption list, and would still have been WRONG in kind —
@@ -29,6 +30,32 @@
 # 5 mis-levelled subsections inside the 2026-08-08 #1038 entry).
 #
 # THE CHECKS, and why each
+#
+#   0. no CLOSED month is still inline (issue 2138) — the one check that is
+#      FILE-scoped rather than diff-scoped, and the reason is the finding it
+#      comes from. `docs/DESIGN_NOTES.md` is the current month plus the undated
+#      preamble; closed months are archived verbatim in
+#      `docs/design_notes/YYYY-MM.md` (#1537). Nothing enforced that, so the
+#      rollover simply stopped after July: 495 August entries were still inline
+#      six weeks later, in a file of 3.3 MB. A stale month is a property of the
+#      FILE — the branch that must fix it is whichever one is next, not the one
+#      that wrote the entries — so this check ignores the diff entirely, and
+#      runs even on a branch that appends nothing (most PRs never touch the
+#      log; gated behind the diff the enforcement would be dead exactly where
+#      the debt lives).
+#
+#      "CLOSED" is read off the FILE and never off the clock: the newest month
+#      with an inline entry is the current one, every older month is closed. A
+#      wall-clock rule would turn main red at midnight on the 1st for work
+#      nobody did, and could not be tested without a time seam. This one goes
+#      red on the branch that opens a new month — attributable, and the moment
+#      the rollover actually falls due.
+#
+#      It reads the DATE in the heading because that is the only month signal
+#      the file carries; append order is not recoverable from it. That is a
+#      membership rule and NOT an answer to whether the log is ordered by date
+#      or by append order — an entry dated 2026-08-31 and appended in September
+#      belongs to August either way.
 #
 #   1. every ADDED `## ` heading is preceded by `---` — the detector. It sees
 #      whatever the merge machinery does next, including a mechanism nobody has
@@ -82,7 +109,8 @@
 # and a deliberate one — the 2026-08-08 #1038 entry has five `##` subsections
 # and they are why a file-wide separator rule cannot exist.
 #
-# Exit 0 = every added entry is well formed (or the branch adds none).
+# Exit 0 = no closed month is inline, and every added entry is well formed (or
+#          the branch adds none).
 # Exit 1 = a finding, or the base ref cannot be resolved. A gate that cannot
 #          reach its base FAILS; it never passes vacuously.
 
@@ -109,13 +137,75 @@ git rev-parse --verify --quiet "${BASE_REF}^{commit}" >/dev/null \
 base="$(git merge-base "$BASE_REF" HEAD)" \
 	|| die "no merge base between '$BASE_REF' and HEAD"
 
+status=0
+
+# ── Check 0: the rollover ────────────────────────────────────────────────────
+#
+# Every dated entry heading in the file, as `month<TAB>line<TAB>heading`. Read
+# off the KEY line and nothing else: the rollover's own index table carries a
+# `| 2026-08 | ... |` row forever after, the preamble names the boundary month
+# in prose, and entries quote entry headings inside fences — a matcher that
+# reads any of those is green on a broken file and red on a correct one, which
+# is the shape of an assertion that passes on the documentation of its own
+# subject. Fences are skipped for the same reason check 1 skips them.
+inline_entries="$(awk '
+/^(```|~~~)/ { fence = !fence; next }
+!fence && /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+    printf "%s\t%d\t%s\n", substr($0, 4, 7), FNR, $0
+}
+' "$FILE")"
+
+if [ -z "$inline_entries" ]; then
+	rollover_summary="$FILE carries no dated entry inline."
+else
+	newest="$(printf '%s\n' "$inline_entries" | cut -f1 | sort -u | tail -1)"
+	current_count="$(printf '%s\n' "$inline_entries" | cut -f1 | grep -Fxc "$newest")"
+	stale="$(printf '%s\n' "$inline_entries" | awk -F'\t' -v cur="$newest" '$1 != cur')"
+	rollover_summary="$FILE carries one month inline ($newest, $current_count entries) — nothing to roll over."
+fi
+
+if [ -n "${stale:-}" ]; then
+	status=1
+	{
+		printf 'design-notes-gate: closed month(s) still inline in %s — the current month is %s:\n' \
+			"$FILE" "$newest"
+		printf '%s\n' "$stale" | awk -F'\t' '
+			{ n[$1]++; if (!($1 in first)) { first[$1] = $2; head[$1] = $3 } }
+			END {
+			    for (m in n)
+			        printf "  %s\t%d entr%s\tfirst at line %d: %s\n",
+			            m, n[m], (n[m] == 1 ? "y" : "ies"), first[m], head[m]
+			}
+		' | sort
+		printf '\nThis log is the CURRENT month plus the undated preamble; a closed\n'
+		printf 'month is archived VERBATIM in docs/design_notes/YYYY-MM.md and listed\n'
+		printf 'in the preamble index (#1537). Nothing enforced that before issue\n'
+		printf '2138, which is how the rollover stopped after July and left 495\n'
+		printf 'August entries inline for six weeks.\n\n'
+		printf 'Moving them is a mass DELETION from a merge=union path, where the\n'
+		printf 'failure mode is RESURRECTION and not loss: union takes the additions\n'
+		printf 'from both sides and never the deletions, so any branch forked before\n'
+		printf 'the move brings the text back with rc=0, no conflict and no deleted\n'
+		printf 'line. Predict the byte and line arithmetic on BOTH files before\n'
+		printf 'moving anything, and rebase through scripts/union-rebase.sh.\n'
+	} >&2
+fi
+
+# ── The shape checks, diff-scoped ────────────────────────────────────────────
+#
 # The entry headings this branch adds. `+## ` cannot collide with diff's own
 # `+++ ` header line.
 added="$(git diff "$base" HEAD -- "$FILE" | sed -n 's/^+\(## .*\)$/\1/p')"
 
 if [ -z "$added" ]; then
-	printf 'design-notes-gate: this branch adds no %s entry heading — nothing to check.\n' "$FILE"
-	exit 0
+	printf 'design-notes-gate: this branch adds no %s entry heading — the shape checks have nothing to judge.\n' "$FILE"
+	# Only when check 0 found nothing: a summary reading "nothing to roll
+	# over" under a finding that says the opposite is the log-honesty bug in
+	# its purest form, and this fast path is the one place it can print.
+	if [ "$status" -eq 0 ]; then
+		printf 'design-notes-gate: %s\n' "$rollover_summary"
+	fi
+	exit "$status"
 fi
 
 # Locate each added heading in the resulting file and read the four lines above
@@ -134,8 +224,6 @@ NR == FNR { want[$0] = 1; next }
 }
 { p5 = p4; p4 = p3; p3 = p2; p2 = p1; p1 = $0 }
 ' <(printf '%s\n' "$added") "$FILE")"
-
-status=0
 
 separator_findings="$(printf '%s\n' "$findings" | grep -F "	SEPARATOR	" || true)"
 if [ -n "$separator_findings" ]; then
@@ -228,3 +316,4 @@ fi
 
 printf 'design-notes-gate: %s new entry heading(s), separator and marker present.\n' \
 	"$(printf '%s\n' "$added" | wc -l | tr -d ' ')"
+printf 'design-notes-gate: %s\n' "$rollover_summary"

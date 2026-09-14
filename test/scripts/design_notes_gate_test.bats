@@ -51,6 +51,15 @@ append_entry() {
         >> docs/DESIGN_NOTES.md
 }
 
+# An entry dated in an arbitrary month. `append_entry` pins 2026-01-02 because
+# every case above judges SHAPE and the date is inert to it; the rollover check
+# reads the month out of the heading, so those cases need a date they choose.
+append_entry_dated() {
+    local date="$1" tag="$2"
+    printf '<!-- entry #%s -->\n\n---\n\n## %s — entry %s\n\nbody %s\n' \
+        "$tag" "$date" "$tag" "$tag" >> docs/DESIGN_NOTES.md
+}
+
 # A scratch repo with `merge=union` on the log, one entry already in the base,
 # and one appended on each of `main` and `feat`. Leaves `feat` checked out,
 # NOT yet rebased, so each case controls what happens next.
@@ -375,6 +384,107 @@ contribution() {
 
     run scripts/design-notes-gate.sh main
     [ "$status" -eq 0 ]
+}
+
+# ── The rollover: a closed month must not still be inline (issue 2138) ──────
+#
+# `docs/DESIGN_NOTES.md` is the CURRENT month plus the undated preamble; closed
+# months live in `docs/design_notes/YYYY-MM.md` (#1537). Nothing enforced that,
+# so it simply stopped after July and 495 August entries stayed inline for six
+# weeks without anyone noticing.
+#
+# "Closed" is read off the FILE and never off the clock: the newest month with
+# an inline entry is the current one, everything older is closed. A wall-clock
+# rule would turn main red at midnight on the 1st for work nobody did, and
+# could not be tested without a time seam; this one goes red on the branch that
+# opens the new month, which is both attributable and the moment the rollover
+# actually falls due.
+
+@test "a closed month still inline FAILS the gate (2138)" {
+    scratch B C no
+    append_entry_dated 2026-02-01 F
+    git commit -qam 'feat F opens February while January is still inline'
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"closed month"* ]]
+    [[ "$output" == *"2026-01"* ]]
+
+    # The two January entries the branch can see (base A, its own B), counted
+    # rather than eyeballed — and EXACTLY one month reported, which is what the
+    # negative control below asserts is EXACTLY zero.
+    [[ "$output" == *"2 entries"* ]]
+    [ "$(grep -c 'first at line' <<<"$output")" -eq 1 ]
+}
+
+@test "the CURRENT month inline is not a finding (2138)" {
+    # The negative control. A check that complained about the month the file is
+    # supposed to carry would be red on every branch forever, so it would be
+    # turned off within a day — and it would satisfy the case above.
+    scratch B C no
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'first at line' <<<"$output")" -eq 0 ]
+    [[ "$output" == *"nothing to roll over"* ]]
+}
+
+@test "prose, an index row and a fenced sample naming a closed month are not entries (2138)" {
+    # The trap this check is one line of regex away from: its subject
+    # DOCUMENTS ITSELF. The rollover's own index table carries a `2025-12` row
+    # forever after, the preamble names the boundary month in prose, and
+    # entries quote entry headings inside fences. A matcher that reads any of
+    # those is green on a broken file and red on a correct one.
+    scratch B C no
+    cat >> docs/DESIGN_NOTES.md <<'EOF'
+
+Everything before **2025-12** lives in [`design_notes/`](design_notes/).
+
+| month | file | `##` sections |
+| --- | --- | --- |
+| 2025-12 | [`design_notes/2025-12.md`](design_notes/2025-12.md) | 3 |
+
+```
+## 2025-12-31 — entry Z
+```
+EOF
+    git commit -qam 'feat B gains the index that documents the convention'
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'first at line' <<<"$output")" -eq 0 ]
+
+    # Two-sided, on the same file: the SAME heading text outside the fence IS a
+    # finding. Without this half the green above is also what a check that
+    # reads nothing at all produces.
+    append_entry_dated 2025-12-31 Z
+    git commit -qam 'feat B, and now December really is inline'
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"2025-12"* ]]
+    [ "$(grep -c 'first at line' <<<"$output")" -eq 1 ]
+}
+
+@test "the rollover check runs on a branch that adds no entry (2138)" {
+    # The shape checks are diff-scoped and skip a branch that appends nothing.
+    # This one must not: a stale month is a property of the FILE, every branch
+    # is about to build on it, and most PRs never touch the log — gated behind
+    # the diff, the enforcement would be dead exactly where the debt lives.
+    scratch B C no
+    git checkout -q main
+    append_entry_dated 2026-02-01 F
+    git commit -qam 'main F opens February'
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"adds no"* ]]
+    [[ "$output" == *"closed month"* ]]
+
+    # And it does not also claim the opposite. This is the only path that
+    # prints the summary line next to a finding, so it is the only place the
+    # "nothing to roll over" wording can contradict the check above it.
+    refute grep -q "nothing to roll over" <<<"$output"
 }
 
 # ── The gate against the file it actually ships to guard ────────────────────
