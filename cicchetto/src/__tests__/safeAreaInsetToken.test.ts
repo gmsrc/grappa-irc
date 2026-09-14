@@ -180,6 +180,23 @@ const CENSUS = [
   ".shell-mobile | padding-left: var(--safe-area-inset-left)",
   ".shell-mobile | padding-right: var(--safe-area-inset-right)",
   ".shell-mobile | padding-top: var(--safe-area-inset-top)",
+  // issue 2163 — the first consumers in this census that are not box-model
+  // properties, and the distinction is the whole of that fix. The desktop
+  // `.shell` rows above put the inset on the CONTAINER's padding, which under
+  // `box-sizing: border-box` leaves the shell's bottom `var(--safe-area-inset-
+  // bottom)` as a transparent strip: the grid tracks stop short of a border box
+  // that does not. These three extend each column's own background back down
+  // through that strip with an outer box-shadow, offset by exactly the
+  // container's own inset.
+  //
+  // "Moves no pixel" therefore holds here by CONSTRUCTION rather than by
+  // arithmetic: a box-shadow occupies no space and moves no descendant — which
+  // is also why it is a shadow and not padding on the asides. Padding there
+  // would drag `.rail-radio-picker` (abspos `inset: 0`, the row-block above)
+  // into the gesture strip, the #1751 defect this file is named for.
+  ".shell:not(.shell-mobile) .crt-splash | box-shadow: 0 var(--safe-area-inset-bottom) 0 #000",
+  ".shell:not(.shell-mobile) .home-pane | box-shadow: 0 var(--safe-area-inset-bottom) 0 var(--adm-surface-1)",
+  ".shell:not(.shell-mobile) > .shell-sidebar, .shell:not(.shell-mobile) > .shell-members | box-shadow: 0 var(--safe-area-inset-bottom) 0 var(--bg-alt)",
   ".theme-editor-modal | padding: max(0.75rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom))",
   ":root | --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px)",
   ":root | --safe-area-inset-left: env(safe-area-inset-left, 0px)",

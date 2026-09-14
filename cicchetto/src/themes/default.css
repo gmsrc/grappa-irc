@@ -1437,6 +1437,72 @@ html.overlay-open #root > div {
   }
 }
 
+/* issue 2163 — the desktop shell's bottom edge, on an iPad running the
+   installed PWA fullscreen (measured by an external reporter: iPad Pro 11,
+   iPadOS 26.7, inset-bottom 20px, 100dvh 748 / 100svh 728). #1127 cured this
+   on `.shell-mobile`; this shell is the one an iPad actually gets (#205), and
+   never received the same treatment.
+
+   The mechanism is one step removed from "the inset lifts the shell off the
+   bottom", and the difference is what picks the cure. With `box-sizing:
+   border-box` (global, ~:133) `height: 100dvh` puts the BORDER box on the
+   physical bottom edge; `padding-bottom` shrinks only the CONTENT box. So the
+   shell is not lifted — and it declares no background of its own, so its
+   bottom `var(--safe-area-inset-bottom)` is a TRANSPARENT strip through which
+   `body { background: var(--bg) }` shows. Every column whose bottom-most
+   painter is not `--bg` therefore ends in a band of `--bg`.
+
+   So this is PAINT, not spacing: each such painter extends its own background
+   through the strip with an OUTER box-shadow — offset down by exactly the
+   container's own inset, no blur, no spread. Nothing moves. Both alternatives
+   move a box, and each is fenced by a measurement already in this repo:
+
+     - widening an aside's box (or padding it) carries `.rail-radio-picker`
+       — abspos `inset: 0` against `.shell-members`, ~:2812 — into the
+       home-indicator gesture strip, which is exactly what #1751 measured;
+     - putting the inset on the last interactive row means `.compose-box`,
+       which is SHARED with the mobile shell, and a bottom inset there
+       re-opens #1127's D11: with the soft keyboard up iOS reports the inset
+       against the DEVICE, not against the shrunken visual viewport.
+
+   A box-shadow rather than an `::after`: `.shell-sidebar` is `overflow-y:
+   auto`, which clips an absolutely-positioned pseudo-element child, whereas
+   an element's own overflow never clips its own outer shadow. Nothing between
+   here and the viewport clips it either — `.shell` and `.shell-main` declare
+   no overflow, and `body { overflow: hidden }` clips at the viewport edge,
+   which is where the strip already ends.
+
+   Scoped to the desktop shell, by the same predicate the component uses
+   (`isMobile()` puts `shell-mobile` on this element, Shell.tsx ~:902) rather
+   than by restating the 768px breakpoint. The mobile shell declares
+   `padding-bottom: 0` (#1127), so it has no strip to fill and an extender
+   there would paint 20px of colour over whatever sits below.
+
+   The SET is measured, not assumed: an element is here when it is the
+   bottom-most background painter of a desktop column AND paints something
+   other than `--bg`. The main column's painter varies by window kind
+   (Shell.tsx's <Switch>); `.compose-box` and `.admin-pane` are both
+   `var(--bg)` — the same colour as the strip, so those windows show no band
+   at all — and `.mentions-window` / `.directory-pane` declare no background.
+   Adding a window kind that paints its own surface means adding it here;
+   `ipadSafeArea.test.ts` pins the set and the shape. */
+.shell:not(.shell-mobile) > .shell-sidebar,
+.shell:not(.shell-mobile) > .shell-members {
+  box-shadow: 0 var(--safe-area-inset-bottom) 0 var(--bg-alt);
+}
+
+.shell:not(.shell-mobile) .home-pane {
+  box-shadow: 0 var(--safe-area-inset-bottom) 0 var(--adm-surface-1);
+}
+
+/* The cold-load splash is `#000` against a `--bg` strip — near-invisible in
+   the dark theme and a hard black-on-white edge in the light one. Transient,
+   but it is the same defect and leaving it out would make the rule above an
+   enumeration with an exception rather than a rule. */
+.shell:not(.shell-mobile) .crt-splash {
+  box-shadow: 0 var(--safe-area-inset-bottom) 0 #000;
+}
+
 /* #71 INC-2 / #473 — when the active window has no member-list-shaped UI (DM,
    server, mentions, home, parked/failed/kicked channel) the right rail
    drops the MembersPane but KEEPS the RailActions drawer (the buttons are
