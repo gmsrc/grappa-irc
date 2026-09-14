@@ -1733,6 +1733,23 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
    **`"0\n8"`**, `[ "$T" -ge 8 ]` muore *"integer expression expected"*, `jq` urla *"Cannot iterate
    over null"* **su stderr — che l'harness NON trasforma in notifica** — e **il ciclo non sarebbe
    MAI uscito.** Il suo silenzio si legge identico a *"la CI e' ancora in volo"*.
+   🔴🔴 **E LO STESSO GIORNO, NELLO STESSO GIRO IN CUI SCRIVEVO QUESTE TRE REGOLE, HO ARMATO UN
+   POLLER IL CUI CONTROLLO NEGATIVO ERA VACUO **E SI DICHIARAVA OK** — la faccia peggiore della
+   famiglia, perche' non tace: ASSERISCE.** Scritto
+   `NEG=$(gh api <sha di zeri> 2>&1 >/dev/null; echo $?)` poi `[ "$NEG" -eq 0 ] && exit 1`.
+   **`2>&1 >/dev/null` NON silenzia stderr**: duplica stderr sullo stdout ANCORA collegato e solo
+   DOPO manda stdout a `/dev/null` ⇒ `$NEG` contiene **il testo dell'errore** (`gh: No commit
+   found … (HTTP 422)`) piu' l'`echo`, non un intero. `[` muore `integer expression expected`
+   (rc=2), quindi il `&&` **non scatta**, l'esecuzione prosegue e la riga dopo stampa
+   **`NEG CTRL ok`**.
+   🥇 **Due lezioni distinte:** (1) **l'ordine e' `>/dev/null 2>&1`**, mai l'inverso — e un rc si
+   legge da `$?` del COMANDO, non catturando output; (2) **`[ … ] && exit 1` NON e' una guardia**:
+   se il test stesso muore non ferma niente, ed e' la forma `<verificatore> || echo "PULITO"` con
+   un altro vestito. **Si scrive `if ! … ; then exit 1; fi`, e il verdetto non si stampa se un
+   controllo non ha risposto.**
+   ⚠️ Li' il POS ctrl era vivo (8 check-run sulla sha giusta) e la logica di settle sana ⇒ il
+   poller non ha mentito sull'esito — **ma non lo sapevo quando l'ho armato**, e il neg ctrl e'
+   stato rifatto A MANO fuori dallo script per stabilirlo.
    🥇 **Tre regole, e la terza e' quella che generalizza:**
    (a) **la SHA si DERIVA, sempre** (`gh pr view N --json headRefOid -q .headRefOid`) — la regola
        esisteva gia' in questo file per `--force-with-lease` e **non l'avevo portata fuori da li'**;
