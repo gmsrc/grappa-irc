@@ -49,16 +49,43 @@ defmodule Grappa.Dcc do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Repo, Grappa.Subject],
+    # issue 2127 — `public_url/2` mints its absolute URL against
+    # `Uploads.base_url/0`, the ONE `:persistent_term` the deployment's
+    # public origin lives in (seeded from `Endpoint.url/0` once the
+    # Endpoint child is up). A second base-url seam here would be a copy
+    # of that boot ordering, not reuse of it. No cycle: `Grappa.Uploads`
+    # deps are `[Repo, Subject, Sys.HardenedCmd]`.
+    deps: [Grappa.Repo, Grappa.Subject, Grappa.Uploads],
     exports: [SpoolFile]
 
   import Ecto.Query
 
   alias Grappa.Dcc.SpoolFile
-  alias Grappa.{Repo, Subject}
+  alias Grappa.{Repo, Subject, Uploads}
 
   @slug_byte_size 16
   @slug_regex ~r/\A[a-z2-7]{26}\z/
+
+  # issue 2127 — what an extension may look like in a minted URL. A
+  # CHARACTER whitelist, not a list of known extensions: a `DCC SEND`
+  # carries anything (`.zip`, `.iso`, `.mkv`, `.torrent`), and a closed
+  # vocabulary would drop the extension off most real traffic while
+  # buying nothing — the extension is decoration and the three response
+  # headers, not this set, are what make a lying `.svg` harmless.
+  #
+  # What it IS load-bearing for: the extension can never change the URL's
+  # STRUCTURE, only its tail. `/`, `?`, `#`, `%`, `:`, whitespace and
+  # every control byte fall outside `[A-Za-z0-9]`, so a peer cannot graft
+  # a path segment, a query string or a fragment onto a URL we publish
+  # into somebody's scrollback.
+  #
+  # 8 characters: twice the longest extension `Grappa.Uploads.MimeExt`
+  # mints (4 — `webm`, `flac`, `webp`, `xlsx`), which comfortably clears
+  # `torrent` at 7 and refuses a 200-char tail. Matched case-SENSITIVE
+  # and lowercased AFTER, never before: `String.downcase/1` is Unicode
+  # and would fold `İ` into two code points, so validating first keeps
+  # the value pure ASCII by the time it is folded.
+  @url_extension_regex ~r/\A[A-Za-z0-9]{1,8}\z/
 
   @storage_root_key {__MODULE__, :storage_root}
 
@@ -343,6 +370,69 @@ defmodule Grappa.Dcc do
   def storage_path(slug) when is_binary(slug) do
     unless Regex.match?(@slug_regex, slug), do: raise(ArgumentError, "invalid slug shape: #{inspect(slug)}")
     Path.join(storage_root(), slug)
+  end
+
+  @doc """
+  The absolute public URL for a spooled file —
+  `<base_url>/dcc_files/<slug>[.<ext>]` (issue 2127).
+
+  ## Why absolute
+
+  `Grappa.Dcc.Report.render/2` interpolates this into a scrollback BODY,
+  and a body is plain text to everyone downstream. cic's `linkify.ts`
+  matches a scheme (`https?://`, `ftp://`, `www.`) or a bare `host.tld/`
+  — a leading `/dcc_files/…` is neither, so the relative form rendered as
+  unclickable text. `Grappa.Uploads.public_url/2` had already answered
+  this for own uploads; the base URL comes from there rather than from a
+  second seam.
+
+  ## Why the extension, and why it is only decoration
+
+  cic's `mediaLink.ts` classifies a same-origin link by file EXTENSION,
+  so a bare 26-char slug stays an opaque download. The type has to come
+  from the peer's declared filename: a `DCC SEND` carries name, address,
+  port and size and no MIME, and the schema deliberately has no `mime`
+  column.
+
+  That filename is ATTACKER-CONTROLLED TEXT, so it is whitelist-
+  normalised and never echoed — see `@url_extension_regex`. The
+  extension reaches neither the lookup (`GrappaWeb.Validation.
+  slug_from_path/1` strips it; `get_by_slug/1` keys on the 26 characters)
+  nor the response headers (`GrappaWeb.DccFilesController` has no branch
+  to take). A filename with no admissible extension yields the bare URL,
+  exactly as an unmapped MIME does for an upload.
+
+  🔴 Takes the RAW peer filename, NOT `Report.display_filename/1`. That
+  one truncates at 120 bytes and appends `…`, which would silently eat
+  the extension off a long name and, worse, could make the last
+  dot-segment something the peer never wrote.
+  """
+  @spec public_url(String.t(), String.t()) :: String.t()
+  def public_url(slug, filename) when is_binary(slug) and is_binary(filename) do
+    base = Uploads.base_url() <> "/dcc_files/" <> slug
+
+    case url_extension(filename) do
+      {:ok, ext} -> base <> "." <> ext
+      :error -> base
+    end
+  end
+
+  # The LAST dot-segment, admitted only if it is pure ASCII alphanumeric
+  # and at most 8 chars. `String.split/2` on the whole string rather than
+  # a `parts: 2` from the left: `holiday.tar.gz` is a `gz`, and a name
+  # with no dot at all yields a single-element list and no extension.
+  @spec url_extension(String.t()) :: {:ok, String.t()} | :error
+  defp url_extension(filename) do
+    case String.split(filename, ".") do
+      [_no_dot] -> :error
+      parts -> admit_extension(List.last(parts))
+    end
+  end
+
+  defp admit_extension(candidate) do
+    if Regex.match?(@url_extension_regex, candidate),
+      do: {:ok, String.downcase(candidate, :ascii)},
+      else: :error
   end
 
   @doc """

@@ -3,8 +3,8 @@ defmodule Grappa.DccTest do
 
   import Grappa.AuthFixtures, only: [network_fixture: 0, user_fixture: 0, visitor_fixture: 0]
 
-  alias Grappa.{Dcc, Repo, UserSettings}
-  alias Grappa.Dcc.SpoolFile
+  alias Grappa.{Dcc, Repo, Uploads, UserSettings}
+  alias Grappa.Dcc.{Report, SpoolFile}
 
   setup do
     user = user_fixture()
@@ -221,6 +221,142 @@ defmodule Grappa.DccTest do
     test "storage_path/1 joins a real slug under the configured root" do
       slug = Dcc.mint_slug()
       assert Dcc.storage_path(slug) == Path.join(Dcc.storage_root(), slug)
+    end
+  end
+
+  describe "public_url/2 — the hostile half: an extension off the peer's filename" do
+    # These come FIRST on purpose. The extension's only source is a
+    # `DCC SEND` filename, which is attacker-controlled text, and the URL
+    # it decorates is published into somebody's scrollback. The whitelist
+    # is what stops the peer from grafting structure onto that URL.
+    setup do
+      {:ok, slug: Dcc.mint_slug()}
+    end
+
+    test "a filename whose tail is not pure ASCII alphanumeric yields NO extension", ctx do
+      hostile = [
+        # Path structure: the peer must not be able to add a segment.
+        {"../../etc/passwd", "traversal"},
+        {"evil.tar/../../root", "slash in the tail"},
+        # URL structure: query, fragment, percent-escape, scheme colon.
+        {"clip.mp4?token=steal", "query string"},
+        {"clip.mp4#tracking", "fragment"},
+        {"clip.%2e%2e", "percent escape"},
+        {"clip.mp 4", "whitespace"},
+        # Control bytes are BUILT, never written as literals: a literal
+        # NUL or CRLF in a source file is invisible in review and one
+        # editor away from silently vanishing.
+        {"clip.mp" <> <<9>> <> "4", "tab"},
+        {"clip.mp4" <> <<0>>, "NUL byte"},
+        {"clip.mp4" <> <<13, 10>> <> "X-Evil: 1", "CRLF injection"},
+        {"clip.mp4 ", "trailing space"},
+        # Shape: empty, absent, over-long, non-ASCII.
+        {"trailing.", "empty extension"},
+        {"no_extension_at_all", "no dot at all"},
+        {".", "a lone dot"},
+        {"..", "two dots and nothing else"},
+        {"clip." <> String.duplicate("a", 200), "a 200-char tail"},
+        {"clip." <> String.duplicate("a", 9), "one char past the cap"},
+        {"clip." <> <<0xD0, 0xBC, 0xD0, 0xBF>> <> "4", "cyrillic extension"},
+        {"clip.m" <> <<0xC3, 0xA9>> <> "p4", "accented latin-1"}
+      ]
+
+      for {filename, why} <- hostile do
+        assert Dcc.public_url(ctx.slug, filename) ==
+                 Uploads.base_url() <> "/dcc_files/" <> ctx.slug,
+               "#{why}: #{inspect(filename)} must mint a BARE url, not an extension"
+      end
+    end
+
+    test "no rejected filename can ever change the URL's structure", ctx do
+      # The property behind the table above, stated once: whatever the
+      # peer names the file, the minted URL is the bare one plus at most a
+      # dot and 8 ASCII alphanumerics. Nothing can introduce a second
+      # path segment, a query or a fragment.
+      bare = Uploads.base_url() <> "/dcc_files/" <> ctx.slug
+
+      for filename <- ["a.b/c", "a.b?c", "a.b#c", "a.b%2f", "a.b:c", "a.b\\c", "a.b&c=d"] do
+        url = Dcc.public_url(ctx.slug, filename)
+        assert url == bare, "#{inspect(filename)} leaked structure into #{inspect(url)}"
+      end
+    end
+
+    test "the cap is measured against the extension the house itself mints" do
+      # Derived, not invented: 8 is twice the longest extension
+      # `Grappa.Uploads.MimeExt` can produce, so every type this
+      # deployment already knows how to name fits with room to spare.
+      longest_minted =
+        ["png", "jpeg", "webp", "webm", "flac", "opus", "apng"]
+        |> Enum.map(&byte_size/1)
+        |> Enum.max()
+
+      slug = Dcc.mint_slug()
+      assert longest_minted <= 8
+
+      # And the boundary is exactly where it says it is.
+      assert Dcc.public_url(slug, "f." <> String.duplicate("a", 8)) =~
+               "." <> String.duplicate("a", 8)
+
+      assert Dcc.public_url(slug, "f." <> String.duplicate("a", 9)) ==
+               Uploads.base_url() <> "/dcc_files/" <> slug
+    end
+  end
+
+  describe "public_url/2 — the shape it mints when the filename behaves" do
+    setup do
+      {:ok, slug: Dcc.mint_slug()}
+    end
+
+    test "absolute, on the deployment's own base URL — the whole of defect 1", ctx do
+      # The relative `/networks/1/dcc_files/<slug>` matched neither of
+      # linkify's alternatives (no scheme, no `host.tld/`) and rendered as
+      # dead text. Asserted against the SAME accessor `Uploads.public_url/2`
+      # builds on, not a literal.
+      url = Dcc.public_url(ctx.slug, "holiday.jpg")
+
+      assert String.starts_with?(url, Uploads.base_url())
+      assert url == Uploads.base_url() <> "/dcc_files/" <> ctx.slug <> ".jpg"
+    end
+
+    test "no network id in the path — the route carries none any more", ctx do
+      refute Dcc.public_url(ctx.slug, "holiday.jpg") =~ "/networks/"
+    end
+
+    test "the LAST dot-segment wins, so a double extension keeps the real one", ctx do
+      assert Dcc.public_url(ctx.slug, "holiday.tar.gz") =~ ".gz"
+      refute Dcc.public_url(ctx.slug, "holiday.tar.gz") =~ ".tar"
+    end
+
+    test "an extension is lowercased, and only after it is admitted", ctx do
+      # Validate-then-fold, never fold-then-validate: `String.downcase/1`
+      # is Unicode and would turn `İ` into two code points, smuggling a
+      # combining mark past a check that ran before it.
+      assert Dcc.public_url(ctx.slug, "HOLIDAY.JPG") =~ ".jpg"
+      assert Dcc.public_url(ctx.slug, "clip.Mp4") =~ ".mp4"
+      assert Dcc.public_url(ctx.slug, "clip.İ") == Uploads.base_url() <> "/dcc_files/" <> ctx.slug
+    end
+
+    test "the extension never reaches the lookup — the slug still keys the row", ctx do
+      # The rule the route depends on, asserted where the URL is minted:
+      # the 26 characters between the last `/` and the first `.` are the
+      # slug the controller will look up.
+      url = Dcc.public_url(ctx.slug, "Deadpool.e.Wolverine.2024.mp4")
+
+      addressed =
+        url |> String.split("/") |> List.last() |> GrappaWeb.Validation.slug_from_path()
+
+      assert addressed == ctx.slug
+      assert {:error, :not_found} = Dcc.get_by_slug(addressed)
+    end
+
+    test "the raw filename is the source, NOT the truncated display name", ctx do
+      # `Report.display_filename/1` caps at 120 bytes and appends `…`, so
+      # feeding it here would eat the extension off a long name — and
+      # could make the last dot-segment something the peer never wrote.
+      long = String.duplicate("a", 200) <> ".mp4"
+
+      assert Dcc.public_url(ctx.slug, long) =~ ".mp4"
+      refute Report.display_filename(long) =~ ".mp4"
     end
   end
 end

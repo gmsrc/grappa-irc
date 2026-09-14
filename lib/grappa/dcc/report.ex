@@ -44,6 +44,17 @@ defmodule Grappa.Dcc.Report do
   inline render. Picking one of the three would have made the renderer
   the sniffer.
 
+  ⚠️ **Issue 2127 put an EXTENSION on the URL, and that does not reopen
+  this.** `mediaLink.ts` has two separate type rules and they are not
+  interchangeable. Rule 2 is the emoji map, and it fires only on the
+  legacy extensionless `/uploads/<slug>` path shape — a `/dcc_files/…`
+  URL cannot reach it whatever emoji precedes it, which is why 📥 staying
+  outside the map is still the whole of this paragraph's guarantee. Rule
+  3 keys on the URL extension, and what it changes is what a CLICK does:
+  the viewer is on-click only, never on arrival. 2089's rule was "never
+  an INLINE render", and that survives untouched — nothing here renders
+  a stranger's bytes into scrollback.
+
   ## The filename is neutralised HERE, not in the parser
 
   `Grappa.IRC.DCC` keeps the peer's filename verbatim because it is

@@ -7543,7 +7543,7 @@ defmodule Grappa.Session.Server do
         persist_dcc_report(
           state,
           channel,
-          Report.render({:delivered, filename, dcc_file_route(state, row.slug)}, from)
+          Report.render({:delivered, filename, Dcc.public_url(row.slug, filename)}, from)
         )
 
       {:error, changeset} ->
@@ -7565,13 +7565,6 @@ defmodule Grappa.Session.Server do
         persist_dcc_report(state, channel, Report.render({:failed, filename, {:fs, :rejected}}, from))
     end
   end
-
-  # The authenticated serving route for a spooled file. Same shape and
-  # same gate as `peer_avatar_route/2` — a stranger's bytes are not
-  # something the operator's user chose to publish, so they never get the
-  # public `/uploads/:slug` URL.
-  @spec dcc_file_route(t(), String.t()) :: String.t()
-  defp dcc_file_route(state, slug), do: "/networks/#{state.network_id}/dcc_files/#{slug}"
 
   # One report row, wherever the offer died. Same shape and same reasoning
   # as `persist_link_failure/2` above — `Grappa.Dcc.Report` has already
