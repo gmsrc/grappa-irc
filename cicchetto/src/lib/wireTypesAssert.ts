@@ -133,6 +133,8 @@ import type {
   SessionWireMember,
   SessionWireTopicEntryWire,
   UserSettingsWireAutoAwayDebounceChangedPayload,
+  UserSettingsWireAutoAwayReasonChangedPayload,
+  UserSettingsWireQuitPartReasonChangedPayload,
   WindowCountsWireEvent,
   WireSessionEvent,
 } from "./wireTypes";
@@ -370,6 +372,12 @@ type CrossModuleArm = {
   archive_changed: ScrollbackWireArchiveChangedPayload;
   archive_purged: ScrollbackWireArchivePurgedPayload;
   auto_away_debounce_changed: UserSettingsWireAutoAwayDebounceChangedPayload;
+  // issue 2150 — the two remembered leave reasons. Registry entries
+  // rather than Session arms, like the debounce above: they are
+  // `Grappa.UserSettings.Wire` payloads, so the Session walk cannot
+  // reach them and only a named counterpart pins the shape.
+  quit_part_reason_changed: UserSettingsWireQuitPartReasonChangedPayload;
+  auto_away_reason_changed: UserSettingsWireAutoAwayReasonChangedPayload;
   server_settings_changed: ServerSettingsWireChangedPayload;
   connection_state_changed: NetworksWireConnectionStateEvent;
   bundle_hash: CicWireBundleHashPayload;

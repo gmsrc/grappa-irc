@@ -10454,6 +10454,16 @@ button.topic-bar-windows-opener {
   width: 100%;
 }
 
+/* issue 2150 — the two leave-reason rows: a free-text input that should eat
+ * the row, with a save button at its natural width. `.settings-drawer label`
+ * is already a flex row, so the only thing missing is telling the input to
+ * grow; the button is left alone and keeps its own size. Same posture as the
+ * select rule above — on the CLASS, so both rows answer identically. */
+.leave-reason-row > input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
 .settings-subpage {
   display: flex;
   flex-direction: column;

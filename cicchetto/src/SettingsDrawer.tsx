@@ -40,6 +40,14 @@ import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { errorMessage, friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
 import {
+  autoAwayReasonValue,
+  loadAutoAwayReason,
+  loadQuitPartReason,
+  quitPartReasonValue,
+  saveAutoAwayReason,
+  saveQuitPartReason,
+} from "./lib/leaveReasons";
+import {
   deleteAccountBody,
   deleteAvatar,
   updateIdentity,
@@ -186,6 +194,23 @@ const SettingsDrawer: Component<Props> = (props) => {
   );
   const [autoAwayCustomMode, setAutoAwayCustomMode] = createSignal(false);
   const [autoAwayCustomDraft, setAutoAwayCustomDraft] = createSignal("");
+
+  // issue 2150 — the two remembered leave reasons. Each keeps a DRAFT
+  // separate from the stored value: these are free-text inputs saved on a
+  // button, not selects that commit on change, so the field has to hold
+  // what the user is typing without claiming it is persisted.
+  //
+  // `null` (nothing stored) seeds an EMPTY draft, and emptying the draft
+  // clears the setting — the server maps `""` to "no default", so the two
+  // ends of the round trip agree with no sentinel of cic's own.
+  const [quitPartReasonDraft, setQuitPartReasonDraft] = createSignal<string | null>(null);
+  const [quitPartReasonSavingError, setQuitPartReasonSavingError] = createSignal<string | null>(
+    null,
+  );
+  const [autoAwayReasonDraft, setAutoAwayReasonDraft] = createSignal<string | null>(null);
+  const [autoAwayReasonSavingError, setAutoAwayReasonSavingError] = createSignal<string | null>(
+    null,
+  );
   // #228, #251 — source-bind (vhost) selection. Server owns the allow-set +
   // current selection (no admin pin — #251). `null` view = not-yet-loaded
   // (the widget stays hidden until the first GET lands).
@@ -655,6 +680,12 @@ const SettingsDrawer: Component<Props> = (props) => {
       // #348 — same reason: the auto-away control must show what the
       // server stored, not a client-side guess.
       void loadAutoAwayDebounce(t);
+      // issue 2150 — same reason again for the two leave-reason inputs.
+      // No draft seeding here: the inputs READ THROUGH to the cache until
+      // the user types (see `quitPartReasonText`), so this async load
+      // surfaces on its own, as does a later push from another device.
+      void loadQuitPartReason(t);
+      void loadAutoAwayReason(t);
       // M2 — same reason: the peer-profiles toggle must show the
       // subject's actual opt-in, not a client-side guess.
       void loadShowPeerProfiles(t);
@@ -1015,6 +1046,47 @@ const SettingsDrawer: Component<Props> = (props) => {
     if (value === "") return await saveAutoAway(null);
     if (value === "off") return await saveAutoAway(0);
     return await saveAutoAway(Number(value));
+  };
+
+  // issue 2150 — what each leave-reason input SHOWS. The draft wins once
+  // the user has touched the field (`null` means untouched), otherwise the
+  // input reads through to the server-backed cache. That read-through is
+  // what makes the async boot load and a push from another device appear
+  // without an effect copying values around — and it is also what stops a
+  // push from clobbering text someone is mid-way through typing.
+  //
+  // `??` and not `||`: an empty draft is a real value (the user cleared
+  // the field, which is how you delete the setting), so it must NOT fall
+  // through to the stored string.
+  const quitPartReasonText = (): string => quitPartReasonDraft() ?? quitPartReasonValue() ?? "";
+  const autoAwayReasonText = (): string => autoAwayReasonDraft() ?? autoAwayReasonValue() ?? "";
+
+  // Saving posts the field's raw contents — an emptied box included, which
+  // is the clear gesture. The server answers with what it stored (`null`
+  // for a cleared one), and dropping the draft afterwards snaps the input
+  // back to READING THROUGH that answer rather than to a value cic made up.
+  const onQuitPartReasonSave = async () => {
+    const t = token();
+    if (t === null) return;
+    setQuitPartReasonSavingError(null);
+    try {
+      await saveQuitPartReason(t, quitPartReasonText());
+      setQuitPartReasonDraft(null);
+    } catch (err) {
+      setQuitPartReasonSavingError(err instanceof Error ? err.message : "save_failed");
+    }
+  };
+
+  const onAutoAwayReasonSave = async () => {
+    const t = token();
+    if (t === null) return;
+    setAutoAwayReasonSavingError(null);
+    try {
+      await saveAutoAwayReason(t, autoAwayReasonText());
+      setAutoAwayReasonDraft(null);
+    } catch (err) {
+      setAutoAwayReasonSavingError(err instanceof Error ? err.message : "save_failed");
+    }
   };
 
   const onAutoAwayCustomSave = async () => {
@@ -1923,6 +1995,89 @@ const SettingsDrawer: Component<Props> = (props) => {
               <Show when={autoAwaySavingError() !== null}>
                 <p class="auto-away-error" role="alert" data-testid="auto-away-error">
                   {autoAwaySavingError()}
+                </p>
+              </Show>
+
+              {/* issue 2150 — the TEXT that delay eventually sends. It sits
+                  INSIDE the auto-away fieldset rather than in one of its
+                  own: it is meaningless without the delay above it, and
+                  "never — stay online" makes it inert. One question, one
+                  group. Empty means the bouncer keeps its own wording,
+                  which is deliberately not printed here as a placeholder —
+                  that string is server-owned and a copy would drift. */}
+              <label class="leave-reason-row">
+                reason:
+                <input
+                  type="text"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck={false}
+                  placeholder="leave empty for the default"
+                  data-testid="auto-away-reason-input"
+                  value={autoAwayReasonText()}
+                  onInput={(e) => setAutoAwayReasonDraft(e.currentTarget.value)}
+                />
+                <button
+                  type="button"
+                  data-testid="auto-away-reason-save"
+                  onClick={() => {
+                    void onAutoAwayReasonSave();
+                  }}
+                >
+                  save
+                </button>
+              </label>
+              <Show when={autoAwayReasonSavingError() !== null}>
+                <p class="auto-away-error" role="alert" data-testid="auto-away-reason-error">
+                  {autoAwayReasonSavingError()}
+                </p>
+              </Show>
+            </fieldset>
+
+            {/* issue 2150 — the message sent when YOU leave, as opposed to
+                the one above that the bouncer sends for you. Account-wide
+                and not per-network: a second copy per network buys nothing
+                the account-wide one does not cover, and would drag in the
+                selector and the "which network is this keyed to" heading
+                (vjt's scope ruling on the issue).
+
+                Outside the auto-away fieldset because it answers a
+                different question, and outside the host-gated upload block
+                because it has nothing to do with uploads. */}
+            <fieldset class="leave-reason-fieldset">
+              <legend>leave message</legend>
+              <label class="leave-reason-row">
+                <input
+                  type="text"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck={false}
+                  placeholder="leave empty for none"
+                  aria-label="quit and part message"
+                  data-testid="quit-part-reason-input"
+                  value={quitPartReasonText()}
+                  onInput={(e) => setQuitPartReasonDraft(e.currentTarget.value)}
+                />
+                <button
+                  type="button"
+                  data-testid="quit-part-reason-save"
+                  onClick={() => {
+                    void onQuitPartReasonSave();
+                  }}
+                >
+                  save
+                </button>
+              </label>
+              {/* ONE sentence, and not by taste: a general-subpage test
+                  counts full stops across every `.settings-section-blurb`
+                  and fails a second one. */}
+              <p class="settings-section-blurb" data-testid="quit-part-reason-hint">
+                Sent when you leave a channel or disconnect without typing your own message — one
+                typed on the spot still wins, and an empty box sends none.
+              </p>
+              <Show when={quitPartReasonSavingError() !== null}>
+                <p class="auto-away-error" role="alert" data-testid="quit-part-reason-error">
+                  {quitPartReasonSavingError()}
                 </p>
               </Show>
             </fieldset>

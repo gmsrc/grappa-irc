@@ -1354,6 +1354,14 @@ export type WireUserEvent =
   // server's own default applies), 0 = off, N = seconds. Mirrors
   // `Grappa.UserSettings.Wire.auto_away_debounce_changed/1`.
   | { kind: "auto_away_debounce_changed"; auto_away_debounce_seconds: number | null }
+  // issue 2150 — the two remembered leave reasons changed, on this device
+  // or another one. `null` is a VALUE (the subject cleared it), never a
+  // missing field: for the quit/part message the server then falls back to
+  // its own literal, and for the auto-away one it keeps its own constant —
+  // a string cic does not know and must not print. Mirrors
+  // `Grappa.UserSettings.Wire.{quit_part,auto_away}_reason_changed/1`.
+  | { kind: "quit_part_reason_changed"; quit_part_reason: string | null }
+  | { kind: "auto_away_reason_changed"; auto_away_reason: string | null }
   | { kind: "archive_changed"; network_slug: string }
   // UX-7-B (2026-05-22) — `archive_purged` push after a destructive
   // archive-entry delete (operator dropped scrollback for the target).

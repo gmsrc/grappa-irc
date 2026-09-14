@@ -19,6 +19,7 @@ import { patchHomeNetwork } from "./home";
 import { seedIdentity } from "./identity";
 import { appendInviteAck } from "./inviteAck";
 import { isupportEntryFromWire, seedIsupport } from "./isupport";
+import { applyAutoAwayReasonFromWire, applyQuitPartReasonFromWire } from "./leaveReasons";
 import { setLinksReply } from "./linksModal";
 import { applyLusersBundle, clearLusersRequested } from "./lusersBundle";
 import { setMentionsBundle } from "./mentionsWindow";
@@ -113,6 +114,8 @@ import {
   S_SessionWireWindowInvitedPayload,
   S_SessionWireWindowPendingPayload,
   S_UserSettingsWireAutoAwayDebounceChangedPayload,
+  S_UserSettingsWireAutoAwayReasonChangedPayload,
+  S_UserSettingsWireQuitPartReasonChangedPayload,
 } from "./wireSchema";
 import type { ServerSettingsWireUploadView } from "./wireTypes";
 import { validate } from "./wireValidate";
@@ -681,6 +684,13 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // MEANINGFUL value here, not a missing field, and the typespec says so:
       // `{u: ["i", "z"]}` admits it and rejects anything that is neither.
       return validate(S_UserSettingsWireAutoAwayDebounceChangedPayload, r);
+    case "quit_part_reason_changed":
+      // issue 2150 — same posture as the debounce above: `null` is a
+      // MEANINGFUL value (the subject cleared the message), not a missing
+      // field, so the schema admits it and rejects anything else.
+      return validate(S_UserSettingsWireQuitPartReasonChangedPayload, r);
+    case "auto_away_reason_changed":
+      return validate(S_UserSettingsWireAutoAwayReasonChangedPayload, r);
     case "archive_changed":
       // UX-1 (2026-05-17) — server broadcasts after a successful PART
       // (channel moves into archive list). Single-field envelope: cic
@@ -1308,6 +1318,18 @@ moduleRoot(() => {
           // originates this state; it only reflects what the server
           // stored, including for the write this device just made.
           applyAutoAwayDebounceFromWire(payload.auto_away_debounce_seconds);
+          return;
+
+        case "quit_part_reason_changed":
+          // issue 2150 — mirror the server's announcement so the settings
+          // input converges across the subject's devices. cic never
+          // originates this state; the SERVER resolves the default when it
+          // builds the QUIT/PART line, and this is only the display copy.
+          applyQuitPartReasonFromWire(payload.quit_part_reason);
+          return;
+
+        case "auto_away_reason_changed":
+          applyAutoAwayReasonFromWire(payload.auto_away_reason);
           return;
 
         case "archive_changed":

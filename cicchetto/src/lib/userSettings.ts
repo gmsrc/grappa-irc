@@ -491,3 +491,88 @@ export async function putUploadConfirmEnabled(token: string, enabled: boolean): 
   const body = (await res.json()) as UploadConfirmEnabledResponse;
   return body.upload_confirm_enabled;
 }
+
+// ---------------------------------------------------------------------------
+// The two leave reasons — issue 2150.
+//
+// `quit_part_reason` is the message sent when the subject leaves without
+// typing one (`/quit`, `/part`, the sidebar ×). `auto_away_reason` is what
+// the bouncer sends when IT marks them away after the debounce fires.
+//
+// Both carry `string | null` and share one rule that matters here: the
+// EMPTY STRING CLEARS. The server normalises `""` to "no default" and
+// deletes the key, so cic can post the field's raw contents — including an
+// emptied input — without a special "clear" verb.
+//
+// Neither ceiling nor charset rule is mirrored on this side. An oversized
+// or CRLF-bearing reason comes back as a 422 whose message names the
+// problem, which is one source of truth instead of two — the same posture
+// `auto_away_debounce_seconds` takes on its range.
+//
+// `null` from the auto-away GET means "the server keeps its own constant".
+// cic does NOT know that string and must not print one: it is server-owned
+// and a copy here would drift the day it changes.
+// ---------------------------------------------------------------------------
+
+export type QuitPartReasonResponse = {
+  quit_part_reason: string | null;
+};
+
+export async function getQuitPartReason(token: string): Promise<string | null> {
+  const res = await fetch("/me/settings/quit-part-reason", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  // ISOLATED from the dead-token handler, like `getUploadConfirmEnabled`
+  // above: a cosmetic boot read must not clear a valid session's token on a
+  // transient 401 and bounce the Shell to the login screen.
+  if (!res.ok) throw await readError(res, false);
+  const body = (await res.json()) as QuitPartReasonResponse;
+  return body.quit_part_reason;
+}
+
+export async function putQuitPartReason(
+  token: string,
+  reason: string | null,
+): Promise<string | null> {
+  const res = await fetch("/me/settings/quit-part-reason", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ quit_part_reason: reason }),
+  });
+  if (!res.ok) throw await readError(res);
+  const body = (await res.json()) as QuitPartReasonResponse;
+  return body.quit_part_reason;
+}
+
+export type AutoAwayReasonResponse = {
+  auto_away_reason: string | null;
+};
+
+export async function getAutoAwayReason(token: string): Promise<string | null> {
+  const res = await fetch("/me/settings/auto-away-reason", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw await readError(res, false);
+  const body = (await res.json()) as AutoAwayReasonResponse;
+  return body.auto_away_reason;
+}
+
+export async function putAutoAwayReason(
+  token: string,
+  reason: string | null,
+): Promise<string | null> {
+  const res = await fetch("/me/settings/auto-away-reason", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ auto_away_reason: reason }),
+  });
+  if (!res.ok) throw await readError(res);
+  const body = (await res.json()) as AutoAwayReasonResponse;
+  return body.auto_away_reason;
+}

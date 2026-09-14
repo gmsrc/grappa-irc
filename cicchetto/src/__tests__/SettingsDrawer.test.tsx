@@ -299,6 +299,40 @@ vi.mock("../lib/autoAway", () => ({
   autoAwayDebounceValue: () => autoAwayHolder.current,
 }));
 
+// issue 2150 — same posture as the auto-away mock above: the two
+// leave-reason stores are stubbed so these cases stay about the CONTROLS.
+// The holders are separate signals-in-a-box so a test can seed "already
+// stored" and observe what the save sent, including the empty string that
+// means "clear it".
+const leaveReasonHolder = vi.hoisted(() => ({
+  quitPart: null as string | null,
+  autoAway: null as string | null,
+  savedQuitPart: undefined as string | null | undefined,
+  savedAutoAway: undefined as string | null | undefined,
+  rejectQuitPart: null as string | null,
+}));
+vi.mock("../lib/leaveReasons", () => ({
+  loadQuitPartReason: vi.fn(async () => {
+    /* no-op; the drawer test asserts on the call only */
+  }),
+  loadAutoAwayReason: vi.fn(async () => {
+    /* no-op */
+  }),
+  quitPartReasonValue: () => leaveReasonHolder.quitPart,
+  autoAwayReasonValue: () => leaveReasonHolder.autoAway,
+  saveQuitPartReason: vi.fn(async (_t: string, reason: string | null) => {
+    if (leaveReasonHolder.rejectQuitPart !== null) {
+      throw new Error(leaveReasonHolder.rejectQuitPart);
+    }
+    leaveReasonHolder.savedQuitPart = reason;
+    leaveReasonHolder.quitPart = reason === "" ? null : reason;
+  }),
+  saveAutoAwayReason: vi.fn(async (_t: string, reason: string | null) => {
+    leaveReasonHolder.savedAutoAway = reason;
+    leaveReasonHolder.autoAway = reason === "" ? null : reason;
+  }),
+}));
+
 const shareModalHolder = { opened: 0 };
 // #462 — spread the REAL module so `SHARE_SESSION_LABEL` comes from the one
 // place that declares it: a hand-written copy in the factory would be a
@@ -353,6 +387,11 @@ beforeEach(() => {
   meHolder.current = null;
   uploadTtlHolder.current = null;
   autoAwayHolder.current = null;
+  leaveReasonHolder.quitPart = null;
+  leaveReasonHolder.autoAway = null;
+  leaveReasonHolder.savedQuitPart = undefined;
+  leaveReasonHolder.savedAutoAway = undefined;
+  leaveReasonHolder.rejectQuitPart = null;
   subjectHolder.current = null;
   selectedChannelHolder.current = null;
   windowCandidatesHolder.current = [];
@@ -2369,6 +2408,169 @@ describe("SettingsDrawer — auto-away debounce (#348)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("auto-away-error")).toHaveTextContent("out_of_range");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue 2150 — the two remembered leave reasons (General)
+// ---------------------------------------------------------------------------
+//
+// Two free-text inputs with the same contract, so the same questions get
+// asked of both: does a stored value show, does typing reach the store,
+// does an EMPTIED box clear rather than send a string, and does a refusal
+// surface instead of being swallowed.
+//
+// The clearing case is the one that earns its keep. `""` and "no default"
+// are the same state on the server, so cic must post the empty box rather
+// than skip the call — a control that did nothing on an empty field would
+// leave the user unable to remove a message they had set.
+
+describe("SettingsDrawer — leave reasons (issue 2150)", () => {
+  it("hydrates both stores when the drawer opens with a token", async () => {
+    const store = await import("../lib/leaveReasons");
+    wrap(true);
+    openSub("general-settings-entry");
+
+    await waitFor(() => {
+      expect(store.loadQuitPartReason).toHaveBeenCalledWith("test-bearer");
+      expect(store.loadAutoAwayReason).toHaveBeenCalledWith("test-bearer");
+    });
+  });
+
+  it("shows a stored quit/part message, and an empty box when there is none", () => {
+    leaveReasonHolder.quitPart = "gone fishing";
+    wrap(true);
+    openSub("general-settings-entry");
+
+    expect((screen.getByTestId("quit-part-reason-input") as HTMLInputElement).value).toBe(
+      "gone fishing",
+    );
+    // The sibling has nothing stored, so it must read empty rather than
+    // borrowing its neighbour's text — they are two keys, not one.
+    expect((screen.getByTestId("auto-away-reason-input") as HTMLInputElement).value).toBe("");
+  });
+
+  it("sends what was typed in the quit/part box", async () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    fireEvent.input(screen.getByTestId("quit-part-reason-input"), {
+      target: { value: "see you" },
+    });
+    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+
+    await waitFor(() => {
+      expect(leaveReasonHolder.savedQuitPart).toBe("see you");
+    });
+  });
+
+  it("emptying the box SENDS the empty string — that is the clear gesture", async () => {
+    leaveReasonHolder.quitPart = "gone fishing";
+    wrap(true);
+    openSub("general-settings-entry");
+
+    fireEvent.input(screen.getByTestId("quit-part-reason-input"), { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+
+    // `toBe("")`, NOT a loose falsy check: `undefined` here would mean the
+    // save was never called at all, which is the bug this test exists for.
+    await waitFor(() => {
+      expect(leaveReasonHolder.savedQuitPart).toBe("");
+    });
+  });
+
+  it("after saving, the input reads through to what the server echoed back", async () => {
+    leaveReasonHolder.quitPart = "old";
+    wrap(true);
+    openSub("general-settings-entry");
+
+    fireEvent.input(screen.getByTestId("quit-part-reason-input"), { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+
+    // The mock mirrors the server: `""` in, "nothing stored" out. The box
+    // must follow THAT, not the string it posted.
+    await waitFor(() => {
+      expect((screen.getByTestId("quit-part-reason-input") as HTMLInputElement).value).toBe("");
+    });
+  });
+
+  it("sends what was typed in the auto-away reason box", async () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    fireEvent.input(screen.getByTestId("auto-away-reason-input"), {
+      target: { value: "sono a pranzo" },
+    });
+    fireEvent.click(screen.getByTestId("auto-away-reason-save"));
+
+    await waitFor(() => {
+      expect(leaveReasonHolder.savedAutoAway).toBe("sono a pranzo");
+      // Disjoint keys: writing one must not post the other.
+      expect(leaveReasonHolder.savedQuitPart).toBeUndefined();
+    });
+  });
+
+  it("surfaces the server's refusal instead of pretending it saved", async () => {
+    leaveReasonHolder.rejectQuitPart = "must not contain CR, LF or NUL";
+    wrap(true);
+    openSub("general-settings-entry");
+
+    fireEvent.input(screen.getByTestId("quit-part-reason-input"), {
+      target: { value: "bye\r\nJOIN #evil" },
+    });
+    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("quit-part-reason-error")).toHaveTextContent(/CR, LF or NUL/);
+    });
+  });
+
+  // The auto-away REASON belongs to the auto-away control, not to a card of
+  // its own: it is meaningless without the delay, and "never" makes it
+  // inert. Pinning the DOM relationship keeps a later tidy-up from floating
+  // it away from the thing that gives it meaning.
+  it("keeps the auto-away reason inside the auto-away fieldset", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const fieldset = screen.getByTestId("auto-away-reason-input").closest("fieldset");
+    expect(fieldset?.querySelector("legend")?.textContent).toMatch(/auto-away/i);
+    expect(fieldset?.querySelector('[data-testid="auto-away-select"]')).not.toBeNull();
+  });
+
+  // ...whereas the leave message answers a different question and gets its
+  // own group. Same rule, opposite direction — and this is the assertion
+  // that fails if someone merges the two.
+  it("keeps the leave message OUT of the auto-away fieldset", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const fieldset = screen.getByTestId("quit-part-reason-input").closest("fieldset");
+    expect(fieldset?.querySelector("legend")?.textContent).toMatch(/leave message/i);
+    expect(fieldset?.querySelector('[data-testid="auto-away-select"]')).toBeNull();
+  });
+
+  // #1766's lesson, applied ahead of time: a text input whose wrapping
+  // <label> carries no visible text has no accessible name at all.
+  it("leaves both inputs an accessible name", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    expect(screen.getByLabelText(/quit and part message/i)).toBe(
+      screen.getByTestId("quit-part-reason-input"),
+    );
+    expect(screen.getByLabelText(/reason:/i)).toBe(screen.getByTestId("auto-away-reason-input"));
+  });
+
+  // The account-scoped half of the page is where vjt put this: NOT inside
+  // `.settings-network-scope`, because one string covers every network.
+  it("sits in the account-scoped half, not the per-network block", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const scope = screen.queryByTestId("settings-network-scope");
+    expect(scope?.contains(screen.getByTestId("quit-part-reason-input")) ?? false).toBe(false);
+    expect(scope?.contains(screen.getByTestId("auto-away-reason-input")) ?? false).toBe(false);
   });
 });
 

@@ -289,12 +289,19 @@ const strengthened: Narrower = (raw) => {
   return typeof r.user === "string" ? { kind: "whowas_bundle", ...r } : null;
 };
 
-// The 42 `case` labels of `narrowUserEvent`, transcribed from the switch so
-// the reconciliation below has a reference OUTSIDE the schema walk.
+// The `case` labels of `narrowUserEvent`, transcribed from the switch so the
+// reconciliation below has a reference OUTSIDE the schema walk.
+//
+// The count is deliberately NOT written here any more. It said "42" while the
+// array held 46 — four arms had been added without anyone touching the prose,
+// because nothing checks a number in a comment. The `handArms` field of the
+// snapshot below carries the same figure and IS enforced, so stating it twice
+// only bought a second copy to go stale (issue 2150).
 const HAND_SWITCH_ARMS = [
   "archive_changed",
   "archive_purged",
   "auto_away_debounce_changed",
+  "auto_away_reason_changed",
   "away_confirmed",
   "banlist_bundle",
   "bundle_hash",
@@ -322,6 +329,7 @@ const HAND_SWITCH_ARMS = [
   "presence_error",
   "presence_snapshot",
   "query_windows_list",
+  "quit_part_reason_changed",
   "recover_progress",
   "recover_result",
   "server_reply",
@@ -691,11 +699,11 @@ describe("#1393 — user-topic boundary census", () => {
       censusedNotInSwitch: [...censused].filter((k) => !handSwitch.has(k)),
     }).toMatchInlineSnapshot(`
       {
-        "censused": 45,
+        "censused": 47,
         "censusedNotInSwitch": [
           "whois_avatar_ready",
         ],
-        "handArms": 44,
+        "handArms": 46,
         "inSwitchNotCensused": [],
       }
     `);
@@ -722,9 +730,9 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 37,
-        "armsCensused": 46,
-        "armsWithSchema": 45,
+        "armsAtParity": 39,
+        "armsCensused": 48,
+        "armsWithSchema": 47,
         "brokenOracles": [],
         "divergent": [
           {
@@ -860,10 +868,10 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtValueParity": 45,
-        "comparablePairs": 45,
+        "armsAtValueParity": 47,
+        "comparablePairs": 47,
         "divergent": [],
-        "pairs": 46,
+        "pairs": 48,
         "skippedOneSideRejected": 1,
       }
     `);
