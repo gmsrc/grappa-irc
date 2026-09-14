@@ -56140,3 +56140,110 @@ separately zeroing `tone`'s sustain in the table, each turn that one test red
 and leave the other eighteen green; setting the sustain to the full 80 ms
 instead reddens the release invariant. A test that stays green under its own
 cure is watching nothing.
+<!-- entry #1773b -->
+
+---
+
+## 2026-09-14 — issue 1773b: the credits roll was derived from one commit, and only a bot made it visible
+
+Three dependabot PRs went red on `integration` shard 1 with a payload the
+#1773 spec refuses:
+
+```
+GRAPPA_CREDITS is the DEGRADED payload
+({"sha":"a017e63","date":"2026-09-14T04:24:02Z","contributors":[]})
+```
+
+Two of the three probes answered, so it was never "git is missing". The
+question the red actually posed — and the reason it took a bot to ask it — is
+below.
+
+### What was measured
+
+`a017e63` is exactly `refs/pull/2123/merge`, to the second on the date. CI
+checks that ref out at `fetch-depth: 1`, which is `actions/checkout`'s own
+default at the sha this repo pins (`action.yml`: *"Number of commits to fetch.
+0 indicates all history"*, `default: 1`). Reproduced locally from a
+`git init` + `fetch --depth=1` of that ref, byte for byte:
+
+```
+{"sha":"a017e63","date":"2026-09-14T04:24:02Z","contributors":[]}
+```
+
+The chain, each link measured rather than argued:
+
+1. at depth 1 the clone is GRAFTED, so the merge commit reports **0 parents**
+   — `--no-merges` therefore does NOT exclude it. The suspicion that it did
+   was the obvious one and it is wrong; `--no-merges` is inert here;
+2. `git shortlog -sn --no-merges HEAD` consequently yields exactly ONE row:
+   the author of the single fetched commit. GitHub attributes a PR's
+   auto-merge commit to the **PR author**;
+3. for a dependabot PR that author is `dependabot[bot]`, which #1927's bot
+   filter drops where the list is born — leaving `contributors: []`;
+4. for a human PR the one row survives, and the suite is green.
+
+### The defect the red was hiding
+
+Step 4 is not the system working. On `main`, at depth 1, the same code bakes
+`[{"name":"Marcello Barnaba","nick":"vjt","commits":1}]` — against a history
+where that author has **5667** commits and nine people appear. Every green
+`integration` run this suite has ever had painted a credit roll that was
+factually wrong, and nothing could see it, because **a wrong roll and a right
+one have the same shape**. The spec only refuses the EMPTY list, so the one
+case it caught was the one where a bot filter happened to empty it.
+
+So the dependabot red is not the bug. It is the only configuration in which
+the bug became a shape.
+
+### Two fixes, because there are two defects
+
+**`credits.sh` withholds the contributor list on a shallow repo.** A
+truncated history is not a smaller answer, it is a false one, and this is the
+only probe in the script that can be confidently wrong rather than empty —
+which is why it is the only one that gets a gate. `sha` and `date` stay:
+a shallow repo knows them exactly, and nulling them would claim the build has
+no history at all, which is the AUR/tarball case and a different fact. An
+older git without `--is-shallow-repository` (2.15+) leaves the probe empty,
+which reads as not-shallow and preserves the previous behaviour exactly — the
+gate can be absent, never inverted. Measured: on a full clone the output is
+**byte-identical** before and after (same sha256), so no release path, no
+operator deploy and no local stack can tell the difference.
+
+**`integration.yml` checks out whole history**, `fetch-depth: 0` plus
+`filter: blob:none`. Without the filter, `fetch-depth: 0` drags 491M of
+historical blobs onto four shard runners every run; the partial clone reaches
+the same 6293 commits — all `shortlog` reads — in 25M with the tree checked
+out, against 15M for today's single-commit fetch. The filter is a cost choice
+and is deliberately NOT pinned by the test: a build should not fail for being
+slow.
+
+The two must land together. Alone, the first turns a silent lie into a red
+suite on every run; alone, the second fixes today's checkout and leaves the
+class open for the next wrapper.
+
+### What the spec did NOT need
+
+Nothing. `bakedCredits()` already refuses an empty list and its comment already
+says why accepting a degraded payload would make the file vacuous. Once
+credits.sh stops laundering a truncated history into a confident list, that
+untouched guard IS the gate that catches a shallow wrapper. No assertion was
+added to it and none was weakened.
+
+### The gate that read its own comment
+
+The first version of `integration_checkout_depth_test.bats` matched
+`fetch-depth: 0` as a substring of the raw step. Deleting the key from the
+YAML left it **green** — the step explains itself in prose that spells the
+same string, so the check was reading the justification and reporting on the
+configuration. It now strips comment lines first and anchors on a key line.
+Recorded because the failure mode is general: a config assertion whose
+subject also documents itself will pass on the documentation, and only
+deleting the thing it guards reveals it.
+
+Five mutations, each confirming the corresponding gate moves: key removed
+(prose left in place) → red; `fetch-depth: 10` → red; checkout step renamed →
+red via the positive control; the shallow branch removed from `credits.sh` →
+red; the predicate forced always-true → red via `refute`. That last one was
+itself a repair: the negative control was first written `! declares_full_history`,
+which cannot fail a bats body, and the repo's own
+`bats_assertion_style_test.bats` is what caught it.
