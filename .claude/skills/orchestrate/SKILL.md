@@ -918,6 +918,21 @@ at that merge (#1632). ONE batched deploy (~4–5 already-closed issues), ONE du
   sull'albero nuovo per classificare la spedizione che la porta è l'inversione che costa il giro.
   **Classifica contro la prod VIVA (`/api/config`, `start_erl.data`, il lib_dir del nodo), mai
   contro il diff da solo.**
+- 🔴🔴 **L'ORA DI UNA FINESTRA DI DEPLOY TE LA DICONO, NON LA MISURI — E SE CI COSTRUISCI SOPRA
+  L'ANNUNCIO, L'ANNUNCIO ESCE A DANNO FATTO (orch, 2026-09-14, misurato).** vjt aveva detto *"il cold
+  è armato per le 04:30 Rome"*; ho programmato il BEFORE alle 04:25 e **il cron ha sparato alle
+  04:19:17**. Misurato dopo: `ELAPSED 08:20` sul `beam.smp` alle 02:27:35Z ⇒ start **02:19:17Z**,
+  cioè **sei minuti PRIMA** della mia riga *"fra pochi minuti riavvio"*. Gli utenti erano già stati
+  droppati quando li ho avvisati: **l'unico annuncio che costa qualcosa se sbagliato è proprio il
+  BEFORE**, e l'ho sbagliato.
+  🥇 **La regola: un orario RIFERITO è un'intenzione, non una misura.** Se l'annuncio dipende da
+  quell'orario, **campiona la macchina** (`ps -o lstart,etime` sul beam, `/api/config`) **prima di
+  scrivere "fra pochi minuti"**, e ancora meglio **chiava il BEFORE su un evento osservato** (il
+  deploy che parte) invece che sull'orologio. In mancanza, **anticipa con margine** e dì *"da qui a
+  N minuti"*, mai *"fra pochi minuti"*.
+  🥇 **E quando te ne accorgi dopo, la cura è UNA riga che dice FATTO, non una che si scusa**: agli
+  utenti serve sapere che sono tornati su, non che l'orchestratrice ha sbagliato l'orologio — quello
+  va in `#grappa-live` e nell'handoff, dove lo legge chi deve non ripeterlo.
 - 🔴 **PROVE A HOT DEPLOY** by the reload `{"failed":[]}` list + the served cic bundle hash (`curl
   https://irc.sindro.me/`). **`/api/config` stays STALE after a hot deploy** — valid for COLD only. A release `rpc`
   from root fails `:noconnection` — use `service grappa status` + `fetch http://127.0.0.1:4000/healthz`.
