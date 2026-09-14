@@ -29,6 +29,7 @@ defmodule Grappa.ReadCursorTest do
   alias Grappa.PubSub.Topic
   alias Grappa.{ReadCursor, Repo, ScrollbackHelpers, Visitors}
   alias Grappa.ReadCursor.Cursor
+  alias Grappa.Scrollback.Message
 
   # ---------------------------------------------------------------------------
   # Fixtures
@@ -831,6 +832,53 @@ defmodule Grappa.ReadCursorTest do
       assert split[net_a.slug]["#chan"] == %{messages: 2, events: 1}
       assert split[net_a.slug]["peer"] == %{messages: 1, events: 0}
       assert split[net_b.slug]["#ops"] == %{messages: 1, events: 0}
+    end
+
+    # issue 2176 — this aggregate SEEDS the unread badge, so its presence
+    # exclusion must honour the same per-row structural exemption the history
+    # fetch does. If only `Scrollback` had learned about the tag, the pane
+    # would render a ban the badge refused to count — the #239 "the count and
+    # the pane must agree" invariant, one table out.
+    test "a HIDDEN channel still counts a structural mode row, and still skips the churn" do
+      user = user_fixture()
+      subject = {:user, user.id}
+      attrs = %{user_id: user.id}
+      net = network_fixture()
+
+      anchor = insert_message(attrs, net.id, "#chan", 1)
+      {:ok, _} = ReadCursor.set(subject, net.id, "#chan", anchor.id)
+
+      mode_row = fn server_time, meta ->
+        {:ok, _} =
+          ScrollbackHelpers.insert(
+            Map.merge(attrs, %{
+              network_id: net.id,
+              channel: "#chan",
+              server_time: server_time,
+              kind: :mode,
+              sender: "op",
+              body: nil,
+              meta: meta
+            })
+          )
+      end
+
+      # Two mode rows past the cursor: the op grade (churn, untagged) and the
+      # ban (structural, tagged).
+      mode_row.(2, %{modes: "+o", args: ["alice"]})
+      mode_row.(3, %{Message.structural_meta_key() => true, modes: "+b", args: ["troll!*@*"]})
+
+      own_nicks = %{net.slug => {net.id, "vjt"}}
+      hidden = %{net.slug => MapSet.new(["#chan"])}
+
+      assert ReadCursor.bulk_unread_split(subject, own_nicks, hidden)[net.slug]["#chan"] ==
+               %{messages: 0, events: 1}
+
+      # Control: with the channel NOT hidden both rows count, so the 1 above is
+      # the exemption doing its job and not the churn row having vanished for
+      # some other reason.
+      assert ReadCursor.bulk_unread_split(subject, own_nicks, %{})[net.slug]["#chan"] ==
+               %{messages: 0, events: 2}
     end
 
     test "a window read to the tail is present with zero counts (LEFT JOIN)" do
