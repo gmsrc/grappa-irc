@@ -83,6 +83,31 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # `wireTypes.ts` enforces at compile time — from one source, under one
   # `--check` drift gate.
   @schema_output_path "cicchetto/src/lib/wireSchema.ts"
+
+  # A7 (issue 2135) — the third artefact, and the only one no compiler reads.
+  #
+  # `wireSchema.ts` emits a runtime schema for every exported Wire typespec
+  # whether or not anything consumes it, so the file grows with the server
+  # and shrinks never. Measured on `6b8b4fe0f`: 192 schemas emitted, 59
+  # imported by cicchetto, 72 not reachable from any importer even through
+  # nesting. Nothing said so, and a cost nobody can see is a cost nobody
+  # pays down — so the count is written to a committed file and the existing
+  # `--check` turns a stale one red. That is the whole gate: no new CI step,
+  # because the artefact list already has one.
+  #
+  # ⚠️ It lives under `priv/wire/` and not next to its two siblings, for a
+  # reason that is not taste. A worktree mix run bind-mounts an ENUMERATED
+  # list of paths (`scripts/_lib.sh`), `docs/` is not on it — a write there
+  # would land in the image and a read would answer with MAIN's copy — and
+  # `cicchetto/src/**` is inside biome's `includes`, which would hand a
+  # generated markdown file to a formatter no human may then hand-correct.
+  # `priv/wire/` is already mounted read-write for `shape.pin`, which is the
+  # other artefact that exists to make a drift visible.
+  @inventory_output_path "priv/wire/schema_inventory.md"
+
+  # Scanned for `import … from "…/wireSchema"`. Read-only, and read from the
+  # repo root like the two output paths — the task already runs there.
+  @cic_source_root "cicchetto/src"
   # #428 — `**/wire.ex` matched ONLY files named exactly `wire.ex`, silently
   # skipping the 10 `admin_wire.ex` modules. `**/*wire.ex` catches every
   # `*wire.ex` (`wire.ex` + `admin_wire.ex` + any future `*_wire.ex`) so the
@@ -130,7 +155,12 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     {opts, _, _} = OptionParser.parse(argv, switches: [check: :boolean])
     Mix.Task.run("loadpaths")
     Mix.Task.run("compile")
-    artifacts = [{@output_path, generate()}, {@schema_output_path, generate_schema()}]
+
+    artifacts = [
+      {@output_path, generate()},
+      {@schema_output_path, generate_schema()},
+      {@inventory_output_path, generate_inventory()}
+    ]
 
     if opts[:check] do
       Enum.each(artifacts, fn {path, content} -> verify_committed(content, path) end)
@@ -420,9 +450,13 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
       {:ok, committed} when committed == generated ->
         Mix.shell().info("#{path} is in sync.")
 
+      # "the inputs it is generated from", not "the Wire typespecs": since
+      # issue 2135 a third artefact is verified here whose inputs include
+      # cicchetto's schema IMPORTS, so a typespec-only message would send the
+      # reader to look at the wrong file for the commonest cause.
       {:ok, _} ->
         Mix.shell().error("""
-        #{path} is OUT OF SYNC with the Wire typespecs.
+        #{path} is OUT OF SYNC with the inputs it is generated from.
 
         Run `scripts/mix.sh grappa.gen_wire_types` and commit the
         result.
@@ -1494,6 +1528,167 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     case File.read(path) do
       {:ok, committed} when committed == generated -> :ok
       _ -> :drift
+    end
+  end
+
+  ## ----- Schema inventory (A7, issue 2135) ---------------------------------
+
+  @typep schema_seen :: %{optional(String.t()) => true}
+
+  @doc false
+  @spec inventory_path() :: Path.t()
+  def inventory_path, do: @inventory_output_path
+
+  @doc false
+  @spec generate_inventory() :: String.t()
+  def generate_inventory do
+    render_inventory(schema_graph(), scan_schema_imports(@cic_source_root))
+  end
+
+  # The composition edges the schema emitter already computes, re-keyed from
+  # `{module, type}` to the emitted const name. Derived, never a second
+  # traversal: a nesting the emitter can see and this cannot would report a
+  # live schema as dead, which is the one error that costs a deletion.
+  @spec schema_graph() :: %{String.t() => [String.t()]}
+  defp schema_graph do
+    Process.put(:wire_schema_enum_imports, MapSet.new())
+    entries = collect_schema_entries()
+    Process.delete(:wire_schema_enum_imports)
+
+    Map.new(entries, fn {key, {_, deps}} ->
+      {const_for(key), Enum.map(deps, &const_for/1)}
+    end)
+  end
+
+  defp const_for({mod, name}), do: schema_const_name(render_alias_name(mod, name))
+
+  # The set of generated schema consts a PRODUCTION cicchetto module imports.
+  #
+  # Production only: `wireUserBoundary.test.ts` namespace-imports the whole
+  # file to mutate every arm, so counting tests would answer 100% and the
+  # inventory would say nothing. Raises rather than under-reports when a
+  # production module uses a namespace import, since such a module names no
+  # schema and every schema it validates against would read as unread.
+  @doc false
+  @spec scan_schema_imports(Path.t()) :: MapSet.t(String.t())
+  def scan_schema_imports(root) do
+    root
+    |> Path.join("**/*.{ts,tsx}")
+    |> Path.wildcard()
+    |> Enum.reject(&test_module?/1)
+    |> Enum.reduce(MapSet.new(), fn path, acc ->
+      source = strip_ts_comments(File.read!(path))
+      refuse_namespace_import!(path, source)
+      MapSet.union(acc, named_schema_imports(source))
+    end)
+  end
+
+  # `__tests__/` is where cic keeps them; a co-located `*.test.ts` is the
+  # other spelling in this tree. Both, or the scan counts a mutation harness
+  # as a reader.
+  defp test_module?(path) do
+    String.contains?(path, "/__tests__/") or String.match?(path, ~r/\.test\.tsx?$/)
+  end
+
+  # A commented-out import is TEXT, not a use. Block comments go first so a
+  # `//` inside one cannot terminate half of it; line comments are only
+  # stripped when the `//` opens the line, which leaves a `https://` inside a
+  # string alone — an import statement never carries one, so the narrower
+  # rule loses nothing and cannot desynchronise on a URL.
+  defp strip_ts_comments(source) do
+    source
+    |> String.replace(~r|/\*.*?\*/|s, "")
+    |> String.replace(~r|^[ \t]*//.*$|m, "")
+  end
+
+  defp refuse_namespace_import!(path, source) do
+    if String.match?(source, ~r|import\s+\*\s+as\s+\w+\s+from\s+"[^"]*wireSchema"|) do
+      raise "gen_wire_types: #{path} takes a namespace import of wireSchema — the inventory " <>
+              "cannot see which schemas it reads. Import the consts by name, or move the " <>
+              "module under __tests__/."
+    end
+  end
+
+  defp named_schema_imports(source) do
+    ~r|import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"[^"]*wireSchema"|
+    |> Regex.scan(source, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.flat_map(&String.split(&1, ","))
+    |> Enum.map(&specifier_name/1)
+    |> Enum.reject(&(&1 == ""))
+    |> MapSet.new()
+  end
+
+  # `{ S_Foo }` and `{ type S_Foo }` name the same const; the inline `type`
+  # marker is a tsc instruction, not part of the identifier.
+  defp specifier_name(specifier) do
+    specifier |> String.trim() |> String.replace_prefix("type ", "")
+  end
+
+  # Render the generated-vs-read inventory.
+  #
+  # `graph` maps every emitted const to the consts it embeds; `roots` is what
+  # cicchetto imports by name. Reachability is transitive because a schema
+  # nested inside an imported one IS walked at runtime — counting direct
+  # imports alone would mark it dead and invite a deletion that breaks the
+  # boundary.
+  @doc false
+  @spec render_inventory(%{String.t() => [String.t()]}, MapSet.t(String.t())) :: String.t()
+  def render_inventory(graph, roots) do
+    ghosts = roots |> Enum.reject(&Map.has_key?(graph, &1)) |> Enum.sort()
+
+    if ghosts != [] do
+      raise "gen_wire_types: cicchetto imports #{Enum.join(ghosts, ", ")} from wireSchema, " <>
+              "but the codegen emits no such schema"
+    end
+
+    reachable = reachable_from(graph, MapSet.to_list(roots), %{})
+    unread = graph |> Map.keys() |> Enum.reject(&Map.has_key?(reachable, &1)) |> Enum.sort()
+
+    """
+    <!-- GENERATED FILE — DO NOT EDIT -->
+    <!-- Run `scripts/mix.sh grappa.gen_wire_types` to regenerate. -->
+
+    # Runtime wire schemas: generated vs read
+
+    `wireSchema.ts` emits one runtime schema per exported `Grappa.*.Wire`
+    typespec, whether or not a client reads it. This is the count, so the
+    unread set is a work list instead of invisible weight. It is regenerated
+    by `mix grappa.gen_wire_types` and held by the same `--check` that holds
+    the two TypeScript artefacts, so it cannot go stale quietly.
+
+        generated                 #{map_size(graph)}
+        imported by cicchetto     #{MapSet.size(roots)}
+        reachable at runtime      #{map_size(reachable)}
+        never read                #{length(unread)}
+
+    "Reachable" counts a schema nested inside an imported one: the validator
+    walks it, so it is load-bearing even though no module names it.
+
+    ## Never read
+
+    Emitted, formatted and drift-gated; no cicchetto module reaches them.
+    Each is either a boundary cic has not narrowed yet (issue 2135's A4) or a
+    wire shape cic does not consume at all.
+
+    #{Enum.map_join(unread, "\n", &"- #{&1}")}
+    """
+  end
+
+  # A plain map, not a MapSet, for the same reason `visit_schema/5` above uses
+  # one: a MapSet is opaque, an unspecced private accumulator loses that
+  # opacity, and Dialyzer then flags every well-typed `MapSet.member?/2` here
+  # as a call without an opaque term. Measured on this function, not inherited
+  # — it was written with a MapSet and `scripts/check.sh` refused it.
+  @spec reachable_from(%{String.t() => [String.t()]}, [String.t()], schema_seen()) ::
+          schema_seen()
+  defp reachable_from(_, [], seen), do: seen
+
+  defp reachable_from(graph, [name | rest], seen) do
+    if Map.has_key?(seen, name) do
+      reachable_from(graph, rest, seen)
+    else
+      reachable_from(graph, Map.fetch!(graph, name) ++ rest, Map.put(seen, name, true))
     end
   end
 end

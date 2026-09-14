@@ -602,4 +602,156 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert GenWireTypes.compare_committed("// any\n", tmp) == :drift
     end
   end
+
+  # A7 (issue 2135) — the schema inventory. 192 schemas are generated,
+  # formatted and `--check`-gated; the set cic actually reads is a third of
+  # them, and nothing said so. The two halves are tested apart because they
+  # fail apart: `scan_schema_imports/1` is a reader of cic source with four
+  # ways to lie, `render_inventory/2` is a graph walk with one.
+  describe "scan_schema_imports/1" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "cic-src-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(root)
+      on_exit(fn -> File.rm_rf!(root) end)
+      %{root: root}
+    end
+
+    # The trap this whole scanner exists to avoid, and the one the review that
+    # filed 2135 fell into: every import in cic's boundary modules spans many
+    # lines, so a line-scoped reader answers with the last name on the first
+    # line — or with nothing at all.
+    test "reads a MULTI-LINE import, not just its first line", %{root: root} do
+      write(root, "lib/wireNarrow.ts", """
+      import {
+        S_Alpha,
+        S_Beta,
+      } from "./wireSchema";
+      """)
+
+      assert GenWireTypes.scan_schema_imports(root) == MapSet.new(["S_Alpha", "S_Beta"])
+    end
+
+    # Depth zero and depth two in one assertion: cic keeps its components at
+    # `src/*.tsx` and its modules at `src/lib/*.ts`, so a glob that misses
+    # either end silently under-reports.
+    test "reads single-line imports at every depth, including the root", %{root: root} do
+      File.mkdir_p!(Path.join(root, "lib/deep"))
+      write(root, "Pane.tsx", ~s|import { S_Gamma } from "./lib/wireSchema";|)
+      write(root, "lib/deep/x.ts", ~s|import { S_Delta } from "../wireSchema";|)
+
+      assert GenWireTypes.scan_schema_imports(root) == MapSet.new(["S_Gamma", "S_Delta"])
+    end
+
+    # NEGATIVE control. A grep over the identifier counts the TEXT; only a
+    # reader that skips comments counts the USE.
+    test "ignores a commented-out import", %{root: root} do
+      write(root, "lib/a.ts", """
+      // import { S_Commented } from "./wireSchema";
+      /* import { S_Blocked } from "./wireSchema"; */
+      import { S_Live } from "./wireSchema";
+      """)
+
+      assert GenWireTypes.scan_schema_imports(root) == MapSet.new(["S_Live"])
+    end
+
+    # A test that sweeps every schema (`wireUserBoundary.test.ts` does exactly
+    # that) would report 100% read and the inventory would say nothing. Only
+    # production modules count as readers.
+    test "ignores test modules", %{root: root} do
+      write(root, "__tests__/a.test.ts", ~s|import { S_T } from "../lib/wireSchema";|)
+      write(root, "lib/b.test.ts", ~s|import { S_U } from "./wireSchema";|)
+      write(root, "lib/c.ts", ~s|import { S_V } from "./wireSchema";|)
+
+      assert GenWireTypes.scan_schema_imports(root) == MapSet.new(["S_V"])
+    end
+
+    # The one shape that defeats the scanner silently: a namespace import
+    # names no schema, so every schema it uses reads as unread. Fail loud
+    # rather than emit an inventory that under-counts by an unknown amount.
+    test "raises on a namespace import in a production module", %{root: root} do
+      write(root, "lib/a.ts", ~s|import * as s from "./wireSchema";|)
+
+      assert_raise RuntimeError, ~r/namespace import/, fn ->
+        GenWireTypes.scan_schema_imports(root)
+      end
+    end
+
+    test "an import from another module is not a schema reference", %{root: root} do
+      write(root, "lib/a.ts", ~s|import { S_NotMine } from "./wireTypes";|)
+
+      assert GenWireTypes.scan_schema_imports(root) == MapSet.new()
+    end
+  end
+
+  describe "render_inventory/2" do
+    test "a schema reachable only through nesting is not reported unread" do
+      out = GenWireTypes.render_inventory(nested_graph(), MapSet.new(["S_Root"]))
+
+      refute out =~ "- S_Nested"
+      assert out =~ "- S_Orphan"
+    end
+
+    test "the counts name all four populations" do
+      out = GenWireTypes.render_inventory(nested_graph(), MapSet.new(["S_Root"]))
+
+      assert out =~ "generated                 3"
+      assert out =~ "imported by cicchetto     1"
+      assert out =~ "reachable at runtime      2"
+      assert out =~ "never read                1"
+    end
+
+    # The mutant: referencing the orphan must move it out of the list. A
+    # report that cannot change is a report nobody has to act on.
+    test "importing the orphan empties the unread list" do
+      out = GenWireTypes.render_inventory(nested_graph(), MapSet.new(["S_Root", "S_Orphan"]))
+
+      refute out =~ "- S_Orphan"
+      assert out =~ "never read                0"
+    end
+
+    test "raises when an imported name is not a generated schema" do
+      assert_raise RuntimeError, ~r/S_Ghost/, fn ->
+        GenWireTypes.render_inventory(nested_graph(), MapSet.new(["S_Ghost"]))
+      end
+    end
+
+    test "the unread list is sorted, so a regeneration diff is the delta only" do
+      graph = %{"S_Zulu" => [], "S_Alpha" => [], "S_Mike" => []}
+      out = GenWireTypes.render_inventory(graph, MapSet.new())
+
+      listed =
+        out
+        |> String.split("\n")
+        |> Enum.filter(&String.starts_with?(&1, "- "))
+
+      assert listed == ["- S_Alpha", "- S_Mike", "- S_Zulu"]
+    end
+  end
+
+  describe "the committed inventory" do
+    test "generate_inventory/0 agrees with the committed artefact" do
+      assert GenWireTypes.compare_committed(
+               GenWireTypes.generate_inventory(),
+               GenWireTypes.inventory_path()
+             ) == :ok
+    end
+
+    # Positive control for the test above: it can only fail the drift arm, so
+    # prove the comparison is live rather than trivially :ok.
+    test "the committed inventory is not empty" do
+      assert GenWireTypes.generate_inventory() =~ "never read"
+    end
+  end
+
+  # One cic source file, with the trailing newline every real file carries.
+  defp write(root, relative, contents) do
+    path = Path.join(root, relative)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, String.trim_trailing(contents) <> "\n")
+  end
+
+  # `S_Nested` is named by nobody, but `S_Root` embeds it, so the runtime
+  # walks it on every validate. Counting only direct imports would call it
+  # dead and send someone to delete a schema that is load-bearing.
+  defp nested_graph, do: %{"S_Root" => ["S_Nested"], "S_Nested" => [], "S_Orphan" => []}
 end

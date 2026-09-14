@@ -56927,3 +56927,144 @@ knowledge of the wire lives anyway.
     `NO-USER` until they reconnect. Re-deriving the table would mean
     reaching into every Client's socket from outside it, which is a
     bigger structure than the failure it insures.
+<!-- entry #2135 -->
+
+---
+
+## 2026-09-14 — issue 2135: the schemas nobody reads, and why counting the imports would have got it wrong
+
+A4 and A7 of the 2026-09-13 architecture review (parent #2118), filed as one
+issue because A7 is A4's work list. The review ran on a host with no
+toolchain, so every number in its body is a grep. Four of the six are wrong,
+and each is wrong in a way worth keeping, because the same grep will be run
+again by the next reader.
+
+### The four corrections
+
+| review | measured on `6b8b4fe0f` |
+| --- | --- |
+| `api.ts` 3,522 lines | 3522 ✔ |
+| 31 `as` casts | **36** — 34 of them `(await res.json()) as T` |
+| 107 hand-written `type`/`interface` declarations | **106**, all `type`, zero `interface` — plus one `export type { AdmissionFlow } from "./wireTypes"`, a re-export of a GENERATED type, which is the opposite of hand-written |
+| "importing exactly one type from `wireTypes.ts`" | **55 names** — 54 in one MULTI-LINE import (lines 47–102) plus that re-export |
+| 192 generated schemas | 192 ✔ |
+| 64 referenced (~33%), "128 never read" | **59** imported by name; **120 of 192 (63%)** reachable once nesting counts; **72** never read |
+
+Measured with an instrument that strips comments and string literals before
+counting and self-tests on a fixture with known answers — eighteen
+assertions, positive and negative — refusing to print a number if one fails.
+It earned that: the first run reported six `as` tokens on a fixture holding
+five, because `{ as: string }` is a property named `as` and `{ A as B }` in
+an import clause is a rename. Cross-checked against naked greps and every
+divergence reconciled: `as const` appears twice to `grep` and zero times in
+code (both are prose), and 107 naked is 106 declarations plus the re-export.
+
+**"Exactly one" is the multi-line trap**, and it is the one that matters
+beyond this issue: every import in cic's boundary modules spans tens of
+lines, so a line-scoped grep for `import .* from "./wireTypes"` answers with
+the closing brace line and hides 54 names behind it.
+
+### The correction that changes the work, not just the number
+
+"128 generated, formatted, CI-gated and never read" counts DIRECT imports. A
+schema nested inside an imported one is walked by `validate` on every call —
+it is load-bearing even though no module names it. Counted that way the
+unread set is 72, not 128, and the difference is not bookkeeping: acting on
+the larger number means deleting schemas that are live, and the deletion
+would compile, pass `tsc`, and fail at runtime on the first payload that
+reaches the nested arm.
+
+So the inventory the task now emits counts REACHABILITY, seeded from the
+imports and closed over the composition edges. The edges are not re-derived:
+they are the `deps` the schema emitter already computes for its topological
+sort. A nesting the emitter can see and the inventory cannot is exactly the
+error that costs a deletion, so the two read one graph.
+
+### Where the artefact lives, and why it is not next to its siblings
+
+`priv/wire/schema_inventory.md`, not `cicchetto/src/lib/` beside
+`wireTypes.ts` and `wireSchema.ts`. Two measured reasons:
+
+  * a worktree `mix` run bind-mounts an ENUMERATED list of paths
+    (`scripts/_lib.sh`), and `docs/` is not on it — a write there lands in
+    the image and a read answers with MAIN's copy, which is the #1170 class
+    of unattributable red;
+  * `cicchetto/src/**` is inside biome's `files.includes`, so a generated
+    markdown file there would be handed to a formatter whose output no human
+    may then hand-correct.
+
+`priv/wire/` is already mounted read-write and already holds `shape.pin`,
+the other artefact that exists to make a drift visible.
+
+It gates itself with no new CI step: the inventory joins the `artifacts`
+list `--check` already walks, so a cic module that starts or stops importing
+a schema reddens `mix grappa.gen_wire_types --check` until the file is
+regenerated. It is deliberately NOT in the `wire_pin` digest — that digest
+covers `generate/0` and `generate_schema/0`, and the inventory describes who
+READS the wire rather than what the wire IS. Nothing in this change touches
+either emitter, so the protocol version does not move.
+
+### A4: the criterion for the slice, and what it excludes
+
+The slice is *the REST doors whose response envelope ALREADY has a generated
+schema*. That draws the line where it costs nothing: no Wire typespec is
+added, so the digest stands still and no protocol bump is owed, and no shape
+is invented by hand on the client — which is the defect A4 is about.
+
+  * `GET /me` → `S_MeJSONMeJson`. The widest renderer feed in the app, and
+    the literal case the issue describes: `home_data` draws HomePane,
+    `read_cursors` + `unread_counts` seed every sidebar badge, `badge_count`
+    seeds the PWA icon, and a cast made all four `undefined` inside a
+    renderer on a response one vintage behind.
+  * `PATCH /networks/:slug/profile`, `PUT` and `DELETE
+    /networks/:slug/avatar` → the EXISTING `narrowCredentialResponse`. Six
+    controller actions render `NetworksJSON.update/1` through one
+    `Wire.credential_to_json/1`; #1400 converted three and left three
+    casting, and nothing distinguished them but which ones were looked at.
+
+Excluded, with the reason rather than a silence:
+
+  * `AdminNetwork` / `AdminCredential` (six casts) INTERSECT fields the
+    server sends and the typespec does not declare (`circuit_state`,
+    `live_counts`, `session_action`, `session_error`); validating would drop
+    them. #1400 already recorded this — it needs the server-side declaration
+    first.
+  * `GET /networks` → `RawNetwork[]`: the hand-written type is a deliberate
+    mid-rollout TOLERANCE (every field optional, `tagNetwork` defaults a
+    missing one). Narrowing strictly would reject exactly the payloads it
+    exists to accept.
+  * login / TOTP / passkey / share-token, admin vhost list, subject search,
+    perform view, ignores, settings, the reaper / circuit / delete acks, the
+    message count: no generated envelope. `AuthJSON` publishes
+    `subject_wire` and not the `{token, subject}` around it; the others
+    publish nothing. Emitting them is a server-side change that moves the
+    digest and owes a protocol bump, which is a different slice.
+  * the `Record<string, unknown>` casts on the error path: not a wire shape.
+
+### `MeResponse` stays, and that is not an oversight
+
+cic's hand-written `MeResponse` marks `read_cursors`, `unread_counts`,
+`badge_count` and `home_data` OPTIONAL while the generated schema declares
+them required. The server is not ambiguous: both clauses of `MeJSON.show/1`
+`Map.put` all four unconditionally. The optional marks are the test-mock
+convenience `wireTypesAssert.ts` already names where it declines the
+full-shape pin. So the door narrows against the generated shape and returns
+a value assignable to the hand type; deleting the mirror is A4 residue that
+costs a sweep of every consumer, and no door needs it to fail loud.
+
+What the narrow did force is honest: `ME_BODY` in `api.test.ts` stopped
+after `inserted_at`. A fixture that omits what production always sends
+cannot catch a door losing it.
+
+### The mutant, and what it found
+
+Reverting the seven narrows to casts turns exactly the seven new fail-loud
+assertions red and nothing else. The "nothing else" is the finding: #1400
+shipped the three credential doors it DID convert with no test at all, so
+the three it missed were invisible from both directions.
+
+A positive control earned its keep here too. The complete `CREDENTIAL_ROW`
+fixture was REJECTED on first run — `auth_method: "nickserv"`, where the
+generated enum says `nickserv_identify`. Without a control that has to
+answer yes, three rejection assertions would have passed against a narrower
+rejecting everything.
