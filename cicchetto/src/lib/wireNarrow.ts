@@ -17,6 +17,7 @@ import {
   S_AdminOverviewWireT,
   S_ChannelDirectoryWireIndexPayload,
   S_LiveIntrospectionAdminWireIndexPayload,
+  S_MeJSONMeJson,
   S_NetworksFeaturedChannelsAdminWireIndexPayload,
   S_NetworksFeaturedChannelsAdminWireT,
   S_NetworksFeaturedChannelsWireIndexPayload,
@@ -43,6 +44,7 @@ import type {
   AdminOverviewWireT,
   ChannelDirectoryWireIndexPayload,
   LiveIntrospectionAdminWireIndexPayload,
+  MeJSONMeJson,
   NetworksFeaturedChannelsAdminWireIndexPayload,
   NetworksFeaturedChannelsAdminWireT,
   NetworksFeaturedChannelsWireIndexPayload,
@@ -788,9 +790,40 @@ export function narrowThemeResponse(raw: unknown): ThemesWireT {
   return narrowRest(S_ThemesWireT, raw, "theme");
 }
 
-/** `PATCH /networks/:slug`, `PATCH /networks/:slug/identity`, `PUT /networks/:slug/password`. */
+/**
+ * Every door that renders `NetworksJSON.update/1` — `PATCH /networks/:slug`,
+ * `PATCH /networks/:slug/identity`, `PUT /networks/:slug/password`,
+ * `PATCH /networks/:slug/profile`, `PUT` + `DELETE /networks/:slug/avatar`.
+ *
+ * Six controller actions, one `render(conn, :update, credential:)` each, one
+ * `Wire.credential_to_json/1` behind them (issue 2135, measured on
+ * `networks_controller.ex`). #1400 narrowed the first three and left the
+ * last three casting; nothing distinguished them but which ones were looked
+ * at.
+ */
 export function narrowCredentialResponse(raw: unknown): NetworksWireCredentialJson {
   return narrowRest(S_NetworksWireCredentialJson, raw, "network credential");
+}
+
+/**
+ * `GET /me`, the widest renderer feed in the app.
+ *
+ * Issue 2135's A4, and the reason it is the first door of that slice rather
+ * than a representative one: `home_data` draws HomePane, `read_cursors` +
+ * `unread_counts` seed every sidebar badge and `badge_count` seeds the PWA
+ * icon. A cast made all four `undefined` in a renderer on a response one
+ * vintage behind; validation makes the surface fail where the fault is.
+ *
+ * The schema declares those four REQUIRED and cic's `MeResponse` marks them
+ * optional. The server is the authority and it is not ambiguous: both arms
+ * of `MeJSON.show/1` `Map.put` all four unconditionally. The optional marks
+ * are a client-side convenience for test mocks (`wireTypesAssert.ts` says so
+ * where it declines the full-shape pin), which is why this narrows against
+ * the generated shape and leaves the hand-written type alone — the mirror is
+ * A4 residue, not something this door can delete on its own.
+ */
+export function narrowMeResponse(raw: unknown): MeJSONMeJson {
+  return narrowRest(S_MeJSONMeJson, raw, "subject profile");
 }
 
 /** `POST /admin/users`, `PATCH /admin/users/:id`, `PUT /admin/users/:id/password`. */

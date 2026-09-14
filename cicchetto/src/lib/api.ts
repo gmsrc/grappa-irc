@@ -35,6 +35,7 @@ import {
   narrowDirectoryPageResponse,
   narrowFeaturedChannelsResponse,
   narrowMembersIndexResponse,
+  narrowMeResponse,
   narrowMessagePageResponse,
   narrowMessageResponse,
   narrowSessionLogListResponse,
@@ -1869,7 +1870,7 @@ async function fetchMe(token: string): Promise<MeResponse> {
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as MeResponse;
+  return narrowMeResponse(await res.json());
 }
 
 // #211 phase 7 — `PATCH /me/identity` + its `IdentityResponse` are RETIRED.
@@ -3017,7 +3018,7 @@ export async function updateNetworkProfile(
     body: JSON.stringify(fields),
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as CredentialJson;
+  return narrowCredentialResponse(await res.json());
 }
 
 // M3a — the credential's own avatar, per (subject, network) for BOTH
@@ -3048,7 +3049,7 @@ export async function uploadNetworkAvatar(
     body,
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as CredentialJson;
+  return narrowCredentialResponse(await res.json());
 }
 
 export async function deleteNetworkAvatar(
@@ -3060,7 +3061,7 @@ export async function deleteNetworkAvatar(
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as CredentialJson;
+  return narrowCredentialResponse(await res.json());
 }
 
 // #189 — per-network on-connect perform list. `perform_list` is the raw

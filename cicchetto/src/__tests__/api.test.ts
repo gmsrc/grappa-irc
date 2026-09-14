@@ -49,7 +49,7 @@ describe("api 401 handler", () => {
   it("does not invoke the handler on 2xx success", async () => {
     const handler = vi.fn();
     api.setOn401Handler(handler);
-    stubFetch(200, { kind: "user", id: "u1", name: "alice", is_admin: false, inserted_at: "x" });
+    stubFetch(200, ME_BODY);
     await expect(api.me("good-token", "shared")).resolves.toBeDefined();
     expect(handler).not.toHaveBeenCalled();
   });
@@ -1069,12 +1069,22 @@ describe("#739 — startPasskeyModeChange only offers modes the server accepts",
 // HomePane connect-a-network refetch, the BootErrorBoundary retry) must not be
 // served an answer that was already on the wire before its write.
 
+// The FULL user arm of `GET /me`, because that is what the server sends:
+// both clauses of `MeJSON.show/1` `Map.put` all four envelopes
+// unconditionally. It used to stop after `inserted_at`, which type-checked
+// only because cic's `MeResponse` marks them optional for exactly this
+// convenience — and a fixture that omits what production always sends is a
+// fixture that cannot catch the door losing them (issue 2135).
 const ME_BODY = {
   kind: "user",
   id: "u1",
   name: "alice",
   is_admin: false,
-  inserted_at: "x",
+  inserted_at: "2026-09-14T10:00:00Z",
+  read_cursors: {},
+  unread_counts: {},
+  badge_count: 0,
+  home_data: { networks: [], available_networks: [] },
 } as const;
 
 type DeferredWire = {
@@ -1481,6 +1491,117 @@ describe("#1400 slice 1 — the nine class-A doors reject an incomplete row", ()
   it("adminListFeaturedChannels rejects a channel missing `position`", async () => {
     stubFetch(200, { featured_channels: [without(FEATURED_ROW, "position")] });
     await expect(api.adminListFeaturedChannels("t", 1)).rejects.toBeInstanceOf(WireShapeError);
+  });
+});
+
+// The complete `Networks.Wire.credential_to_json/1` row, shared by the six
+// doors that render `NetworksJSON.update/1`.
+const CREDENTIAL_ROW = {
+  network: "azzurra",
+  nick: "vjt",
+  ident: "vjt",
+  realname: "Marcello",
+  sasl_user: null,
+  auth_method: "nickserv_identify",
+  auth_command_template: null,
+  autojoin_channels: ["#italia"],
+  connection_state: "connected",
+  connection_state_reason: null,
+  connection_state_changed_at: "2026-09-14T10:00:00Z",
+  age: null,
+  gender: null,
+  location: null,
+  languages: null,
+  custom: null,
+  avatar_url: null,
+  inserted_at: "2026-08-01T09:00:00Z",
+  updated_at: "2026-09-14T10:00:00Z",
+};
+
+// Issue 2135 A4. The damage the issue names is specific — "on REST it becomes
+// `undefined` inside a renderer" — so the doors converted here are the ones
+// whose value a renderer reads, and the assertion is the same mutant #1400
+// used: remove ONE required key and the door must refuse the response.
+describe("issue 2135 — /me fails loud instead of handing a renderer `undefined`", () => {
+  it("rejects a /me body missing `home_data`", async () => {
+    // The one that bites hardest: HomePane renders `home_data.networks`, so
+    // the cast turned a vintage mismatch into an empty home page with no
+    // error anywhere.
+    stubFetch(200, without(ME_BODY, "home_data"));
+    await expect(api.me("t", "fresh")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("rejects a /me body missing `unread_counts`", async () => {
+    stubFetch(200, without(ME_BODY, "unread_counts"));
+    await expect(api.me("t", "fresh")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("rejects a /me body whose `badge_count` is the wrong primitive", async () => {
+    stubFetch(200, { ...ME_BODY, badge_count: "3" });
+    await expect(api.me("t", "fresh")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  // POSITIVE control, chosen by demonstrating it answers yes: without it the
+  // three above would pass against a narrower that rejects EVERYTHING.
+  it("passes a complete /me body through", async () => {
+    stubFetch(200, ME_BODY);
+    await expect(api.me("t", "fresh")).resolves.toEqual(ME_BODY);
+  });
+
+  // The visitor arm is a separate union member; a narrower pinned only on
+  // the user arm would reject every visitor session in production.
+  it("passes a complete visitor /me body through", async () => {
+    const visitor = {
+      kind: "visitor",
+      id: "v1",
+      expires_at: null,
+      registered: true,
+      incognito: false,
+      read_cursors: {},
+      unread_counts: {},
+      badge_count: 0,
+      home_data: { networks: [], available_networks: [] },
+    };
+    stubFetch(200, visitor);
+    await expect(api.me("t", "fresh")).resolves.toEqual(visitor);
+  });
+
+  it("drops a key /me's own typespec does not declare, rather than rejecting", async () => {
+    stubFetch(200, { ...ME_BODY, experiments: ["x"] });
+
+    const me = await api.me("t", "fresh");
+
+    expect(me).toEqual(ME_BODY);
+    expect(me).not.toHaveProperty("experiments");
+  });
+});
+
+describe("issue 2135 — the three credential doors #1400 left casting", () => {
+  it("updateNetworkProfile rejects a credential missing `nick`", async () => {
+    stubFetch(200, without(CREDENTIAL_ROW, "nick"));
+    await expect(api.updateNetworkProfile("t", "azzurra", { age: "30" })).rejects.toBeInstanceOf(
+      WireShapeError,
+    );
+  });
+
+  it("uploadNetworkAvatar rejects a credential missing `avatar_url`", async () => {
+    stubFetch(200, without(CREDENTIAL_ROW, "avatar_url"));
+    const file = new File(["x"], "a.png", { type: "image/png" });
+    await expect(api.uploadNetworkAvatar("t", "azzurra", file)).rejects.toBeInstanceOf(
+      WireShapeError,
+    );
+  });
+
+  it("deleteNetworkAvatar rejects a credential missing `connection_state`", async () => {
+    stubFetch(200, without(CREDENTIAL_ROW, "connection_state"));
+    await expect(api.deleteNetworkAvatar("t", "azzurra")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  // POSITIVE control for all three: the row itself has to be acceptable, or
+  // the rejections above prove nothing about the missing key.
+  it("passes a complete credential row through", async () => {
+    stubFetch(200, CREDENTIAL_ROW);
+    await expect(api.deleteNetworkAvatar("t", "azzurra")).resolves.toEqual(CREDENTIAL_ROW);
   });
 });
 
