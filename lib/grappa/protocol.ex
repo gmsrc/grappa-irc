@@ -600,16 +600,29 @@ defmodule Grappa.Protocol do
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
   #
-  # 🔴 A REBASE IS THE CASE THE TRIPWIRE IS FOR, and it is silent. The
-  # number lives in TWO places ~10 lines apart, and two branches that both
-  # bump it conflict on the attribute — whose neighbouring prose diverged —
-  # while the `@spec` line is IDENTICAL on both sides and merges clean.
-  # Measured on issue 2150 rebasing onto v22: git raised the conflict on
-  # `@protocol_version` alone, took the base's `:: 22` for the spec without
-  # a marker, and the tree compiled. Resolving the conflict is NOT resolving
-  # the bump — grep the whole file for the OLD number before continuing a
-  # rebase, because a conflict on one site is positive evidence the other
-  # site was decided for you.
+  # 🔴 THE NUMBER LIVES IN THREE PLACES, AND A REBASE WALKS PAST TWO OF
+  # THEM. Measured on issue 2150 rebasing onto v22:
+  #
+  #   1. `@protocol_version` above        — CONFLICTS. The prose around it
+  #      diverges between branches, so git stops and a human decides.
+  #   2. `@spec version() :: N`, below    — MERGES CLEAN. The line is
+  #      byte-identical on both sides, so there is nothing to conflict on:
+  #      git took the base's `:: 22` with no marker and the tree compiled.
+  #   3. `CLIENT_PROTOCOL_VERSION` in     — NEVER CONSIDERED. Another file,
+  #      `cicchetto/src/lib/socket.ts`       another language. No merge will
+  #      ever raise it, in either direction.
+  #
+  # So this spec is a tripwire against a half-done bump TYPED BY HAND, and
+  # not against a rebase — one you never step on cannot trip. Site 3 is
+  # worse: on issue 2150 it was simply never edited, the pair stayed unequal
+  # from the wire commit onward, and the ONLY thing that said so was
+  # `protocol_test.exs` — which runs in `scripts/check.sh` and in no
+  # targeted suite, so five commits carried the inequality with no red.
+  #
+  # The rule, for whoever is mid-rebase: a conflict on ONE site of a
+  # duplicated constant is positive evidence that the OTHER sites were
+  # decided for you. Grep every site for the OLD number before continuing,
+  # including the ones that are not Elixir.
   @spec version() :: 23
   def version, do: @protocol_version
 
