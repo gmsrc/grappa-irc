@@ -1600,6 +1600,24 @@ Spostata qui dall'handoff 2026-08-18: e' una regola, non uno stato.
    *"additions invariate"* becca **solo il modo TESTA** (il separatore mangiato, 3 righe: 96→93) ed è
    **CIECA sul modo CODA**, che è esattamente ciò per cui esiste il check (4).
    ⇒ **Il numstat NON è la prova portante su un append: dichiaralo vacuo a metà e appoggiati al (4).**
+   🔴🔴 **E SU UN RAMO CHE CANCELLA IL NUMSTAT NON È NEMMENO STABILE: DIPENDE DALL'ALGORITMO DI
+   DIFF, E IL DEFAULT `myers` SI MUOVE ATTRAVERSO UN REBASE (w2, 2026-09-14, misurato su #2149).**
+   Stesso contenuto, stesso file, rebase provato corretto: `myers` legge **156/44287 PRIMA** e
+   **323/44454 DOPO** — entrambe UP di 167 — mentre `minimal`, `patience` e `histogram` leggono
+   **156/44287 in tutti e due i casi**. ⇒ `scripts/union-rebase.sh` dava **ROSSO su un rebase
+   CORRETTO**, cioè la direzione che uccide un cancello: **non lo spegni, insegni a non credergli.**
+   ⇒ **Un verificatore che conta righe PINNA l'algoritmo (`--diff-algorithm=histogram`) sui DUE
+   lati del confronto** — un pin su un lato solo è peggio di nessun pin.
+   🥇🥇 **E LA PROVA CHE NON DIPENDE DA NIENTE DI TUTTO QUESTO, portata da lei senza che la
+   chiedessi: RICOSTRUISCI IL FILE ATTESO BYTE PER BYTE** (testa del ramo + coda di main + la tua
+   entry) **e `cmp` contro quello vero, con il mutante a un byte che DEVE dare rc=1.** Risponde alla
+   domanda vera — *"quel file è quello che deve essere?"* — invece che a una proxy, e il numstat,
+   come questo caso dimostra, alla domanda vera non ci arriva **nemmeno in linea di principio**.
+   ⚠️ Nello stesso episodio lo strumento aveva **già** un secondo difetto, indipendente: la clausola
+   `del_after == 0` è **invertita** su un ramo che cancella (rosso nel caso sano, **verde nel caso
+   in cui il driver ha MANGIATO le cancellazioni**). I due difetti si sommano: **prima di fidarti
+   del verdetto di un contatore di righe, chiediti se sta contando una grandezza STABILE e se la
+   sua soglia è orientata nel verso giusto.**
 3. **FORMA AL CONFINE letta SUL FILE**: fine-entry / marcatore **senza vuota davanti** / vuota / `---` /
    vuota / `## `.
 4. 🥇 **ENTRY PRECEDENTE byte-identica — LA prova portante sul rebase**, l'unica che intercetta il modo di
