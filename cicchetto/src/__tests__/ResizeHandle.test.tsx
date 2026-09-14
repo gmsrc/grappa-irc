@@ -54,6 +54,10 @@ describe("ResizeHandle component", () => {
     document.documentElement.style.removeProperty("--sidebar-width");
     document.documentElement.style.removeProperty("--members-width");
     document.documentElement.classList.remove("resize-dragging");
+    // issue 2165 — the desktop floor resolves against the root font size now,
+    // and jsdom's own default is 16px, not the app's 14px. Pin the app's, so
+    // the 160px this file asserts stays the number it was written for.
+    document.documentElement.style.fontSize = "14px";
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
       writable: true,
@@ -99,7 +103,7 @@ describe("ResizeHandle component", () => {
     expect(document.documentElement.classList.contains("resize-dragging")).toBe(false);
   });
 
-  it("clamps to MIN_WIDTH_PX (160) when dragged below min (left)", () => {
+  it("clamps to the desktop floor (160 at the default font) below min (left)", () => {
     const { aside } = mountInAside("left", { left: 0, right: 256 });
     const handle = aside.querySelector(".resize-handle") as HTMLElement;
     handle.dispatchEvent(makePointerEvent("pointerdown", { clientX: 256 }));

@@ -26,9 +26,10 @@
 // would freeze them at one font size.
 //
 // Clamp policy — TWO tiers, because the bound is not one number:
-//   * Min width:  MIN_WIDTH_PX on the desktop shell; COMPACT_MIN_WIDTH_PX in
-//                 the short-landscape tier, whose whole rail is narrower than
-//                 the desktop floor.
+//   * Min width:  MIN_WIDTH_REM on the desktop shell, resolved against the
+//                 LIVE root font size (issue 2165 — it was a px constant);
+//                 COMPACT_MIN_WIDTH_PX in the short-landscape tier, whose
+//                 whole rail is narrower than the desktop floor.
 //   * Max width:  half the viewport on the desktop shell; a QUARTER of it in
 //                 the short-landscape tier, so both rails at their cap still
 //                 leave the centre at least half the width.
@@ -54,13 +55,39 @@ const DEFAULT_PX: Record<SidebarSide, number> = {
   right: 224,
 };
 
-export const MIN_WIDTH_PX = 160;
+// The `:root` default of `--font-size` in themes/default.css. Mirrored here
+// for the same reason SHORT_LANDSCAPE_QUERY is: JS cannot read a stylesheet's
+// default. It is used ONLY to express the floor below in `rem` — the LIVE
+// basis every clamp resolves against is read off the DOM by rootFontSizePx(),
+// never from this number.
+const BASE_FONT_SIZE_PX = 14;
 
-// issue 1827 — the tier's own floor. Deliberately a SECOND constant rather
-// than a smaller MIN_WIDTH_PX: 160px is the right floor for the desktop
-// shell and must not move. In the short-landscape tier it is wider than the
-// tier's own 7rem rail (98px at the default font size), so reusing it would
-// pin the handle against its floor and give the operator nothing to drag.
+// issue 2165 — the desktop floor, in `rem`. It was `MIN_WIDTH_PX = 160`, a px
+// constant that did not move when --font-size did, so the same 160px held a
+// third more characters at S than at XXL and the empty band to the right of
+// the longest nick GREW as the operator shrank the text — backwards. The
+// defaults in CSS already track the ladder (see the no-var rule above); this
+// is the floor finally getting the same treatment.
+//
+// `160 / 14` and not a rounder 10rem: this is a rewrite to PRESERVE what
+// ships at the default font size, the #1827 posture on the CSS fallbacks run
+// in the opposite direction. It resolves to exactly 160px at M and differs
+// only away from it. 10rem would be the conversion for a 16px root, which
+// this app does not have — `html` takes `font-size: var(--font-size)`, whose
+// :root default is 14px.
+export const MIN_WIDTH_REM = 160 / BASE_FONT_SIZE_PX;
+
+// issue 1827 — the tier's own floor, and STILL px after issue 2165 converted
+// its desktop sibling. Deliberately a SECOND constant: in the short-landscape
+// tier the desktop floor is wider than the tier's own 7rem rail (98px at the
+// default font size), so reusing it would pin the handle against its floor
+// and give the operator nothing to drag.
+//
+// issue 2165 asked whether a rem desktop floor makes this dead. Measured: it
+// does not. The desktop floor only crosses below 96px at a root font size
+// under 8.4px (96 / (160/14), rounding included), which is below every rung
+// of the S…XXL ladder and below the smallest size the app can be put in. The
+// tier floor is still the lower of the two everywhere it applies.
 export const COMPACT_MIN_WIDTH_PX = 96;
 
 // Mirrors the #319 tier predicate in themes/default.css. Same caveat theme.ts
@@ -78,8 +105,30 @@ function inShortLandscape(): boolean {
   return window.matchMedia(SHORT_LANDSCAPE_QUERY).matches;
 }
 
+// issue 2165 — the live `rem` basis. `rem` resolves against the ROOT
+// element's font size, and themes/default.css gives `html` a
+// `font-size: var(--font-size)`, so this one property carries the whole S…XXL
+// ladder already resolved to a length. Deliberately NOT
+// `getComputedStyle(root).getPropertyValue("--font-size")`: that is an
+// UNREGISTERED custom property, and reading one back hands you its token
+// stream rather than a value — the trap ContextMenu.tsx and RailActions.tsx
+// both record. The absent-API arm mirrors inShortLandscape()'s: an
+// environment that cannot evaluate the question gets the stylesheet default,
+// which is the right answer for it.
+//
+// Free on the hot path, which is the only place this is called in a loop:
+// ResizeHandle's pointermove already calls `aside.getBoundingClientRect()`
+// one statement before `clampWidth`, and that flushes style and layout — so
+// by the time this runs there is nothing left to recompute.
+function rootFontSizePx(): number {
+  if (typeof window === "undefined" || !window.getComputedStyle) return BASE_FONT_SIZE_PX;
+  const px = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(px) && px > 0 ? px : BASE_FONT_SIZE_PX;
+}
+
 export function minWidthPx(): number {
-  return inShortLandscape() ? COMPACT_MIN_WIDTH_PX : MIN_WIDTH_PX;
+  if (inShortLandscape()) return COMPACT_MIN_WIDTH_PX;
+  return Math.round(MIN_WIDTH_REM * rootFontSizePx());
 }
 
 // The single source of the upper bound. ResizeHandle reads it for BOTH the

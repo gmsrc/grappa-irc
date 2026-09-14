@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mirror-shape of fontSize.test.ts. Imports are dynamic so each `beforeEach`
 // can reset localStorage + the CSS vars and re-import the module fresh.
@@ -7,6 +8,28 @@ const STORAGE_KEY_LEFT = "cicchetto.sidebarWidth";
 const STORAGE_KEY_RIGHT = "cicchetto.membersWidth";
 const CSS_VAR_LEFT = "--sidebar-width";
 const CSS_VAR_RIGHT = "--members-width";
+
+// issue 2165 — the desktop floor is a `rem` quantity now, so every assertion
+// about it has to declare the basis it is measured at. Production gets that
+// basis from `html { font-size: var(--font-size) }` in themes/default.css;
+// jsdom loads no stylesheet AND does not substitute `var()` — measured:
+// setting `--font-size: 9px` on <html> leaves `getComputedStyle(html)
+// .fontSize` at jsdom's own 16px default, while an inline `style.fontSize`
+// reads straight back. So the inline property is how a test states "the root
+// font size is N", and 16 is what the module would otherwise see here — which
+// is NOT the app's 14px default and would quietly shift every number below.
+function setRootFontSize(px: number): void {
+  document.documentElement.style.fontSize = `${px}px`;
+}
+
+// The full range --font-size can take. S…XXL is the shipped ladder; 9 and 28
+// are the bounds of the custom field, so a floor derived from the root font
+// size has to stay sane across all of it.
+const FONT_SIZE_RANGE_PX = [9, 11, 12, 14, 16, 18, 20, 22, 28];
+
+// The narrowest viewport that still renders THIS shell: below 769px the
+// #319/#1827 tier predicate and Shell.tsx hand over to `.shell-mobile`.
+const NARROWEST_DESKTOP_PX = 769;
 
 // issue 1827 — the short-landscape tier predicate, mirrored from
 // themes/default.css. jsdom implements no matchMedia at all, so the desktop
@@ -40,6 +63,10 @@ describe("sidebarWidths module", () => {
     });
     // Undo any tier stub a previous test installed.
     Reflect.deleteProperty(window, "matchMedia");
+    // Every pre-2165 expectation in this file was written against the 160px
+    // floor, which is what the rem floor resolves to at the app's default
+    // font size. Pin that basis so those numbers keep meaning what they said.
+    setRootFontSize(14);
   });
 
   describe("getSidebarWidth()", () => {
@@ -65,7 +92,7 @@ describe("sidebarWidths module", () => {
       expect(getSidebarWidth("right")).toBe(280);
     });
 
-    it("clamps stored value below MIN_WIDTH_PX (160) up to 160", async () => {
+    it("clamps stored value below the floor (160 at the default font) up to it", async () => {
       localStorage.setItem(STORAGE_KEY_LEFT, "50");
       const { getSidebarWidth } = await import("../lib/sidebarWidths");
       expect(getSidebarWidth("left")).toBe(160);
@@ -128,8 +155,8 @@ describe("sidebarWidths module", () => {
 
   describe("clampWidth()", () => {
     it("returns min when input < min", async () => {
-      const { clampWidth, MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
-      expect(clampWidth(0)).toBe(MIN_WIDTH_PX);
+      const { clampWidth, minWidthPx } = await import("../lib/sidebarWidths");
+      expect(clampWidth(0)).toBe(minWidthPx());
     });
 
     it("returns viewport-max when input > viewport/2", async () => {
@@ -192,10 +219,21 @@ describe("sidebarWidths module", () => {
   // is its own, TIGHTER pair of bounds, so a width chosen on a tall window
   // cannot leak in and starve the centre.
   describe("short-landscape tier bounds", () => {
-    it("keeps MIN_WIDTH_PX at 160 — the tier floor is a separate constant", async () => {
-      const { MIN_WIDTH_PX, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
-      expect(MIN_WIDTH_PX).toBe(160);
-      expect(COMPACT_MIN_WIDTH_PX).toBeLessThan(MIN_WIDTH_PX);
+    it("keeps the desktop floor at 160 at the default font — separate constants", async () => {
+      const { minWidthPx, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
+      expect(minWidthPx()).toBe(160);
+      expect(COMPACT_MIN_WIDTH_PX).toBeLessThan(minWidthPx());
+    });
+
+    // issue 2165's second question. The tier floor stays px while its desktop
+    // sibling goes rem, so the two could in principle cross and leave this
+    // constant unreachable. They do not, anywhere the app can be driven.
+    it("stays the LOWER floor across the whole font range — not dead code", async () => {
+      const { minWidthPx, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
+      for (const px of FONT_SIZE_RANGE_PX) {
+        setRootFontSize(px);
+        expect(COMPACT_MIN_WIDTH_PX).toBeLessThan(minWidthPx());
+      }
     });
 
     it("floors at the tier constant, not at the 160px desktop floor", async () => {
@@ -234,6 +272,116 @@ describe("sidebarWidths module", () => {
       enterShortLandscape(844);
       const { maxWidthPx, COMPACT_MIN_WIDTH_PX } = await import("../lib/sidebarWidths");
       expect(maxWidthPx() - COMPACT_MIN_WIDTH_PX).toBeGreaterThan(100);
+    });
+  });
+
+  // issue 2165 — the reported defect: the members rail stopped shrinking well
+  // before the nicks needed the room, and the leftover empty band GREW as the
+  // operator shrank the font, because the floor was 160 flat px while every
+  // width around it was in `rem`.
+  describe("desktop floor tracks the root font size", () => {
+    // The two guard-arm cases below stub getComputedStyle, and the stub must
+    // not outlive them. It goes in afterEach and NOT in the file's beforeEach:
+    // setupTests.ts installs a fresh in-memory localStorage from its OWN
+    // beforeEach, which runs FIRST, so an unstub from here would strip that
+    // mock one step after it was installed and hand the module the real
+    // Storage, still carrying the previous test's widths. Measured, and
+    // setupTests.ts's header warns about exactly this: two unrelated
+    // applySidebarWidthsFromStorage cases went red reading a leaked 281px.
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // The anchor, from below. 160/14 is the only conversion that leaves the
+    // shipped floor untouched at the default font size; the natural-looking
+    // 10rem is the conversion for a 16px root, which this app does not have,
+    // and it would silently narrow every desktop rail by 20px on merge.
+    it("is still exactly the 160px that shipped, at the default font size", async () => {
+      const { minWidthPx } = await import("../lib/sidebarWidths");
+      setRootFontSize(14);
+      expect(minWidthPx()).toBe(160);
+    });
+
+    // The defect itself. A constant floor answers the same number at every
+    // rung — this is the assertion the pre-2165 module cannot satisfy.
+    it("answers a strictly smaller floor at every smaller font size", async () => {
+      const { minWidthPx } = await import("../lib/sidebarWidths");
+      let previous = 0;
+      for (const px of FONT_SIZE_RANGE_PX) {
+        setRootFontSize(px);
+        const floor = minWidthPx();
+        expect(floor).toBeGreaterThan(previous);
+        previous = floor;
+      }
+    });
+
+    // Linearity + anchor in one statement, without restating MIN_WIDTH_REM:
+    // scale any rung's floor back to the default font and the shipped 160 has
+    // to come out. Tolerance is the ±0.5px rounding, widened by the scale.
+    it("is proportional to the font size, anchored on the shipped 160", async () => {
+      const { minWidthPx } = await import("../lib/sidebarWidths");
+      for (const px of FONT_SIZE_RANGE_PX) {
+        setRootFontSize(px);
+        expect(Math.abs((minWidthPx() * 14) / px - 160)).toBeLessThanOrEqual(1);
+      }
+    });
+
+    // The anchor, from above — and the property a rem floor could plausibly
+    // break where a px one could not. `maxWidthPx` clamps ITSELF up to the
+    // floor, so a floor that outgrows half the viewport does not error: it
+    // silently collapses min onto max and the handle stops moving. On the
+    // narrowest shell that still renders rails, at the largest font the app
+    // can be put in, there must still be travel.
+    it("leaves the handle somewhere to travel, at every font size", async () => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: NARROWEST_DESKTOP_PX,
+      });
+      const { maxWidthPx, minWidthPx } = await import("../lib/sidebarWidths");
+      for (const px of FONT_SIZE_RANGE_PX) {
+        setRootFontSize(px);
+        expect(maxWidthPx()).toBeGreaterThan(minWidthPx());
+      }
+    });
+
+    // End to end, in the units of the complaint: at the smallest font the
+    // rail can finally follow short nicks down past where 160px used to stop
+    // it. No nick is truncated by any of this — the floor is a lower bound on
+    // the drag, not a width imposed on the list.
+    it("accepts a width the 160px constant used to refuse", async () => {
+      const { clampWidth } = await import("../lib/sidebarWidths");
+      setRootFontSize(9);
+      expect(clampWidth(110)).toBe(110);
+    });
+
+    // Both arms of the module's read guard, so neither is untested defensive
+    // code. Same posture as inShortLandscape()'s absent-matchMedia arm: an
+    // environment that cannot answer gets the stylesheet default, never a
+    // guess and never a crash.
+    it("falls back to the stylesheet default where getComputedStyle is absent", async () => {
+      vi.stubGlobal("getComputedStyle", undefined);
+      const { minWidthPx } = await import("../lib/sidebarWidths");
+      setRootFontSize(9);
+      expect(minWidthPx()).toBe(160);
+    });
+
+    // A zero root font size would otherwise multiply the floor to 0, and a
+    // zero floor is not a narrow rail — it is a rail the operator can drag
+    // shut with no handle left to drag it back.
+    it("falls back rather than collapsing the floor on a zero font size", async () => {
+      vi.stubGlobal("getComputedStyle", () => ({ fontSize: "0px" }) as CSSStyleDeclaration);
+      const { clampWidth, minWidthPx } = await import("../lib/sidebarWidths");
+      expect(minWidthPx()).toBe(160);
+      expect(clampWidth(1)).toBe(160);
+    });
+
+    // The coupling the whole conversion rests on. `rem` resolves against the
+    // ROOT font size, and it equals --font-size only because default.css says
+    // so. Delete that declaration and the floor silently detaches from the
+    // ladder with nothing else going red.
+    it("is coupled to default.css giving html font-size: var(--font-size)", () => {
+      const css = readFileSync("src/themes/default.css", "utf8");
+      expect(css).toMatch(/html,\s*body\s*\{[^}]*font-size:\s*var\(--font-size\)/);
     });
   });
 });

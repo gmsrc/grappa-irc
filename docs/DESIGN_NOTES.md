@@ -14208,3 +14208,110 @@ un-wired (1 red each).
 The issue's other direction — the channel identity no longer being the
 leading element pinned to the top-left — is a product decision and was not
 taken here.
+<!-- entry #2165 -->
+
+---
+
+## 2026-09-14 — issue 2165: the floor that could not follow the font down
+
+The members rail stopped shrinking well before the nicks needed the room, and
+the leftover was a visible strip of empty background on a narrow iPad window.
+`MIN_WIDTH_PX = 160` in `cicchetto/src/lib/sidebarWidths.ts` was a flat px
+constant while every width around it was in `rem`, so the wasted band GREW as
+the operator shrank the text — the same 160px holds a third more characters at
+S than at XXL. vjt ruled option A (IRC #grappa, 21:26): the floor becomes
+rem-derived and tracks `--font-size` the way the default widths already do.
+The nick is never truncated; that was the reporter's explicit constraint and
+nothing here touches it, because the floor is a lower bound on the DRAG, not a
+width imposed on the list.
+
+### The anchor is 160/14, and the obvious 10rem would have been wrong
+
+`rem` resolves against the ROOT element's font size, and in this app
+`themes/default.css` gives `html, body` a `font-size: var(--font-size)` whose
+`:root` default is **14px, not 16**. So the conversion that preserves what
+ships is `160 / 14 ≈ 11.43rem`, and the natural-looking 10rem is the
+conversion for a 16px root this app does not have — it would have silently
+narrowed every desktop rail by 20px at the default font size, on merge, with
+nothing going red. That is the #1827 posture on the CSS fallbacks run in the
+other direction: a rewrite to PRESERVE what ships, not a change of it.
+
+Both sides of the anchor are pinned. From below, `minWidthPx()` is still
+exactly 160 at a 14px root. From above, the handle must still have somewhere
+to travel at the narrowest viewport that renders rails (769px) and the largest
+font the app can take — a rem floor can outgrow half the viewport where a px
+one could not, and `maxWidthPx()` clamps ITSELF up to the floor, so the
+failure is not an error but min collapsing silently onto max. Measured across
+9…28px at 769px: the floor tops out at 320px against a 384px cap.
+
+### The tier's 96px floor is NOT dead, and that is measured
+
+The ruling asked to say so if the rem floor made `COMPACT_MIN_WIDTH_PX` (#1827)
+dead code rather than to drop it silently. It does not. The desktop floor only
+crosses below 96px at a root font size under **8.4px** (`96 / (160/14)`,
+rounding included). Every rung of the S…XXL ladder is above it, and so is the
+9px lower bound of the custom font-size field arriving in issue 2164 (read on
+that branch, `FONT_SIZE_MIN_PX = 9` — unmerged at the time of writing): at 9px
+the desktop floor is 103px, still 7px clear. The tier floor stays the lower of
+the two everywhere it applies, so the constant stays, untouched, and the
+crossing point is written next to it.
+
+What the conversion DOES do to that constant is worth recording for whoever
+revisits #1827: it is still px, so at small font sizes it is now the one
+number in this module that does not track the ladder, and it exceeds the
+tier's own `7rem` rail below ~13.7px. That is an observation, not a change —
+removing or converting it is the ruling-holder's call, not this slice's.
+
+### Reading the basis, and why it costs nothing
+
+The live basis is `getComputedStyle(document.documentElement).fontSize`, not
+`getPropertyValue("--font-size")`. The latter is an UNREGISTERED custom
+property and reading one back hands you its token stream rather than a value —
+the trap `ContextMenu.tsx` and `RailActions.tsx` already record. The absent-API
+arm mirrors `inShortLandscape()`'s: an environment that cannot answer gets the
+stylesheet default.
+
+No caching, deliberately. `clampWidth` is only called in a loop from
+`ResizeHandle`'s pointermove, and that handler calls
+`aside.getBoundingClientRect()` one statement earlier, which flushes style and
+layout; nothing dirties either in between, so the read is free where it
+matters. A cache would have been a second copy of a value that already exists
+in the DOM, with housekeeping to drift.
+
+### The coupling, and what a test can and cannot see
+
+The whole conversion rests on `html` taking `font-size: var(--font-size)`.
+Delete that one declaration and the floor detaches from the ladder with
+nothing else going red, so a test reads the rule back out of the stylesheet —
+the `nickColor.test.ts` idiom.
+
+jsdom does not substitute `var()`: setting `--font-size: 9px` on `<html>`
+leaves `getComputedStyle(html).fontSize` at jsdom's own **16px** default, while
+an inline `style.fontSize` reads straight back. So the tests state the rem
+basis inline, and they must state it — 16 is not this app's 14, and every
+pre-2165 assertion of 160 would otherwise have quietly become 183.
+
+One trap found on the way, already documented in `setupTests.ts` and now met
+in practice: `vi.unstubAllGlobals()` belongs in `afterEach`, never in a test
+file's `beforeEach`. Setup files' `beforeEach` runs FIRST and installs the
+in-memory `localStorage` stub, so an unstub from the file's own `beforeEach`
+strips that mock one step after it was installed and hands the module the real
+Storage, still carrying the previous test's widths. It surfaced as two
+unrelated `applySidebarWidthsFromStorage` cases reading a leaked `281px`.
+
+### What was not established
+
+The issue's second mechanism — that the floor knows nothing about the CONTENT,
+so a channel of short nicks still cannot follow its names down — is option B
+and was not ruled. It is untouched here: this slice makes the floor track the
+font, not the longest nick.
+
+No real-device verification. No e2e: the drag floor is unit-measurable and the
+defect is arithmetic, not layout, so a browser run would add cost without
+adding evidence. Thirteen mutants applied, thirteen killed — including both
+wrong anchors (10rem and 160/9), the px constant restored, the two guard arms
+of the basis read, and the stylesheet coupling. `Math.round → Math.ceil`
+survives and is declared EQUIVALENT rather than chased: it differs by at most
+1px at two rungs, violates nothing the contract states, and tightening the
+proportionality tolerance to catch it would pin the implementation instead of
+the property.
