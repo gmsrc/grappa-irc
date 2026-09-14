@@ -13337,3 +13337,89 @@ alignment ambiguity. In both, myers and histogram agree on both sides of the
 rebase, so neither discriminates and neither shipped. The instance above is
 the only measured one. A fixture that cannot fail asserts nothing while
 looking like cover.
+<!-- entry #2139 -->
+
+---
+
+## 2026-09-14 — #2139: six of the seven e2e strictness flags were free, and the seventh says why it is not
+
+`cicchetto/e2e/tsconfig.json` set `strict: true` and omitted seven flags that
+`cicchetto/tsconfig.json` pins. Arch review #2118 (finding A9) called that the
+larger half of the client's verification surface being checked more loosely
+than the code it drives. Six of the seven are now on; the seventh is off with
+its reason written in the file, which is the outcome the issue admitted.
+
+### The flags were measured one at a time, not turned on in a heap
+
+Enabling all seven and reading the pile gives a total and tells you nothing
+about which flag to keep. Each was enabled ALONE against an otherwise green
+tree:
+
+| flag | errors |
+| --- | --- |
+| `noUncheckedIndexedAccess` | **813** |
+| `noUnusedParameters` | 1 |
+| `noUnusedLocals` | 0 |
+| `noFallthroughCasesInSwitch` | 0 |
+| `noImplicitReturns` | 0 |
+| `verbatimModuleSyntax` | 0 |
+| `isolatedModules` | 0 |
+
+All seven together produce 814, so they compose additively — no pair
+interacts. The probe carried its own controls: the pristine tree had to be
+green (else no per-flag number is attributable) and a deliberately broken
+config had to go red (else the harness cannot see a failure at all).
+
+The single `noUnusedParameters` error was a dead `el` parameter on a Playwright
+`evaluate` callback whose body queries `document` instead. The parameter is
+removed rather than renamed to `_el` — the locator stays, because
+`.evaluate` on it is still a real synchronisation point, but a parameter no
+one reads is dead code. tsc enumerates that class exhaustively: 176 e2e
+`evaluate` callbacks take one parameter, exactly one did not read it, and
+after the fix the count is zero. The class is closed, not the example.
+
+### Why `noUncheckedIndexedAccess` stays off, measured
+
+813 errors across **287 of the 496 files** (58% of the tree), and 753 of them
+are one shape: TS2345, `string | undefined` not assignable to `string` — an
+index read handed straight on. The mechanical cure is a `!` at each of the 813
+sites. That buys the flag's name and none of its safety, and plants 813
+non-null assertions in a tree whose own linter treats them as a smell. Making
+the flag mean something requires auditing those reads, which is a slice of its
+own. The reason lives in the tsconfig next to the other six, so the next
+reader does not have to re-derive it.
+
+### The flags were proven to BITE, two-sided
+
+A green gate after the change proves the tree still compiles; it does not
+prove the flags do anything. A typo in a key, a flag TS silently ignores, or a
+tsconfig the runner never reads would all be green too. So one minimal
+violation per flag, judged on TWO sides: RED under the new config **and**
+GREEN under the pre-change config, because a mutant red on both sides is not
+attributable to the flag. All six bite — TS6133, TS6133, TS7029, TS7030,
+TS1484, TS1205 respectively.
+
+### The review's numbers were RIGHT, and that is worth recording
+
+Siblings of #2118 have been correcting the parent's counts, so these were
+re-derived rather than cited. At the review's own timestamp
+(`0136c7771`, 2026-09-13T21:03:44Z) the e2e tree measures **495 files /
+80,653 lines** — the review's figure, exact to the file and to the line. The
+non-test `src` count measures 92,275 against the review's 92,272, a 3-line
+(0.003%) gap not explained by `.d.ts` files (there are none) nor by excluding
+`setupTests.ts` (that lands 147 short); it is left unattributed. TODAY the
+same definitions give 496 / 80,920 and 92,421 — the figures in the issue are
+not wrong, they have aged by a day.
+
+### A red baseline that belonged to no branch
+
+The first `bun run check` on this worktree reported 2 of 5 stages failing.
+Neither was #484 and neither was the branch. Stage 1 is lock drift and it
+named the cause: 24 packages installed off-lock, **including biome itself**
+(lock 2.5.13, installed 2.5.8), inherited from cloning `node_modules` out of
+another checkout. The biome failure below it was produced by the wrong biome.
+After `bun install --frozen-lockfile` the true baseline is **5 stages, 0
+failed** — `tsc (e2e)` included. #484 tracks pre-existing type errors in that
+tree; on this base there are none, so every error the new flags surfaced is
+attributable to the flags. Stage 1 exists precisely so that a stale toolchain
+reports as a stale toolchain rather than as a defect in the code under test.
