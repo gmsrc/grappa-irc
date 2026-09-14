@@ -2222,7 +2222,30 @@ html.resize-dragging * {
 /* #229 — compact umode indicator on the network-header row. Tap target
    that opens the umode viewer/editor modal (mirror of #216's
    .topic-bar-modes button). A <button> reset to read as an inline mode
-   string; muted like the sibling badges, brightening on hover. */
+   string; muted like the sibling badges, brightening on hover.
+
+   issue 2166 — this is a flex item of the header `<li>`, a SIBLING of the
+   window button that holds the network slug, and it used to carry `nowrap`
+   and nothing that bounds its width. A flex item's `min-width` is `auto`,
+   which resolves to the item's CONTENT-BASED MINIMUM unless the item is a
+   scroll container (css-flexbox-1 §4.5) — so an 18-character oper umode
+   string floored ~113px of a 160px rail, took NONE of the row's deficit, and
+   the whole shortfall landed on the one sibling that could shrink. The slug
+   inside it went to ZERO width, not to an ellipsis, and that row is also the
+   SERVER TAB: with several networks connected the rows lost both their
+   identity and their click target.
+
+   `nowrap` STAYS — a mode string must not wrap. What is added is the bound it
+   was missing, so the row shares its deficit in proportion to the bases and
+   the slug keeps `base x available / sum(bases)`, which is above zero for any
+   available width above zero, whatever the font. `flex: 0 1 auto` is
+   deliberately NOT declared: it is the initial value of `flex` and no other
+   rule in this sheet sets `flex` on this selector, so writing it would claim
+   a load-bearing role that removing it cannot change. `min-width: 0` and
+   `overflow: hidden` each lift the automatic minimum on their own; both are
+   here because they say different things — the first that this box may shrink
+   below its text, the second (with `text-overflow`) how the remainder reads.
+   Pinned by `src/__tests__/sidebarHeaderRowShrink.test.ts`. */
 .sidebar-umode-indicator {
   margin-left: 0.4rem;
   background: transparent;
@@ -2232,6 +2255,9 @@ html.resize-dragging * {
   color: var(--muted);
   font-size: 0.75rem;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 
