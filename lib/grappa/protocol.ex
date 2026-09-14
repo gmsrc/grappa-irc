@@ -588,7 +588,31 @@ defmodule Grappa.Protocol do
   # simply not have an arm for, and an unrecognised `kind` has always been
   # ignorable (unknown-is-never-fatal); no bundle predating v23 is left
   # unable to talk to this server.
-  @protocol_version 23
+  #
+  # ---------------------------------------------------------------------------
+  # 24 — issue 2167: `bold_mentions`, a seventh key on `display_prefs`
+  # ---------------------------------------------------------------------------
+  #
+  # The GET/PUT `/me/settings/display-prefs` body grows one boolean. Purely
+  # additive, and the bump is owed under #1393d rather than demanded by the
+  # shape gate: `mix grappa.wire_pin --check` was GREEN at 23 before this
+  # branch touched anything, and the display-prefs body is hand-typed
+  # (`userSettings.ts`) rather than generated, so the pin's digest does not
+  # move for this key. Those are two DIFFERENT verdicts and they are recorded
+  # as different ones — the number moves because the rule says every
+  # wire-shape change moves it, not because a gate went red.
+  #
+  # The reason #1393d exists applies squarely here: a cic bundle that comes to
+  # REQUIRE `bold_mentions` cannot talk to a server predating it, and nothing
+  # server-side would express that without the number. Its six predecessors
+  # (#1766, #2029, #2037 …) each bumped for the same reason.
+  #
+  # @min_protocol_version stays at 1. The key is absent-tolerant in BOTH
+  # directions by construction — the server fills it from
+  # `default_display_prefs/0` on the way in, cic coalesces it against the same
+  # default on the way out — so a bundle predating v24 keeps working, and this
+  # server keeps serving it.
+  @protocol_version 24
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -623,7 +647,7 @@ defmodule Grappa.Protocol do
   # duplicated constant is positive evidence that the OTHER sites were
   # decided for you. Grep every site for the OLD number before continuing,
   # including the ones that are not Elixir.
-  @spec version() :: 23
+  @spec version() :: 24
   def version, do: @protocol_version
 
   @doc """

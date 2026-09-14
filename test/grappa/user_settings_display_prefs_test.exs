@@ -43,7 +43,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
         "presence_filter" => %{},
         "show_bottom_bar" => true,
         "strip_formatting" => false,
-        "show_event_badge" => false
+        "show_event_badge" => false,
+        "bold_mentions" => true
       },
       overrides
     )
@@ -63,7 +64,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                presence_filter: %{},
                show_bottom_bar: true,
                strip_formatting: false,
-               show_event_badge: false
+               show_event_badge: false,
+               bold_mentions: true
              }
     end
 
@@ -78,7 +80,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                presence_filter: %{},
                show_bottom_bar: true,
                strip_formatting: false,
-               show_event_badge: false
+               show_event_badge: false,
+               bold_mentions: true
              }
     end
 
@@ -99,7 +102,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                presence_filter: %{},
                show_bottom_bar: true,
                strip_formatting: false,
-               show_event_badge: false
+               show_event_badge: false,
+               bold_mentions: true
              }
     end
 
@@ -117,7 +121,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                presence_filter: %{},
                show_bottom_bar: true,
                strip_formatting: false,
-               show_event_badge: false
+               show_event_badge: false,
+               bold_mentions: true
              }
     end
   end
@@ -194,7 +199,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                presence_filter: %{"libera #bofh" => "hide", "libera #cat" => "show"},
                show_bottom_bar: true,
                strip_formatting: false,
-               show_event_badge: false
+               show_event_badge: false,
+               bold_mentions: true
              }
     end
 
@@ -633,6 +639,95 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       prefs = UserSettings.get_display_prefs({:user, user.id})
       assert prefs.time_format == "hm"
       assert prefs.colored_nicklist == true
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # bold_mentions (issue 2167) — the SEVENTH key, and the first OPT-OUT of
+  # something currently visible
+  # ---------------------------------------------------------------------------
+  #
+  # vjt's ruling on issue 2167: option A, scoped preferences — "così sono
+  # accessibili a tutti". The ask was a free-form custom CSS block; that was
+  # declined in BOTH forms (client-local and theme-payload), and cosmetic knobs
+  # become first-class validated preferences instead. This is the first one.
+  #
+  # The default is TRUE, which is the inverse of #2037's: the bold exists
+  # today, so leaving it on is the no-change default and the opt-out is the
+  # choice. That inversion is the whole reason this key gets its own block —
+  # every absent-key path has to land on `true` here, where its six
+  # predecessors land on their own (mostly `false`) defaults.
+  #
+  # Server-backed on #1766's criterion, same as the fifth and sixth: "the bold
+  # annoys me" is a property of the ACCOUNT — identical on a phone and on a
+  # desktop — not of a viewport. Its nearest neighbour by shape,
+  # `strip_formatting`, is synced for that same reason.
+  #
+  # ⚠️ The constraint the ruling attached: the bold is what distinguishes a
+  # mention row from a watchlist-highlight row (which is deliberately NOT
+  # bold), so turning it off must not collapse the two. That is a STYLESHEET
+  # invariant and is pinned client-side by
+  # `cicchetto/src/__tests__/mentionBoldDistinction.test.ts` — nothing the
+  # server can assert.
+
+  describe "bold_mentions (issue 2167)" do
+    test "defaults to TRUE — the opt-out is a choice, not a default change" do
+      assert UserSettings.default_display_prefs().bold_mentions == true
+
+      assert UserSettings.get_display_prefs({:user, Ecto.UUID.generate()}).bold_mentions ==
+               true
+    end
+
+    test "round-trips false" do
+      user = user_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_display_prefs(
+                 {:user, user.id},
+                 valid_wire(%{"bold_mentions" => false})
+               )
+
+      assert UserSettings.get_display_prefs({:user, user.id}).bold_mentions == false
+    end
+
+    test "a PUT from a client predating the key is ACCEPTED, and reads as bold" do
+      user = user_fixture()
+      older_body = Map.delete(valid_wire(), "bold_mentions")
+
+      assert {:ok, _} = UserSettings.put_display_prefs({:user, user.id}, older_body)
+      assert UserSettings.get_display_prefs({:user, user.id}).bold_mentions == true
+    end
+
+    # The direction that matters for THIS key, and the one no sibling test
+    # covers: a stored `false` must survive a read. With a default of `true`,
+    # a merge that treated `false` as "missing" (an `||` where a boolean guard
+    # belongs) would silently restore the bold on every load and the
+    # preference would be unusable — visibly set in the drawer, gone on reload.
+    test "a stored false SURVIVES the default merge (not treated as absent)" do
+      user = user_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_display_prefs(
+                 {:user, user.id},
+                 valid_wire(%{"bold_mentions" => false})
+               )
+
+      # Read twice: the merge runs on every read, so a one-shot pass would not
+      # prove the value is stable.
+      assert UserSettings.get_display_prefs({:user, user.id}).bold_mentions == false
+      assert UserSettings.get_display_prefs({:user, user.id}).bold_mentions == false
+    end
+
+    test "rejects a non-boolean with a field error, like its six siblings" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               UserSettings.put_display_prefs(
+                 {:user, user.id},
+                 valid_wire(%{"bold_mentions" => "yes"})
+               )
+
+      assert cs.errors[:display_prefs]
     end
   end
 end

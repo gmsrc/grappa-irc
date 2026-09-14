@@ -252,7 +252,8 @@ defmodule Grappa.UserSettings do
           presence_filter: %{String.t() => String.t()},
           show_bottom_bar: boolean(),
           strip_formatting: boolean(),
-          show_event_badge: boolean()
+          show_event_badge: boolean(),
+          bold_mentions: boolean()
         }
 
   @notification_prefs_key "notification_prefs"
@@ -1928,8 +1929,10 @@ defmodule Grappa.UserSettings do
   `"display_prefs"` key is absent: `"hms"` timestamps, monochrome nicklist,
   an empty presence-filter map (every channel follows the size default),
   the mobile window bar SHOWN (#1766 is an opt-out, never a default change),
-  and mIRC formatting RENDERED (#2029 is an opt-in: colours keep working as
-  they do today until a reader asks for them to stop).
+  mIRC formatting RENDERED (#2029 is an opt-in: colours keep working as
+  they do today until a reader asks for them to stop), and mention rows BOLD
+  (issue 2167 is an opt-out, like #1766: the bold exists today, so leaving it
+  on is the no-change default).
   """
   @dialyzer {:nowarn_function, default_display_prefs: 0}
   @spec default_display_prefs() :: display_prefs()
@@ -1940,7 +1943,8 @@ defmodule Grappa.UserSettings do
       presence_filter: %{},
       show_bottom_bar: true,
       strip_formatting: false,
-      show_event_badge: false
+      show_event_badge: false,
+      bold_mentions: true
     }
   end
 
@@ -2007,10 +2011,19 @@ defmodule Grappa.UserSettings do
       `Message.suppressed_presence_kinds/0` (#458). A kick therefore stops
       contributing to a badge by default; if one must stay loud it belongs in
       the mention/severity channel (#267), not back in the message bucket.
-    * `show_bottom_bar` (#1766) and `strip_formatting` (#2029) are booleans
-      IF PRESENT; an absent key takes the default. The two keys added since
-      the shape first shipped are exactly the two that tolerate absence, and
-      that asymmetry is deliberate — see `fetch_optional_display_bool/3`.
+    * `show_bottom_bar` (#1766), `strip_formatting` (#2029) and
+      `bold_mentions` (issue 2167) are booleans IF PRESENT; an absent key
+      takes the default. Every key added since the shape first shipped
+      tolerates absence, and that asymmetry is deliberate — see
+      `fetch_optional_display_bool/3`.
+    * `bold_mentions` (issue 2167) is the first of them whose default is
+      TRUE, i.e. the first OPT-OUT of something currently on screen. vjt's
+      ruling put cosmetic knobs behind first-class validated preferences
+      rather than the free-form custom CSS block that was asked for
+      ("così sono accessibili a tutti"), and this is the first one. The
+      constraint that rides with it is a CLIENT-side stylesheet invariant,
+      not a server one: the bold is what tells a mention row from a
+      watchlist-highlight row, so the opt-out must not collapse the two.
     * `presence_filter` is a `%{channel_key => "show" | "hide"}` map. Any
       other value (a boolean, a third state) is REJECTED — the tri-state's
       unset is the ABSENCE of a key, never a stored value, so the server
@@ -2704,7 +2717,14 @@ defmodule Grappa.UserSettings do
       presence_filter: read_presence_filter(stored),
       show_bottom_bar: read_display_bool(stored, :show_bottom_bar, true),
       strip_formatting: read_display_bool(stored, :strip_formatting, false),
-      show_event_badge: read_display_bool(stored, :show_event_badge, false)
+      show_event_badge: read_display_bool(stored, :show_event_badge, false),
+      # issue 2167 — default TRUE. `read_display_bool/3` guards on
+      # `is_boolean/1`, so a stored `false` is a VALUE and survives; only a
+      # missing or malformed entry falls back. That distinction is load-bearing
+      # for this key alone: with a `true` default, a merge that treated `false`
+      # as absent would restore the bold on every read and the preference would
+      # be visibly set in the drawer yet gone after a reload.
+      bold_mentions: read_display_bool(stored, :bold_mentions, true)
     }
   end
 
@@ -2742,7 +2762,8 @@ defmodule Grappa.UserSettings do
          {:ok, pf} <- fetch_presence_filter(prefs),
          {:ok, sbb} <- fetch_optional_display_bool(prefs, :show_bottom_bar, true),
          {:ok, sf} <- fetch_optional_display_bool(prefs, :strip_formatting, false),
-         {:ok, seb} <- fetch_optional_display_bool(prefs, :show_event_badge, false) do
+         {:ok, seb} <- fetch_optional_display_bool(prefs, :show_event_badge, false),
+         {:ok, bm} <- fetch_optional_display_bool(prefs, :bold_mentions, true) do
       {:ok,
        %{
          "time_format" => tf,
@@ -2750,7 +2771,8 @@ defmodule Grappa.UserSettings do
          "presence_filter" => pf,
          "show_bottom_bar" => sbb,
          "strip_formatting" => sf,
-         "show_event_badge" => seb
+         "show_event_badge" => seb,
+         "bold_mentions" => bm
        }}
     else
       {:error, message} -> {:error, display_prefs_changeset_error(message, subject)}

@@ -1,5 +1,6 @@
 import { createEffect } from "solid-js";
 import { token } from "./auth";
+import { getBoldMentions, setBoldMentions } from "./boldMentions";
 import { type ChannelKey, decodeChannelKey } from "./channelKey";
 import { getColoredNicklist, setColoredNicklist } from "./colorNicklist";
 import { getShowEventBadge, setShowEventBadge } from "./eventBadge";
@@ -26,13 +27,19 @@ import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSetti
 //
 // #1766 added a FOURTH owner module (`showBottomBar.ts`) on exactly that shape,
 // and #2029 a FIFTH (`stripFormatting.ts`), and #2037 a SIXTH
-// (`eventBadge.ts`). Every function below that names the
+// (`eventBadge.ts`), and issue 2167 a SEVENTH (`boldMentions.ts`). Every
+// function below that names the
 // wire map has to grow with it — the default baseline, `buildWireMap`,
 // `applyServerPrefs` and a `syncedSet*` — and the server's
 // `default_display_prefs/0` is the authority for the default. Four touch points
 // per key, none of them optional: miss the baseline and logout leaves a
 // residual pref, miss `buildWireMap` and every PUT silently resets the key to
 // the server's default.
+//
+// The seventh key is the first whose default is TRUE while being an OPT-OUT of
+// something visible, which flips the sign on two of those four touch points:
+// the `??` coalesce must land on `true`, and the value worth asserting in a
+// test is `false`. See the comments at each site.
 //
 // ## The THEME sync shape, not the notification-prefs shape
 //
@@ -69,6 +76,7 @@ const DEFAULT_DISPLAY_PREFS: Required<DisplayPrefs> = {
   show_bottom_bar: true,
   strip_formatting: false,
   show_event_badge: false,
+  bold_mentions: true,
 };
 
 // #449 (issue222 regression fix) — the "unconfirmed local write" marker.
@@ -100,7 +108,7 @@ function hasUnsyncedWrite(): boolean {
   return localStorage.getItem(UNSYNCED_KEY) === "1";
 }
 
-// Read the six owner modules into the wire shape (the seed-up + every PUT
+// Read the seven owner modules into the wire shape (the seed-up + every PUT
 // body). Pure snapshot; no reactivity intended. `show_bottom_bar` (#1766) and
 // `strip_formatting` (#2029) are OPTIONAL on the type (an older server omits
 // them on the way IN) but always populated here — cic is the writer, and it
@@ -113,10 +121,11 @@ export function buildWireMap(): Required<DisplayPrefs> {
     show_bottom_bar: getShowBottomBar(),
     strip_formatting: getStripFormatting(),
     show_event_badge: getShowEventBadge(),
+    bold_mentions: getBoldMentions(),
   };
 }
 
-// Distribute a server-authoritative payload into the six owner modules'
+// Distribute a server-authoritative payload into the seven owner modules'
 // LOCAL setters (write-through to signal + localStorage). No re-PUT — this is
 // the server-wins apply path only. The presence map is a full replace so unset
 // channels stay unset.
@@ -145,6 +154,14 @@ export function applyServerPrefs(prefs: DisplayPrefs): void {
   // `||` would make it impossible to turn the badge back OFF from a second
   // device once any device had turned it on.
   setShowEventBadge(prefs.show_event_badge ?? DEFAULT_DISPLAY_PREFS.show_event_badge);
+  // issue 2167 — coalesced for the fourth time, same `--cic` skew, but the
+  // SAFE value runs the other way: this default is TRUE, so an older server
+  // omitting the key must land on bold rather than take it away. And `??`
+  // rather than `||` matters MOST here of the four: with a `true` default,
+  // `||` would send a server-sent `false` straight back to `true`, making the
+  // preference impossible to turn on from a second device — the exact
+  // cross-device failure #449 was built to end.
+  setBoldMentions(prefs.bold_mentions ?? DEFAULT_DISPLAY_PREFS.bold_mentions);
 }
 
 // Reactive server sync — re-runs on every `token()` change (registered inside a
@@ -251,6 +268,11 @@ export function syncedSetStripFormatting(on: boolean): void {
 
 export function syncedSetShowEventBadge(on: boolean): void {
   setShowEventBadge(on);
+  pushDisplayPrefs();
+}
+
+export function syncedSetBoldMentions(on: boolean): void {
+  setBoldMentions(on);
   pushDisplayPrefs();
 }
 

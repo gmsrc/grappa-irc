@@ -19,6 +19,7 @@ import { getSubject, token } from "./lib/auth";
 import { autoAwayDebounceValue, loadAutoAwayDebounce, saveAutoAwayDebounce } from "./lib/autoAway";
 import { createBackdropDismiss } from "./lib/backdropDismiss";
 import { playBeep } from "./lib/beep";
+import { getBoldMentions } from "./lib/boldMentions";
 import { type ChannelKey, decodeChannelKey } from "./lib/channelKey";
 import { getColoredNicklist } from "./lib/colorNicklist";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./lib/conversationMute";
 import { CREDITS_LABEL, openCreditsModal } from "./lib/creditsModal";
 import {
+  syncedSetBoldMentions,
   syncedSetColoredNicklist,
   syncedSetShowBottomBar,
   syncedSetShowEventBadge,
@@ -323,6 +325,13 @@ const SettingsDrawer: Component<Props> = (props) => {
   // removes something an operator already sees.
   const onShowEventBadgeChange = (e: Event) => {
     syncedSetShowEventBadge((e.currentTarget as HTMLInputElement).checked);
+  };
+
+  // issue 2167 — same shape as the three rows above, default back to ON: this
+  // is an opt-OUT, so an unchecked box is the reader asking for the change and
+  // a checked one is today's appearance.
+  const onBoldMentionsChange = (e: Event) => {
+    syncedSetBoldMentions((e.currentTarget as HTMLInputElement).checked);
   };
 
   // #986 — the `onDetach` / `onQuit` handlers moved to RailActions with
@@ -2506,6 +2515,30 @@ const SettingsDrawer: Component<Props> = (props) => {
                     data-testid="strip-formatting-toggle"
                   />
                   strip colours and formatting from messages
+                </label>
+
+                {/* issue 2167 — bold on own-nick mention rows, ON by default:
+                  an opt-OUT, never a default change. The bold is genuinely
+                  contested (one reader called it annoying, another
+                  "comodissimo" in the same channel), which is why it is a
+                  preference rather than a flipped default. It is also the
+                  first cosmetic knob landed under vjt's option-A ruling: the
+                  ask was a free-form custom CSS block, and the ruling took
+                  scoped preferences instead — "così sono accessibili a tutti".
+                  ⚠️ The bold carries weight: `.scrollback-highlight` (watchlist
+                  match) is deliberately not bold, so turning this off must not
+                  make the two states identical. It does not — the mention row
+                  keeps its `--mention` background and the highlight keeps its
+                  accent bar. Sits next to the two rows above because all three
+                  are scrollback-rendering prefs. */}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={getBoldMentions()}
+                    onChange={onBoldMentionsChange}
+                    data-testid="bold-mentions-toggle"
+                  />
+                  bold the rows that mention your nick
                 </label>
 
                 {/* #2037 B — the events badge, OFF by default. vjt's ruling:

@@ -3849,12 +3849,27 @@ button.topic-bar-windows-opener {
 
 .scrollback-line.scrollback-mention {
   background: var(--mention);
-  font-weight: bold;
+  /* issue 2167 — the bold is a PREFERENCE, and the fallback is what keeps it
+     the default. `--mention-font-weight` is written on `<html>` by
+     lib/boldMentions.ts (a #449 synced display pref); until that write lands
+     — the pre-boot frame, a server predating the key, JS disabled — the
+     fallback renders today's appearance.
+
+     The weight is the ONLY thing this property is allowed to reach. The
+     sibling `.scrollback-highlight` below is deliberately not bold, so the
+     bold is one of the axes telling the two states apart; routing anything
+     else through the same property (either background, the accent bar) would
+     let the opt-out collapse them. Pinned by
+     `mentionBoldDistinction.test.ts`, which fails on a second consumer. */
+  font-weight: var(--mention-font-weight, bold);
 }
 
 /* C7.7: Watchlist highlight — own-nick match in content kinds.
    Visually distinct from .scrollback-mention: softer background,
-   no bold, so the two states are clearly different. */
+   no bold, so the two states are clearly different. Since issue 2167 the
+   mention's bold is opt-out, so this rule's background + the accent bar
+   below are what carry the distinction when a reader turns it off — they
+   are load-bearing, not decoration. */
 .scrollback-line.scrollback-highlight {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   /* #1298 — anchor for the accent bar below, which is PAINTED rather than

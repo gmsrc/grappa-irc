@@ -18,6 +18,7 @@ import "./lib/subscribe";
 import "./lib/userTopic";
 import { isDiagEnabled } from "./DiagFloat";
 import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
+import { applyBoldMentionsFromStorage } from "./lib/boldMentions";
 import { bootBundleHashAccessor, shouldShowRefreshBanner } from "./lib/bundleHash";
 import { requestBundleRefresh } from "./lib/bundleRefreshNotice";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
@@ -65,6 +66,14 @@ applyCachedCustomTheme();
 // BEFORE render() so the first frame already has the user's preferred
 // size. iOS-4 default = "M" (14px = current behavior).
 applyFontSizeFromStorage();
+
+// issue 2167 — and for `--mention-font-weight`, the mention-bold opt-out.
+// Unlike the two above this pref is SERVER-owned (a #449 synced display pref,
+// reconciled by `mountDisplayPrefsSync` below); this write is the FOUC-free
+// boot mirror only. The stylesheet's own `var(…, bold)` fallback covers the
+// frame before it, so the worst case here is a correct default, never a flash
+// of the wrong weight.
+applyBoldMentionsFromStorage();
 
 // UX-5 bucket BS — pre-paint sidebar widths from localStorage so the
 // first frame already has the operator's preferred grid template. No

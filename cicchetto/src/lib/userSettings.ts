@@ -362,6 +362,11 @@ export type DisplayPrefs = {
   // #2037 B — the events pill opt-in. Optional for the same reason as the two
   // above: an older server omits it on the way in.
   show_event_badge?: boolean;
+  // issue 2167 — bold on own-nick mention rows. Optional for the same reason
+  // as the three above, and the DEFAULT is the difference worth knowing:
+  // `true`, so an older server's omission leaves the bold ON rather than
+  // silently removing it. `buildWireMap()` always populates it.
+  bold_mentions?: boolean;
 };
 
 export type DisplayPrefsResponse = {
