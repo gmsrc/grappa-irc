@@ -1214,7 +1214,13 @@ defmodule Grappa.Session.EventRouter do
           # never touches state.members, so it never queries either —
           # same gate the merge itself already applies).
           newly_seen = new_entries |> Map.keys() |> Enum.reject(&Map.has_key?(existing, &1))
-          {Map.put(state.members, channel, Map.merge(existing, new_entries)), newly_seen}
+
+          merged =
+            Map.merge(existing, new_entries, fn _, tracked, seeded ->
+              merge_seeded_sigils(seeded, tracked, sigils)
+            end)
+
+          {Map.put(state.members, channel, merged), newly_seen}
 
         :error ->
           {state.members, []}
@@ -4082,6 +4088,48 @@ defmodule Grappa.Session.EventRouter do
   end
 
   defp split_mode_prefix(token, _, acc), do: {token, Enum.reverse(acc)}
+
+  # issue 2140 — fold ONE 353 token's sigil run over what the live MODE
+  # stream already tracks for that member. The 353 used to simply WIN
+  # (`Map.merge/2`), which deleted every grade the seed could not report.
+  #
+  # What a 353 token actually asserts, and it is more than "some sigils":
+  # without `multi-prefix` the ircd reports the member's HIGHEST grade and
+  # nothing else, so the token is the claim *"this is the top"*. Everything
+  # ranking ABOVE the lowest sigil it names is therefore PROVABLY ABSENT —
+  # not unobserved, absent — while everything below it is simply not
+  # spoken about. A BARE token is the limit case of the same statement:
+  # top = none, so the member holds nothing, and that IS complete.
+  #
+  # So the rule is one line with no branch: keep the tracked sigils that
+  # rank strictly BELOW the lowest one the seed named, and take the seed's
+  # run for everything at or above it. Three properties fall out rather
+  # than being coded:
+  #
+  #   * it degrades TOWARD "the seed is the whole truth" as the run grows
+  #     — with `multi-prefix` the run is complete, its lowest member is the
+  #     member's lowest grade, and nothing survives underneath it;
+  #   * a bare token wipes, because there is nothing below "no sigil";
+  #   * the reconnect case needs NO clause. Self-JOIN already wipes
+  #     `members[channel]` (the one window where we were genuinely blind),
+  #     so `tracked` is empty by the time the seed lands.
+  #
+  # Rank comes from the advertised run, never from the token's byte order:
+  # `multi-prefix` sends highest-first by convention, and a convention is
+  # not a contract. A tracked sigil the network does not advertise is not a
+  # grade and does not survive — the same posture cic's `memberSigil` takes.
+  #
+  # Residual, accepted and named (issue 2140 leg 4): a grade our live set
+  # holds STALE and the seed ranks below its lowest is kept. That needs a
+  # MODE we never applied — e.g. #878 withholding derived state from a
+  # malformed line — and it clears the moment the member's grades move.
+  @spec merge_seeded_sigils([String.t()], [String.t()], [String.t()]) :: [String.t()]
+  defp merge_seeded_sigils(seeded, tracked, sigils) do
+    lowest_seeded = sigils |> Enum.reverse() |> Enum.find(&(&1 in seeded))
+    below = sigils |> Enum.drop_while(&(&1 != lowest_seeded)) |> Enum.drop(1)
+
+    seeded ++ Enum.filter(tracked, &(&1 in below))
+  end
 
   @spec build_persist(
           state(),

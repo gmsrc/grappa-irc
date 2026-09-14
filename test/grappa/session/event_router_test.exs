@@ -77,6 +77,24 @@ defmodule Grappa.Session.EventRouterTest do
     %Message{command: command, params: params, prefix: prefix, tags: %{}}
   end
 
+  # issue 2140 — a membership-sigil defect only surfaces across a SEQUENCE of
+  # wire lines (MODE, then a seed, then MODE), so thread the state through one
+  # line at a time. Asserts `:cont` rather than matching it away: a route that
+  # stops the session must not be able to read as a pass.
+  defp route!(state, message) do
+    assert {:cont, next_state, _} = EventRouter.route(message, state)
+    next_state
+  end
+
+  # The two wire lines that carry membership sigils, spelled once. A
+  # channel-operator MODE really does arrive from ChanServ on the networks
+  # this models, and a 353 really does carry the `= #chan` pair.
+  defp mode_line(modes, target),
+    do: msg(:mode, ["#italia", modes, target], {:nick, "ChanServ", "u", "h"})
+
+  defp names_line(tokens),
+    do: msg({:numeric, 353}, ["vjt", "=", "#italia", tokens], {:server, "irc"})
+
   # SEC-3 — a cache full of nicks we share no channel with: exactly the
   # population a masked WHO produces, and the one no lifecycle event evicts.
   defp stranger_cache(count) do
@@ -4395,6 +4413,129 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg({:numeric, 366}, ["vjt", "#empty", "End of /NAMES list."], {:server, "irc"})
 
       assert {:cont, ^state, [{:members_seeded, "#empty", %{}}]} = EventRouter.route(m, state)
+    end
+  end
+
+  # issue 2140 — the roster is a SET of sigils per member at every stage but
+  # one: the seed. Without `multi-prefix` a 353 reports the member's HIGHEST
+  # sigil and nothing else, so folding it over the live map with "seed wins"
+  # DELETED grades the MODE stream had tracked correctly. While we are
+  # connected that stream is complete, so it is the source of truth: a seed
+  # ASSERTS the top sigil, it never DENIES a lower one.
+  describe "route/2 — issue 2140: a 353 re-seed never denies a live-tracked sigil" do
+    test "+v then +o, a /names re-seed, then -o leaves the member VOICED" do
+      # The reported defect end to end. Every line here is one the ircd really
+      # sends; the only thing that changes is which of them we believe. Each
+      # stage keeps its own name so an intermediate assertion cannot be read
+      # against the wrong one.
+      joined = base_state(%{members: %{"#italia" => %{"bob" => []}}})
+
+      voiced = route!(joined, mode_line("+v", "bob"))
+      opped = route!(voiced, mode_line("+o", "bob"))
+      assert opped.members["#italia"]["bob"] == ["@", "+"]
+
+      # A /names (or any second 353 burst). `@bob` asserts that bob's top
+      # sigil is `@` — it says NOTHING about the voice underneath it.
+      reseeded = route!(opped, names_line("@bob"))
+      assert reseeded.members["#italia"]["bob"] == ["@", "+"]
+
+      # The deop the issue reports. `List.delete/2` on a one-element list is
+      # what rendered bob plain; on the real set it leaves the voice standing.
+      deopped = route!(reseeded, mode_line("-o", "bob"))
+      assert deopped.members["#italia"]["bob"] == ["+"]
+    end
+
+    test "generic over the advertised PREFIX table — no `o`/`v` anywhere" do
+      # The defect is a property of the sigil SET, not of op/voice. Same
+      # sequence one rung up the founder/admin/halfop table.
+      isupport = ISupport.merge_isupport(["s", "PREFIX=(qaohv)~&@%+"], ISupport.default())
+      joined = base_state(%{members: %{"#italia" => %{"boss" => []}}, isupport: isupport})
+
+      halfopped = route!(joined, mode_line("+h", "boss"))
+      founded = route!(halfopped, mode_line("+q", "boss"))
+      assert founded.members["#italia"]["boss"] == ["~", "%"]
+
+      reseeded = route!(founded, names_line("~boss"))
+      assert reseeded.members["#italia"]["boss"] == ["~", "%"]
+
+      defounded = route!(reseeded, mode_line("-q", "boss"))
+      assert defounded.members["#italia"]["boss"] == ["%"]
+    end
+
+    test "a 353 still introduces members and their sigils" do
+      # The fold must not cost the seed its actual job — leg 2 is about what a
+      # seed may DENY, never about what it may assert.
+      state = base_state(%{members: %{"#italia" => %{"vjt" => []}}})
+
+      m = msg({:numeric, 353}, ["vjt", "=", "#italia", "@op +voiced plain"], {:server, "irc"})
+
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
+
+      assert new_state.members["#italia"] == %{
+               "vjt" => [],
+               "op" => ["@"],
+               "voiced" => ["+"],
+               "plain" => []
+             }
+    end
+
+    test "a BARE token denies every grade — 'top = none' is a COMPLETE statement" do
+      # The limit case of the same claim. A member with any sigil is reported
+      # WITH it, so a bare nick is the ircd saying the member holds nothing.
+      tracked = base_state(%{members: %{"#italia" => %{"bob" => ["@"]}}})
+
+      reseeded = route!(tracked, names_line("bob"))
+      assert reseeded.members["#italia"]["bob"] == []
+    end
+
+    test "a seed naming a LOWER top denies everything ABOVE it" do
+      # `+bob` asserts that `+` is bob's highest grade, which is a positive
+      # statement that the op is gone — not silence about it.
+      tracked = base_state(%{members: %{"#italia" => %{"bob" => ["@", "+"]}}})
+
+      reseeded = route!(tracked, names_line("+bob"))
+      assert reseeded.members["#italia"]["bob"] == ["+"]
+    end
+
+    test "a multi-prefix run reaching the bottom rung IS the whole truth" do
+      # No branch keys on the cap: when the run is complete its LOWEST sigil
+      # is the member's lowest grade, so nothing can survive underneath it and
+      # the rule degrades to "the seed wins" on its own. Here that drops a
+      # stale `@` sitting between the two grades upstream actually reports.
+      isupport = ISupport.merge_isupport(["s", "PREFIX=(qaohv)~&@%+"], ISupport.default())
+
+      tracked =
+        base_state(%{members: %{"#italia" => %{"boss" => ["~", "@", "+"]}}, isupport: isupport})
+
+      reseeded = route!(tracked, names_line("~+boss"))
+      assert reseeded.members["#italia"]["boss"] == ["~", "+"]
+    end
+
+    test "self-JOIN drops the local set wholesale — the one blind window" do
+      # Across a reconnect we genuinely missed the MODE stream, so the seed is
+      # all we have and the stale set must NOT survive into it. The wipe lives
+      # in the self-JOIN arm, which every reconnect goes through; this pins
+      # that the fold does not defeat it — and it is WHY the fold needs no
+      # reconnect clause of its own.
+      stale = base_state(%{members: %{"#italia" => %{"bob" => ["@", "+"], "vjt" => ["@"]}}})
+
+      rejoined = route!(stale, msg(:join, ["#italia"], {:nick, "vjt", "u", "h"}))
+      assert rejoined.members["#italia"] == %{"vjt" => []}
+
+      reseeded = route!(rejoined, names_line("@bob"))
+      assert reseeded.members["#italia"]["bob"] == ["@"]
+    end
+
+    test "with multi-prefix the seed alone carries the whole run" do
+      # What leg 3 buys on a solanum-family network: the 353 is complete, so
+      # even a member we never watched being voiced survives the deop.
+      joined = base_state(%{members: %{"#italia" => %{"vjt" => []}}})
+
+      seeded = route!(joined, names_line("@+bob"))
+      assert seeded.members["#italia"]["bob"] == ["@", "+"]
+
+      deopped = route!(seeded, mode_line("-o", "bob"))
+      assert deopped.members["#italia"]["bob"] == ["+"]
     end
   end
 
