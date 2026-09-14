@@ -133,7 +133,9 @@ mountBadgeReconcile(async () => {
 // of view. Boot-time so the first frame already has the var.
 // #649 — ALSO re-reads on resume (visibilitychange / pageshow /
 // focus), for the app-switch return that restores the viewport
-// without firing a resize. One writer, more triggers: the window and
+// without firing a resize. issue 2159 adds window `resize` for the
+// iPadOS Split View pane drag, which backgrounds nothing and so fires
+// none of those three. One writer, more triggers: the window and
 // document listeners are installed by the tracker itself, so nothing
 // out here (and nothing anywhere else) touches the vars.
 installViewportHeightTracker();
