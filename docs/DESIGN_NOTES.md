@@ -57127,11 +57127,36 @@ clause of prose and a gate that notices when the clause goes away; the SPLIT
 the issue proposes alongside it is deferred, and this entry is the measured
 reason the deferral is not just caution.
 
-Every number below was taken on `6b8b4fe0f` with a tool that carries its own
-known-answer control and prints nothing when the control fails. The
-partitioner was validated first on four fixtures: a known-answer file, braces
-inside a comment, an unclosed block (must REFUSE), and a `:root` nested in an
-`@media` (must not steal the class).
+### How to reproduce every number below
+
+The partition and the token census come from **`test/bench_2136.sh`**, which is
+committed for this reason and no other — a number that decides a refactor must
+be re-derivable from the repo alone. It runs 13 known answers BEFORE it
+measures anything and prints no measurement at all if one disagrees; the
+fixtures exercise the ways the scan can be silently wrong (braces inside a
+comment, an unclosed block it must refuse, a `:root` nested in an `@media`,
+prose and BEM selectors that inflate a naive token grep). Verified by mutation:
+breaking the classifier fails 2 controls and emits zero numbers.
+
+```sh
+bash test/bench_2136.sh                              # the partition + token census
+wc -l < cicchetto/src/themes/default.css             # 15,513
+git show 24d1cb0ac:cicchetto/src/themes/default.css | wc -l   # 12,778, one month earlier
+git ls-files | xargs wc -l | sort -rn | head -5      # the size ranking
+git ls-files 'cicchetto/src/*' | grep -vE '__tests__|\.test\.tsx?$' | xargs wc -l | tail -1
+grep -rl 'themes/default\.css\|themeCss' cicchetto/src/__tests__ | wc -l   # 29 = 28 + helper
+grep -c '!important' cicchetto/src/themes/default.css         # 2
+```
+
+The growth anchor is **pinned to a SHA on purpose**. The date-relative spelling
+(`git rev-list -1 --before=2026-08-14`) is not a provenance: two commits sit 41
+minutes apart on that boundary day (`24d1cb0ac` at 13:24 and `e2bb68c9` at
+14:05, 12,778 lines against 12,792), and which one the walk returns is not
+something a reader should have to reproduce by luck.
+
+The sheet is byte-identical at `6b8b4fe0f` and at this branch's base
+`aad1e8ef2` (sha256 `b768e61e…`), so it does not matter which of the two you
+check out.
 
 ### The scope defect was real in one document and already fixed in the other
 
@@ -57151,7 +57176,9 @@ only and leaves the scope-count divergence open.
 The skill's row carried its own rot: it called `default.css` "the single
 largest file in the repo (9022 lines)". Both halves are false — the file is
 15,513 lines and the FOURTH largest tracked text file, behind
-`docs/DESIGN_NOTES.md` (56,740), `frontends/shottino/shottino.c` (23,017) and
+`docs/DESIGN_NOTES.md` (no count quoted — this entry lives inside that file and
+lengthens it, so any figure here is wrong by the time it is read; the ranking
+command above is the honest form), `frontends/shottino/shottino.c` (23,017) and
 `docs/design_notes/2026-07.md` (17,096). It was replaced with a class rather
 than a fresh count ("by a wide margin the largest file under `cicchetto/`",
 true at 3.4x the next one) because a number in prose is a claim with an expiry
@@ -57159,7 +57186,8 @@ date and this one had already expired.
 
 ### Two more of the issue's numbers, re-measured
 
-Growth **holds**: 12,778 lines on 2026-08-14 → 15,513 today, +21.4% (the issue
+Growth **holds**: 12,778 lines at `24d1cb0ac` (2026-08-14T13:24+02:00) → 15,513
+today, +21.4% (the issue
 says 12,822 → 15,476, +20.7%; different commits, same fact).
 
 The **17% of all non-test client code** does not reproduce. Under the partition
