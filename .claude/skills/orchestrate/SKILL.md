@@ -1413,6 +1413,26 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   🧾 Prior instance, same family: it auto-closed #540 while prod lacked the code.
   ⇒ **`board-check.sh` after EVERY merge, and read the issue's STATE, not your intention for it.**
 - **No CI polling by the worker — the ORCHESTRATOR watches CI.**
+- 🥇🥇 **DOPO UN REBASE SU UN FILE CON `merge=union`, CHIEDI ANCHE L'ASSE CHE LA RICETTA
+  `DESIGN_NOTES` NON GUARDA: «il rebase poteva toccare il CODICE» (w2, 2026-09-14 — un check che
+  NON avevo chiesto).** I quattro controlli della ricetta rispondono **solo per il file conteso**;
+  il resto del contributo non lo guarda nessuno. Forma: **contributo pre vs post ESCLUSO
+  `DESIGN_NOTES`, `cmp` byte-identico, CON NEG CTRL** (un byte infilato ⇒ rc=1) — misurato
+  **78 746 byte ai due lati, rc=0**. **Mettilo nei brief a ogni rebase**, o il verde della ricetta
+  si legge come un verde sull'intero contributo, che non è.
+- 🥇 **CHIEDI LO SPURGO DEI BEAM MUTANTI DAL `_build` CONDIVISO quando una worker gira mutanti**
+  (w2 l'ha fatto senza che glielo chiedessi, prima di restituire la corsia). Il `_build` è condiviso
+  da OGNI worktree dell'host: un beam mutante lasciato lì è **un rosso che l'altra worker raccoglie
+  e che non appartiene a nessun ramo** — cioè la contaminazione cross-worktree già documentata, ma
+  *fabbricata da noi* invece che ereditata.
+- 🚦 **LA CORSIA VA A CHI È PRONTO A SPENDERLA, NON A CHI L'HA PRENOTATA.** Una worker che ha
+  chiesto COMPILE e sta ancora leggendo non la sta spendendo: **probate l'host** (`pgrep` col
+  pattern INTERO + pos ctrl) e spostala a chi ha il comando pronto. **Uno `STALL state=idle` su una
+  worker in attesa di corsia è MIO, non suo: agisci al PRIMO.**
+- ⚠️ **SE DERIVI UN POLLER DALL'ALTRO CON `sed`, VERIFICA CON UN GREP (vecchio 0, nuovo ≥1).**
+  Misurato: `s/^PR=2189$/…/` **non sostituisce niente** perché la riga vera è
+  `PR=2189; FLOOR=8; REPO=…` e il `$` non matcha ⇒ **il poller resta puntato sulla PR SBAGLIATA, in
+  silenzio, e il suo referto risponde a un'altra domanda.** Forma giusta `s/^PR=2189;/PR=NNNN;/`.
 - **A flake is fixed by making the SETUP deterministic, never by weakening an assert or bumping a timeout.**
 - **ALWAYS push with an explicit refspec** (`git push origin refs/heads/X:refs/heads/X`) — the bare-refspec trap
   landed a branch on **main** twice in one day.
