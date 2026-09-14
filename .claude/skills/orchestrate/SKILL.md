@@ -1883,6 +1883,24 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   riarmata.** *Ennesima faccia dello zero falso e plausibile: non lo strumento rotto, non
   l'artefatto sbagliato, ma il PRIVILEGIO insufficiente — e l'unica cosa che lo rivela è un
   controllo a risposta IMPOSSIBILE da sbagliare.*
+- 🔴🔴 **L'HANDOFF NON SI POTA CON UNA REGEX, E NON C'È GIT A SALVARTI: `.orchestrate/` È
+  GITIGNORATO (orch, 2026-09-14, danno vero).** Per togliere UN blocco di ~18 righe ho scritto un
+  `python3` con `re.search(r"> 🪦 .*?(?=\n> 🔒 \*\*`w1-2031`|\n> \*\*IGNOTE)", s, re.S)`: il
+  lookahead non ha matchato dove credevo e **`.*?` ha mangiato 120 righe — QUATTRO SEZIONI INTERE**
+  (#2110 e le sue tre ruling, l'AUDIT RISERVATO, le 8 issue parcheggiate, PR/CRON). Lo script ha
+  stampato *"potato blocco lungo"* ed è uscito **rc=0**: nessun errore, nessun avviso.
+  🥇 **Tre regole:**
+  (a) **si pota con `Edit` su stringhe ESATTE**, un blocco per volta — mai una regex con `.*?` su un
+      file che non è versionato;
+  (b) **il conteggio righe PRIMA/DOPO è il controllo, e va PREDETTO**: mi aspettavo −18 e ho avuto
+      −120. Quel numero era lì a urlare e l'ho letto come un successo (*"243 → 123, sotto il
+      ceiling!"*) — **la potatura riuscita e quella catastrofica hanno lo stesso osservabile: un
+      file più corto**;
+  (c) **prima di riscrivere l'handoff, copialo** (`cp` nello scratchpad). Il recupero è riuscito
+      **solo perché avevo il file nel contesto** dal Read di inizio sessione: senza quello, le
+      quattro sezioni erano perse e nessuna delle ruling parcheggiate sarebbe mai tornata.
+  ⚠️ **Il ceiling delle ~120 righe è un obiettivo, non un verdetto.** Una potatura va giudicata da
+  COSA è sparito, non da quanto è corto il risultato.
 - 🥇🥇 **UN ASSERT SU CONFIGURAZIONE IL CUI SOGGETTO *DOCUMENTA SÉ STESSO* PASSERÀ SULLA
   DOCUMENTAZIONE, E SOLO CANCELLARE LA COSA CHE SORVEGLIA LO RIVELA (w1, 2026-09-14, #2125).**
   Gate bats nuovo su `integration.yml`: match a substring per `fetch-depth: 0`. **Cancellata la
