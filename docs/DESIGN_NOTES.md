@@ -14921,3 +14921,107 @@ fact it does not have — `parseSlash`'s arity at every call site — for a targ
 genuinely ambiguous with a legal channel name (`+#chan` IS a valid RFC channel
 spelling). `@#chan` and `%#chan` both reach the new path. Not a regression:
 `+#chan` was refused before this issue and is refused after it.
+<!-- entry #2181 -->
+
+---
+
+## 2026-09-15 — #2181: the two reason fields lose their save buttons, and the label gets a line of its own
+
+vjt's ruling after testing staging: the `save` buttons beside the two
+free-text leave-reason fields ask for a click the rest of the drawer does
+not. `SettingsDrawer.tsx` already commits free text without a button three
+controls away — the notification allow-lists commit on blur
+(`commitChannelsOnly` / `commitNicksOnly`) — so the drawer was inconsistent
+with itself, not merely click-heavy. Both buttons are gone; both fields
+commit on blur, with Enter as the explicit keyboard commit.
+
+The third `save` in the same area, `auto-away-custom-save` (the custom
+minutes), is a different control and was explicitly outside the ruling. It
+stays, and a test asserts it stays — an over-eager sweep that took all three
+is the obvious way to get this wrong, and nothing else would have caught it.
+
+### Only the trigger moved
+
+`onQuitPartReasonSave` / `onAutoAwayReasonSave` are untouched and remain the
+commit path. That is what keeps the empty-string-clears-it gesture, the
+dropped draft, and the server round-trip exactly as #2150 built them: an
+emptied box still POSTs `""`, and the input still reads back through to
+whatever the server echoed rather than to a string cic made up. The error
+rows outlived the buttons for the same reason they exist — with the button
+gone they are the ONLY feedback a failed commit has left.
+
+### The guard is value-based, not touch-based
+
+A blur must not POST a field nobody edited, or opening the drawer and closing
+it again would write to the server twice per visit. The obvious guard is
+"is the draft non-null", i.e. has the user touched it. It is the wrong one:
+text typed and then undone is unchanged text, and the touch test calls it
+dirty. So the predicate compares the box against what is STORED
+(`quitPartReasonText() === (quitPartReasonValue() ?? "")`).
+
+Two things fall out of that choice rather than being coded separately. The
+typed-and-reverted case is silent. And Enter-then-tab-away is a SINGLE write:
+a successful save drops the draft, the box reads through to the echo, and the
+blur that follows finds nothing to send. A touch-based guard would have
+needed a second mechanism for that.
+
+Measured, not argued: swapping the predicate for `draft() === null` leaves
+every test in the file green except the one written for exactly this
+distinction.
+
+### The label, and a correction to the reasoning that asked for it
+
+The scope addendum asked for the label on its own line with the input full
+width beneath, because the auto-away input started after the word `reason:`
+while its twin started at the edge. The addendum's stated blocker was that
+`reason:` is a bare text node — an ANONYMOUS flex item, which no selector can
+reach — so it needed a real element around it first.
+
+The wrapper shipped, and the class is asserted. But the blocker as stated is
+not quite the mechanism: an anonymous flex item is still a flex item, so
+`flex-direction: column` on the ROW would have stacked the bare text node
+too. What the `<span class="leave-reason-label">` actually buys is
+ADDRESSABILITY — the label can now be styled, moved or measured on its own,
+which the text node never could. Worth recording because the next reader will
+otherwise conclude the wrapper is load-bearing for the layout and be afraid
+to touch it. It is load-bearing for the CONTRACT.
+
+The span stays INSIDE the `<label>`, so the implicit association and the
+input's accessible name are untouched; the leave-message row keeps its
+`aria-label`.
+
+### The column REPLACES the grow rule, it does not join it
+
+`.leave-reason-row > input[type="text"] { flex: 1; min-width: 0 }` is gone,
+not kept alongside. With `flex-direction: column` plus `align-items: stretch`
+the input is sized to the row on the CROSS axis, where there is no automatic
+minimum to fight — so `flex: 1` would be grow along a main axis with no free
+space (inert, and misleading to the next reader) and `min-width: 0` would be
+guarding against an overflow that cannot happen. The `stretch` is not
+decoration either: it overrides the `align-items: center` inherited from
+`.settings-drawer label`, which would otherwise centre both the label and a
+content-width input.
+
+On the CLASS, like the two rules around it. The leave-message row carries no
+visible text, so the column is inert there and the two rows keep answering
+identically — the posture this region of the sheet states twice already. A
+test reads the parsed selector lists and fails if any rule in the sheet
+narrows to one instance; it reads the PARSED lists rather than the raw text
+because a rule nested in an at-rule block is exactly the kind a text scan
+reports as absent.
+
+### What was not established
+
+No e2e and no real-device run: the STACK lane was never requested for this
+slice. Everything asserted here is either DOM structure in jsdom or a
+source-level invariant over the stylesheet, so the one thing nothing in this
+branch observes is the rendered layout — that the label really does sit above
+a full-width input at a real viewport. The existing `issue2150` e2e spec was
+updated from clicking the button to pressing Enter, but it was not run.
+
+Also uncovered: that a blur commit reaches the server over HTTP (the unit
+tests mock the store), and the `e.preventDefault()` on the Enter handler,
+which is inert today — `SettingsDrawer.tsx` contains no `<form>` at all. It
+is kept for consistency with the file's own Enter idiom on the device-rename
+input, in a drawer whose sibling panes (`TotpSettings`, `IgnoresSettings`,
+`PerformSettings`) are forms.
