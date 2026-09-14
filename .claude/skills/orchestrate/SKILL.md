@@ -1202,6 +1202,18 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   sopra: lì `-D` è la via NORMALE e il verdetto vero è il **CONTENUTO**.
   🔴 **Non confonderlo con la UNION**: quando N rami appendono allo stesso file, la union si costruisce
   per **MERGE** (ruling di vjt), non con questo. Questo è per la PR SINGOLA, dietro per rumore mio.
+  🔴🔴 **E SU UNA PR CHE TOCCA `DESIGN_NOTES.md` `--rebase` NON PUÒ RIUSCIRE AFFATTO — misurato tre
+  volte il 2026-09-14 (#2146, #2149, #2152).** `gh pr merge N --rebase` risponde
+  *"is not mergeable: the merge commit cannot be cleanly created"*, e le altre due si presentano
+  `CONFLICTING/DIRTY` **con ZERO check-run**, perché **GitHub non applica i driver di
+  `.gitattributes`**: `merge=union` vive solo in git LOCALE. ⇒ **Su quel file la via è UNA:
+  rebase LOCALE (driver vivo) → `push --force-with-lease` del RAMO → FF di main.** È anche la forma
+  che fa marcare la PR `MERGED` da sola, quindi elimina la chore *"chiudi per contenuto"*.
+  🥇 **Corollario che vale come diagnosi, e va detto alla worker prima che se lo chieda: una PR che
+  appende a `DESIGN_NOTES` mentre main ci ha appeso qualcos'altro è `CONFLICTING` ⇒ ZERO CI PER
+  COSTRUZIONE.** Non è *"la CI non è partita"*, non è colpa del ramo, e **non si cura con un
+  `rerun`**. Lo zero si verifica col POS CTRL (stessa query su una head mergiata: deve contarne
+  molti), altrimenti non sai se hai misurato zero o niente.
 - 🔴 **CLOSING THE PR IS PART OF THE MERGE STEP, NOT A LATER SWEEP — this leaked FIVE times in one day**
   (#587 #586 #583 swept 05:10; #602 #603 swept 12:0x, all on already-shipped issues). A rebase-then-ff-merge leaves the
   PR open with its pre-rebase head still reading *mergeable* — a standing invitation to ship the same work twice.
@@ -2130,6 +2142,16 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   su #1841). **L'insieme dei rossi veri e' `failure|cancelled|timed_out|action_required`.**
   🥇 **Meglio ancora: `lib/ci-watch.sh` chiava sul CAMBIAMENTO, non su un conteggio** ⇒ niente soglia
   da tarare e niente falsi rossi. **E una soglia, quando serve, e' un PAVIMENTO, mai un'uguaglianza.**
+  🥇🥇 **E IL 2026-09-14 QUEL "PAVIMENTO, MAI UN'UGUAGLIANZA" HA SALVATO IL GIRO DOVE DUE DERIVAZIONI
+  SU DUE ERANO SBAGLIATE — su #2151 ho messo prima `9` COPIANDOLO da un'altra PR** (l'errore che
+  questo file vieta: il poller sarebbe rimasto in loop fino al timeout, e **il suo silenzio si legge
+  identico a "la CI e' ancora in volo"**), **poi l'ho ri-derivato a `8`** leggendo i workflow
+  (`ci.yml` 4 job + `integration.yml` 4 shard) **e il settle ha risposto `tot=9`**.
+  🔑 **Il nono e' `integration (all shards)`, il job AGGREGATORE, e come check-run NON ESISTE finche'
+  i 4 shard non sono finiti.** ⇒ **una derivazione fatta all'ARM sotto-conta di uno PER COSTRUZIONE**,
+  e nessuna uguaglianza — ne' `== 9` ne' `== 8` — sarebbe stata giusta in entrambi gli istanti.
+  Ha retto `tot >= FLOOR && DONE == tot`. **Il "9/9" dei referti e' vero ma NON derivabile dai
+  `paths:`: si spiega solo con l'aggregatore, quindi non citarlo come atteso.**
 - 🔴 **`git show --name-only <sha>` GUARDA UN COMMIT, NON UN RANGE.** Usato per misurare la
   sovrapposizione fra due rami mi ha risposto *"nessun file comune"* su due rami che condividevano
   `docs/DESIGN_NOTES.md`, cioe' **proprio il file con `merge=union`**. Forma giusta:
