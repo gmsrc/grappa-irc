@@ -377,6 +377,25 @@ is DELETE-then-write, never append-only:
   🥇 *Una worker che rifiuta un passo dicendo "questo rimedio non si applica a QUESTO ramo
   dell'albero, e te lo dimostro col testo dell'errore" ha fatto la cosa giusta: il difetto non era
   nel comando, era nella mia diagnosi di quale domanda il comando stesse rispondendo.*
+  🔴🔴 **E C'È UNA **QUARTA** CAUSA DEL *"not fully merged"*, CHE NESSUNO DEI TRE RIMEDI SOPRA
+  TOCCA, ED È **MIA**, NON DELLA WORKER: IL `origin/main` LOCALE STANTIO DOPO UN FF FATTO CON
+  `gh api -X PATCH` (orch, 2026-09-14, misurato su `union-2155-2162`).** Il PATCH sposta il ref
+  **sul REMOTO** e **NON tocca `refs/remotes/origin/main`**, quindi `-d` confronta il ramo con una
+  remote-tracking ref ferma **16 commit indietro** e risponde *"not fully merged"* **di un ramo che
+  È main.** 🥇 **Il tell che distingue questa dalle altre tre: l'upstream c'è ED È GIÀ GIUSTO.**
+  Misurato: `branch.union-2155-2162.merge = refs/heads/main` + `.remote = origin` (pos ctrl: 20
+  rami configurati sul repo) ⇒ **`--set-upstream-to=origin/main` è un no-op** — l'ho girato, ha
+  detto *"set up to track"*, e `-d` ha rifiutato **identico**. ⇒ **Cura: `git fetch origin`, e poi
+  `-d` NUDO**, che allora dà rc=0 stampando da solo la prova (*"merged to
+  `refs/remotes/origin/main`, but not yet merged to HEAD"*).
+  🥇 **Quindi la sequenza si allunga di un passo, e il passo va PRIMA dell'upstream:** `-d` NUDO →
+  se *"not fully merged"*, **`git fetch origin` e `-d` NUDO di nuovo** → SOLO SE rifiuta ancora,
+  misura l'upstream e, se manca, `--set-upstream-to=origin/main` + `-d` NUDO.
+  ⚠️ **È la stessa trappola già scritta in questo file per il push via URL ssh esplicito, da una
+  terza porta:** *qualunque* merge che non passi da `git push` lascia la tua remote-tracking ref
+  a mentire, e qui la bugia non si presenta come un numero sbagliato ma come **un divieto**. *Un
+  falso rosso che invita a `-D` è peggio di un falso verde: ti fa distruggere la prova per
+  aggirare uno strumento che aveva ragione a metà.*
   ⚠️ **E `git worktree remove` senza `--force` rifiuta (rc=128, *"contains modified or untracked
   files"*) su una worktree sporca**: lì `--force` è **necessario**, non un'abitudine — ma solo dopo
   che lo sporco è stato misurato e preservato fuori.
