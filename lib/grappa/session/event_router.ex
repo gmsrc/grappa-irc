@@ -4058,13 +4058,16 @@ defmodule Grappa.Session.EventRouter do
   # makes the inverse safe too: on a `(ov)@+` network a leading `~` is not a
   # membership sigil, and peeling it would silently address a DIFFERENT nick.
   #
-  # GREEDY on purpose. `multi-prefix` is not in grappa's CAP REQ today, so
-  # upstream sends only the highest sigil and the run is length 1 in
-  # production — but a nick can never BEGIN with a sigil (RFC 2812 §2.3.1
-  # `special` is `[ ] \ ` _ ^ { | }`, which excludes every PREFIX char), so
-  # peeling the whole advertised run is unambiguous and costs nothing. That
-  # keeps this function's correctness independent of a CAP decision made in
-  # `IRC.AuthFsm`, instead of silently keying on `&nick` the day it changes.
+  # GREEDY on purpose, and since issue 2140 the run is genuinely longer than
+  # one on any network that ACKs `multi-prefix` (now in `AuthFSM`'s
+  # `@opportunistic_caps`). It stays length 1 where the cap is absent —
+  # bahamut/Azzurra answers no `CAP LS` at all — so BOTH lengths are live in
+  # production and neither is the special case. A nick can never BEGIN with a
+  # sigil (RFC 2812 §2.3.1 `special` is `[ ] \ ` _ ^ { | }`, which excludes
+  # every PREFIX char), so peeling the whole advertised run is unambiguous
+  # either way. Writing it greedily BEFORE the cap was requested is what made
+  # that CAP change a one-line edit in another module instead of a silent
+  # mis-key on `&nick`.
   @spec split_mode_prefix(String.t(), [String.t()]) :: {String.t(), [String.t()]}
   defp split_mode_prefix(token, sigils), do: split_mode_prefix(token, sigils, [])
 

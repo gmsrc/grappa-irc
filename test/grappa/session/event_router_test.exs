@@ -4307,13 +4307,13 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "353 peels EVERY leading advertised sigil, not just the first" do
-      # `multi-prefix` is not in grappa's CAP REQ today, so upstream sends the
-      # single highest sigil and this run is length 1 in production. The split
-      # is greedy anyway so that its correctness does not depend on a CAP
-      # decision made in another module: a nick can never BEGIN with a sigil
-      # (RFC 2812 §2.3.1 `special` excludes `~ & @ % +`), so peeling the whole
-      # advertised run is unambiguous. If `multi-prefix` is ever requested,
-      # this path is already right instead of silently keying on `&nick`.
+      # Since issue 2140 `multi-prefix` IS in grappa's CAP REQ, so a run
+      # longer than one is what a solanum-family network really sends; where
+      # the cap is absent (bahamut/Azzurra answers no CAP LS) it stays length
+      # 1. The split was written greedily before the cap was requested, which
+      # is why that CAP change needed no edit here: a nick can never BEGIN
+      # with a sigil (RFC 2812 §2.3.1 `special` excludes `~ & @ % +`), so
+      # peeling the whole advertised run is unambiguous at either length.
       isupport =
         ISupport.merge_isupport(["s", "PREFIX=(qaohv)~&@%+"], ISupport.default())
 

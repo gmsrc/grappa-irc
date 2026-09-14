@@ -3913,12 +3913,21 @@ defmodule Grappa.Session.Server do
   # round trip would land honest-but-degraded instead of whole.
   #
   # The request is intersected with `@tracked_caps` and NOT with AuthFSM's
-  # `@opportunistic_caps`, which today holds the same two names. That is the
-  # semantically load-bearing choice: `@tracked_caps` is exactly "caps whose
-  # ACK this process records", so the intersection makes it impossible to
-  # request something whose grant we would then drop on the floor. Caps
-  # already active are subtracted — a re-advertisement of something we hold
-  # is not news.
+  # `@opportunistic_caps`. #2097 recorded that the two held the same two
+  # names and were kept apart anyway, "two readings that may legitimately
+  # diverge"; issue 2140 is that divergence arriving — `multi-prefix` is
+  # opportunistic (we ask for it) and NOT tracked (no branch here reads its
+  # ACK). The intersection is the semantically load-bearing choice:
+  # `@tracked_caps` is exactly "caps whose ACK this process records", so it
+  # makes it impossible to request something whose grant we would then drop
+  # on the floor. Caps already active are subtracted — a re-advertisement of
+  # something we hold is not news.
+  #
+  # Consequence of the divergence, named rather than discovered: a DEL/NEW
+  # cycle of `multi-prefix` is NOT re-requested, so the seed goes back to
+  # reporting the top sigil only. That is issue 2140's accepted residual, not
+  # a wrong roster — `EventRouter`'s fold reads a run of any length and a
+  # seed never denies a grade below the lowest one it names.
   #
   # 🔴 GATED ON `registered_at`, and the gate is load-bearing, not hygiene.
   # `AuthFSM` matches a CAP ACK in all three `:awaiting_cap_ack*` phases and

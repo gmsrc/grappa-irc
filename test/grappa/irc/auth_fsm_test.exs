@@ -450,6 +450,51 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert send_lines(sends) == ["CAP REQ :sasl account-notify"]
     end
 
+    # issue 2140 — `multi-prefix` joins the opportunistic set. It has the same
+    # three properties as the two entries before it: advertised-gated, no
+    # follow-up exchange, NAK non-fatal. What it buys is a COMPLETE 353 seed
+    # (every membership sigil per member, not just the highest), which is the
+    # only stage of the roster that was ever lossy.
+    test "CAP LS advertising multi-prefix requests it alongside sasl", %{state: state} do
+      # The Libera/solanum shape: multi-prefix advertised, labeled-response not.
+      msg = %Message{
+        command: :cap,
+        params: ["*", "LS", "sasl=PLAIN multi-prefix account-notify"]
+      }
+
+      assert {:cont, %AuthFSM{phase: :awaiting_cap_ack_combined}, sends} =
+               AuthFSM.step(state, msg)
+
+      assert send_lines(sends) == ["CAP REQ :sasl account-notify multi-prefix"]
+    end
+
+    test "multi-prefix alone still rides the combined REQ", %{state: state} do
+      msg = %Message{command: :cap, params: ["*", "LS", "sasl=PLAIN multi-prefix"]}
+
+      assert {:cont, %AuthFSM{phase: :awaiting_cap_ack_combined}, sends} =
+               AuthFSM.step(state, msg)
+
+      assert send_lines(sends) == ["CAP REQ :sasl multi-prefix"]
+    end
+
+    test "the H9 combined-NAK fallback DROPS multi-prefix — accepted, not incidental",
+         %{state: state} do
+      # Pinned because it is a knowing trade, not an oversight: the fallback
+      # exists to rescue SASL from an ircd that NAKs the whole blob, and SASL
+      # is the cap we cannot trade away. Losing multi-prefix there costs the
+      # seed's completeness — i.e. it degrades to issue 2140's ACCEPTED
+      # residual (leg 4), not to a new defect. A per-cap REQ ladder would buy
+      # back the seed at the price of a second in-flight REQ the FSM would
+      # have to correlate against its own ACK.
+      combined_state = %{state | phase: :awaiting_cap_ack_combined}
+      msg = %Message{command: :cap, params: ["*", "NAK", "sasl multi-prefix"]}
+
+      assert {:cont, %AuthFSM{phase: :awaiting_cap_ack_sasl_only}, sends} =
+               AuthFSM.step(combined_state, msg)
+
+      assert send_lines(sends) == ["CAP REQ :sasl"]
+    end
+
     test "a server advertising NEITHER opportunistic cap sends the pre-#388 line", %{state: state} do
       # The Azzurra/bahamut shape — all of prod. #388 must be byte-identical
       # here or it changes the handshake on every production network.

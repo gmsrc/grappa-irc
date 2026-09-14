@@ -790,18 +790,39 @@ defmodule Grappa.IRC.AuthFSM do
   # Like `labeled-response` it is requested purely because it is advertised,
   # needs no follow-up exchange, and a NAK is non-fatal.
   #
-  # The four shapes above are unchanged in BYTES for every existing case:
-  # the list is ordered `labeled-response` first, and a server that does not
-  # advertise `account-notify` (bahamut / all of prod) produces exactly the
-  # pre-#388 REQ line.
+  # issue 2140 added the third entry, `multi-prefix`, for the same three
+  # reasons: advertised-gated, no follow-up exchange, NAK non-fatal. What it
+  # buys is the ONE lossy stage of the membership roster — without it a 353
+  # RPL_NAMREPLY reports each member's HIGHEST sigil and nothing else, so a
+  # `+v` held under a `+o` is invisible to the seed. No consumer branches on
+  # it: `EventRouter`'s 353 peel is already greedy and its fold already
+  # reads a run of any length, so the cap changes what upstream SENDS and
+  # nothing about what we do with it. That is also why it is deliberately
+  # absent from `Session.Server`'s `@tracked_caps`, which means "caps whose
+  # ACK changes how that process behaves".
+  #
+  # The REQ line is unchanged in BYTES for a server advertising none of the
+  # three — bahamut/Azzurra answers no `CAP LS` at all, so all of prod still
+  # produces the pre-#388 line. It is NOT byte-stable for a server that
+  # advertises one: `multi-prefix` is common on solanum-family ircd, and
+  # Libera's REQ does grow by it. That is the intended effect, not a
+  # side-effect.
   #
   # KNOWN EDGE: the H9 combined-NAK fallback re-requests `:sasl` ALONE, so
-  # an ircd that both offers `account-notify` and NAKs the combined blob
-  # loses it. That fallback exists for bahamut-family servers, which do not
-  # offer `account-notify` in the first place, and SASL is the cap we cannot
-  # trade away — so the loss is theoretical and the alternative (an extra
-  # per-cap REQ ladder) buys nothing real.
-  @opportunistic_caps ["labeled-response", "account-notify"]
+  # an ircd that offers an opportunistic cap AND NAKs the combined blob
+  # loses it. For `account-notify` the loss was theoretical — that fallback
+  # exists for bahamut-family servers, which do not offer it. **That
+  # argument does NOT transfer to `multi-prefix`**: the fallback also covers
+  # Solanum variants, which advertise it. The loss is real there, and it is
+  # accepted rather than overlooked, because what it costs is the seed's
+  # completeness — i.e. it degrades exactly to issue 2140's accepted
+  # residual (a grade hidden under a higher one stays unknown until the
+  # higher one is removed on the wire), never to a wrong roster. SASL is the
+  # cap we cannot trade away, and the alternative is a second in-flight REQ
+  # the FSM would have to correlate against its own ACK — an ACK carrying no
+  # "sasl" is already read as "SASL refused" in all three `:awaiting_cap_ack*`
+  # phases, so that ladder buys a complete seed at the price of a login.
+  @opportunistic_caps ["labeled-response", "account-notify", "multi-prefix"]
 
   defp finalize_cap_ls(caps, state) do
     sasl_wanted = "sasl" in caps and state.auth_method in [:auto, :sasl]
