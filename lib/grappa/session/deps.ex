@@ -87,7 +87,7 @@ defmodule Grappa.Session.Deps do
   """
 
   alias Grappa.QueryWindows
-  alias Grappa.Session.{DepsInjectionError, EventRouter}
+  alias Grappa.Session.{DepsInjectionError, EventRouter, Server}
 
   @typedoc """
   Optional opaque callback the visitor-side `SessionPlan` injects into
@@ -582,7 +582,17 @@ defmodule Grappa.Session.Deps do
   the merged result against the due set — which is the part that matters,
   since a fresh plan that drops a closure is caught there.
   """
-  @spec refresh!(Grappa.Session.subject(), map()) :: {:ok, map()} | {:error, :not_found}
+  # The second parameter is NOT `map()`, and Dialyzer said so: a `map()` spec
+  # is a supertype of the success typing, because `opts.refresh_plan` already
+  # tells the checker the key must be there. The constraint is right and the
+  # wider spec was the wrong answer to it — this door does not accept "any
+  # map", it accepts a session plan that carries the closure. Stating it is
+  # also the only compile-time visibility this member gets: the VALUE is a
+  # bare function, invisible to `Boundary` by construction.
+  @spec refresh!(
+          Grappa.Session.subject(),
+          %{required(:refresh_plan) => Server.refresh_plan_check(), optional(any()) => any()}
+        ) :: {:ok, map()} | {:error, :not_found}
   def refresh!(subject, opts) when is_tuple(subject) and is_map(opts) do
     due = Map.take(required_injections(subject), [:refresh_plan])
 
