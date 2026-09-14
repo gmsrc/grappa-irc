@@ -13288,3 +13288,52 @@ here, and the only thing standing in front of it is the arithmetic above,
 performed by a human. Closing that would mean comparing against history, a
 different and much heavier check; it is named here rather than left for
 someone to discover.
+
+### The verifier was measuring the aligner, not the contribution
+
+Both tools went RED on this branch's real rebase onto `702834fd7`, and
+neither red was about the branch. `git diff`'s default algorithm (`myers`,
+heuristics on) does not produce a minimal edit script, and on a bulk
+deletion from a large file the alignment it settles on depends on content
+the branch never touched — here, the 492 lines `origin/main` appended while
+the branch was out.
+
+    myers      before 156/44287   after 323/44454   <- BOTH columns +167
+    minimal    before 156/44287   after 156/44287
+    patience   before 156/44287   after 156/44287
+    histogram  before 156/44287   after 156/44287
+
+On a third pair (merge base → post-rebase HEAD) the three stable algorithms
+all returned 648/44287 — the arithmetic prediction, 156 plus main's 492
+appended — while myers returned 798/44437.
+
+`union-rebase.sh` compares counts taken against two DIFFERENT base files, so
+its verdict is only meaningful if the count is a function of the content.
+`design-notes-gate.sh` has a second, uglier symptom from the same cause: it
+derives "the headings this branch adds" from the same diff, and myers
+attributed `## Open design questions` and `## What's *not* in this document
+(on purpose)` — PREAMBLE lines, byte-identical on the base — to the branch,
+so the gate demanded an entry marker on two lines nobody wrote. That is the
+gate failing on the exact shape check 0 now makes MANDATORY every month.
+
+Both are pinned to `histogram`. `minimal` and `patience` measured equally
+stable and nothing here distinguishes them; histogram was the ruling's
+choice and the measurement did not displace it (0.04 s vs 0.08 s on the
+3.3 MB file, so cost did not decide it either). The pin lives inside
+`pin()`, which serves both sides of the comparison — pinning one side would
+be worse than pinning neither, since the two numbers would then be computed
+by different rules.
+
+What made the reds safe to overrule was not the tools: the post-rebase file
+was rebuilt byte-for-byte from its three parts — the branch's head, main's
+appended tail, the branch's entry — and `cmp`'d against the real one, rc=0,
+with a one-byte perturbation giving rc=1. That answers the question the
+numstat cannot even ask.
+
+**Untested, and not faked.** Two synthetic fixtures were built to reproduce
+the instability — 60,000 lines with a 45,000-line deletion, and 30,000 lines
+with a 24,000-line deletion drawn from a six-line vocabulary to maximise
+alignment ambiguity. In both, myers and histogram agree on both sides of the
+rebase, so neither discriminates and neither shipped. The instance above is
+the only measured one. A fixture that cannot fail asserts nothing while
+looking like cover.

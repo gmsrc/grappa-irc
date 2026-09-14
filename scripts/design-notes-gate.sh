@@ -195,7 +195,29 @@ fi
 #
 # The entry headings this branch adds. `+## ` cannot collide with diff's own
 # `+++ ` header line.
-added="$(git diff "$base" HEAD -- "$FILE" | sed -n 's/^+\(## .*\)$/\1/p')"
+#
+# 🔴 The diff algorithm is PINNED here and at the marker check below. What
+# counts as an ADDED line is the aligner's opinion, not a fact about the
+# branch, and the default (`myers`, heuristics on) will attribute to a branch
+# lines it never touched once that branch deletes in bulk from a large file.
+#
+# Measured, issue 2138, the August rollover rebased onto 702834fd7 — 44,287
+# lines out of 57,421. myers reported
+#
+#     +## Open design questions
+#     +## What's *not* in this document (on purpose)
+#
+# as ADDITIONS. Both are PREAMBLE headings, byte-identical on the base and on
+# the merge base (lines 366/378 there, 369/381 here). The gate then demanded
+# an entry marker on two lines nobody wrote — rc=1 on a rebase that was
+# byte-for-byte correct. With histogram only the one heading the branch
+# really adds is reported.
+#
+# This is not incidental to the rollover: check 0 above makes a bulk-deletion
+# branch MANDATORY every month, so that shape is the gate's routine input
+# now, not a rarity. Untested — two fixtures failed to reproduce the
+# aligner's instability; see the note on pin() in scripts/union-rebase.sh.
+added="$(git diff --diff-algorithm=histogram "$base" HEAD -- "$FILE" | sed -n 's/^+\(## .*\)$/\1/p')"
 
 if [ -z "$added" ]; then
 	printf 'design-notes-gate: this branch adds no %s entry heading — the shape checks have nothing to judge.\n' "$FILE"
@@ -285,7 +307,11 @@ fi
 # with a byte-identical one, since only a byte-identical prefix is what the
 # merge machinery collapses. No reachable substring pair is known — `-x` states
 # the contract rather than closing a measured hole.
-added_markers="$(git diff "$base" HEAD -- "$FILE" | sed -n 's/^+\(<!-- entry .* -->\)$/\1/p' | sort -u)"
+# Same algorithm pin as the heading check above, for the same reason: a
+# marker misattributed as ADDED by the aligner would be tested for collision
+# against the base that already legitimately carries it, and report the
+# branch as colliding with itself.
+added_markers="$(git diff --diff-algorithm=histogram "$base" HEAD -- "$FILE" | sed -n 's/^+\(<!-- entry .* -->\)$/\1/p' | sort -u)"
 base_markers="$(git show "$BASE_REF:$FILE" 2>/dev/null | grep '^<!-- entry .* -->$' || true)"
 
 collisions=""

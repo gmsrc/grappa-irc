@@ -113,9 +113,46 @@ fi
 
 # Additions and deletions of the branch's own contribution for one path, as
 # "<add> <del>". An untouched path is a real 0 0, not an absence.
+#
+# 🔴 The diff algorithm is PINNED, and that is the load-bearing part of this
+# function. The verdict compares two counts taken against DIFFERENT base
+# files — the merge base before, the onto-ref after — so it only means
+# anything if the count is a property of the CONTENT and not of the path
+# git's aligner happened to take. The default (`myers`, heuristics on) is not
+# that: on a branch deleting in bulk from a large file it reports a different
+# pair on each side of a rebase that changed nothing.
+#
+# Measured, issue 2138, rebasing 7cb03ef0d onto 702834fd7 — the August
+# rollover, 44,287 lines out of a 57,421-line docs/DESIGN_NOTES.md:
+#
+#   myers      before 156/44287   after 323/44454   <- BOTH columns +167
+#   minimal    before 156/44287   after 156/44287
+#   patience   before 156/44287   after 156/44287
+#   histogram  before 156/44287   after 156/44287
+#
+# On a third pair (merge base -> post-rebase HEAD) the three stable
+# algorithms all returned 648/44287, which is the arithmetic prediction
+# 156 + 492 appended; myers returned 798/44437. The rebase itself was
+# CORRECT: the resulting file was rebuilt byte-for-byte from its three parts
+# and cmp'd clean (rc=0; rc=1 with one byte perturbed). So the RED belonged
+# to the aligner, and a verifier that cries wolf on a correct rebase is one
+# the next reader learns not to believe — which is how a gate dies.
+#
+# Pinning ONE side would be worse than pinning neither: the two numbers would
+# be computed by different rules and every comparison below would be
+# furniture. Both sides come through this one function, so the pin cannot be
+# half-applied.
+#
+# NOT COVERED BY A TEST, and deliberately not faked. Two synthetic fixtures
+# were built to reproduce the instability — 60,000 lines with a 45,000-line
+# deletion, and 30,000 lines with a 24,000-line deletion drawn from a
+# six-line vocabulary to maximise alignment ambiguity. Neither discriminates:
+# myers and histogram agree on both sides of both rebases. The instance above
+# is the only measured one, and a fixture that cannot fail would assert
+# nothing while looking like cover.
 pin() {
 	local base="$1" head="$2" path="$3" out
-	out="$(git diff --numstat "$base" "$head" -- "$path" | cut -f1,2 | tr '\t' ' ')"
+	out="$(git diff --diff-algorithm=histogram --numstat "$base" "$head" -- "$path" | cut -f1,2 | tr '\t' ' ')"
 	[ -n "$out" ] || out="0 0"
 	printf '%s\n' "$out"
 }
