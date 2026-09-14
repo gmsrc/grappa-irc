@@ -12,9 +12,6 @@ defmodule Grappa.Application do
       Grappa.Cic.Bundle,
       Grappa.Health,
       Grappa.HttpHosts,
-      # issue 227 — supervises the RFC 1413 ident server (off unless the
-      # operator turns it on; see identd_children/0).
-      Grappa.Identd,
       Grappa.Net.PtrCache,
       # #543 INC-5: start/2 calls SourceAlias.Config.boot/0 (adapter/cmd DI-seam)
       # and supervises SourceAliasManager (arm gate + ref-count lifecycle).

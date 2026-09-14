@@ -50,7 +50,14 @@ defmodule Grappa.Identd do
   shape rather than a comparison.
   """
 
-  use Boundary, top_level?: true, deps: [Grappa.Net.IpLiteral], exports: [Bindings, Listener]
+  # MEASURED with the compiler (`mix compile --force --warnings-as-errors`, dev
+  # AND test), never eyeballed. `Net.IpLiteral` is load-bearing: dropping it
+  # reds the listener's bind-address parse. There is deliberately NO
+  # `exports:` — `Grappa.Application` names `Bindings` and `Listener` as bare
+  # child-spec atoms, which the xref checker never sees, so exporting them
+  # would widen this boundary's public surface to authorise calls nobody
+  # intends. Measured green without them. The context module IS the API.
+  use Boundary, top_level?: true, deps: [Grappa.Net.IpLiteral]
 
   alias Grappa.Identd.Bindings
 
