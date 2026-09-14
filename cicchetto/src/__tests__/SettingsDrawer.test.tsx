@@ -5,10 +5,20 @@ vi.mock("@solidjs/router", () => ({
   useNavigate: () => vi.fn(),
 }));
 
-vi.mock("../lib/fontSize", () => ({
-  getFontSize: vi.fn(() => "M"),
-  setFontSize: vi.fn(),
-}));
+// issue 2164 — the module stores a NUMBER now, so the two verbs the drawer
+// calls are SPIES OVER THE REAL ONES rather than stubs: the clamp is the
+// thing under test here (an out-of-range entry must snap the box), and a
+// hand-written stub would be a second copy of it that cannot disagree with
+// the shipped one. `importOriginal` also keeps the ladder + the bounds real,
+// so no preset value is duplicated into this file.
+vi.mock("../lib/fontSize", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../lib/fontSize")>();
+  return {
+    ...real,
+    getFontSizePx: vi.fn(real.getFontSizePx),
+    setFontSizePx: vi.fn(real.setFontSizePx),
+  };
+});
 
 vi.mock("../lib/timeFormat", () => ({
   getTimeFormat: vi.fn(() => "hms"),
@@ -2932,5 +2942,115 @@ describe("SettingsDrawer (issue 1993 — general sub-page rework)", () => {
       const sentences = (text.match(/\./g) ?? []).length;
       expect(sentences, `too many sentences in: ${text}`).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+// issue 2164 — the text-size control after the ruling: six preset rungs (XS
+// joins at 11px) that WRITE THEIR NUMBER, plus an advanced numeric field
+// clamped 9–28px. The presets stay radios and keep their `font-size-<KEY>`
+// testids verbatim — four e2e specs address them, two by tapping and two by
+// seeding the old localStorage KEY, and the migration is what keeps the
+// second pair working.
+describe("SettingsDrawer text size — presets write numbers, custom clamps (issue 2164)", () => {
+  const STORAGE_KEY = "cicchetto.fontSize";
+  const customBox = () => screen.getByTestId("font-size-custom-input") as HTMLInputElement;
+
+  const openDisplay = () => {
+    wrap(true);
+    openSub("display-settings-entry");
+  };
+
+  beforeEach(() => localStorage.removeItem(STORAGE_KEY));
+
+  it("renders one radio per rung, in ladder order, valued at its px", async () => {
+    const { FONT_SIZE_PRESETS } = await import("../lib/fontSize");
+    openDisplay();
+
+    const fieldset = screen.getByTestId("font-size-XS").closest("fieldset");
+    const radios = Array.from(
+      fieldset?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? [],
+    );
+
+    expect(radios.map((r) => [r.dataset.testid, r.value])).toEqual(
+      FONT_SIZE_PRESETS.map((p) => [`font-size-${p.key}`, String(p.px)]),
+    );
+  });
+
+  it("checks the rung whose px is in effect", () => {
+    localStorage.setItem(STORAGE_KEY, "12");
+    openDisplay();
+    expect((screen.getByTestId("font-size-S") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId("font-size-M") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("checks no rung at all while a custom size is in effect", async () => {
+    const { FONT_SIZE_PRESETS } = await import("../lib/fontSize");
+    localStorage.setItem(STORAGE_KEY, "13");
+    openDisplay();
+    for (const preset of FONT_SIZE_PRESETS) {
+      expect(
+        (screen.getByTestId(`font-size-${preset.key}`) as HTMLInputElement).checked,
+        `${preset.key} must not be checked at 13px`,
+      ).toBe(false);
+    }
+  });
+
+  it("writes the rung's NUMBER through the module, not its key", async () => {
+    const fontSize = await import("../lib/fontSize");
+    openDisplay();
+    fireEvent.click(screen.getByTestId("font-size-XS"));
+    expect(fontSize.setFontSizePx).toHaveBeenCalledWith(11);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("11");
+  });
+
+  it("offers the advanced field inside the same fieldset, bounded by the ruled clamp", async () => {
+    const { FONT_SIZE_MIN_PX, FONT_SIZE_MAX_PX } = await import("../lib/fontSize");
+    openDisplay();
+
+    const box = customBox();
+    expect(box.type).toBe("number");
+    expect(box.min).toBe(String(FONT_SIZE_MIN_PX));
+    expect(box.max).toBe(String(FONT_SIZE_MAX_PX));
+    expect(box.closest("fieldset")).toBe(screen.getByTestId("font-size-XS").closest("fieldset"));
+  });
+
+  it("takes an in-range number the presets do not offer", async () => {
+    const fontSize = await import("../lib/fontSize");
+    openDisplay();
+    fireEvent.change(customBox(), { target: { value: "13" } });
+    expect(fontSize.setFontSizePx).toHaveBeenCalledWith(13);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("13");
+  });
+
+  it("clamps an out-of-range entry instead of refusing it", () => {
+    openDisplay();
+    fireEvent.change(customBox(), { target: { value: "400" } });
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("28");
+    expect(customBox().value).toBe("28");
+  });
+
+  // The half a reactive `value=` cannot carry on its own: when the typed
+  // number clamps ONTO the size already in effect the signal never changes,
+  // so nothing re-renders and the box would keep displaying the number that
+  // did not take. The handler writes the applied value back to the element.
+  it("snaps the box back even when the clamp lands on the size already in effect", () => {
+    localStorage.setItem(STORAGE_KEY, "28");
+    openDisplay();
+    fireEvent.change(customBox(), { target: { value: "50" } });
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("28");
+    expect(customBox().value).toBe("28");
+  });
+
+  // Same reason `onAutoAwayCustomSave` refuses a blank: `Number("")` is 0,
+  // which would clamp onto the 9px floor and shrink the whole app because
+  // somebody cleared the box to retype. An emptied box is not an instruction.
+  it("treats an emptied box as no instruction and restores what is in effect", async () => {
+    const fontSize = await import("../lib/fontSize");
+    localStorage.setItem(STORAGE_KEY, "22");
+    openDisplay();
+    fireEvent.change(customBox(), { target: { value: "" } });
+    expect(fontSize.setFontSizePx).not.toHaveBeenCalled();
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("22");
+    expect(customBox().value).toBe("22");
   });
 });

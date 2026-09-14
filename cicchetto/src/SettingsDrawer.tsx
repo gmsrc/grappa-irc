@@ -36,7 +36,13 @@ import {
 } from "./lib/displayPrefs";
 import { formatDuration } from "./lib/duration";
 import { getShowEventBadge } from "./lib/eventBadge";
-import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
+import {
+  FONT_SIZE_MAX_PX,
+  FONT_SIZE_MIN_PX,
+  FONT_SIZE_PRESETS,
+  getFontSizePx,
+  setFontSizePx,
+} from "./lib/fontSize";
 import { errorMessage, friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
 import {
@@ -156,7 +162,7 @@ const AUTO_AWAY_PRESETS = [
 ];
 
 const SettingsDrawer: Component<Props> = (props) => {
-  const [size, setSize] = createSignal<FontSizeKey>(getFontSize());
+  const [fontPx, setFontPx] = createSignal<number>(getFontSizePx());
   const [timeFmt, setTimeFmt] = createSignal<TimeFormatKey>(getTimeFormat());
   const [coloredNicklist, setColoredNicklistSig] = createSignal<boolean>(getColoredNicklist());
   // issue 2157 — device-local, so the checkbox's state is a plain local signal
@@ -278,10 +284,31 @@ const SettingsDrawer: Component<Props> = (props) => {
   const [channelsOnlyText, setChannelsOnlyText] = createSignal("");
   const [nicksOnlyText, setNicksOnlyText] = createSignal("");
 
-  const onFontSizeChange = (e: Event) => {
-    const value = (e.currentTarget as HTMLInputElement).value as FontSizeKey;
-    setSize(value);
-    setFontSize(value);
+  // issue 2164 — a preset rung carries its NUMBER in `value`, so picking one
+  // and typing one go through the same setter and there is no key left to
+  // translate.
+  const onFontSizePresetChange = (e: Event) => {
+    const px = Number((e.currentTarget as HTMLInputElement).value);
+    setFontPx(setFontSizePx(px));
+  };
+
+  // issue 2164 — the advanced field. `setFontSizePx` returns what it ACTUALLY
+  // applied, and the box is made to show that: a reactive `value=` alone
+  // cannot, because a number clamping onto the size already in effect leaves
+  // the signal unchanged and re-renders nothing — the box would keep
+  // displaying a number that never took.
+  const onFontSizeCustomChange = (e: Event) => {
+    const box = e.currentTarget as HTMLInputElement;
+    // Same reason `onAutoAwayCustomSave` refuses a blank: `Number("")` is 0,
+    // which the clamp would turn into the 9px floor. An emptied box is not an
+    // instruction, so it re-states what is in effect instead of applying one.
+    if (box.value.trim() === "") {
+      box.value = String(fontPx());
+      return;
+    }
+    const applied = setFontSizePx(Number(box.value));
+    setFontPx(applied);
+    box.value = String(applied);
   };
 
   const onTimeFormatChange = (e: Event) => {
@@ -2369,62 +2396,44 @@ const SettingsDrawer: Component<Props> = (props) => {
             <section class="settings-section" data-testid="settings-section-display">
               <h4 class="settings-section-heading">display options</h4>
 
+              {/* issue 2164 — six rungs now (XS at the ruled 11px), driven off
+                  lib/fontSize's ladder rather than written out one by one: the
+                  px belongs to the module that writes the CSS var, and a copy
+                  here is a second place for it to drift. The rungs stay RADIOS
+                  and keep their `font-size-<KEY>` testids verbatim — four e2e
+                  specs address them. The advanced box beside them is the
+                  escape hatch; nothing is checked while it holds a size no
+                  rung offers, which is the honest render of that state. */}
               <fieldset class="font-size-fieldset">
                 <legend>text size</legend>
+                <For each={FONT_SIZE_PRESETS}>
+                  {(preset) => (
+                    <label>
+                      <input
+                        type="radio"
+                        name="font-size"
+                        value={String(preset.px)}
+                        checked={fontPx() === preset.px}
+                        onChange={onFontSizePresetChange}
+                        data-testid={`font-size-${preset.key}`}
+                      />
+                      {preset.key}
+                    </label>
+                  )}
+                </For>
                 <label>
+                  px:
                   <input
-                    type="radio"
-                    name="font-size"
-                    value="S"
-                    checked={size() === "S"}
-                    onChange={onFontSizeChange}
-                    data-testid="font-size-S"
+                    type="number"
+                    inputmode="numeric"
+                    min={FONT_SIZE_MIN_PX}
+                    max={FONT_SIZE_MAX_PX}
+                    step="1"
+                    aria-label="custom text size in pixels"
+                    data-testid="font-size-custom-input"
+                    value={fontPx()}
+                    onChange={onFontSizeCustomChange}
                   />
-                  S
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="font-size"
-                    value="M"
-                    checked={size() === "M"}
-                    onChange={onFontSizeChange}
-                    data-testid="font-size-M"
-                  />
-                  M
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="font-size"
-                    value="L"
-                    checked={size() === "L"}
-                    onChange={onFontSizeChange}
-                    data-testid="font-size-L"
-                  />
-                  L
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="font-size"
-                    value="XL"
-                    checked={size() === "XL"}
-                    onChange={onFontSizeChange}
-                    data-testid="font-size-XL"
-                  />
-                  XL
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="font-size"
-                    value="XXL"
-                    checked={size() === "XXL"}
-                    onChange={onFontSizeChange}
-                    data-testid="font-size-XXL"
-                  />
-                  XXL
                 </label>
               </fieldset>
 
