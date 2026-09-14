@@ -653,10 +653,7 @@ defmodule GrappaWeb.NetworksController do
   # boundary regardless.
   @spec parked_reason(Subject.t()) :: String.t()
   defp parked_reason(subject) do
-    subject
-    |> Subject.to_session()
-    |> UserSettings.get_quit_part_reason()
-    |> case do
+    case UserSettings.get_quit_part_reason(Subject.to_session(subject)) do
       nil -> "user-disconnect"
       stored -> stored
     end
