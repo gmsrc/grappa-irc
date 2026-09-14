@@ -332,7 +332,12 @@ defmodule Grappa.Session do
           # `JoinSeedCostTest` counted as a stray query inside a join storm.
           # Kept in sync with the `Grappa.Session.Server.init_opts/0` twin.
           optional(:ignores) => [String.t()],
-          optional(:refresh_plan) => Server.refresh_plan_check(),
+          # issue 2137 — REQUIRED, not optional. Both producers inject it and
+          # `Grappa.Session.Deps.refresh!/2` refuses a plan without it, so the
+          # typespec now says what the door enforces. It is also the one place
+          # Dialyzer can see this closure at all: the value is a bare function,
+          # invisible to `Boundary` by construction.
+          required(:refresh_plan) => Server.refresh_plan_check(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Set by
           # `SessionPlan.base_plan/6` for BOTH subjects; run at 001 by

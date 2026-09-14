@@ -425,7 +425,9 @@ defmodule Grappa.Session.Server do
           # `:restored_profile` above.
           optional(:restored_avatar_url) => String.t() | nil,
           optional(:query_window_open?) => EventRouter.query_window_open?(),
-          optional(:refresh_plan) => refresh_plan_check(),
+          # issue 2137 — REQUIRED; kept in step with the
+          # `Grappa.Session.start_opts/0` twin.
+          required(:refresh_plan) => refresh_plan_check(),
           # #100 sustained-reconnect reset gate — test seam. Production
           # omits it and inherits `@connection_stable_ms`.
           optional(:connection_stable_ms) => pos_integer(),
@@ -1031,24 +1033,22 @@ defmodule Grappa.Session.Server do
     # breaks the respawn loop — `:transient` treats init's `:ignore`
     # as normal termination, supervisor drops the child permanently).
     #
-    # The closure is optional: test fixtures + the original Bootstrap
-    # call site that doesn't supply it stay on the cached-opts path.
-    # Production call sites (`Networks.SessionPlan.resolve/1` +
-    # `Visitors.SessionPlan.resolve/1`) inject it.
-    case Map.get(opts, :refresh_plan) do
-      refresh when is_function(refresh, 0) ->
-        case refresh.() do
-          {:ok, fresh_plan} ->
-            init_or_hold(Map.merge(opts, fresh_plan))
+    # The closure is NOT optional (issue 2137). Both production producers
+    # (`Networks.SessionPlan.resolve/1` + `Visitors.SessionPlan.resolve/1`)
+    # inject it, and `Deps.refresh!/2` now refuses a plan that omits it or
+    # answers out of contract — so the former `nil ->` arm, which quietly
+    # continued on the supervisor's CACHED opts, is gone with its cause.
+    # That arm was the silent half of the zombie-respawn class it was
+    # written to fix: it handled the closure's absence by doing exactly
+    # what a missing refresh does, which is nothing observable.
+    case Deps.refresh!(opts.subject, opts) do
+      {:ok, fresh_plan} ->
+        init_or_hold(Map.merge(opts, fresh_plan))
 
-          {:error, :not_found} ->
-            Logger.info("session init: subject DB row gone — stopping cleanly to break respawn loop")
+      {:error, :not_found} ->
+        Logger.info("session init: subject DB row gone — stopping cleanly to break respawn loop")
 
-            :ignore
-        end
-
-      nil ->
-        init_or_hold(opts)
+        :ignore
     end
   end
 

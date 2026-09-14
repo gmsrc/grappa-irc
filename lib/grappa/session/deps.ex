@@ -37,19 +37,20 @@ defmodule Grappa.Session.Deps do
   not a crash, not a log line.
 
   `nil` could not simply be banned, because it is correct half the time.
-  There are exactly TWO producers and they inject DISJOINT sets:
+  There are exactly TWO producers — `Grappa.Networks.SessionPlan` for
+  registered users and `Grappa.Visitors.SessionPlan` for visitors — and
+  they inject sets that overlap only in part.
 
-  * `Grappa.Networks.SessionPlan` (registered users) —
-    `away_persister`, `credential_committer`, `credential_failer`,
-    `last_joined_persister`, `link_state_reporter`,
-    `registration_committer`;
-  * `Grappa.Visitors.SessionPlan` (visitors) — `credential_failer`,
-    `last_joined_persister`, `link_state_reporter`, `recover_source`,
-    `visitor_committer`, `visitor_nick_persister`,
-    `visitor_password_rotator`.
+  **The two sets are NOT restated here.** They are `@user_injections` and
+  `@visitor_injections` below, reachable as `required_injections/1`, and
+  the reason each member exists is `rationale/1`. A prose copy is
+  duplicated state with no housekeeping, and this paragraph is the proof:
+  it read "three shared, three user-only, four visitor-only" and was
+  wrong within one commit of `refresh_plan` joining both tables — the same
+  rot that had this file carrying three disagreeing counts of its own
+  members when issue 2137 measured it.
 
-  Three shared, three user-only, four visitor-only. So `nil` is not a
-  default at all: it is a function of the SUBJECT TAG, which
+  So `nil` is not a default at all: it is a function of the SUBJECT TAG, which
   `Grappa.Subject` already carries. `from_opts/2` validates the set due
   for that tag and raises `Grappa.Session.DepsInjectionError` naming the
   offending keys — the failure moves to spawn, loud, instead of surfacing
@@ -59,17 +60,30 @@ defmodule Grappa.Session.Deps do
   this module (both their boundaries already dep `Grappa.Session`, so the
   reverse edge would close a cycle — the same reason these are closures).
 
-  Two keys sit outside that rule, both measured:
+  Two keys sit outside that rule, both measured, and they sit outside it
+  in OPPOSITE directions:
 
-  * `query_window_open?` is due on NEITHER tag. Neither producer injects
-    it, it carries a real production default, and it exists as a seam so
-    a test can keep `EventRouter` sandbox-free. Accepted on both tags,
-    required on neither.
-  * `refresh_plan` is not a field here at all, though both producers
-    inject it and it shares the silent-absence class. `Server.init/1`
-    consumes it from the raw opts BEFORE `do_init/1` builds this struct,
-    because its return value REPLACES the opts the struct is built from.
-    It is outside this struct's authority and stays unguarded.
+  * `query_window_open?` is a FIELD that is due on NEITHER tag. Neither
+    producer injects it, it carries a real production default, and it
+    exists as a seam so a test can keep `EventRouter` sandbox-free.
+    Accepted on both tags, required on neither.
+  * `refresh_plan` is DUE ON BOTH TAGS and is not a field here at all.
+    `Server.init/1` consumes it from the raw opts BEFORE `do_init/1`
+    builds this struct, because its return value REPLACES the opts the
+    struct is built from — so a session keeps no reference to it and
+    there is nothing to store.
+
+  **This module therefore has TWO doors, not one (issue 2137).**
+  `from_opts/2` guards the ten closures the struct keeps, at the point
+  they are stored; `refresh!/2` guards the eleventh, at the point it is
+  invoked. Until 2137 the second door did not exist and this file said
+  `refresh_plan` "is outside this struct's authority and stays
+  unguarded" — the ordering fact was right and the conclusion drawn from
+  it was not. Ordering decides WHERE a guard goes, never WHETHER there
+  is one, and the gap it left was the loudest kind of quiet: an omitted
+  `refresh_plan` is a session replaying the supervisor's cached child
+  spec, i.e. holding stale credentials after a rotation, with no crash,
+  no error and no log line.
   """
 
   alias Grappa.QueryWindows
@@ -309,12 +323,20 @@ defmodule Grappa.Session.Deps do
   # shape fails at the call site — deep inside a running session, on the
   # rare path that reaches for it — which is the same silent-until-late
   # failure the presence check exists to end.
+  #
+  # `refresh_plan` is due on BOTH tags and is the one member this struct
+  # does NOT carry — see `refresh!/2`. That asymmetry is the point of
+  # issue 2137: these tables describe the PLAN contract (what a producer
+  # owes), which is a wider thing than the struct's CONTENTS (what a
+  # session keeps). Conflating the two is what left the eleventh closure
+  # outside every guard for four months.
   @user_injections %{
     away_persister: 2,
     credential_committer: 1,
     credential_failer: 1,
     last_joined_persister: 2,
     link_state_reporter: 1,
+    refresh_plan: 0,
     registration_committer: 1
   }
 
@@ -323,6 +345,7 @@ defmodule Grappa.Session.Deps do
     last_joined_persister: 2,
     link_state_reporter: 1,
     recover_source: 0,
+    refresh_plan: 0,
     visitor_committer: 3,
     visitor_nick_persister: 2,
     visitor_password_rotator: 2
@@ -332,27 +355,132 @@ defmodule Grappa.Session.Deps do
   # union computed from the two tables cannot drift away from them.
   @injectable_keys Enum.sort(Enum.uniq(Map.keys(@user_injections) ++ Map.keys(@visitor_injections)))
 
+  # `refresh!/2` is the door for `refresh_plan` and reads its arity from the
+  # two tables rather than restating it. Pinned HERE, at compile time,
+  # because `DepsTest`'s producer pin cannot catch the key's removal: that
+  # test filters the live plan through `injectable_keys/0`, which is derived
+  # from these same tables, so dropping the key would drop it from both
+  # sides of the assertion at once and leave it green.
+  for table <- [@user_injections, @visitor_injections] do
+    if not Map.has_key?(table, :refresh_plan) do
+      raise "Grappa.Session.Deps: both due tables must carry :refresh_plan — " <>
+              "`refresh!/2` reads its arity from them"
+    end
+  end
+
+  # WHY each member is a closure at all, in ONE place — the third leg of
+  # issue 2137. The reasons used to live scattered across eleven typedocs
+  # and two producer modules, which is how the count reached eleven with
+  # nobody able to state the rationale for the set: the 2026-09-13 review
+  # counted twelve, and three separate counts in this file disagreed with
+  # each other. Prose alone would rot the same way, so the table is TOTAL
+  # by compile-time assertion below — a twelfth closure does not compile
+  # until someone writes down why it exists and what its silence costs.
+  #
+  # Keyed WIDER than `injectable_keys/0` on purpose: `query_window_open?`
+  # is a struct field no producer injects, and its entry is the one that
+  # records why it is NOT part of the inversion.
+  @member_rationale %{
+    away_persister:
+      "Networks → user plans only. Dodges Session → Grappa.Networks (Networks " <>
+        "already deps Session for stop_session). Absent: /away and /back persist " <>
+        "nothing, so an explicit away does not survive a reconnect.",
+    credential_committer:
+      "Networks → user plans only. Same Session → Grappa.Networks cycle. Absent: " <>
+        "an in-session SET PASSWD leaves the wire while the bound credential keeps " <>
+        "the old secret, so the next reconnect identifies with a password services " <>
+        "no longer accept.",
+    credential_failer:
+      "BOTH producers, deliberately DIFFERENT bodies behind one key (user: mark the " <>
+        "credential :failed; visitor: expire the identity row). Dodges Session → " <>
+        "Networks and Session → Visitors. Absent: a k-line or permanent SASL failure " <>
+        "stops the session recording nothing, and the supervisor respawns into the " <>
+        "same wall.",
+    last_joined_persister:
+      "BOTH. Dodges Session → Networks and Session → Visitors. Absent: the channel " <>
+        "keyset is never snapshotted, so a restart rejoins only the operator autojoin " <>
+        "— and a visitor, having none, rejoins nothing.",
+    link_state_reporter:
+      "BOTH, one closure for both edges of one axis (:failing / :registered), because " <>
+        "a session that can report one must be able to report the other. Dodges " <>
+        "Session → Grappa.Networks. Absent: connection_state keeps claiming " <>
+        ":connected while every attempt is refused — the #1675 drift.",
+    query_window_open?:
+      "NEITHER producer, and the reason this table is keyed wider than " <>
+        "injectable_keys/0. Its default is the STATIC &QueryWindows.open?/3, this " <>
+        "module aliases Grappa.QueryWindows by name, and Grappa.Session declares it " <>
+        "in deps: — so it dodges no cycle and Boundary SEES the edge. It is a test " <>
+        "seam that keeps EventRouter sandbox-free, not a carrier of the inversion. " <>
+        "Absent is not a state: it has a real production default.",
+    recover_source:
+      "Visitors → visitor plans only. Dodges Session → Grappa.Visitors (Visitors " <>
+        "deps Session via Login). Absent: /recover has no secret to identify with, " <>
+        "while the button that offers it reads a credential the session cannot see.",
+    refresh_plan:
+      "BOTH, and the ONE member consumed outside this struct: Server.init/1 invokes " <>
+        "it before do_init/1 and its return REPLACES the opts the struct is built " <>
+        "from, so it is guarded by refresh!/2 rather than carried as a field. Dodges " <>
+        "Session → Networks and Session → Visitors. Absent: the supervisor's cached " <>
+        "child spec is replayed verbatim, so the session keeps a stale nick, a stale " <>
+        "autojoin set and stale credentials after a rotation — the 2026-05-27 " <>
+        "Azzurra zombie-respawn incident.",
+    registration_committer:
+      "Networks → user plans only. Same cycle as credential_committer but a " <>
+        "different verb: it also flips auth_method to :nickserv_identify. Absent: a " <>
+        "nick registered in-session does not auto-identify on the next reconnect and " <>
+        "services enforce it away.",
+    visitor_committer:
+      "Visitors → visitor plans only. Dodges Session → Grappa.Visitors. Absent: a " <>
+        "+r-confirmed IDENTIFY never promotes the anon row to permanent, so the " <>
+        "visitor is reaped together with the identity it just proved.",
+    visitor_nick_persister:
+      "Visitors → visitor plans only. Same cycle. Absent: the upstream NICK " <>
+        "self-echo is not persisted, so credential and live session disagree on the " <>
+        "nick until a restart re-registers under the stale one.",
+    visitor_password_rotator:
+      "Visitors → visitor plans only. Same cycle. Deliberately NOT visitor_committer: " <>
+        "this one is identity-gated, so an optimistic commit cannot pin an " <>
+        "unidentified visitor permanent. Absent: a visitor's SET PASSWD rotates " <>
+        "upstream and nowhere else."
+  }
+
+  # Total by construction: every key this module has authority over — the
+  # eleven injectable ones plus the struct field no producer injects — and
+  # nothing else. A member added on one side alone fails the BUILD.
+  @rationale_domain Enum.sort([:query_window_open? | @injectable_keys])
+
+  if Enum.sort(Map.keys(@member_rationale)) != @rationale_domain do
+    raise "Grappa.Session.Deps: @member_rationale must name exactly " <>
+            "#{inspect(@rationale_domain)}, got " <>
+            "#{inspect(Enum.sort(Map.keys(@member_rationale)))}"
+  end
+
   @typedoc """
-  The closed set of injectable closure keys — TEN, not eleven.
+  The closed set of injectable closure keys — ELEVEN: exactly what the two
+  producers inject between them.
 
-  Ten and not eleven because the union of WHAT THE TWO PRODUCERS INJECT
-  includes `refresh_plan`, which this struct does not carry. Measured,
-  not assumed:
+  **Eleven and not ten since issue 2137.** `refresh_plan` used to be
+  excluded from this set, and the exclusion reason was true but was doing
+  the wrong job. It IS consumed before this struct exists — `Server.init/1`
+  invokes it and `Map.merge`s its return over the opts the struct is then
+  built from — so a check inside `from_opts/2` alone would run after the
+  fact. What did not follow is that it should therefore go unguarded: the
+  ordering says WHERE the guard belongs, not WHETHER there is one. It now
+  has `refresh!/2`, this module's other door, at the exact point it is
+  consumed.
 
-  * it is absent from `defstruct` above and always has been;
-  * `Server.init/1` reads it with its own `Map.get(opts, :refresh_plan)`
-    and, on `{:ok, fresh_plan}`, calls `init_or_hold(Map.merge(opts,
-    fresh_plan))`. So it is consumed BEFORE `do_init/1` and its return
-    value REPLACES the opts this struct is then built from — a check here
-    would run after the fact, on a map that already reflects the closure's
-    own output.
+  So this set no longer equals the struct's fields, and the difference is
+  deliberate in BOTH directions:
 
-  Excluded by that structure, therefore, not by oversight and not because
-  its absence is safe: both producers inject it, so it belongs to the same
-  silent-absence class as these ten, and it stays UNGUARDED. That is the
-  documented limitation of this door. `query_window_open?` is the
-  eleventh STRUCT field and is likewise not here, for the opposite
-  reason — no producer injects it and it has a real production default.
+  * `refresh_plan` is in this set and is NOT a `defstruct` field — a
+    session keeps no reference to it, because nothing reads it after
+    `init/1`. Making it a field would add a member nobody consumes, and
+    would move `Deps` into the COLD half of the deploy preflight
+    (`HotReload.LongLivedModules` lists this module under `@state_helpers`,
+    and `Deploy.Preflight` extracts `@type t` + `defstruct`).
+  * `query_window_open?` is a `defstruct` field and is NOT in this set —
+    no producer injects it, it has a real production default, and its
+    edge is one `Boundary` already sees. See `rationale/1`.
   """
   @type injectable ::
           :away_persister
@@ -361,6 +489,7 @@ defmodule Grappa.Session.Deps do
           | :last_joined_persister
           | :link_state_reporter
           | :recover_source
+          | :refresh_plan
           | :registration_committer
           | :visitor_committer
           | :visitor_nick_persister
@@ -385,11 +514,104 @@ defmodule Grappa.Session.Deps do
   A key in this list that is not due for the session's tag is ALIEN: a
   visitor closure on a user session is a mis-wired plan, not a spare
   capability, and `from_opts/2` refuses it. See `t:injectable/0` for why
-  the list holds TEN keys and not the eleven this struct carries — measured
-  for issue 2137, which found this line claiming nine.
+  the list holds ELEVEN keys that are NOT the eleven fields this struct
+  carries — the two sets differ by one member in each direction, and the
+  difference is the whole subject of issue 2137. (This line claimed NINE
+  until that issue measured it.)
   """
   @spec injectable_keys() :: [injectable(), ...]
   def injectable_keys, do: @injectable_keys
+
+  @doc """
+  Why `key` is an opaque closure rather than a module alias, and what its
+  silent absence costs — one sentence-set per member, in one place.
+
+  Raises `FunctionClauseError` on anything outside the set, which cannot
+  happen from `injectable_keys/0 ++ [:query_window_open?]`: the table is
+  held TOTAL against exactly that domain at compile time, so a twelfth
+  closure fails the build until its rationale is written.
+
+  This exists because the count reached eleven with the reasons scattered
+  over eleven typedocs and two producer modules, and nobody could state
+  the rationale for the SET — the 2026-09-13 review counted twelve, and
+  three separate counts inside this one file disagreed with each other.
+  """
+  @spec rationale(injectable() | :query_window_open?) :: String.t()
+  def rationale(key) when is_map_key(@member_rationale, key), do: Map.fetch!(@member_rationale, key)
+
+  @doc """
+  Invokes the plan's `refresh_plan` and returns its verdict — the door for
+  the one injected closure this struct does not carry.
+
+  Returns `{:ok, fresh_plan}` (a PLAIN map, which `Server.init/1` merges
+  over the opts) or `{:error, :not_found}` (the subject is no longer
+  viable). Raises `Grappa.Session.DepsInjectionError` when the closure is
+  absent, is not a 0-arity function, or answers with anything else.
+
+  ## Why the check is here and not in `from_opts/2`
+
+  Both, in fact — `refresh_plan` is due on both tags, so `from_opts/2`
+  asserts it too, on the MERGED opts. But `from_opts/2` alone would be
+  two steps too late. `init/1` invokes this closure BEFORE `do_init/1`
+  builds the struct, and `init_or_hold/1` sits between them: a plan whose
+  source resolved to `{:hold, _}` returns `:ignore` without ever reaching
+  the struct door. An omitted `refresh_plan` on that path would have gone
+  on being silent, which is the exact class issue 2137 is about.
+
+  ## The shape check, and its limit
+
+  The other ten members can only be checked for arity, because nothing at
+  the door may invoke them — they have effects. This one is DIFFERENT in
+  the only way that matters: this door is where it is consumed anyway, so
+  its answer exists here and can be checked for real. Arity alone is a
+  weak contract for a 0-arity closure, since every 0-arity closure
+  satisfies it.
+
+  A STRUCT is refused specifically, and it is not a hypothetical shape:
+  `Map.merge/2` accepts a struct as its second argument without a word, so
+  `{:ok, some_struct}` used to merge, inject `__struct__` into the opts and
+  refresh NOTHING — a session left on stale credentials, silently, which is
+  the very failure the closure exists to prevent. The producer body has
+  `fresh_cred` in hand one line above its return, so returning it instead
+  of the resolved plan is a one-word slip, not a laboratory case.
+
+  What this does NOT check is that the returned map IS a valid
+  `Grappa.Session.start_opts/0`. Expressing that in the typespec would
+  make `start_opts/0` and `refresh_plan_check/0` mutually recursive; the
+  runtime check stops at "a plain map", and `from_opts/2` then validates
+  the merged result against the due set — which is the part that matters,
+  since a fresh plan that drops a closure is caught there.
+  """
+  @spec refresh!(Grappa.Session.subject(), map()) :: {:ok, map()} | {:error, :not_found}
+  def refresh!(subject, opts) when is_tuple(subject) and is_map(opts) do
+    due = Map.take(required_injections(subject), [:refresh_plan])
+
+    case due_faults(due, opts) do
+      {[], []} ->
+        refresh_result!(subject, opts.refresh_plan.())
+
+      {missing, wrong_arity} ->
+        raise DepsInjectionError,
+          subject_tag: elem(subject, 0),
+          missing: missing,
+          alien: [],
+          wrong_arity: wrong_arity
+    end
+  end
+
+  defp refresh_result!(_, {:ok, plan}) when is_map(plan) and not is_struct(plan),
+    do: {:ok, plan}
+
+  defp refresh_result!(_, {:error, :not_found} = not_found), do: not_found
+
+  defp refresh_result!(subject, other) do
+    raise DepsInjectionError,
+      subject_tag: elem(subject, 0),
+      missing: [],
+      alien: [],
+      wrong_arity: [],
+      bad_refresh: {:returned, other}
+  end
 
   @doc """
   Builds the struct from a resolved `Grappa.Session.start_opts/0`,

@@ -57279,3 +57279,143 @@ remember.
 
 The `!important` count in the lens was re-checked and **holds**: exactly 2, at
 lines 1814-1815.
+<!-- entry #2137 -->
+
+---
+
+## 2026-09-14 — #2137: the eleventh injected closure gets a door, and the count gets a rationale
+
+The 2026-09-13 architecture review (A6) read `Grappa.Session.Deps` as
+"twelve injected closures carrying the Networks/Visitors → Session
+inversion invisibly to Boundary", with `refresh_plan` the twelfth and
+documented as outside the guard. Two of those three things were true.
+
+### The count is ELEVEN, and the twelfth member was never invisible
+
+Re-measured with a self-testing census (parser unit tests, six
+repo-anchored positive controls, one invented key asserted at exactly
+zero, and falsified by mutating a known key until the controls aborted
+the run rather than printing numbers). The two producers inject **eleven**
+closures. The struct carries **eleven fields**. They are not the same
+eleven — they differ by one member in each direction, and conflating the
+two sets is the whole bug.
+
+`query_window_open?` was the review's twelfth. It is a struct field **no
+producer injects**, its default is the STATIC `&QueryWindows.open?/3`,
+this module aliases `Grappa.QueryWindows` by name, and `Grappa.Session`
+declares that module in its `deps:`. Boundary SEES that edge. It hides
+nothing, so it cannot be one of the edges the finding is about.
+
+The review's growth series "7 → 10 → 12 across three reviews" holds for
+its first two terms and misses the third by the same one. Dated by first
+appearance of each key in `lib/`: seven by 2026-06-28 (the 07-08 and
+07-19 reviews saw seven), ten by 2026-08-01 (08-15 saw ten), eleven by
+2026-08-22 (09-13 saw eleven).
+
+Four more counts in the same two files disagreed with the code and with
+each other: `injectable_keys/0` claimed NINE, the `t` typedoc called all
+eleven struct fields "injected", `DepsTest` called `query_window_open?`
+the TENTH field, and a test name called the user due set FIVE. One file
+carried "these eleven", "these ten" and "TEN, not eleven" at once.
+
+### Ordering says WHERE a guard goes, never WHETHER there is one
+
+`refresh_plan`'s exclusion had a real reason: `Server.init/1` invokes it
+and merges its return over the opts the struct is then built from, so a
+check inside `from_opts/2` would run after the fact. The fact was right;
+"and therefore it stays UNGUARDED" did not follow. `Deps` now has TWO
+doors — `from_opts/2` over the ten the struct keeps, at the point they
+are stored, and `refresh!/2` over the eleventh, at the point it is
+invoked.
+
+`from_opts/2` alone would still have been two steps short, and the
+existing tests say why: `init_or_hold/1` sits between the closure and the
+struct, and a plan whose source resolved to `{:hold, _}` returns
+`:ignore` without ever reaching the struct door. The four static-mapping
+hold fixtures pass today while carrying five of the six user closures due
+to them — that path was never guarded at all.
+
+**The `nil ->` arm in `init/1` is deleted, not kept for compatibility.**
+It was the silent half of the very bug it was written for: it handled the
+closure's absence by doing exactly what a missing refresh does, which is
+nothing observable. Every production spawn reaches `Session.Server`
+through `SessionPlan.resolve/1` → `SpawnOrchestrator` →
+`start_session/3`, and both producers inject the key, so the arm was
+reachable only from fixtures.
+
+### The shape check, and why only this member can have one
+
+Arity is all the other ten can be checked for: nothing at the door may
+invoke them, because they have effects. `refresh_plan` is different in
+the only way that matters — this door consumes it anyway, so its answer
+exists here. Arity alone is a weak contract for a 0-arity closure, since
+every 0-arity closure satisfies it.
+
+A STRUCT return is refused by name, and it is not hypothetical:
+`Map.merge/2` accepts a struct as its second argument without a word, so
+`{:ok, some_struct}` merged, injected `__struct__` into the opts, and
+refreshed NOTHING. The producer's own body holds `fresh_cred` one line
+above its return, so returning it instead of the resolved plan is a
+one-word slip.
+
+What is NOT checked is that the returned map is a valid `start_opts/0`.
+Expressing that in the typespec would make `start_opts/0` and
+`refresh_plan_check/0` mutually recursive; the runtime check stops at "a
+plain map", and `from_opts/2` then validates the merged result.
+
+### The two mutants, measured before and after
+
+* **omitted `refresh_plan`** — pre-cure `{:ok, #PID<0.967.0>}`, a live
+  session, registered as `nick=stale-nick` while the DB row said
+  `fresh-nick`. Post-cure `{:error, {%DepsInjectionError{}, _}}` naming
+  `refresh_plan` and no other key.
+* **right arity, struct return** — pre-cure `{:ok, #PID<0.924.0>}`, a
+  live session, refresh silently a no-op. Post-cure refused.
+
+Neither pre-cure case was a crash, an error or a log line. That silence
+is the finding; the mutants exist because an argument for it would not
+have been believable.
+
+### Why `refresh_plan` is NOT a `defstruct` field
+
+It is in the due tables and in `t:injectable/0`, and deliberately not in
+the struct. Nothing reads it after `init/1`, so a field would be a member
+no consumer has. It would also move the DEPLOY CLASS: `Deps` is listed in
+`HotReload.LongLivedModules`'s `@state_helpers`, and
+`Deploy.Preflight.collect_state_blocks/1` extracts exactly `@type t`,
+`defstruct`, and `init/1`'s returned map literals — so a field-add here
+classifies COLD, while module attributes and function bodies do not move
+the extracted block at all.
+
+### The rationale table, total at compile time
+
+The count reached eleven with the reasons scattered over eleven typedocs
+and two producer modules, and nobody could state the rationale for the
+SET — which is how three disagreeing counts survived in one file.
+`@member_rationale` now holds one entry per governed member (the eleven
+injectable keys plus `query_window_open?`, whose entry records why it is
+NOT part of the inversion), each naming who injects it, which cycle the
+closure dodges, and what its silence costs. A compile-time assertion
+holds the table total against that domain: **a twelfth closure does not
+compile until someone writes down why it exists.**
+
+A second compile-time assertion pins `:refresh_plan` into both due
+tables, because `DepsTest`'s producer pin structurally cannot catch its
+removal: that test filters the live plan through `injectable_keys/0`,
+which is derived from the same tables, so dropping the key would remove
+it from both sides of the assertion at once and leave it green.
+
+The moduledoc's two hand-written producer lists are DELETED rather than
+corrected. They were duplicated state with no housekeeping, and they had
+just rotted again in the same commit that added the eleventh member
+("three shared" became four). `required_injections/1` and `rationale/1`
+are the sources; a prose copy is the failure mode this entry is about.
+
+### What is NOT claimed
+
+Boundary still cannot see any of these eleven edges, and this slice does
+not change that. A closure carries no module reference — that is the
+premise of the defect, not an oversight — and making the edges visible is
+a redesign of the inversion, not a slice. What changed is that the
+eleventh closure is now guarded like the other ten, and that the set has
+a rationale in one place instead of none.

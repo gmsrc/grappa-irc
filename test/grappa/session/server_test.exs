@@ -50,6 +50,7 @@ defmodule Grappa.Session.ServerTest do
     AwayState,
     Backoff,
     Deps,
+    DepsInjectionError,
     DirectoryIngest,
     GhostRecovery,
     ISupport,
@@ -165,20 +166,27 @@ defmodule Grappa.Session.ServerTest do
   # SessionPlan layer) but which we decouple here to isolate the
   # alias-lifecycle from the orthogonal socket-bind concern.
   #
-  # `refresh_plan` is dropped EXPLICITLY, because it is the DB-wins closure
-  # and would re-resolve both overrides away inside `init/1`. It used to be
-  # absent by virtue of the whole plan being hand-built — a synthetic map
-  # that also carried none of the five USER closures, which #1398 turned
-  # from an invisible omission into a spawn-time raise
-  # (`Grappa.Session.Deps.from_opts/2`). Resolving the real plan and
-  # naming the one key this test must NOT have is the honest shape: the
-  # exclusion is now a line of code instead of a silence.
+  # `refresh_plan` is the DB-wins closure and the real one would re-resolve
+  # both overrides away inside `init/1`, so this test needs it neutralised.
+  # It used to be absent by virtue of the whole plan being hand-built — a
+  # synthetic map that also carried none of the five USER closures, which
+  # #1398 turned from an invisible omission into a spawn-time raise
+  # (`Deps.from_opts/2`) — and was then DROPPED explicitly, the honest
+  # shape while the key was ungoverned.
+  #
+  # Issue 2137 closed that door too: `Deps.refresh!/2` refuses a plan
+  # without it, so the exclusion can no longer be spelled as an absence.
+  # A closure that re-asserts the overrides is the same intent stated
+  # positively, and it is strictly more truthful than the drop was — it
+  # says what the DB re-resolve should answer HERE, instead of removing
+  # the question.
   defp derived_alias_opts(user, network, managed_alias) do
     {:ok, plan} = SessionPlan.resolve(Credentials.get_credential!(user, network))
+    overrides = %{source_address: nil, managed_source_alias: managed_alias}
 
     plan
-    |> Map.drop([:refresh_plan])
-    |> Map.merge(%{source_address: nil, managed_source_alias: managed_alias})
+    |> Map.merge(overrides)
+    |> Map.put(:refresh_plan, fn -> {:ok, overrides} end)
   end
 
   # #211 phase 7 — the visitor nick lives on its per-network credential now
@@ -820,6 +828,61 @@ defmodule Grappa.Session.ServerTest do
       # `:warning` so it would be filtered anyway.)
       assert :ignore = Server.start_link(init_opts)
     end
+
+    # Issue 2137 — the two mutants for the guard that closed this door.
+    # Both were measured on the PRE-cure tree first: each spawned a live
+    # session, on the STALE credentials, with no crash and no log line.
+    # That silence is the whole finding — an omitted or mis-shaped
+    # `refresh_plan` is not an error, it is a bouncer quietly reconnecting
+    # under a nick the operator rotated away hours ago.
+
+    test "an OMITTED refresh_plan is refused at spawn instead of booting on stale opts" do
+      port = IRCServer.pick_unused_port()
+      {user, network, credential} = setup_user_and_network(port, %{nick: "stale-nick"})
+      Process.flag(:trap_exit, true)
+
+      {:ok, plan} = SessionPlan.resolve(credential)
+      stale_opts = Map.merge(plan, %{user_id: user.id, network_id: network.id})
+
+      # The rotation the cached child spec would miss.
+      {:ok, _} =
+        credential |> Ecto.Changeset.change(nick: "fresh-nick") |> Repo.update()
+
+      # NOT `assert_raise`: a raise inside `init/1` kills the spawned process,
+      # so `start_link/1` RETURNS `{:error, {exception, stacktrace}}` instead
+      # of raising in this process. An `assert_raise` here would be red on a
+      # CURED tree too, and would have proved nothing about either.
+      assert {:error, {%DepsInjectionError{} = error, _}} =
+               Server.start_link(Map.drop(stale_opts, [:refresh_plan]))
+
+      # Names the offending key, and ONLY it: the other ten are present, so
+      # an error that listed the whole due set would read the same on every
+      # failure and make this assertion vacuous.
+      message = Exception.message(error)
+      assert message =~ "missing: refresh_plan"
+      refute message =~ "credential_failer"
+    end
+
+    test "a refresh_plan of the right ARITY but the wrong return SHAPE is refused" do
+      port = IRCServer.pick_unused_port()
+      {user, network, credential} = setup_user_and_network(port, %{nick: "stale-nick"})
+      Process.flag(:trap_exit, true)
+
+      {:ok, plan} = SessionPlan.resolve(credential)
+      stale_opts = Map.merge(plan, %{user_id: user.id, network_id: network.id})
+
+      # The plausible one-word slip, not a laboratory shape: the producer's
+      # own `refresh_plan` body holds `fresh_cred` one line above its
+      # return. `Map.merge/2` takes a struct as its second argument without
+      # complaint, so pre-cure this merged, injected `__struct__` into the
+      # opts and refreshed NOTHING.
+      fresh_cred = Credentials.get_credential!(user, network)
+
+      assert {:error, {%DepsInjectionError{} = error, _}} =
+               Server.start_link(Map.put(stale_opts, :refresh_plan, fn -> {:ok, fresh_cred} end))
+
+      assert Exception.message(error) =~ "refresh_plan returned a shape its contract forbids"
+    end
   end
 
   describe "static-mapping hold (#543 INC-4)" do
@@ -830,8 +893,14 @@ defmodule Grappa.Session.ServerTest do
     # "static-mapping: " reason (reusing the same terminal-failure machinery
     # #554 uses for KILL) and returns `:ignore`, so the `:transient`
     # supervisor drops the child instead of respawn-looping into a shared
-    # egress. Synthetic opts (no `refresh_plan`) so the injected hold isn't
-    # re-resolved away by the DB-wins closure.
+    # egress. Synthetic opts so the injected hold is not re-resolved away by
+    # the DB-wins closure — expressed since issue 2137 as an explicit no-op
+    # `refresh_plan` rather than as its absence. These four fixtures are
+    # exactly why the guard could not live in `Deps.from_opts/2` alone: a
+    # held plan returns `:ignore` from `init_or_hold/1` and never reaches the
+    # struct door at all, so before 2137 a plan omitting `refresh_plan`
+    # slipped through this path without a word. `Deps.refresh!/2` sits ahead
+    # of the fork, which is why these four now owe the key.
 
     test "a {:hold, :no_client_source} source fires the failer and returns :ignore" do
       test_pid = self()
@@ -842,6 +911,7 @@ defmodule Grappa.Session.ServerTest do
         subject_label: "user:hold-test",
         network_slug: "holdnet",
         source_address: {:hold, :no_client_source},
+        refresh_plan: fn -> {:ok, %{}} end,
         credential_failer: fn reason -> send(test_pid, {:held_failer, reason}) end
       }
 
@@ -858,6 +928,7 @@ defmodule Grappa.Session.ServerTest do
         subject_label: "user:hold-test",
         network_slug: "holdnet",
         source_address: {:hold, :no_static_prefix},
+        refresh_plan: fn -> {:ok, %{}} end,
         credential_failer: fn reason -> send(test_pid, {:held_failer, reason}) end
       }
 
@@ -873,7 +944,8 @@ defmodule Grappa.Session.ServerTest do
         network_id: 1,
         subject_label: "user:hold-test",
         network_slug: "holdnet",
-        source_address: {:hold, :no_client_source}
+        source_address: {:hold, :no_client_source},
+        refresh_plan: fn -> {:ok, %{}} end
       }
 
       assert :ignore = Server.start_link(init_opts)
@@ -895,6 +967,7 @@ defmodule Grappa.Session.ServerTest do
         subject_label: "user:hold-test",
         network_slug: "holdnet",
         source_address: {:hold, :mode2_disarmed},
+        refresh_plan: fn -> {:ok, %{}} end,
         credential_failer: fn reason -> send(test_pid, {:held_failer, reason}) end
       }
 

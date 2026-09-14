@@ -22,7 +22,14 @@ defmodule Grappa.Session.DepsTest do
     keys that were supplied);
   * that an alien key — a visitor closure on a user session — raises;
   * that an explicit `nil`, the exact shape the old `Map.get/2` door
-    accepted in silence, counts as MISSING and not as supplied.
+    accepted in silence, counts as MISSING and not as supplied;
+  * the SECOND door, `refresh!/2` (issue 2137) — that the eleventh
+    closure is refused when absent, when it is not 0-arity, and when its
+    ANSWER is out of contract, which is a check no other member can get
+    because no other member may be invoked at the door;
+  * that `rationale/1` covers every governed member and says what each
+    one's SILENCE costs — the table is held total at compile time, so
+    this only has to pin that the entries are worth having.
 
   Out of scope, measured and deliberate:
 
@@ -34,18 +41,20 @@ defmodule Grappa.Session.DepsTest do
     of the closures that hide an edge from `Boundary`: that default is a
     static reference, and `Grappa.Session` declares `Grappa.QueryWindows`
     in its `deps:` (issue 2137).
-  * `refresh_plan` is NOT a `Deps` field, though both plans inject it and
-    it belongs to the same silent class. `Server.init/1` reads it from the
-    raw opts BEFORE `do_init/1` builds this struct, because its return
-    value REPLACES the opts the struct would be built from. It is outside
-    this struct's authority and stays unguarded — the documented
-    limitation of this guard, not an oversight.
+  🔴 `refresh_plan` USED to be listed here as out of scope, on the
+  grounds that `Server.init/1` consumes it before `do_init/1` builds the
+  struct. Issue 2137 kept the fact and dropped the conclusion: ordering
+  decides WHERE the guard goes, not whether there is one. It is now due
+  on both tags and guarded by `refresh!/2`, at the point of consumption —
+  see the two describes for that door below. It is still NOT a struct
+  field, and that is the deliberate part: nothing reads it after
+  `init/1`.
   """
   use Grappa.DataCase, async: true
 
   import Grappa.AuthFixtures
 
-  alias Grappa.Networks.{Credentials, SessionPlan}
+  alias Grappa.Networks.{Credential, Credentials, SessionPlan}
   alias Grappa.QueryWindows
   alias Grappa.Session.{Deps, DepsInjectionError}
   alias Grappa.Visitors.SessionPlan, as: VisitorSessionPlan
@@ -65,7 +74,7 @@ defmodule Grappa.Session.DepsTest do
       assert injected_arities(plan) == Deps.required_injections({:visitor, visitor.id})
     end
 
-    test "the two due sets are disjoint on all but the three shared closures" do
+    test "the two due sets are disjoint on all but the four shared closures" do
       user_keys = {:user, "u"} |> Deps.required_injections() |> Map.keys() |> MapSet.new()
       visitor_keys = {:visitor, "v"} |> Deps.required_injections() |> Map.keys() |> MapSet.new()
 
@@ -75,8 +84,16 @@ defmodule Grappa.Session.DepsTest do
       # producers inject genuinely different closures behind it (visitor
       # terminal failure expires the identity row, not the credential
       # state) — this assertion is about the due SET, not the behaviour.
+      # Issue 2137 added the fourth: `refresh_plan` is due on both tags
+      # because both producers inject it, and the respawn staleness it
+      # prevents has no subject branch either.
       assert MapSet.intersection(user_keys, visitor_keys) ==
-               MapSet.new([:credential_failer, :last_joined_persister, :link_state_reporter])
+               MapSet.new([
+                 :credential_failer,
+                 :last_joined_persister,
+                 :link_state_reporter,
+                 :refresh_plan
+               ])
     end
 
     test "injectable_keys/0 is exactly the union of the two due sets" do
@@ -225,6 +242,111 @@ defmodule Grappa.Session.DepsTest do
   # new due key cannot be silently forgotten here — the helper grows with
   # the table, and the drift tests above keep the table honest against the
   # two real producers.
+  describe "refresh!/2 — the door for the closure the struct does not carry (issue 2137)" do
+    test "returns the fresh plan when the closure answers with a plain map" do
+      subject = {:user, "u"}
+      opts = Map.put(complete_opts(subject), :refresh_plan, fn -> {:ok, %{nick: "fresh"}} end)
+
+      assert Deps.refresh!(subject, opts) == {:ok, %{nick: "fresh"}}
+    end
+
+    test "passes {:error, :not_found} through — the subject-is-gone verdict" do
+      subject = {:visitor, "v"}
+      opts = Map.put(complete_opts(subject), :refresh_plan, fn -> {:error, :not_found} end)
+
+      assert Deps.refresh!(subject, opts) == {:error, :not_found}
+    end
+
+    test "an OMITTED refresh_plan raises and names it, on BOTH tags" do
+      for subject <- [{:user, "u"}, {:visitor, "v"}] do
+        opts = Map.delete(complete_opts(subject), :refresh_plan)
+
+        assert raise_message(subject, opts, &Deps.refresh!/2) =~ "missing: refresh_plan"
+      end
+    end
+
+    test "an explicit nil counts as MISSING, not as supplied" do
+      subject = {:user, "u"}
+      opts = Map.put(complete_opts(subject), :refresh_plan, nil)
+
+      assert raise_message(subject, opts, &Deps.refresh!/2) =~ "missing: refresh_plan"
+    end
+
+    test "a closure of the wrong arity is refused, naming both arities" do
+      subject = {:user, "u"}
+      opts = Map.put(complete_opts(subject), :refresh_plan, fn _ -> {:ok, %{}} end)
+
+      assert raise_message(subject, opts, &Deps.refresh!/2) =~
+               "wrong arity: refresh_plan (expected 0, got 1)"
+    end
+
+    # THE mutant. Right arity, wrong shape, and silent before this door
+    # existed: `Map.merge/2` accepts a struct as its second argument, so
+    # `{:ok, %Struct{}}` merged, injected `__struct__` into the opts and
+    # refreshed nothing at all.
+    test "a struct return is refused — the shape Map.merge/2 would have swallowed" do
+      subject = {:user, "u"}
+      opts = Map.put(complete_opts(subject), :refresh_plan, fn -> {:ok, %Credential{}} end)
+
+      message = raise_message(subject, opts, &Deps.refresh!/2)
+
+      assert message =~ "refresh_plan returned a shape its contract forbids"
+      assert message =~ "Credential"
+    end
+
+    test "every other return shape is refused, nil and a bare atom included" do
+      subject = {:user, "u"}
+
+      for bad <- [nil, :ok, {:ok, [nick: "fresh"]}, {:error, :something_else}, "plan"] do
+        opts = Map.put(complete_opts(subject), :refresh_plan, fn -> bad end)
+
+        assert raise_message(subject, opts, &Deps.refresh!/2) =~
+                 "refresh_plan returned a shape its contract forbids",
+               "#{inspect(bad)} was accepted"
+      end
+    end
+
+    # A raise that renders no fault at all would read as an empty
+    # accusation, and `nil` is the shape that produces it if the field is
+    # stored bare rather than wrapped.
+    test "a nil return still names the fault instead of rendering an empty message" do
+      subject = {:user, "u"}
+      opts = Map.put(complete_opts(subject), :refresh_plan, fn -> nil end)
+
+      assert raise_message(subject, opts, &Deps.refresh!/2) =~ "nil"
+    end
+  end
+
+  describe "rationale/1 — one place, held total at compile time (issue 2137)" do
+    test "every member this module governs carries a non-empty rationale" do
+      for key <- [:query_window_open? | Deps.injectable_keys()] do
+        rationale = Deps.rationale(key)
+
+        assert is_binary(rationale) and byte_size(rationale) > 40,
+               "#{key} has no usable rationale"
+      end
+    end
+
+    test "each rationale names what the member's SILENCE costs, not just what it is" do
+      # The table exists because a count grew without anyone able to state
+      # the reason for the set. A rationale that describes the closure but
+      # not its absence would restate the typedoc and buy nothing.
+      for key <- Deps.injectable_keys() do
+        assert Deps.rationale(key) =~ "Absent", "#{key}'s rationale does not say what is lost"
+      end
+    end
+
+    test "a key outside the governed set has no rationale to give" do
+      assert_raise FunctionClauseError, fn -> Deps.rationale(:porcodio_persister) end
+    end
+
+    test "the governed set is exactly the eleven injectable keys plus the one field" do
+      assert length(Deps.injectable_keys()) == 11
+      assert :refresh_plan in Deps.injectable_keys()
+      refute :query_window_open? in Deps.injectable_keys()
+    end
+  end
+
   defp complete_opts(subject) do
     subject
     |> Deps.required_injections()
@@ -246,7 +368,12 @@ defmodule Grappa.Session.DepsTest do
     |> Map.new(fn {key, fun} -> {key, elem(Function.info(fun, :arity), 1)} end)
   end
 
-  defp raise_message(subject, opts) do
-    Exception.message(assert_raise(DepsInjectionError, fn -> Deps.from_opts(subject, opts) end))
+  defp raise_message(subject, opts), do: raise_message(subject, opts, &Deps.from_opts/2)
+
+  # Parameterised by the DOOR, because this module now has two and both
+  # raise the same exception: `from_opts/2` over the set the struct keeps,
+  # `refresh!/2` over the one member it does not.
+  defp raise_message(subject, opts, door) do
+    Exception.message(assert_raise(DepsInjectionError, fn -> door.(subject, opts) end))
   end
 end
