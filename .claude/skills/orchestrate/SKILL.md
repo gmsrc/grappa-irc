@@ -2499,6 +2499,21 @@ con la variante senza `\n` come controllo che discrimina.)
   📏 **Il conto che decide:** con N rami append-only, GitHub rifà `CONFLICTING` gli altri N−1 a ogni
   merge ⇒ **N cicli rebase+CI serializzati**. Misurato lì: 2 delle 3 pagavano una `integration` piena
   (~25' l'una) ⇒ ~55-60' contro **una** CI sola.
+- 🔴🔴 **E IL FATTO CHE RENDE QUESTA SEZIONE QUOTIDIANA E NON ECCEZIONALE, MISURATO IL
+  2026-09-14: OGNI FETTA SCRIVE UNA ENTRY IN `DESIGN_NOTES`, QUINDI CON DUE WORKER IN PARALLELO
+  IL CONFLITTO NON È UN INCIDENTE — È LA NORMA, PER COSTRUZIONE.** In una sera: #2155, #2162,
+  #2168 e #2170, quattro PR indipendenti che non condividono **un solo file di codice** e
+  **collidono tutte sullo stesso file di log**. GitHub non applica `merge=union` ⇒ appena una
+  atterra, **tutte le altre diventano `CONFLICTING`, cioè a ZERO CI**, e quello zero si legge
+  come *"la CI non è ancora partita"*.
+  🥇 **Conseguenza operativa: NON mergiare una alla volta man mano che vanno verdi.** Quel modo
+  costa **(N−1) rebase + (N−1) run `integration` INTERE** — ~25 min l'una qui, perché ogni fetta
+  cic tocca `cicchetto/src/**` e quindi paga i 4 shard. **Lasciale andare verdi, poi UNISCILE IN
+  BATCH per MERGE.** Misurato sulla union #2169 (2155+2162): due merge commit, `rc=0`, zero
+  conflitti, **una sola CI invece di due**, e **zero rebase chiesti alle worker**.
+  ⚠️ **Il prezzo va DETTO a chi lo paga:** una PR che va verde DOPO che hai costruito la union
+  resta fuori e dovrà ribasare. **È costo dell'ORDINAMENTO dell'orchestratrice, non un errore
+  della worker** — e una union si costruisce su rami GIÀ verdi, mai su una promessa.
 - 🥇🥇 **L'ARITMETICA PREDETTA PRIMA SCALA A N RAMI, ED È L'UNICA PROVA PORTANTE QUANDO UNION
   RISOLVE IN SILENZIO.** `rc=0` + zero file in conflitto è **esattamente** il caso in cui il verde non
   prova niente. Forma: `byte(DN di main) + Σ byte(entry di ogni ramo) == byte(DN dopo)`, idem per le
