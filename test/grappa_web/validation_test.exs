@@ -161,4 +161,106 @@ defmodule GrappaWeb.ValidationTest do
       assert Validation.validate_wire_recipient_name("@#chan", []) == {:error, :bad_request}
     end
   end
+
+  # Reuses the `@bahamut` / `@halfop` sigil sets defined above — same two
+  # networks, and the two validators must agree on what a sigil IS.
+  describe "validate_statusmsg_recipient/4 (issue 2179)" do
+    test "accepts an ops-level channel whose window names the channel behind it" do
+      assert Validation.validate_statusmsg_recipient("@#chan", "#chan", @bahamut, :ascii) == :ok
+    end
+
+    test "accepts a multi-sigil run — the whole run, on the same channel" do
+      assert Validation.validate_statusmsg_recipient("@%#chan", "#chan", @halfop, :ascii) == :ok
+    end
+
+    test "REFUSES a bare target: with no level peeled, this is the plain arm's send" do
+      # The narrowing that `validate_wire_recipient_name/2` does not do. A
+      # `#chan` here would open a second door to an ordinary channel message,
+      # and a `carol` would key an outbound DM off a parameter that is supposed
+      # to name a membership level.
+      assert Validation.validate_statusmsg_recipient("#chan", "#chan", @bahamut, :ascii) ==
+               {:error, :bad_request}
+
+      assert Validation.validate_statusmsg_recipient("carol", "carol", @bahamut, :ascii) ==
+               {:error, :bad_request}
+    end
+
+    test "REFUSES a sigil the network does not advertise — never strips it" do
+      # The acceptance. `%` is not in bahamut's `STATUSMSG=@+`, so `%#chan` is
+      # not an ops-only address here; silently peeling it would send to the
+      # WHOLE channel a line the operator addressed to half of it.
+      assert Validation.validate_statusmsg_recipient("%#chan", "#chan", @bahamut, :ascii) ==
+               {:error, :bad_request}
+
+      # …and on a network that DOES advertise it, the same target is fine —
+      # which is what makes the refusal above a per-network fact and not a
+      # hardcoded opinion.
+      assert Validation.validate_statusmsg_recipient("%#chan", "#chan", @halfop, :ascii) == :ok
+    end
+
+    test "REFUSES a sigil over a nick, and the read-only $server synthetic" do
+      assert Validation.validate_statusmsg_recipient("@carol", "carol", @bahamut, :ascii) ==
+               {:error, :bad_request}
+
+      assert Validation.validate_statusmsg_recipient("@$server", "$server", @bahamut, :ascii) ==
+               {:error, :bad_request}
+    end
+
+    test "REFUSES a window that names a DIFFERENT channel from the recipient" do
+      # The discriminating half, and the reason the URL is a parameter here at
+      # all: the server keys this echo to the channel behind the sigil, so a
+      # POST to `#other` carrying `@#chan` would file a row where its own
+      # request denies. 400 beats a silent misfile.
+      assert Validation.validate_statusmsg_recipient("@#chan", "#other", @bahamut, :ascii) ==
+               {:error, :bad_request}
+
+      # …including the near-miss that a substring check would wave through.
+      assert Validation.validate_statusmsg_recipient("@#chan", "#chan2", @bahamut, :ascii) ==
+               {:error, :bad_request}
+
+      # …and the raw target as the window, which is the phantom key itself.
+      assert Validation.validate_statusmsg_recipient("@#chan", "@#chan", @bahamut, :ascii) ==
+               {:error, :bad_request}
+    end
+
+    test "the window compare FOLDS, and folds the way the network folds" do
+      # #537 — the same ingress fold `MessagesController.index/2` applies, so a
+      # `#CHAN` typed in the URL still names the channel `@#chan` addresses.
+      assert Validation.validate_statusmsg_recipient("@#chan", "#CHAN", @bahamut, :ascii) == :ok
+      assert Validation.validate_statusmsg_recipient("@#CHAN", "#chan", @bahamut, :ascii) == :ok
+
+      # On rfc1459 `[` and `{` are the SAME character, so the two spellings name
+      # one channel; on ascii they are two, and a fold that ignored the
+      # casemapping would merge them everywhere.
+      assert Validation.validate_statusmsg_recipient("@#foo[1]", "#foo{1}", @bahamut, :rfc1459) ==
+               :ok
+
+      assert Validation.validate_statusmsg_recipient("@#foo[1]", "#foo{1}", @bahamut, :ascii) ==
+               {:error, :bad_request}
+    end
+
+    test "the peel does not weaken the channel-shape check behind it" do
+      # `peel_statusmsg/2` tests only the FIRST byte of the remainder. The full
+      # channel validator still runs, so a target that would split the wire
+      # line stays refused.
+      assert Validation.validate_statusmsg_recipient(
+               "@#with space",
+               "#with space",
+               @bahamut,
+               :ascii
+             ) == {:error, :bad_request}
+
+      assert Validation.validate_statusmsg_recipient(
+               "@#chan\r\nQUIT",
+               "#chan\r\nQUIT",
+               @bahamut,
+               :ascii
+             ) == {:error, :bad_request}
+    end
+
+    test "an empty advertised set admits nothing — there are no levels to address" do
+      assert Validation.validate_statusmsg_recipient("@#chan", "#chan", [], :ascii) ==
+               {:error, :bad_request}
+    end
+  end
 end

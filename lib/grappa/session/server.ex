@@ -76,6 +76,10 @@ defmodule Grappa.Session.Server do
   `{:send_join, [ch, …], key}` (a canonical-folded channel LIST — #382)
   / `{:send_part, ch, reason}` are upstream-only (channel-membership tracking
   lands in Phase 5 alongside JOIN/PART persistence).
+  `{:send_statusmsg, target, body}` (issue 2179) is the same persist +
+  broadcast + wire triple for a channel addressed at a MEMBERSHIP level
+  (`@#chan`), differing only in that the row's key is peeled out of the
+  target here rather than taken from it.
   """
   use GenServer, restart: :transient
 
@@ -1942,6 +1946,47 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # issue 2179 — /msg to a channel at a membership level (`@#chan` ops-only,
+  # `@+#chan` ops AND voiced). The wire verb and the row kind are a plain
+  # PRIVMSG's; what differs is that the RECIPIENT decides the window. The peel
+  # happens HERE, not at the web door, because this process holds the network's
+  # 005 `STATUSMSG=` set — the same authority, and the same
+  # `Identifier.peel_statusmsg/2` call, `EventRouter.strip_statusmsg_target/2`
+  # uses to file every INBOUND copy of this line into `#chan`. One derivation,
+  # both directions, so the operator's echo cannot land in a different window
+  # from the one their channel-mates read it in.
+  #
+  # A target that peels NOTHING here is refused rather than sent. That is not
+  # belt-and-braces over the controller's validator: the controller peels with
+  # a snapshot taken through `Session.statusmsg/2`, and the only thing that can
+  # be keyed on a target which is not a membership address is the raw target
+  # itself — i.e. a scrollback row keyed `@#chan`, the outbound twin of the
+  # phantom window #1303 removed on the inbound side. The refusal is what makes
+  # "this arm cannot create a phantom window key" true of the arm and not only
+  # of its caller. `:invalid_line` because it IS the target's shape that is
+  # wrong, and it is the tag this facade's other shape guards already use.
+  #
+  # (No @impl here — a continuation clause of handle_call/3, whose @impl rides
+  # the {:send_privmsg, …} clause above.)
+  def handle_call({:send_statusmsg, target, body}, _, state)
+      when is_binary(target) and is_binary(body) do
+    line = "PRIVMSG #{target} :#{body}"
+    # Routed through the choke point for the same reason the NOTICE door is:
+    # `NSInterceptor` cannot match a channel target today, and keeping the door
+    # in the path is what makes it participate automatically if it ever learns
+    # a new shape. No `service_target?/1` branch, though — a channel is never a
+    # `*Serv`, so the W12 carve-out has nothing to carve here.
+    state = capture_outbound_ns_secret(state, line)
+
+    case Identifier.peel_statusmsg(target, session_statusmsg(state)) do
+      {channel, level} when is_binary(level) ->
+        handle_statusmsg_send(target, channel, level, body, state)
+
+      {_, nil} ->
+        {:reply, {:error, :invalid_line}, state}
+    end
+  end
+
   # Sends `TOPIC <channel> :<body>` upstream. NO optimistic persist +
   # broadcast here — issue #22: the upstream IRC server echoes the TOPIC
   # back, EventRouter's unsolicited-TOPIC handler builds the canonical
@@ -2603,7 +2648,7 @@ defmodule Grappa.Session.Server do
   # `Grappa.Session.statusmsg/2`, which degrades to the bahamut default when
   # there is no live pid.
   def handle_call(:statusmsg, _, state) do
-    {:reply, ISupport.statusmsg(Map.get(state, :isupport, ISupport.default())), state}
+    {:reply, session_statusmsg(state), state}
   end
 
   # #247 — the authoritative /notify presence map for this session.
@@ -4381,6 +4426,16 @@ defmodule Grappa.Session.Server do
   defp session_member_sigils(state),
     do: ISupport.sigils(Map.get(state, :isupport, ISupport.default()))
 
+  # The network's advertised STATUSMSG sigil set. Same `Map.get` hot-reload
+  # shape as its two siblings above. issue 2179 gave it a second reader (the
+  # egress peel in `{:send_statusmsg, …}`) beside the `:statusmsg` call the
+  # web edge asks — and the two MUST be one expression: a send door peeling
+  # with a different set from the one it published to the caller would refuse
+  # what it just advertised, or accept what it did not.
+  @spec session_statusmsg(t()) :: [String.t()]
+  defp session_statusmsg(state),
+    do: ISupport.statusmsg(Map.get(state, :isupport, ISupport.default()))
+
   # M3b — the authenticated, same-origin serving path a browser fetches
   # a cached peer avatar from — NEVER the raw third-party URL the peer's
   # CTCP AVATAR reply carried. Relative (no `base_url()` needed, unlike
@@ -4442,7 +4497,7 @@ defmodule Grappa.Session.Server do
         ISupport.linelen(Map.get(state, :isupport, ISupport.default()))
       )
 
-    case persist_and_send_fragments(target, key, fragments, state, nil) do
+    case persist_and_send_fragments(target, key, nil, fragments, state, nil) do
       {:ok, last_message} ->
         # #422: the operator's own outbound DM opens its server-side query
         # window too — a self-msg or a DM sent from another device must
@@ -4456,6 +4511,46 @@ defmodule Grappa.Session.Server do
 
       {:error, _} = err ->
         {:reply, err, state}
+    end
+  end
+
+  # issue 2179 — the ops-only channel message. Everything an ordinary channel
+  # PRIVMSG does, with two facts changed and one added, all three coming from
+  # the same peel:
+  #
+  #   * the KEY is the channel BEHIND the sigil (`@#chan` → `#chan`), not the
+  #     wire target — which is also why this cannot reuse the plain arm
+  #     unchanged: `Scrollback.target_kind/1` reads a leading `@` as
+  #     nick-shaped, so `dm_peer/4` handed the raw target would thread an
+  #     outbound DM to a peer called `@#chan`;
+  #   * `dm_with` is therefore nil, and stays nil by construction rather than
+  #     by a literal — see `outbound_dm_peer/4`;
+  #   * `meta.statusmsg` carries the peeled RUN, byte-for-byte what
+  #     `EventRouter.tag_statusmsg/2` records on the inbound copy, so the
+  #     operator's own line renders with the #1247 badge the others' carry.
+  #
+  # The FRAGMENT budget is sized against the WIRE target, sigils included (as
+  # `handle_notice_send/4` sizes against its recipient): the ircd counts the
+  # bytes it is handed, and budgeting against the shorter `#chan` would put the
+  # sigil's bytes over the line and lose the tail to truncation.
+  @spec handle_statusmsg_send(String.t(), String.t(), String.t(), String.t(), t()) ::
+          {:reply, {:ok, Scrollback.Message.t()} | {:error, term()}, t()}
+  defp handle_statusmsg_send(target, channel, level, body, state) do
+    key = fold_key(state, channel)
+
+    fragments =
+      LineSplit.split_privmsg_body(
+        body,
+        target,
+        ISupport.linelen(Map.get(state, :isupport, ISupport.default()))
+      )
+
+    # No `maybe_open_query_window/2` afterwards, unlike `handle_persisting_send/3`:
+    # a channel at a membership level is a channel, and the window it belongs to
+    # already exists (or does not, and a send is not what opens one).
+    case persist_and_send_fragments(target, key, level, fragments, state, nil) do
+      {:ok, last_message} -> {:reply, {:ok, last_message}, state}
+      {:error, _} = err -> {:reply, err, state}
     end
   end
 
@@ -4509,7 +4604,7 @@ defmodule Grappa.Session.Server do
   # door's FRAGMENTING (a notice body is plain text, so an over-long one must
   # split rather than lose its tail to the ircd's truncation).
   #
-  # Deliberately a sibling of `persist_and_send_fragments/5` rather than a
+  # Deliberately a sibling of `persist_and_send_fragments/6` rather than a
   # parameterisation of it: the two agree only on the recurse-persist-send
   # skeleton and differ on every attribute that matters — row kind, meta, the
   # `dm_with` rule (a notice threads nothing), the persist key's provenance
@@ -4579,18 +4674,28 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # `statusmsg` (issue 2179) is the peeled membership run for an ops-only
+  # channel message (`"@"`, `"@+"`), or nil for an ordinary send. ONE parameter
+  # rather than a second copy of this loop, because the two agree on every
+  # attribute that matters — kind classification, key, sender, the grade
+  # snapshot, the CTCP echo meta, the wire verb, the fragment recursion — and
+  # disagree on exactly the two things the run itself decides (`meta.statusmsg`
+  # and whether the peer question arises at all). That is the inverse of
+  # `handle_notice_send/4`'s case, which forked on four attributes and is
+  # rightly its own loop.
   @spec persist_and_send_fragments(
           String.t(),
           String.t(),
+          String.t() | nil,
           [String.t()],
           t(),
           Scrollback.Message.t() | nil
         ) ::
           {:ok, Scrollback.Message.t()} | {:error, term()}
-  defp persist_and_send_fragments(_, _, [], _, last_message),
+  defp persist_and_send_fragments(_, _, _, [], _, last_message),
     do: {:ok, last_message}
 
-  defp persist_and_send_fragments(target, key, [fragment | rest], state, _) do
+  defp persist_and_send_fragments(target, key, statusmsg, [fragment | rest], state, _) do
     # Issue #14: the operator's own `/me` (cic sends `\x01ACTION text\x01`
     # as a PRIVMSG body) must self-echo-persist as :action, NOT :privmsg —
     # otherwise cic renders it on the privmsg branch (`<nick> ACTION text`)
@@ -4626,7 +4731,18 @@ defmodule Grappa.Session.Server do
           # classifies ACTION at line ~3302 — inbound (EventRouter NOTICE arm)
           # + outbound classified identically, per the #14 lesson. ACTION keeps
           # its `:action` kind; cic ignores meta.ctcp on :action rows.
-          meta: Map.merge(own_sender_prefix_meta(state, key), ctcp_self_echo_meta(fragment)),
+          #
+          # issue 2179 — plus `meta.statusmsg` when this send addressed a
+          # membership level. Same key, same value shape and the same whole-run
+          # rule as `EventRouter.tag_statusmsg/2` writes on the inbound copy:
+          # cic's #1247 badge reads one field, so both halves of an ops-only
+          # exchange must fill it or the operator's own line is the only one in
+          # the window that looks like a plain channel message.
+          meta:
+            state
+            |> own_sender_prefix_meta(key)
+            |> Map.merge(ctcp_self_echo_meta(fragment))
+            |> Map.merge(statusmsg_meta(statusmsg)),
           # CP14 B3 — outbound DM detection. `Scrollback.dm_peer/4` is
           # the single source for the rule (channel msg vs DM): for
           # outbound, target is the peer iff target is nick-shaped (no
@@ -4636,7 +4752,7 @@ defmodule Grappa.Session.Server do
           # dm-eligible kind alongside `:privmsg` (Scrollback.dm_peer/4).
           # `dm_with` is DISPLAY → the RAW peer nick (the MATCH folds); pass
           # the raw `target`, not the folded key.
-          dm_with: Scrollback.dm_peer(kind, target, state.nick, state.nick)
+          dm_with: outbound_dm_peer(statusmsg, kind, target, state.nick)
         },
         state.subject
       )
@@ -4650,11 +4766,47 @@ defmodule Grappa.Session.Server do
     # path — forward-compat insurance against a future facade bypass.
     with {:ok, message} <- Persistor.persist_and_broadcast(attrs, state, push: false),
          :ok <- send_privmsg_or_log(state.client, target, fragment) do
-      persist_and_send_fragments(target, key, rest, state, message)
+      persist_and_send_fragments(target, key, statusmsg, rest, state, message)
     else
       {:error, _} = err -> err
     end
   end
+
+  # issue 2179 — the peeled membership run as a meta FRAGMENT, or nothing.
+  # `nil` is ABSENCE, not a value: `Grappa.Scrollback.Meta`'s per-kind contract
+  # says presence IS the test for an ops-only row, so writing `statusmsg: nil`
+  # on every ordinary channel message would badge the entire scrollback.
+  #
+  # Shaped as a fragment to MERGE rather than as a map to thread through,
+  # because that is exactly what its neighbour `ctcp_self_echo_meta/1` is: same
+  # problem (an optional typed key on the outbound meta), same solution, same
+  # `optional(…)` contract. Threading the whole map through instead made the
+  # spec a supertype of what the one call site can hand it — dialyzer named the
+  # inconsistency before a reader did.
+  @spec statusmsg_meta(String.t() | nil) :: %{optional(:statusmsg) => String.t()}
+  defp statusmsg_meta(nil), do: %{}
+  defp statusmsg_meta(level) when is_binary(level), do: %{statusmsg: level}
+
+  # issue 2179 — who this outbound row threads a DM with, if anyone.
+  #
+  # A peeled run answers the question by existing: a STATUSMSG target is a
+  # CHANNEL at a membership level, so there is no peer, and asking
+  # `Scrollback.dm_peer/4` anyway would get the WRONG answer rather than none —
+  # `target_kind/1` classifies by the FIRST byte, and `@#chan` opens with no
+  # channel sigil, so the raw wire target reads as nick-shaped and comes back
+  # as the DM peer. That row is the outbound phantom this arm exists to
+  # prevent, one `dm_with` instead of one window.
+  # `kind` is the pair this loop classifies a fragment into (`:action` when the
+  # body is a CTCP ACTION, `:privmsg` otherwise) — spelled as the literal union
+  # rather than `Scrollback.Message.kind()`, which also carries `:notice`: a
+  # notice never reaches this loop, and a spec wider than what the call site
+  # can produce is the one dialyzer refuses to let stand.
+  @spec outbound_dm_peer(String.t() | nil, :action | :privmsg, String.t(), String.t()) ::
+          String.t() | nil
+  defp outbound_dm_peer(nil, kind, target, own_nick),
+    do: Scrollback.dm_peer(kind, target, own_nick, own_nick)
+
+  defp outbound_dm_peer(level, _, _, _) when is_binary(level), do: nil
 
   # #25: the operator's own channel grade for an outbound content row, as
   # `%{sender_prefix: <sigil>}` or `%{}` (DM target / plain / untracked).

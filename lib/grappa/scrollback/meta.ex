@@ -174,7 +174,17 @@ defmodule Grappa.Scrollback.Meta do
                                                                   the named levels, so recording only the
                                                                   outermost would badge as ops-only a line
                                                                   voiced members also read. Consumers MUST
-                                                                  NOT assume length 1.)
+                                                                  NOT assume length 1.
+                                                                  issue 2179: also written on the
+                                                                  operator's OWN outbound ops-only send
+                                                                  (`/msg @#chan`) — the level the line was
+                                                                  SENT at, same key and same whole-run
+                                                                  value, so ONE badge renders both halves
+                                                                  of the exchange. Unlike notice_target /
+                                                                  ctcp_target, its presence does NOT mark
+                                                                  the row outbound: on this key the two
+                                                                  directions look alike because they ARE
+                                                                  alike.)
 
   Phase 1 only writes `:privmsg` rows where `meta = %{}` so Phase 1
   exercises only the empty-map path. The allowlist + atomization is

@@ -370,6 +370,197 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "issue 2179: statusmsg_target ships PRIVMSG @#chan and echoes into the CHANNEL",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # `/msg @#sniffo ops only` — the PRIVMSG twin of #1301, and the door that
+      # never existed. Pre-fix the plain arm 400ed the sigil (correctly: there
+      # the target IS the persist key) and cic turned the refusal into a phantom
+      # `@#sniffo` query window on top.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "ops only",
+          "statusmsg_target" => "@#sniffo"
+        })
+
+      body = json_response(conn, 201)
+
+      # The KEY is the channel behind the sigil — the same window
+      # `EventRouter.strip_statusmsg_target/2` files every OTHER member's copy
+      # of this line into. An echo keyed anywhere else splits one conversation
+      # across two windows.
+      assert body["channel"] == "#sniffo"
+      assert body["kind"] == "privmsg"
+
+      # #1247's badge field, from the egress side. Without it the operator's own
+      # ops-only line is the only one in the window that renders as a plain
+      # channel message.
+      assert body["meta"]["statusmsg"] == "@"
+
+      # VERBATIM on the wire, sigil included: peeling to route is not permission
+      # to rewrite. A canonicalised target would send to the WHOLE channel a
+      # line addressed to its ops.
+      assert {:ok, "PRIVMSG @#sniffo :ops only\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG @"), 1_000)
+
+      rows = Scrollback.fetch({:user, vjt.id}, network.id, "#sniffo", nil, 10, nil, false)
+      row = Enum.find(rows, &(&1.body == "ops only"))
+      assert row, "the echo must be readable in the #sniffo window"
+
+      # A channel at a membership level is a CHANNEL, not a peer. `dm_with` is
+      # where the phantom would have come back as a thread instead of a window:
+      # `Scrollback.target_kind/1` classifies by the first byte, so the raw
+      # `@#sniffo` reads as nick-shaped and would have been recorded as the DM
+      # peer.
+      assert row.dm_with == nil
+
+      # …and no window is opened for it, under either spelling.
+      refute Grappa.QueryWindows.open?({:user, vjt.id}, network.id, "@#sniffo")
+      refute Grappa.QueryWindows.open?({:user, vjt.id}, network.id, "#sniffo")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "issue 2179: a sigil the network does not advertise is REFUSED, not stripped",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # This session has seen no 005, so it carries the bahamut default
+      # `STATUSMSG=@+`. `%` is not a level here. Stripping it and sending
+      # `PRIVMSG #sniffo` would broadcast to the WHOLE channel a line the
+      # operator addressed to half of it — the difference between a cure and a
+      # hole.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "half only",
+          "statusmsg_target" => "%#sniffo"
+        })
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+
+      # Nothing reached the wire under EITHER spelling. A refusal that still
+      # sent the stripped form would pass the status assertion alone.
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG"), 300)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "issue 2179: a bare target on this arm is bad_request — that send is the plain arm's",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # Deliberately NARROWER than `validate_wire_recipient_name/2`: with no
+      # level peeled there is nothing this arm knows that the plain arm does
+      # not, and a second door to an ordinary channel message is a second set
+      # of persist rules to keep in step.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "plain",
+          "statusmsg_target" => "#sniffo"
+        })
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "issue 2179: a recipient whose channel is NOT the URL window is bad_request",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # The discriminating control, and the reason the URL is a parameter on
+      # this arm at all: the server keys the echo to the channel behind the
+      # sigil, so a POST to `#other` carrying `@#sniffo` would file a row where
+      # its own request denies. 400 beats a silent misfile — and this is the
+      # one assertion that fails if the comparison is dropped while every other
+      # test here still passes.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23other/messages", %{
+          "body" => "ops only",
+          "statusmsg_target" => "@#sniffo"
+        })
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG"), 300)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "issue 2179: the URL window may differ in CASE — the compare folds",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # The negative half of the test above: the comparison is a #537 FOLD, not
+      # a byte compare. A client that spells the URL `#SNIFFO` names the same
+      # window, and refusing it would be us inventing a case rule the ircd does
+      # not have.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23SNIFFO/messages", %{
+          "body" => "ops only",
+          "statusmsg_target" => "@#sniffo"
+        })
+
+      assert json_response(conn, 201)["channel"] == "#sniffo"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "issue 2179: statusmsg_target alongside another relay key is bad_request",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # The #1225 rule, now over THREE keys. Asserted on both new pairs: the
+      # guard is written pairwise, so a missing disjunct is a pair that
+      # silently falls through to whichever arm sits first in the file.
+      for key <- ["notice_target", "ctcp_target"] do
+        sent =
+          conn
+          |> put_req_header("content-type", "application/json")
+          |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+            "body" => "heads up",
+            "statusmsg_target" => "@#sniffo",
+            key => "carol"
+          })
+
+        assert json_response(sent, 400)["error"] == "bad_request",
+               "statusmsg_target + #{key} must not fall through to an arm"
+      end
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "#1225: a POST carrying BOTH ctcp_target and notice_target is bad_request",
          %{conn: conn, vjt: vjt} do
       {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())

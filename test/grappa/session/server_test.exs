@@ -5325,6 +5325,161 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "issue 2179 outbound ops-only PRIVMSG (send_statusmsg)" do
+    # issue 2179 — `/msg @#chan <text>`. Unlike the #640/#1225 relay verbs, the
+    # RECIPIENT decides the window here: the peel happens in the Session.Server,
+    # which is the only party holding the network's 005 `STATUSMSG=`, and keys
+    # the echo to the channel behind the sigil — the same derivation
+    # `EventRouter.strip_statusmsg_target/2` applies to every INBOUND copy of
+    # the same wire line.
+    #
+    # What this describe covers that the controller test cannot: the refusal of
+    # a target that peels NOTHING. The web door's validator catches that case
+    # first, so the guard inside the handler is unreachable from HTTP — and it
+    # is the guard that makes "this arm cannot build a phantom window key" a
+    # property of the arm rather than of one of its callers.
+    @statusmsg_nick "vjt"
+
+    setup do
+      rfc_handler = IRCServer.welcome_handler(":server", @statusmsg_nick)
+
+      {server, port} = IRCServer.start_server(rfc_handler)
+      {user, network, _} = setup_user_and_network(port, %{nick: @statusmsg_nick})
+      pid = start_session_for(user, network)
+
+      # Same barrier, and the same reason, as the #1225 describe above: the
+      # unconditional #229 umode query proves the 001 callback has started, and
+      # GenServer serialisation proves it has returned before our call is
+      # served. Needed here too — `state.nick` is stamped on every echo row.
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "MODE #{@statusmsg_nick}\r\n"), 1_000)
+
+      %{server: server, user: user, network: network, pid: pid}
+    end
+
+    test "keys the echo to the CHANNEL behind the sigil, tags meta.statusmsg, dm_with nil",
+         %{server: server, user: user, network: network, pid: pid} do
+      assert {:ok, msg} =
+               Session.send_statusmsg({:user, user.id}, network.id, "@#sniffo", "ops only")
+
+      # The KEY is the peeled channel, so the operator's echo lands in the same
+      # window their channel-mates read this line in.
+      assert msg.channel == "#sniffo"
+      assert msg.kind == :privmsg
+      assert msg.body == "ops only"
+      assert msg.sender == "vjt"
+      # #1247's field, from the egress side, and the WHOLE run per #1303.
+      assert msg.meta.statusmsg == "@"
+      # A channel at a membership level is a channel, not a peer. This is where
+      # the phantom would reappear as a thread: `Scrollback.target_kind/1` reads
+      # the leading `@` as nick-shaped, so the raw target would be recorded as
+      # the DM peer.
+      assert msg.dm_with == nil
+
+      # VERBATIM on the wire, whole frame pinned — verb, sigil, channel and
+      # body. `starts_with?` alone would pass on a stripped target.
+      assert {:ok, "PRIVMSG @#sniffo :ops only\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG @"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "records the WHOLE peeled run, not the outermost sigil (#1303)", %{
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # `@+#chan` was seen by ops AND by voiced members. Recording `"@"` alone
+      # would badge as ops-only a line half the channel read, with the `+` gone
+      # and no reader able to correct it.
+      assert {:ok, msg} =
+               Session.send_statusmsg({:user, user.id}, network.id, "@+#sniffo", "both levels")
+
+      assert msg.channel == "#sniffo"
+      assert msg.meta.statusmsg == "@+"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "REFUSES a target that peels nothing on this network — no phantom key", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # This session has seen no 005, so it carries the bahamut default
+      # `STATUSMSG=@+`. Three shapes, one rule: with no level peeled the only
+      # key available is the RAW target, and a row keyed `%#sniffo` / `@carol`
+      # / `#sniffo`-via-this-door is exactly the outbound twin of the phantom
+      # #1303 removed on the inbound side.
+      net_id = network.id
+
+      for target <- ["%#sniffo", "@carol", "@$server"] do
+        assert {:error, :invalid_line} =
+                 Session.send_statusmsg({:user, user.id}, net_id, target, "nope"),
+               "#{target} is not a membership address on STATUSMSG=@+"
+      end
+
+      # And nothing reached the wire under any spelling — a refusal that still
+      # sent the stripped form would satisfy the return-value assertions alone.
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG"), 300)
+
+      # Nor did any of them leave a row behind — asserted under the PEELED key
+      # and under the RAW one, because the two failure modes are different
+      # rows: a row at `#sniffo` would be a level invented on a channel anyone
+      # can read, and a row at `%#sniffo` would be the phantom key itself.
+      for key <- ["#sniffo", "%#sniffo", "@carol"] do
+        rows = Scrollback.fetch({:user, user.id}, net_id, key, nil, 10, nil, false)
+        refute Enum.any?(rows, &(&1.body == "nope")), "a refused send left a row at #{key}"
+      end
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "an over-long body fragments, and EVERY fragment keeps the level", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      # The budget is sized against the WIRE target, sigils included: the ircd
+      # counts the bytes it is handed. A fragment that carried the level on the
+      # first row only would badge one line of a paste and leave the rest
+      # looking like an ordinary channel message.
+      body = String.trim(String.duplicate("parola ", 120))
+
+      assert {:ok, _} = Session.send_statusmsg({:user, user.id}, network.id, "@#sniffo", body)
+
+      assert {:ok, _} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PRIVMSG @#sniffo :"), 1_000)
+
+      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 50, nil, false)
+      fragments = Enum.filter(rows, &(&1.kind == :privmsg))
+      assert length(fragments) > 1
+      assert Enum.all?(fragments, &(&1.meta.statusmsg == "@"))
+      assert Enum.all?(fragments, &(&1.channel == "#sniffo"))
+      assert Enum.all?(fragments, &(&1.dm_with == nil))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "rejects CRLF/NUL in the target or the body as :invalid_line", %{
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      net_id = network.id
+
+      assert {:error, :invalid_line} =
+               Session.send_statusmsg({:user, user.id}, net_id, "@#sniffo\r\nQUIT", "hi")
+
+      assert {:error, :invalid_line} =
+               Session.send_statusmsg({:user, user.id}, net_id, "@#sniffo", "hi\r\nQUIT :bye")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "#640 inbound 401 ERR_NOSUCHNICK from a CTCP probe" do
     # #640 — pinging (or /ctcp'ing) a NONEXISTENT nick makes bahamut answer
     # 401 ERR_NOSUCHNICK for the relayed frame. NumericRouter (a pure

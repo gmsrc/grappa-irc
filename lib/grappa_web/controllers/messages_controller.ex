@@ -20,7 +20,13 @@ defmodule GrappaWeb.MessagesController do
   is not a conversation). #1225: a POST carrying `"notice_target"` is an
   outbound NOTICE (`/notice`) on the same source-window shape, via
   `Grappa.Session.send_notice/5` — a NOTICE opens no window either, and
-  the recipient may be a nick OR a channel. The lookup is keyed by the
+  the recipient may be a nick OR a channel. issue 2179: a POST carrying
+  `"statusmsg_target"` is an ops-only channel PRIVMSG (`/msg @#chan`) via
+  `Grappa.Session.send_statusmsg/4`, and it is the one relay arm whose
+  recipient DECIDES the window rather than riding as payload — the echo is
+  keyed to the channel behind the sigil, where the ingress router already
+  files every other member's copy of the same wire line. The three relay
+  keys are mutually exclusive; any two together is a 400. The lookup is keyed by the
   `t:Grappa.Session.subject/0` ID-tuple resolved from
   `conn.assigns.current_subject` via `GrappaWeb.Subject.to_session/1`
   + `network.id` end-to-end (sub-task 2g) so two subjects on the same
@@ -61,7 +67,8 @@ defmodule GrappaWeb.MessagesController do
     only: [
       validate_target_name: 1,
       validate_post_target_name: 1,
-      validate_wire_recipient_name: 2
+      validate_wire_recipient_name: 2,
+      validate_statusmsg_recipient: 4
     ]
 
   alias Grappa.IRC.Identifier
@@ -279,8 +286,17 @@ defmodule GrappaWeb.MessagesController do
   # #1225 — two relay verbs in one POST is not a shape any client can mean.
   # Refuse it explicitly: leaving it to clause ORDER would make the winner an
   # accident of where the arms sit in this file.
-  def create(_, %{"channel_id" => _, "ctcp_target" => _, "notice_target" => _}),
-    do: {:error, :bad_request}
+  #
+  # issue 2179 — written as a PAIRWISE guard over the relay keys rather than
+  # one literal head per combination: with a third key the head-per-pair form
+  # is three clauses, and the next key makes it six. `is_map_key/2` is
+  # guard-safe, so the rule stays one clause and stays TOTAL — a fourth relay
+  # key adds one disjunct per existing key instead of a combinatorial fan.
+  def create(_, %{"channel_id" => _} = params)
+      when (is_map_key(params, "ctcp_target") and is_map_key(params, "notice_target")) or
+             (is_map_key(params, "ctcp_target") and is_map_key(params, "statusmsg_target")) or
+             (is_map_key(params, "notice_target") and is_map_key(params, "statusmsg_target")),
+      do: {:error, :bad_request}
 
   def create(conn, %{"channel_id" => channel, "body" => body, "ctcp_target" => ctcp_target})
       when is_binary(body) and body != "" and is_binary(ctcp_target) and ctcp_target != "" do
@@ -324,6 +340,50 @@ defmodule GrappaWeb.MessagesController do
            validate_wire_recipient_name(notice_target, Session.statusmsg(subject, network.id)),
          :ok <- take_send_token(subject, network.id),
          {:ok, result} <- Session.send_notice(subject, network.id, channel, notice_target, body) do
+      render_send_result(conn, result, network.slug)
+    end
+  end
+
+  def create(conn, %{
+        "channel_id" => channel,
+        "body" => body,
+        "statusmsg_target" => statusmsg_target
+      })
+      when is_binary(body) and body != "" and is_binary(statusmsg_target) and
+             statusmsg_target != "" do
+    subject = Subject.to_session(conn.assigns.current_subject)
+    network = conn.assigns.network
+
+    # issue 2179 — `/msg @#chan <text>`: a PRIVMSG to a channel at a membership
+    # level. The #1301 NOTICE twin of this existed; the PRIVMSG one never did,
+    # so an ops-only message had no door at all — `validate_post_target_name/1`
+    # refuses `@#chan` on the plain arm (correctly: there the target IS the
+    # persist key) and cic turned the refusal into a phantom `@#chan` query
+    # window on top.
+    #
+    # It is NOT shaped like the notice/CTCP arms, and the difference is the
+    # point: there the URL is the SOURCE window and the recipient is payload,
+    # here the recipient DECIDES the window. `Session.send_statusmsg/4` peels
+    # the sigil with the session's own 005 set and keys the echo to the channel
+    # behind it — the same derivation `EventRouter` applies on ingress, which
+    # is what puts every OTHER member's copy of this line in `#chan`. An echo
+    # keyed anywhere else would split one conversation across two windows.
+    #
+    # So the URL `channel_id` is not passed on; it is VERIFIED against the
+    # recipient (`validate_statusmsg_recipient/4`) so a client cannot address
+    # `@#chan` from a URL that names a different window and get a row filed
+    # where its own request denies. No `$server` guard is needed on top: the
+    # comparison already forces the URL to be the peeled channel.
+    with :ok <- BodyLimit.check(body),
+         :ok <-
+           validate_statusmsg_recipient(
+             statusmsg_target,
+             channel,
+             Session.statusmsg(subject, network.id),
+             Session.casemapping(subject, network.id)
+           ),
+         :ok <- take_send_token(subject, network.id),
+         {:ok, result} <- Session.send_statusmsg(subject, network.id, statusmsg_target, body) do
       render_send_result(conn, result, network.slug)
     end
   end

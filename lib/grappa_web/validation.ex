@@ -101,8 +101,9 @@ defmodule GrappaWeb.Validation do
 
   Used by `MessagesController.create/2`'s plain arm, where the target is
   ALSO the persist key. The notice/CTCP arms take
-  `validate_wire_recipient_name/2` instead — see there for why a wire
-  recipient may carry a STATUSMSG sigil and a window key may not.
+  `validate_wire_recipient_name/2` instead, and the ops-only PRIVMSG arm
+  `validate_statusmsg_recipient/4` — see there for why a wire recipient may
+  carry a STATUSMSG sigil and a window key may not.
   """
   @spec validate_post_target_name(String.t()) :: :ok | {:error, :bad_request}
   def validate_post_target_name("$server"), do: {:error, :bad_request}
@@ -142,6 +143,74 @@ defmodule GrappaWeb.Validation do
       when is_binary(name) and is_list(statusmsg) do
     {peeled, _} = Identifier.peel_statusmsg(name, statusmsg)
     validate_post_target_name(peeled)
+  end
+
+  @doc """
+  Returns `:ok` if `recipient` is a CHANNEL addressed at one or more of the
+  membership levels this network ADVERTISES in `STATUSMSG=` (`@#chan`,
+  `@%#chan`) **and** `window` — the URL `channel_id` the echo will render in —
+  names that same channel under `casemapping`. `{:error, :bad_request}`
+  otherwise.
+
+  issue 2179 — the PRIVMSG door for an ops-only channel message. It is the
+  sibling of `validate_wire_recipient_name/2` and deliberately NARROWER on
+  both axes, because the two arms differ in what the recipient IS.
+
+  ## Why narrower, not the same validator
+
+  On the notice/CTCP arms the recipient may be anything the ircd will take —
+  a nick, a channel, a channel at a level — because the echo is keyed to the
+  SOURCE window and the recipient is pure payload (`meta.notice_target`).
+  Here the recipient DECIDES the window: the channel behind the sigil is
+  where the row lands, mirroring `EventRouter`'s ingress peel, which is what
+  puts every other member's copy of the same wire line in `#chan`. So:
+
+    * a BARE name (`#chan`, `bob`) is refused — nothing was peeled, there is
+      no membership level, and that send is the plain arm's;
+    * a sigil over a NICK (`@bob`) is refused — `peel_statusmsg/2` already
+      declines to peel unless a channel starts behind the run, so this falls
+      out of the same call rather than needing a second rule;
+    * a sigil the network does NOT advertise (`%#chan` on bahamut's `@+`) is
+      refused, NOT silently stripped. Stripping it would send to the whole
+      channel a line the operator addressed to half of it.
+
+  ## Why the window is compared here
+
+  Because the recipient decides the key, the URL would otherwise be a
+  parameter nobody reads — and a client that POSTed `@#chan` to `#other`
+  would get a row filed somewhere its own URL denies. Comparing turns that
+  silent misfile into a 400. The fold is `canonical_target/2` under the
+  network's CASEMAPPING, the same ingress fold `MessagesController.index/2`
+  applies, so `#CHAN` and `@#chan` agree on bahamut and `#foo[1]` /
+  `@#foo{1}` agree on solanum.
+
+  The recipient still reaches the wire **verbatim** — peeling to validate is
+  not permission to rewrite (`validate_wire_recipient_name/2`'s rule, and it
+  holds here for the same reason).
+  """
+  @spec validate_statusmsg_recipient(
+          String.t(),
+          String.t(),
+          [String.t()],
+          Identifier.casemapping()
+        ) :: :ok | {:error, :bad_request}
+  def validate_statusmsg_recipient(recipient, window, statusmsg, casemapping)
+      when is_binary(recipient) and is_binary(window) and is_list(statusmsg) do
+    case Identifier.peel_statusmsg(recipient, statusmsg) do
+      {channel, level} when is_binary(level) -> same_channel(channel, window, casemapping)
+      {_, nil} -> {:error, :bad_request}
+    end
+  end
+
+  @spec same_channel(String.t(), String.t(), Identifier.casemapping()) ::
+          :ok | {:error, :bad_request}
+  defp same_channel(channel, window, casemapping) do
+    with :ok <- validate_channel_name(channel) do
+      if Identifier.canonical_target(channel, casemapping) ==
+           Identifier.canonical_target(window, casemapping),
+         do: :ok,
+         else: {:error, :bad_request}
+    end
   end
 
   @doc """

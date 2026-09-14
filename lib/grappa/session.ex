@@ -935,6 +935,52 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  issue 2179 — sends the operator's own outbound PRIVMSG to a channel at one or
+  more MEMBERSHIP LEVELS (`/msg @#chan`, `/msg @%#chan`) and echoes it into the
+  channel behind the sigil.
+
+  `target` is the wire recipient, sigil and all, and it is the ONLY routing
+  input: the Session.Server peels it with the network's advertised
+  `STATUSMSG=` set — the authority, since only it holds the 005 — and keys the
+  echo to the channel that comes out. That is deliberately NOT `send_notice/5`'s
+  source-window shape. An inbound `PRIVMSG @#chan` is routed to `#chan` by
+  `EventRouter` (#218/#1247), so every other member reads this line there; an
+  echo keyed to wherever the operator happened to type it would put one half of
+  the conversation in a different window from the other half.
+
+  No query window is opened (a channel is not a conversation with a peer) and
+  `dm_with` stays nil — the row is an ordinary channel row that additionally
+  carries `meta.statusmsg`, the peeled run, exactly as the ingress tags it. That
+  is what makes the operator's own ops-only line render with the same #1247
+  badge the others' lines carry.
+
+  There is no `{:ok, :no_persist}` arm and no services carve-out: the recipient
+  is a channel by construction (the peel declines unless a channel starts behind
+  the run), and a channel is never a `*Serv`.
+
+  `{:error, :invalid_line}` when `target`/`body` carry CRLF/NUL, or when the
+  target peels NOTHING on this network's advertised set — see
+  `Grappa.Session.Server`'s handler for why that refusal is load-bearing rather
+  than defensive. `{:error, :no_session}` when no live session.
+  """
+  @spec send_statusmsg(subject(), integer(), String.t(), String.t()) ::
+          {:ok, Grappa.Scrollback.Message.t()}
+          | {:error, :no_session | :invalid_line | send_transport_error()}
+          | {:error, Ecto.Changeset.t()}
+  def send_statusmsg(subject, network_id, target, body)
+      when is_subject(subject) and is_integer(network_id) and is_binary(target) and
+             is_binary(body) do
+    # Injection gates fire BEFORE the registry lookup (mirror send_privmsg/4 +
+    # send_ctcp/5 + send_notice/5): a malformed line against a non-existent
+    # session still surfaces as :invalid_line, and no row is persisted.
+    if Identifier.safe_line_token?(target) and Identifier.safe_line_token?(body) do
+      call_session(subject, network_id, {:send_statusmsg, target, body})
+    else
+      {:error, :invalid_line}
+    end
+  end
+
+  @doc """
   Queues a JOIN upstream through the session. **Synchronous call** — the
   Session.Server processes the message inline: writes
   `window_states[ch] = :pending` AND broadcasts `window_pending` on the
