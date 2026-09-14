@@ -1448,3 +1448,48 @@ export async function setDccAutoAccept(
     throw new Error(`setDccAutoAccept(${enabled}): read back ${JSON.stringify(body)}`);
   }
 }
+
+/**
+ * Writes (or clears) the remembered QUIT/PART message for `token`'s subject —
+ * issue 2150. `null` and `""` both CLEAR the key; the server collapses them,
+ * so a spec restoring the seed state can pass either.
+ *
+ * Reads the value back and throws on disagreement, for the same reason
+ * `setDccAutoAccept` does: this write is what a later assertion about the wire
+ * rests on, and a silently-dropped PUT would make the interesting arm pass or
+ * fail for a reason that has nothing to do with the feature.
+ *
+ * NOT the door a spec should use to prove the feature — the drawer is. This
+ * exists for setup and teardown, where going through the UI would make a
+ * cleanup step able to fail for a rendering reason.
+ */
+export async function setQuitPartReason(token: string, reason: string | null): Promise<void> {
+  const url = `${GRAPPA_BASE_URL}/me/settings/quit-part-reason`;
+  const headers = {
+    authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+
+  const written = await fetch(url, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({ quit_part_reason: reason }),
+  });
+  if (!written.ok) {
+    throw new Error(
+      `setQuitPartReason(${JSON.stringify(reason)}): PUT → ${written.status} ${await written.text()}`,
+    );
+  }
+
+  const read = await fetch(url, { headers });
+  if (!read.ok) {
+    throw new Error(`setQuitPartReason: GET → ${read.status} ${await read.text()}`);
+  }
+  const body = (await read.json()) as { quit_part_reason?: string | null };
+  const expected = reason === "" ? null : reason;
+  if ((body.quit_part_reason ?? null) !== expected) {
+    throw new Error(
+      `setQuitPartReason(${JSON.stringify(reason)}): read back ${JSON.stringify(body)}`,
+    );
+  }
+}
