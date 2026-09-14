@@ -146,6 +146,13 @@ defmodule Grappa.HotReload.LongLivedModules do
     Grappa.Session.Server,
     Grappa.IRC.Client,
     Grappa.IRC.AuthFSM,
+    # issue 227 — both identd children, in tree order (they sit between the
+    # session supervisor and the Endpoint). `Bindings` carries a `defstruct`;
+    # `Listener`'s shape is the bare `{:ok, %{...}}` literal its `init/1`
+    # returns. Being OFF by default changes nothing here: the list is about
+    # what happens when the process IS running and its beam is swapped.
+    Grappa.Identd.Bindings,
+    Grappa.Identd.Listener,
     Grappa.Net.SourceAliasManager,
     Grappa.Visitors.Reaper,
     Grappa.Uploads.Reaper,
@@ -212,6 +219,8 @@ defmodule Grappa.HotReload.LongLivedModules do
           | Grappa.Session.Server
           | Grappa.IRC.Client
           | Grappa.IRC.AuthFSM
+          | Grappa.Identd.Bindings
+          | Grappa.Identd.Listener
           | Grappa.Net.SourceAliasManager
           | Grappa.Visitors.Reaper
           | Grappa.Uploads.Reaper
