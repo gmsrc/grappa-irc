@@ -57116,3 +57116,138 @@ the cheap cic gate — a per-fixture schema assertion in vitest would catch
 the same class for a few milliseconds, but it needs the fixtures hoisted
 out of the spec files into a playwright-free module first, which is its own
 slice.
+<!-- entry #2136 -->
+
+---
+
+## 2026-09-14 — issue 2136: the theme sheet was globbed rather than named, and the split it was told to take moves 1.7% of it
+
+`cicchetto/src/themes/default.css` grew unwatched. The cure for that is one
+clause of prose and a gate that notices when the clause goes away; the SPLIT
+the issue proposes alongside it is deferred, and this entry is the measured
+reason the deferral is not just caution.
+
+Every number below was taken on `6b8b4fe0f` with a tool that carries its own
+known-answer control and prints nothing when the control fails. The
+partitioner was validated first on four fixtures: a known-answer file, braces
+inside a comment, an unclosed block (must REFUSE), and a `:root` nested in an
+`@media` (must not steal the class).
+
+### The scope defect was real in one document and already fixed in the other
+
+The issue says the review skill "globs `src/**` but never names this file".
+Measured: `docs/reviewing.md` has **zero** occurrences of either "CSS" or
+"themes" — the scope row is glob-only and the cicchetto checklist enumerates
+SolidJS, TypeScript, wire shapes, XSS and a11y without mentioning stylesheets
+at all. But `.claude/skills/review/SKILL.md` **already** named
+`cicchetto/src/themes/*.css` in its scope row and **already** carried a CSS
+lens. The premise held for one of the two files.
+
+That the two had drifted was known: the 2026-08-15 codebase review recorded
+"`docs/reviewing.md` lists 8 scopes; the skill defines 9 … The two documents
+should be reconciled." They still are not. This slice reconciles the CSS axis
+only and leaves the scope-count divergence open.
+
+The skill's row carried its own rot: it called `default.css` "the single
+largest file in the repo (9022 lines)". Both halves are false — the file is
+15,513 lines and the FOURTH largest tracked text file, behind
+`docs/DESIGN_NOTES.md` (56,740), `frontends/shottino/shottino.c` (23,017) and
+`docs/design_notes/2026-07.md` (17,096). It was replaced with a class rather
+than a fresh count ("by a wide margin the largest file under `cicchetto/`",
+true at 3.4x the next one) because a number in prose is a claim with an expiry
+date and this one had already expired.
+
+### Two more of the issue's numbers, re-measured
+
+Growth **holds**: 12,778 lines on 2026-08-14 → 15,513 today, +21.4% (the issue
+says 12,822 → 15,476, +20.7%; different commits, same fact).
+
+The **17% of all non-test client code** does not reproduce. Under the partition
+"everything under `cicchetto/src` not in `__tests__` and not `*.test.ts(x)`",
+verified exhaustive (test + non-test re-sums to the total), non-test client
+code is 108,784 lines and the sheet is **14.26%** of it. Reaching 17% needs a
+denominator near 91,250, and no defensible exclusion gets there.
+
+### What the sheet is actually made of
+
+Exhaustive partition, cross-checked against `wc -l`:
+
+| group | lines | share |
+|---|---|---|
+| component rules | 8,617 | 55.5% |
+| interstitial (depth-0 comment/blank) | 5,178 | 33.4% |
+| `@media` | 1,108 | 7.1% |
+| `:root` / `[data-theme]` token blocks | **260** | **1.7%** |
+| `@keyframes` | 194 | 1.3% |
+| `@font-face` | 120 | 0.8% |
+| `@supports` | 36 | 0.2% |
+| TOTAL | 15,513 | 100% |
+
+By line nature, summing to the same total: 8,595 lines of actual CSS (55.4%),
+5,329 comment-only (34.4%), 1,589 blank (10.2%). **Less than 56% of the file
+is CSS.** It holds 1,370 top-level blocks under 519 column-0 section comments.
+
+### Why the token model is not the split axis
+
+The token census, comment-aware so the header's own "Variables:" prose and BEM
+selectors like `.adm-btn--danger:hover` cannot inflate it: **135 definitions,
+91 distinct names** — `--nick-color-*` 48, `--adm-*` 38 plus `--adm-space-*` 6,
+core theme and geometry 25, `--mode-*` 8, `--safe-area-*` 4, effects 3,
+typography 3.
+
+Those definitions occupy 260 lines. **Splitting "along the token model" moves
+1.7% of the file and leaves 98.3% exactly where it is.** The token model is not
+a partition of this sheet at all: it is a small vocabulary that 1,370 blocks
+consume. An axis that addresses the size is the file's own de-facto structure —
+the 519 section comments, which already group rules by product surface — and
+that is a different proposal from the one the issue names.
+
+### The condition a future split must satisfy, and it is constructible
+
+Proposed: **the built CSS bundle must stay byte-identical.** Measured rather
+than asserted:
+
+- Two clean `bun run build` runs produce `dist/assets/index-oaGHBf8Y.css`,
+  152,277 bytes, sha256 `9431a370…`, identical both times. The bundle is
+  reproducible run-to-run, so the criterion has a stable baseline to compare
+  against. Vite content-hashes the filename, so a changed bundle renames itself.
+- The build minifies 560,230 → 152,277 bytes and **comments do not survive**.
+  The oracle is therefore blind to the 44.6% of the source that is prose and
+  blank lines — which is what you want: relocating a section comment with its
+  rules must not fail the gate.
+- Byte-identity is not over-strict here, and that is the load-bearing point.
+  CSS cascade order IS semantics: on equal specificity the later rule wins. A
+  split that preserves concatenation order yields an identical bundle; one that
+  reorders yields a different bundle AND can genuinely change rendering. The
+  oracle is calibrated to the hazard rather than merely convenient.
+
+A second condition the bundle hash cannot express. **28 test files plus
+`__tests__/helpers/themeCss.ts` read the stylesheet as TEXT**, through exactly
+two hardcoded `readFileSync("src/themes/default.css")` call sites. A split
+leaves those reading whichever fragment kept the name. Most of the breakage
+would be LOUD — `ruleBody`, `nestedRuleBodies` and `mediaGatedBlocks` all throw
+when a rule or gate is absent, deliberately, "so a rename can't silently pass
+the test". But `allRules()` and `focusRules()` return arrays and throw on
+nothing. Checked, and the answer was better than expected: all three current
+callers (`railInset`, `railRadioBandInset`, `focusVisible`) carry their own
+non-emptiness guard, so the vacuous-green hazard is **structural but not
+realized today**. A fourth caller written without a guard would open it. So the
+split must re-point `themeCss` at the ORDERED CONCATENATION of the split set,
+which removes the question instead of relying on every future caller to
+remember.
+
+### Not measured
+
+- Whether the 519 section comments actually correspond to product surfaces
+  cleanly enough to cut on. The grouping above counts them; it does not judge
+  them.
+- Whether a split changes anything a browser can see. Nothing here was rendered
+  — the bundle-hash criterion exists precisely because this slice could not
+  answer that question, and neither can the next one without a browser.
+- Whether the scope-count divergence (8 vs 9) between the two review documents
+  matters in practice. It is recorded, not resolved.
+- The skill's "least-reviewed file in the repo" is left standing. It is not a
+  claim this slice can falsify.
+
+The `!important` count in the lens was re-checked and **holds**: exactly 2, at
+lines 1814-1815.
