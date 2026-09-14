@@ -105,7 +105,13 @@ test("2150 — the remembered leave message reaches the channel, and an explicit
     const input = page.getByTestId("quit-part-reason-input");
     await expect(input).toBeVisible({ timeout: 5_000 });
     await input.fill(STORED_REASON);
-    await page.getByTestId("quit-part-reason-save").click();
+    // issue 2181 — the `save` button is gone; the field commits on blur, with
+    // Enter as the keyboard commit. Enter rather than a Tab-away because it
+    // depends on nothing outside this field: whatever the drawer's tab order
+    // becomes, the gesture this spec performs stays the one under test. The
+    // PUT barrier below is what proves it actually committed — a trigger that
+    // silently did nothing would time out here rather than pass.
+    await input.press("Enter");
     expect((await saved).status()).toBe(200);
 
     await page.keyboard.press("Escape");
