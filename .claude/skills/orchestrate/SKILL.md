@@ -1684,6 +1684,23 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
    prima di ordinare l'indagine. E **prima di ordinare un compito, verifica che esista ancora.**
 4. 🪞 **Due volte il bug era nel MIO strumento di misura** (`grep -o` troncato, timestamp gonfiati, `cmp -n`
    su BSD) ⇒ **riga INTERA** + **`date -u` sempre**. ⚠️ Anche le worker gonfiano l'orario: **l'ora e' la mia.**
+   🔴🔴 **TERZA VOLTA, 2026-09-14, E SU UN POLLER CI CHE MI AVREBBE LASCIATA CIECA: HO HARD-TYPATO
+   LA SHA.** Armato un `until` sui check di una PR con la head scritta a mano — `5d52cbacb7f6a15…`
+   inventata, la vera era `5d52cbacb2b02b93…` — e messo un `|| gh api …$(gh pr view …)` come
+   ripiego. Esito: **entrambi i rami scrivono nella stessa sostituzione di comando**, `$T` diventa
+   **`"0\n8"`**, `[ "$T" -ge 8 ]` muore *"integer expression expected"*, `jq` urla *"Cannot iterate
+   over null"* **su stderr — che l'harness NON trasforma in notifica** — e **il ciclo non sarebbe
+   MAI uscito.** Il suo silenzio si legge identico a *"la CI e' ancora in volo"*.
+   🥇 **Tre regole, e la terza e' quella che generalizza:**
+   (a) **la SHA si DERIVA, sempre** (`gh pr view N --json headRefOid -q .headRefOid`) — la regola
+       esisteva gia' in questo file per `--force-with-lease` e **non l'avevo portata fuori da li'**;
+   (b) **`A || B` dentro `$( )` non e' un fallback**: puo' consegnarti l'output di TUTTI E DUE.
+       Un ramo solo, e se fallisce `continue`;
+   (c) 🥇🥇 **il controllo a risposta nota DENTRO lo strumento vale per i MIEI poller, non solo per
+       i brief delle worker.** Rifatto cosi': **pos ctrl** = deve contare ≥8 check ADESSO (`tot=8`),
+       **neg ctrl** = una SHA di soli zeri deve dare **`rc≠0`**, non uno `0` che si legge come una
+       risposta; e **se il positivo fallisce non stampa verdetti**. *Pretendo quella forma nei
+       brief da mesi e non l'applicavo a me.*
 5. 🔧 *"di un run VERDE il log non esiste"* e' TROPPO LARGA: vale per l'artefatto docker (`if: failure()`),
    **non per i log dei job** (`gh api .../runs/<id>/attempts/1/jobs` → `.../jobs/<jid>/logs`).
 6. 🥇 **Un mio paletto puo' essere SBAGLIATO e una worker che me lo rifiuta CON LE PROVE ha ragione. Dillo e
