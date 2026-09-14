@@ -372,7 +372,7 @@ defmodule Grappa.Session.DccConsentTest do
 
   defp eventually_rows(ctx, channel, want), do: eventually_rows(ctx, channel, want, 50)
 
-  defp eventually_rows(ctx, channel, _want, 0), do: rows_in(ctx, channel)
+  defp eventually_rows(ctx, channel, _, 0), do: rows_in(ctx, channel)
 
   defp eventually_rows(ctx, channel, want, tries) do
     rows = rows_in(ctx, channel)

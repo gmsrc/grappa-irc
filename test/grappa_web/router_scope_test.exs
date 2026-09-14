@@ -136,6 +136,17 @@ defmodule GrappaWeb.RouterScopeTest do
     {"GET", "/push/vapid-public-key"},
     {"GET", "/api/config"},
     {"GET", "/uploads/:slug"},
+    # issue 2127 — the accepted-DCC-file door, on the SAME public surface
+    # as `/uploads/:slug` and for a reason measured rather than assumed:
+    # `Plugs.Authn` reads only an `Authorization` HEADER, and a link
+    # tapped out of scrollback opens a tab that carries none, so gating
+    # it made the delivery row's link answer 401 for the very operator it
+    # was minted for. The 26-char base32 slug is the access token, the
+    # same 128 bits the upload door has stood on since UX-6-B1, and the
+    # operator ACCEPTED this specific file from this specific nick before
+    # a byte was written. Joining this list is the deliberate act the
+    # moduledoc asks for — vjt ruled it on 2026-09-14.
+    {"GET", "/dcc_files/:slug"},
     {"GET", "/service-worker.js"},
     {"GET", "/*path"}
   ]

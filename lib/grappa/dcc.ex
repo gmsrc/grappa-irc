@@ -424,7 +424,7 @@ defmodule Grappa.Dcc do
   @spec url_extension(String.t()) :: {:ok, String.t()} | :error
   defp url_extension(filename) do
     case String.split(filename, ".") do
-      [_no_dot] -> :error
+      [_] -> :error
       parts -> admit_extension(List.last(parts))
     end
   end

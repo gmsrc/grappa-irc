@@ -108,6 +108,14 @@ const navigationRoute = new NavigationRoute(navigationHandler, {
     /^\/session/,
     /^\/admin/,
     /^\/uploads/,
+    // issue 2127 — the accepted-DCC-file door, moved to this public
+    // top-level surface beside `/uploads`. Exactly the same failure mode
+    // the `/uploads` entry above was added for: the server mints an
+    // ABSOLUTE URL into the delivery row, a peer taps it, and without
+    // this entry the SW intercepts the top-level navigation and serves
+    // the SPA shell instead of the bytes. Pinned by
+    // `GrappaWeb.RouterSwDenylistTest`, which is what caught its absence.
+    /^\/dcc_files/,
     // #75 themes REST surface. PLURAL only — `/^\/themes/` does NOT match the
     // singular `/theme/:id` SPA share route (after `/theme` comes `/`, not
     // `s`), so a shared theme link still resolves to the SPA shell.

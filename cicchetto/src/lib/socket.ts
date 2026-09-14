@@ -210,7 +210,25 @@ let _socket: Socket | null = null;
 // `MIN_SERVER_PROTOCOL_VERSION` stays at 9: a pre-20 server never answers
 // `not_held`, and this bundle treats an unfamiliar token the way it always
 // has, so it still serves an older server.
-export const CLIENT_PROTOCOL_VERSION = 20;
+// 21 (issue 2127) — the accepted-DCC-file door MOVES rather than gaining a
+// field: `GET /networks/:network_id/dcc_files/:slug` behind `:authn` becomes
+// `GET /dcc_files/:slug[.ext]` at top level with no auth, the same public
+// surface as `/uploads/:slug`, with the 26-char base32 slug as the access
+// token. A path was TAKEN AWAY, so unlike the additive bumps above the break
+// runs in BOTH directions.
+//
+// This bundle needs no code change for it. cic never CONSTRUCTS that URL —
+// the server mints it absolute into the delivery row's body and `linkify.ts`
+// renders whatever it is handed — so the move is invisible here except as
+// this number. (The SW navigation denylist gained `/^\/dcc_files/` in the
+// same change, for the reason `/uploads` is on it: an absolute link tapped
+// out of scrollback is a top-level navigation, and without the entry the SW
+// serves the SPA shell instead of the bytes.)
+//
+// `MIN_SERVER_PROTOCOL_VERSION` stays at 9: a pre-21 server mints the OLD
+// relative path, which this bundle renders as plain text exactly as it
+// always did, so an older server is still served.
+export const CLIENT_PROTOCOL_VERSION = 21;
 
 // #193 — force the correct WS scheme from the page origin, absolutely.
 //
