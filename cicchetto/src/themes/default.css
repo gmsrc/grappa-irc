@@ -223,6 +223,26 @@
      `e2e/tests/issue1039-hamburger-corner.spec.ts`. */
   --pane-chrome-inset-block: 0.5rem;
   --pane-chrome-inset-inline: 1rem;
+  /* issue 2160 — the LEADING half of that inset, split off because one
+     platform puts something of its own in that corner. iPadOS paints its
+     multitasking pill over the top-leading corner of every WINDOWED app, and
+     in a narrow Split View pane that corner is this chrome: the channel name,
+     or — when the mobile window bar is off (#1766) — the window-list ☰, which
+     is a control, and iOS swallows touches under its own chrome.
+
+     DEFAULT IS THE PAIR ABOVE, so nothing moves anywhere today; only the gated
+     override further down (search `min-device-width`) grows it. Splitting the
+     token rather than patching `.topic-bar` is what makes the fix reach BOTH
+     mobile hosts of that corner at once — the same argument #1039 made for the
+     trailing side, which keeps reading `--pane-chrome-inset-inline` alone.
+
+     It is NOT a safe-area problem: measured on the reporter's iPad (26.7,
+     narrow pane) in Safari AND in the installed PWA, all four
+     `env(safe-area-inset-*)` read 0px, and WebKit implements no
+     `titlebar-area-*` either — there is no platform signal to react to, so the
+     clearance has to be taken by layout. See
+     `src/__tests__/windowedPaneChromeInset.test.ts`. */
+  --pane-chrome-inset-inline-start: var(--pane-chrome-inset-inline);
   /* #963 — geometry of the caret the form-control rule draws on every
      <select> (see the `appearance: none` block below). Two numbers, one
      source: --select-caret-inset is the caret's distance from the control's
@@ -2404,6 +2424,12 @@ html.resize-dragging * {
      — so the two cannot drift apart again without one edit changing both. See
      the `--pane-chrome-inset-*` note on `:root`. */
   padding: var(--pane-chrome-inset-block) var(--pane-chrome-inset-inline);
+  /* issue 2160 — the leading side alone, longhand AFTER the shorthand so it
+     wins without restating the other three. Identical to the shorthand's value
+     everywhere except a windowed narrow pane; see the token on `:root`. This
+     band's first child is the pill's victim on a channel window — the namebox,
+     or the leading ☰ when the window bar is off. */
+  padding-inline-start: var(--pane-chrome-inset-inline-start);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -3177,6 +3203,63 @@ html.resize-dragging * {
   }
 }
 
+/* issue 2160 — clearance for the iPadOS multitasking pill, and the whole fix
+   is the GATE. Read it as one sentence: the viewport is narrow AND it is
+   narrower than the display it is drawn on, i.e. the app does not own the
+   screen — it is a window sharing it, which is the only state in which iPadOS
+   paints that pill.
+
+   THE SECOND HALF IS WHY THIS IS NOT THE #985 TRAP. A pill-sized gap hung on
+   `max-width: 768px` alone is paid by every phone, and a phone has no pill:
+   390px is squarely inside the narrow band. `device-width` separates them
+   without a single byte of UA or OS sniffing, because a FULL-SCREEN app cannot
+   satisfy the conjunction by construction — its viewport width IS one of the
+   display's two edges, so it is never below the shorter one, in either
+   orientation and on any device. Measured on the reporter's iPad (26.7, narrow
+   multitasking pane): viewport 417px (installed PWA) and 380px (Safari)
+   against `screen` 834x1194, in both samples. 768px is not a new number — it
+   is `--breakpoint-mobile`, the shell's own switch, which media queries cannot
+   read from a custom property; 769 is its first non-member.
+
+   `device-width` is deprecated in CSS MQ4 and REQUIRED there for compat, so
+   WebKit answers it. If some engine ever stops, the gate simply never matches
+   and the pane renders exactly as it does today — the degradation is the
+   status quo, not a broken layout. The Window Controls Overlay API
+   (`titlebar-area-*`) is the non-deprecated answer for this shape and WebKit
+   does not implement it; `env(safe-area-inset-*)` measured 0px on all four
+   edges in both hosts, so there is no inset to react to either.
+
+   Pinned by `src/__tests__/windowedPaneChromeInset.test.ts`, which reads this
+   prelude out of the sheet and evaluates it against those measurements rather
+   than restating them. */
+@media (max-width: 768px) and (min-device-width: 769px) {
+  :root {
+    /* DERIVED FROM THE SYMPTOM, and an estimate — the pill's own box was never
+       probed, and Playwright/webkit does not reproduce iPadOS window chrome.
+       The report: an EIGHT-character channel renders as its first character,
+       the pill, and its last two. The name is `--font-mono` at `--font-size`
+       14px (advance 0.6em = 8.4px) starting at `--pane-chrome-inset-inline` =
+       1rem = 14px, so the occluded span runs [14 + 1x8.4, 14 + 6x8.4] =
+       [22.4, 64.4] px from the pane's leading edge; content clears it at
+       64.4 -> 65px, the first whole pixel past. ABSOLUTE px for the reason
+       `--chrome-tap-min` carries on :root: this reserves OS chrome, which does
+       not scale with `--font-size`. One token, so a device measurement of the
+       real pill is a one-line retune. */
+    --pane-chrome-inset-inline-start: 65px;
+  }
+
+  /* 65px is 16% of the 417px pane measured above, and the namebox is capped at
+     18% of what survives — so the clearance alone would trade an occluded
+     channel name for a truncated one, which is the same complaint. Same lift,
+     same value and the same "channel name first" reason as the short-landscape
+     block above; that block is gated `min-width: 769px` and can never
+     co-apply. Must sit AFTER `.topic-bar-namebox`'s base rule: a media query
+     adds no specificity, so source order is the whole cascade here. */
+  .topic-bar-namebox {
+    max-width: 50%;
+  }
+}
+
 /* Topic modal (C3.1) */
 
 .topic-modal-backdrop {
@@ -3419,7 +3502,12 @@ html.resize-dragging * {
    that reasons about one host is not a non-collision proof. */
 .shell-chrome .topic-bar-windows-opener {
   background: var(--bg);
-  margin: var(--pane-chrome-inset-block) auto 0 var(--pane-chrome-inset-inline);
+  /* issue 2160 — the LEADING value is the split token now, the other three are
+     untouched. This float is the same top-leading corner the channel band owns
+     on a channel window, so it has to clear the same pill; and unlike the
+     channel name it is a live control, which iOS makes untappable under its
+     own chrome rather than merely unreadable. */
+  margin: var(--pane-chrome-inset-block) auto 0 var(--pane-chrome-inset-inline-start);
 }
 
 .shell-chrome-btn {
