@@ -410,8 +410,18 @@ is DELETE-then-write, never append-only:
   `origin/main`"*, con la sua significa *"è antenato di `HEAD`, e `HEAD` è quello giusto"* — cioè la
   proprietà che il divieto voleva proteggere. ⇒ **Su un host il cui `main` locale è cronicamente
   stantio (voyager), questa è la forma da preferire**, e `-D` resta dove sta: fuori.
+  🔴 **LIMITE, E L'HA DICHIARATO LEI SENZA CHE GLIELO CHIEDESSI — non allargarlo: la cura vale per la
+  classe ANTENATO e SOLO per quella.** Se il ramo è atterrato via **`gh pr merge --rebase`**, GitHub
+  ha **riscritto le sha** e il ramo **non è antenato di NESSUN main, per costruzione** ⇒ dentro la
+  worktree `--detach` **`-d` dice no lo stesso**, e nessun `HEAD`, per quanto corretto, può cambiarlo.
+  Lì il verdetto resta il **CONTENUTO** (blob identici / patch-id), come già scritto più sopra, e `-D`
+  è la via NORMALE. **Le due diagnosi hanno lo stesso osservabile — `not fully merged` — e cure
+  opposte: prima di scegliere, chiediti COME è atterrato il ramo** (FF di una union ⇒ antenato;
+  `--rebase` lato GitHub ⇒ mai antenato).
   🥇 *E l'ha dichiarata come DEVIAZIONE dall'ordine ricevuto, con rc e testo di ogni passo, invece di
-  eseguire alla lettera una ricetta peggiore o di alzare a `-D` in silenzio. È lo standard.*
+  eseguire alla lettera una ricetta peggiore o di alzare a `-D` in silenzio — e poi ha messo IL
+  LIMITE alla propria scoperta. È lo standard: chiedi nei brief «cosa NON copre quello che hai
+  trovato».*
   ⚠️ **E `git worktree remove` senza `--force` rifiuta (rc=128, *"contains modified or untracked
   files"*) su una worktree sporca**: lì `--force` è **necessario**, non un'abitudine — ma solo dopo
   che lo sporco è stato misurato e preservato fuori.
