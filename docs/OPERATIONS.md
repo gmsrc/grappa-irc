@@ -5347,10 +5347,26 @@ it.
   operator settings** — a store that fills with other people's content is
   not a preference the holder should be able to raise.
 
-  Files are served ONLY through the authenticated
-  `GET /networks/:network_id/dcc_files/:slug`, never the public upload
-  route, always as `application/octet-stream` + `Content-Disposition:
-  attachment` + `nosniff`.
+  Files are served through `GET /dcc_files/:slug[.ext]` — top level and
+  **unauthenticated since issue 2127**, the same public surface as
+  `GET /uploads/:slug`, always as `application/octet-stream` +
+  `Content-Disposition: attachment` + `nosniff`.
+
+  🔴 **Operator-visible consequence: whoever holds the URL fetches the
+  file, with no login.** The 26-char base32 slug carries 128 bits and IS
+  the access token, exactly as it is for an upload. It was previously
+  behind `:authn` + `ResolveNetwork`, and that gate was removed because it
+  could not be satisfied: `Plugs.Authn` reads only an `Authorization`
+  header, and a link tapped out of scrollback opens a tab that carries
+  none, so the delivery row's link only ever answered 401.
+
+  That makes `Grappa.Dcc.Reaper` the ONLY revocation — there is no
+  admin-delete door onto this spool, and nothing shortens a row's
+  `expires_at` once written. If an operator needs a specific file gone
+  before its retention elapses, the two verbs are removing the row from
+  `dcc_files` and unlinking the file under the spool root (`scripts/db.sh`
+  for the first); doing only the first leaves orphaned bytes no sweeper
+  will ever find, since the reaper enumerates rows.
 - **Config**: DB-driven (Phase 2 sub-task 2j replaced the TOML loader).
   Operator binds users + networks via mix tasks: `mix grappa.create_user`
   creates a `User` row, `mix grappa.bind_network --auth ...` writes a

@@ -56247,3 +56247,164 @@ red; the predicate forced always-true → red via `refute`. That last one was
 itself a repair: the negative control was first written `! declares_full_history`,
 which cannot fail a bats body, and the repo's own
 `bats_assertion_style_test.bats` is what caught it.
+<!-- entry #2127 -->
+
+---
+
+## 2026-09-14 — #2127: the DCC delivery link, and a gate that could not be satisfied
+
+A live transfer on prod (1.5.7) left this row in the scrollback:
+
+```
+08:37:59 <EliteWarez> 📥 "Deadpool.e.Wolverine.2024...mp4" — /networks/1/dcc_files/m4n3ktwbdbnz5cco2bp6ncefay
+```
+
+Three defects were filed: the URL is relative so nothing linkifies it, it
+carries no extension so `mediaLink.ts` cannot classify it, and the row lands
+in `$server` instead of the query with the peer. The first two were framed
+as URL shaping. They were not.
+
+### The measurement that rewrote the issue
+
+`GET /networks/:network_id/dcc_files/:slug` sat behind `:authn` +
+`ResolveNetwork`. Four facts, each read off the tree:
+
+* `GrappaWeb.Plugs.Authn.get_token/1` accepts exactly one thing — an
+  `authorization: Bearer <uuid>` header. No cookie arm, no query parameter.
+* cicchetto keeps that bearer in `localStorage` (`auth.ts`); `document.cookie`
+  appears **zero** times in all of `cicchetto/src/`.
+* a scrollback link renders as `<a href target="_blank" rel="noopener
+  noreferrer">` (`MircText.tsx`).
+* therefore a tap opens a tab carrying no `Authorization` header, and the
+  route answers 401.
+
+So the link could not be used by the one person it was minted for, and **no
+shape of URL buys its way out of a gate the browser cannot satisfy**. Making
+it absolute would have made it *linkify* — a tappable link to a 401. The
+extension would have been worse: `mediaLink.ts` rule 3 classifies a
+same-origin media extension, so cic would have opened a viewer modal that
+could never fill.
+
+vjt's ruling (2026-09-14) took a fourth road and rewrote the issue body: serve
+the file the way an upload is served. `GET /dcc_files/:slug[.ext]`, top level,
+`pipe_through [:api]`, no `:authn`, no `:resolve_network` — which also drops
+`/networks/:network_id` from the path.
+
+### Why the slug is enough here, and it is not a relaxation
+
+The retired comment read *"a stranger's bytes are not something the operator's
+user chose to publish"*. That describes the OFFER. By the time bytes are on
+disk, `Grappa.Dcc.Policy` has passed and the operator has explicitly accepted
+THIS file from THAT nick — the choice the old comment said was missing. The
+26-char base32 slug carries the same 128 bits `/uploads/:slug` has stood on
+since UX-6-B1, and the consent behind it is stronger.
+
+The trade is explicit and is the point rather than a side effect: whoever
+holds the URL reads the file with no login, until `Grappa.Dcc.Reaper` expires
+it. That makes the reaper the **only** revocation, which is why
+`@max_retention_seconds` being a ruling matters more now than when it was
+written, and why the three response headers moved from defence-in-depth to
+*the* defence and stay unconditional.
+
+Comments asserting the retired rule were rewritten in the same commit —
+router, controller moduledoc, `Dcc.get_by_slug`, `Dcc.delete`, `Dcc.Reaper` —
+on vjt's instruction and for his stated reason: *a comment left there is how
+the next reader puts `:authn` back*. `Dcc.delete/1`'s "no soft-delete" needed
+a new justification as well as a correction: the old one was "this spool is
+private", which is now false. The true one is that `Grappa.Uploads`' tombstone
+distinguishes an admin delete from expiry, and this spool has no admin-delete
+door — the only thing that removes a row is the reaper retiring one that is
+already unreadable.
+
+### The extension is a structural whitelist, not a type vocabulary
+
+It can only come from the peer's declared filename: `DCC SEND` carries name,
+address, port and size, no MIME, and the schema has no `mime` column. That is
+attacker-controlled text interpolated into a URL published into somebody's
+scrollback.
+
+`[A-Za-z0-9]{1,8}`, and the character class is doing structural work rather
+than naming known types. `/`, `?`, `#`, `%`, `:`, whitespace and every control
+byte fall outside it, so no filename can graft a path segment, a query or a
+fragment onto the URL — `clip.http://evil.tld` mints `<slug>.tld`, scheme
+destroyed. A closed list of known extensions was rejected deliberately: DCC
+carries `.zip`, `.iso`, `.mkv`, `.torrent`, so a vocabulary would drop the
+extension off most real traffic while buying nothing, because what makes a
+lying `.svg` harmless is the three headers, not the set.
+
+Two ordering details that are load-bearing and easy to get backwards.
+Validate THEN `downcase(:ascii)`, never the reverse — `String.downcase/1` is
+Unicode and folds `İ` into two code points, so folding first would smuggle a
+combining mark past a check that already ran. And the source is the RAW
+filename, never `Report.display_filename/1`: that one truncates at 120 bytes
+and appends `…`, which would eat the extension off a long name and could make
+the last dot-segment something the peer never wrote.
+
+`Report`'s "the emoji is a TYPE SIGNAL" section was reconciled rather than
+left contradicting this. 2089's rule was *never an INLINE render*, and that
+holds: `mediaLink.ts` rule 2 (the emoji map) fires only on the legacy
+extensionless `/uploads/<slug>` shape, which a `/dcc_files/…` URL cannot
+reach, while rule 3 changes only what a CLICK does.
+
+### Routing follows CONSENT, not kind
+
+`Grappa.Dcc.Report` already splits on attribution — `:delivered` is `:privmsg`
+as the peer, everything else is `:server_event` as the anonymous sentinel. The
+channel is a SECOND axis and does not follow that one. It follows the accept:
+
+* post-accept (`:delivered`, `:failed`, and the `{:fs, :rejected}` storage
+  failure) → the query with the peer, opened if needed;
+* pre-accept (`:refused`, `:expired`) → wherever the OFFER rendered, `$server`
+  for a stranger. Routing those to a query would mint a window for anyone who
+  sent one malformed `DCC` line, which is the capability #546 denies.
+
+Rather than thread a second channel through, the transfer path stops carrying
+one: `start_dcc_transfer/2` and the `{:dcc_transfer_done, …}` tuple lost the
+element. A field nothing reads is a field the next reader files a row into,
+and post-accept there is genuinely nothing to inherit. The window opens as a
+consequence — the `{:persist, …}` arm already runs `maybe_open_query_window/2`,
+and a nick-shaped `channel` with no `dm_with` is the orphan shape
+`numeric_router` has always used.
+
+⚠️ A message in flight across a hot deploy carries the old 6-tuple and matches
+no clause. It is absorbed by the `handle_info/2` catch-all (#1338,
+unknown-is-never-fatal) with a warning: the cost is one missing report row,
+logged, never a dropped session.
+
+### The version bump is decided by precedent, and the pin cannot see it
+
+No wire file was touched — `git diff --name-only` against `origin/main` lists
+no `*wire.ex`, no `*_json.ex`, no `protocol.ex` in the product change. But a
+documented client-facing route was MOVED, and `Grappa.Protocol`'s own log
+already settles that class: **v10** and **v11** are REST routes the pin could
+not see, where *"the number moves on the RULE, not on the tooling"*. This case
+is stronger than either — those were additive, this takes a path away, so the
+break runs in both directions. Hence v21.
+
+`min_protocol_version` stays at 1: no client has ever CONSTRUCTED this URL, the
+server mints it into the body and cic only linkifies what it is handed, so no
+old bundle asks for the old path.
+
+🔴 **The pin was moved twice, and the two results differ — which is the point
+of moving it.** Adding a bogus key to a map literal in
+`Grappa.Session.Wire.dcc_offer/6`'s BODY left `mix grappa.wire_pin --check` at
+rc=0 `agree.`; adding a field to the named `@type channels_changed_payload`
+took it to rc=1 with a moved digest. The first is a blind spot the task's own
+moduledoc already declares (*"a view whose BODY grows a key while its `@spec`
+stands still is still invisible here"*), not a new defect. The second is what
+makes the green meaningful: the gate is alive for the class that could have
+caught this change, and the change makes no such move.
+
+### Two things NOT claimed
+
+Delivery rows already in production scrollback carry the old relative path and
+now point at a route that does not exist. Nothing usable is lost — those
+strings never linkified and 401'd when pasted, so they go from one kind of
+dead to another — and no migration rewrites them. **The row count is not
+measured**: the prod jail is not reachable from this host.
+
+And whether cic's media viewer now actually OPENS a `/dcc_files/<slug>.mp4` is
+a separate question from whether the 401 is gone. The three response headers
+are unconditional by ruling, so the served bytes are `application/octet-stream`
+under `nosniff`; whether a browser will paint an `<img>`/`<video>` pointed at
+that is a real-browser measurement, not a spec reading.
