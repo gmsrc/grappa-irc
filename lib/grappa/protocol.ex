@@ -612,7 +612,50 @@ defmodule Grappa.Protocol do
   # `default_display_prefs/0` on the way in, cic coalesces it against the same
   # default on the way out — so a bundle predating v24 keeps working, and this
   # server keeps serving it.
-  @protocol_version 24
+  #
+  # v25 (issue 2176) — `meta.structural`, a new allowlisted key on the
+  # scrollback `meta` map. The server sets it to `true` on a `:mode` row whose
+  # token changed the CHANNEL (a ban, a key, a limit, a flag) rather than a
+  # member's status prefix, so a denoised window can fold the `+o` churn and
+  # still show the `+b`. Purely additive: the key is absent on every other row
+  # and on every row written before it existed, and absence means exactly what
+  # it meant yesterday.
+  #
+  # The number moves anyway — #1393d — and reason (1) applies literally. cic's
+  # `presenceFilter.ts` now REQUIRES the tag to render a ban on a denoised
+  # channel; a bundle built against v25 talking to a server predating it gets
+  # the old behaviour silently, which is the new-client → old-server direction
+  # this number exists to express. Reason (2) is the load-bearing one: a client
+  # reading `server >= N` is entitled to read it as "has everything N had", and
+  # one un-bumped addition makes that false forever.
+  #
+  # MEASURED, not assumed: `mix grappa.wire_pin --check` was run with this
+  # number still reading 23 and reported «The wire shape changed and the
+  # protocol version did not» — digest `sha256:75e60cc5…c9764` (the one
+  # `origin/main` carries) -> `sha256:30ae99e3…28caaf`, protocol «23
+  # (unchanged)». The addition lands in `SCROLLBACK_META_TKEY`, the generated
+  # literal union of the meta allowlist. Had the digest stood still the honest
+  # act would have been to leave the number alone and say so. The gate named
+  # `23 -> 24`; the number below is 25 for the reason in the next paragraph,
+  # which the gate cannot see.
+  #
+  # ⚠️ 24 IS NOT OURS, and the gap it leaves in this file's narration is a
+  # collision resolved by ORDER rather than by argument. PR #2186 (issue 2167)
+  # claimed 24 while this branch was being written; the clash was visible only
+  # to whoever held both branches, and the published number must stay MONOTONIC
+  # on main, so that one landed first and this one sits exactly above it. Same
+  # posture as the v22/v23 gap recorded earlier. The reservation was declared
+  # CONDITIONAL while #2186 was still in gate — "if it does not land, come back
+  # down to 24 rather than leave a hole" — and the condition is discharged:
+  # measured on `origin/main` at rebase time, all THREE sites read 24
+  # (`@protocol_version`, `@spec version()`, and `CLIENT_PROTOCOL_VERSION` in
+  # socket.ts), which is also the check the three-sites warning below demands.
+  #
+  # @min_protocol_version stays at 1, and the key is absent-tolerant BY
+  # CONSTRUCTION: a bundle that has never heard of `meta.structural` reads a
+  # `:mode` row exactly as it did before, because the pre-2176 rule IS what
+  # absence encodes. No client is left unable to talk to this server.
+  @protocol_version 25
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -647,7 +690,7 @@ defmodule Grappa.Protocol do
   # duplicated constant is positive evidence that the OTHER sites were
   # decided for you. Grep every site for the OLD number before continuing,
   # including the ones that are not Elixir.
-  @spec version() :: 24
+  @spec version() :: 25
   def version, do: @protocol_version
 
   @doc """
