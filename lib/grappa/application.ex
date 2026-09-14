@@ -660,8 +660,7 @@ defmodule Grappa.Application do
       [
         Grappa.Identd.Bindings,
         {Task.Supervisor, name: Grappa.Identd.Acceptors, max_children: 64},
-        {Grappa.Identd.Listener,
-         port: Keyword.fetch!(config, :port), bind: Keyword.fetch!(config, :bind)}
+        {Grappa.Identd.Listener, port: Keyword.fetch!(config, :port), bind: Keyword.fetch!(config, :bind)}
       ]
     else
       []

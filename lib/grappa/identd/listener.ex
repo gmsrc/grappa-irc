@@ -137,8 +137,7 @@ defmodule Grappa.Identd.Listener do
           "(#{@acceptors} acceptors, #{wait_ms}ms wait budget)"
       )
 
-      {:ok, %{socket: socket, wait_ms: wait_ms, port: bound_port},
-       {:continue, :spawn_acceptors}}
+      {:ok, %{socket: socket, wait_ms: wait_ms, port: bound_port}, {:continue, :spawn_acceptors}}
     else
       {:error, reason} -> {:stop, {:identd_listen_failed, bind, configured_port, reason}}
     end
