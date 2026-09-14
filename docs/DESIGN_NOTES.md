@@ -14921,3 +14921,136 @@ fact it does not have — `parseSlash`'s arity at every call site — for a targ
 genuinely ambiguous with a legal channel name (`+#chan` IS a valid RFC channel
 spelling). `@#chan` and `%#chan` both reach the new path. Not a regression:
 `+#chan` was refused before this issue and is refused after it.
+<!-- entry #2176 -->
+
+---
+
+## 2026-09-14 — issue 2176: the denoise filter folds churn, and a ban is not churn
+
+Hypnotize on #it-opers: *"perche' non vedo $nick sets mode +b in canale ma
+Fairy lo vede? stesso grappa 1.5.7?"* Same version, same channel, different
+per-channel **denoise** preference. `#1262` (2026-08-13) had put the `mode`
+KIND wholesale into the suppressed set when vjt withdrew #458's "mode always
+stays visible" rule, and wrote the cost down at the time: while a channel is
+denoised the STRUCTURAL transitions (`+b` / `+k` / `+l` / `+m` / `+i`) fold
+along with the status-prefix churn the filter was aimed at, and *"a write-time
+split that folds only the churn is a possible follow-up, not a precondition"*.
+This is that follow-up, on vjt's ruling (#it-opers, 22:22: *"forse non dovrebbe
+includere i +b"* → si).
+
+**Provenance, stated because it bounds what the rest of this entry can claim:
+the ruling is RELAYED, not seen first-hand.** The report is Hypnotize's, the
+ruling is vjt's on IRC, the issue was filed by the bot under a fleet token —
+`author.login` does not discriminate. The MEASUREMENTS in the issue body
+survive any attribution error; the READINGS and the SCOPING in it are the
+relayer's, not decisions.
+
+### The kind stays suppressed; the exemption is per-ROW
+
+The tempting shape is to take `:mode` back out of
+`Message.suppressed_presence_kinds/0`. That is wrong in the obvious direction:
+a `+o` on a busy channel is exactly the churn the filter exists for, and #1262
+is not being reversed. What was missing is that for `mode` the question "is
+this churn?" cannot be answered by the KIND — it needs the mode LETTERS.
+
+So the set is unchanged and the row carries an exemption:
+`Message.structural_meta_key/0` → `meta.structural = true`, written at persist
+time. A tagged row is visible on both sides even while the channel is
+denoised; an untagged one folds exactly as it did yesterday.
+
+**Classified WRITE-time, on the server, once.** The alternative — each side
+parses `meta.modes` at read time — needs two copies of one parser in two
+languages, which is the drift the cross-language gate exists for, and that
+gate compares sets of KINDS so it would not have caught it. The server is
+also the only place that already holds the network's `PREFIX` table, and the
+churn letters are per-network: `+q` is a founder STATUS mode where 005
+advertises it and a channel mode where it does not. `ISupport.structural_mode_token?/2`
+is the classifier, and the rule is the complement of `user_prefix/2`: a token
+is structural iff it states at least one letter this network did NOT advertise
+as a status prefix.
+
+A MIXED token (`MODE #chan +ob nick mask`) is structural if ANY letter is.
+Showing it is the safe failure; the alternative hides a ban because an op
+grade rode the same line. The same argument settles the malformed token #878
+persists as a transcript while withholding its derived state: its bytes are
+not prefix letters, so it shows.
+
+### Absence means fold, and there is no backfill
+
+The key is written ONLY when true. There is deliberately no `structural:
+false` form, because the absent case ALREADY has to mean "fold" for every row
+persisted before the key existed, and a second spelling of one outcome is a
+second state to keep in step for nothing. **Declared rather than left
+implicit: old rows are not backfilled.** A `+b` from last week keeps folding
+on a denoised channel. Backfilling would mean re-parsing stored mode strings
+against a PREFIX table we no longer know was in force at the time, which is
+the one input the write-time design exists to avoid guessing.
+
+### Two SQL sites, and `IS 1` rather than `= 1`
+
+The exemption had to land in BOTH query sites or the cure would have forked
+the #239 invariant that the badge and the pane agree on which rows count:
+`Scrollback.maybe_exclude_presence/2` (the history page) and
+`ReadCursor.exclude_hidden_presence/2` (the #505 unread aggregate that SEEDS
+the badge). Only the first is the reported symptom; fixing only it would have
+rendered a ban the badge refused to count.
+
+One fragment serves both — `Message.structural_row?/1`, a query macro, the
+`Identifier.nick_fold/1` shape. It uses SQLite's null-safe `IS 1` and not
+`= 1`: `json_extract` returns SQL NULL for an absent path, the untagged row is
+the common case, and the ReadCursor site NEGATES the predicate. Under `=` that
+negation propagates NULL instead of the false it means. Ecto refuses a module
+attribute as `fragment/n`'s first argument, so the JSON path is a literal and
+the key exists twice in `Message`; the pin is a test that renders the REAL SQL
+via `Ecto.Adapters.SQL.to_sql` and looks for `structural_meta_key/0` in it,
+with a negative control so a vacuous `=~` cannot pass.
+
+The disjunct is written `kind NOT IN (…) OR structural` rather than the
+equivalent `NOT (kind IN (…) AND NOT structural)` because SQL short-circuits
+OR: on every `:privmsg` the left side is already true and `json_extract` is
+never called.
+
+### The gate GREW an axis instead of being trusted
+
+`presence_filter_test.exs` held the two sides equal by comparing KIND SETS.
+After this change that comparison can no longer see the whole rule: `mode` is
+in the set on both sides and stays there, and what decides a given row is the
+tag. Rename the tag on one side and the sets still match, both suites stay
+green, and every ban on a denoised channel is silently invisible again — the
+#1262 defect restored by a typo nothing was watching. The gate now also parses
+cic's `STRUCTURAL_META_KEY` literal and compares it to
+`Message.structural_meta_key/0`, with the same zero-parse positive control its
+two siblings carry. cic additionally types the constant `satisfies
+ScrollbackMetaTKey`, so a server that drops the key from the meta allowlist is
+a tsc error rather than a runtime shrug.
+
+### Wire
+
+`meta.structural` is a new key in the generated `SCROLLBACK_META_TKEY` union,
+so the shape moved and `@protocol_version` moves with it (#1393d: the number
+is only worth comparing against if it is TOTAL). Measured, not assumed:
+`mix grappa.wire_pin --check` was run with the number still reading 23 and
+reported *"The wire shape changed and the protocol version did not"*,
+`sha256:75e60cc5…c9764` → `sha256:30ae99e3…28caaf`. The gate named `23 -> 24`;
+the number taken is **25**, because PR #2186 (issue 2167) holds 24 — the
+collision is visible only to whoever holds both branches, and the published
+number must stay monotonic on main. `@min_protocol_version` stays at 1: the
+key is absent-tolerant by construction, since the pre-2176 behaviour IS what
+absence encodes.
+
+### What was NOT established
+
+The ruling is relayed (above); nothing here was confirmed with vjt directly.
+No measurement on prod or against a live bahamut: the classifier is exercised
+against `ISupport.default()` and a synthesised `PREFIX=(qaohv)~&@%+`, not
+against a 005 captured from Azzurra or Libera. No e2e: the size default is not
+reachable from the harness (#915 recorded why — spawning
+`LARGE_CHANNEL_THRESHOLD` real peers trips the bahamut same-host autokill and
+there is no member-count seam), and the explicit `hide` path would exercise the
+pref rather than the new tag. The `$server` self-umode row is deliberately left
+UNTAGGED and so unchanged: it has no member count, `PresenceFilter.hidden?/2`
+already resolves it to SHOW, and tagging it would only override an operator who
+explicitly pinned that window to `hide` — which the issue did not ask for. The
+SQL exemption is expressed on the ROW and not gated to `kind = 'mode'`: only the
+channel-MODE arm writes the tag, and a kind guard in SQL would be a second place
+for the rule to live.
