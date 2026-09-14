@@ -396,6 +396,22 @@ is DELETE-then-write, never append-only:
   a mentire, e qui la bugia non si presenta come un numero sbagliato ma come **un divieto**. *Un
   falso rosso che invita a `-D` è peggio di un falso verde: ti fa distruggere la prova per
   aggirare uno strumento che aveva ragione a metà.*
+  🥇🥇 **MA LA MOSSA MIGLIORE DI TUTTA QUESTA SCALETTA L'HA PORTATA w2 IL 2026-09-14, E BATTE ANCHE
+  L'UPSTREAM: NON AGGIRARE IL CONFRONTO — RENDI GIUSTO `HEAD`.** Su `w2-2173` (atterrata nella union
+  #2189) invece di `-D`, e invece di ripuntare l'upstream, ha fatto un **`git worktree add --detach`
+  temporaneo su `origin/main`** e lì ha girato **`git branch -d` NUDO** ⇒ **rc=0,
+  `Deleted branch w2-2173 (was 3deea967e)`**; worktree temporanea poi rimossa (`porcelain` 0 byte,
+  rc=0, ASSENTE).
+  🥇 **Perché è meglio, e sono le sue parole: «così il controllo di sicurezza è stato fatto davvero,
+  contro l'HEAD giusto invece che contro un main stantio».** Tutte le cure precedenti — fetch,
+  upstream — fanno **passare** `-d` spostando il TERMINE DI PARAGONE su una remote-tracking ref; la
+  sua fa **eseguire** il controllo che `-d` intende fare, contro un `HEAD` che è davvero il main
+  corrente. La differenza non è stilistica: con le altre il verde significa *"è antenato di
+  `origin/main`"*, con la sua significa *"è antenato di `HEAD`, e `HEAD` è quello giusto"* — cioè la
+  proprietà che il divieto voleva proteggere. ⇒ **Su un host il cui `main` locale è cronicamente
+  stantio (voyager), questa è la forma da preferire**, e `-D` resta dove sta: fuori.
+  🥇 *E l'ha dichiarata come DEVIAZIONE dall'ordine ricevuto, con rc e testo di ogni passo, invece di
+  eseguire alla lettera una ricetta peggiore o di alzare a `-D` in silenzio. È lo standard.*
   ⚠️ **E `git worktree remove` senza `--force` rifiuta (rc=128, *"contains modified or untracked
   files"*) su una worktree sporca**: lì `--force` è **necessario**, non un'abitudine — ma solo dopo
   che lo sporco è stato misurato e preservato fuori.
