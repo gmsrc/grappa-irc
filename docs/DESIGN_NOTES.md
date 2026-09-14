@@ -15071,14 +15071,81 @@ rather than write a test that pins an accident.
 The ruling is relayed (above); nothing here was confirmed with vjt directly.
 No measurement on prod or against a live bahamut: the classifier is exercised
 against `ISupport.default()` and a synthesised `PREFIX=(qaohv)~&@%+`, not
-against a 005 captured from Azzurra or Libera. No e2e: the size default is not
-reachable from the harness (#915 recorded why — spawning
+against a 005 captured from Azzurra or Libera. The SIZE-DEFAULT path has no e2e:
+it is not reachable from the harness (#915 recorded why — spawning
 `LARGE_CHANNEL_THRESHOLD` real peers trips the bahamut same-host autokill and
-there is no member-count seam), and the explicit `hide` path would exercise the
-pref rather than the new tag. The `$server` self-umode row is deliberately left
+there is no member-count seam).
+
+⚠️ **This paragraph used to say "No e2e" flatly, and gave as its reason that
+"the explicit `hide` path would exercise the pref rather than the new tag".
+Both halves were wrong and CI is what said so** — see the exemplar section
+below. The explicit-`hide` path is exactly where the tag is observable: with
+the toggle ON, a churn row folds and a structural row does not, and the ONLY
+thing separating those two rows is the tag. There are now two e2e tests on that
+path. The sentence talked itself out of the one gate that would have caught the
+spec collision before CI did.
+
+The `$server` self-umode row is deliberately left
 UNTAGGED and so unchanged: it has no member count, `PresenceFilter.hidden?/2`
 already resolves it to SHOW, and tagging it would only override an operator who
 explicitly pinned that window to `hide` — which the issue did not ask for. The
 SQL exemption is expressed on the ROW and not gated to `kind = 'mode'`: only the
 channel-MODE arm writes the tag, and a kind guard in SQL would be a second place
 for the rule to live.
+
+### The #1262 e2e changed its EXEMPLAR, not its claim (CI red, 2026-09-15)
+
+`cicchetto/e2e/tests/issue1262-mode-denoise.spec.ts` went red on this branch —
+one test, `247 ✓ / 1 ✘`. It was not a flake and not infra: the page snapshot
+(`error-context.md`) showed the surviving row was `* nick sets mode +m on
+#t1262-…` with the denoise toggle `[pressed]`, and `m ∉ PREFIX=(ohv)` makes it
+structural by this slice's own classifier. The branch did exactly what it was
+built to do.
+
+**The spec used `+m` as its specimen of "a channel MODE row that folds", and
+this issue reclassifies `+m` as structural.** Those cannot both hold. What is
+wrong is NOT the behaviour and NOT the assertion — it is that a rule was
+narrowed and the e2e encoding the old rule was left standing: the branch
+touched 23 files and **no `*.spec.ts` at all**.
+
+So the CLAIM is unchanged and still gated (a churn MODE row folds, server-side
+too, and `$server` survives); the SPECIMEN moved to `-o` on our own nick. It is
+written down here because **in six months this reads like an assert softened to
+turn a red green, and it is the opposite**: `+m` now has its own test asserting
+it SURVIVES, and the mutants below kill both directions.
+
+Two things were measured rather than assumed, both off the same snapshot.
+`-o` was chosen over `+v` because being op is a precondition this spec ALREADY
+establishes and depends on, so deopping ourselves is applied and echoed for the
+same reason the old `+m` was — no new assumption about how bahamut treats a
+voice grant to an existing op. And the fresh-join `+nt` does NOT land as a
+scrollback row: the failure reported `Received: 1`, not 2, which is what makes
+a bare `toHaveCount` on mode rows meaningful at all.
+
+One assertion was wrong before it ever ran and the codebase caught it: a MODE
+row's `body` is NULL on the wire (`build_persist(…, nil, %{modes:, args:})`),
+so the served-JSON arm reads `meta.modes`. Asserting on `body` would have
+compared `undefined` and passed for the wrong reason.
+
+### Scope of the authorisation, so it can be reversed in one line
+
+vjt's ruling as QUOTED in the issue covers `+b` textually ("forse non dovrebbe
+includere i +b" → sì). The full list `+k` / `+l` / `+m` / `+i` / `+t` / `+n` /
+`+s` is the issue filer's reading, **relayed and not seen** — the fleet and the
+ircbot both post with vjt's token, so `author.login` does not discriminate.
+`+m` was authorised by the orchestrator on the MECHANICAL criterion the issue
+states (channel versus a member's prefix), not on a quotation. Recorded
+explicitly so that if vjt wants a narrower set, the change is one edit to
+`structural_mode_token?/2` and not an excavation.
+
+### The consequence for the operator, which no test can state
+
+The issue already says old rows keep today's behaviour ("Old rows have no tag:
+they keep today's behaviour (folded) unless we backfill"), and there is no
+backfill. The part the issue does NOT say, and the part a bug report will hit:
+**a `+b` set BEFORE this lands stays invisible to anyone with that channel
+denoised, permanently.** The row has no tag, absence means fold, and nothing
+will ever give it one. Every test here passes with that state fully present,
+because the tests can only speak about rows written after the tag existed. An
+operator asking "why can I still not see the ban Hypnotize set last week" is
+seeing this, not a regression.
