@@ -14307,3 +14307,92 @@ and #1751 closed and is why the `.shell-members` no-insets guard is not being
 routed around. Five mutants, no survivors: deleting the aside extender, dropping
 the container inset, a literal `20px` in place of the token, re-theming an aside
 without its extender, and a `padding-bottom` added to an extender rule.
+<!-- entry #2166 -->
+
+---
+
+## 2026-09-14 — issue 2166: one line of the flexbox spec, and the row that was also a tab
+
+At the rail's 160px floor the network-header row's umode indicator ran over
+the network slug instead of yielding. The reporter's re-measurement is what
+made it more than cosmetic: the slug is squeezed to **zero** width, not
+truncated, and that row is also the **server tab** — with several networks
+connected the rows lose both their identity and their click target.
+
+### The mechanism is one sentence, and the topology matters
+
+The header `<li>` is the flex container (`.sidebar-network-section li`), and
+`.sidebar-umode-indicator` is a **sibling of the window button**, not a child
+of it (`Sidebar.tsx` ~:336-425). The slug lives one flex context deeper,
+inside that button. So the indicator does not crowd the slug — it crushes the
+box the slug lives in.
+
+A flex item's `min-width` is `auto`, and `auto` resolves to the item's
+**content-based minimum** unless the item is a scroll container
+(css-flexbox-1 §4.5). A `nowrap` text box with `overflow: visible` therefore
+has a minimum equal to its whole string: an 18-character oper umode string
+floors ~113px of a 160px row, takes **none** of the deficit, and the entire
+shortfall lands on `.sidebar-window-btn`, which carries `min-width: 0` and
+duly shrinks to nothing. `.sidebar-channel-name` already had
+`overflow: hidden; text-overflow: ellipsis; white-space: nowrap` — it was the
+willing one, and willingness is exactly what made it the casualty.
+
+### The contract is "no child of this row may floor it"
+
+Not "the indicator has four declarations". Once every content-sized child of
+the line can shrink, the deficit is shared in proportion to the bases and each
+keeps `base x available / sum(bases)` — strictly above zero for any available
+width above zero, **whatever the font**. That is why the acceptance criterion
+the reporter asked for (at the floor the slug still renders at least an
+ellipsised first character) follows from the assertions rather than from a
+pixel count.
+
+`white-space: nowrap` stays — a mode string must not wrap. Added:
+`min-width: 0`, `overflow: hidden`, `text-overflow: ellipsis`.
+
+### What was deliberately NOT declared, and how that was established
+
+The shape proposed in the issue also carried `flex: 0 1 auto`. It is **the
+initial value of `flex`**, and an exhaustive grep of the sheet finds exactly
+three rules naming this selector (the base rule, `:hover`, and the shared
+`:focus-visible` group) — none of them sets `flex`, and a parent cannot set a
+child's. So writing it would claim a load-bearing role that removing it cannot
+change, and the next reader would believe the sheet. It is omitted, and a test
+pins the omission: adding it back is red.
+
+`min-width: 0` and `overflow: hidden` each lift the automatic minimum on their
+own, so `min-width: 0` is redundant **conditionally** — only while
+`overflow: hidden` stays, and that one is there for the ellipsis, a different
+intent. Both are kept for that reason and the mutant table says so out loud.
+
+### Mutants — five, and the survivor is the informative one
+
+| mutant | outcome |
+|---|---|
+| `min-width: 0` removed | **SURVIVES** — `overflow: hidden` already lifts the automatic minimum |
+| `overflow: hidden` removed | RED (clip triple); the floor test correctly survives on `min-width: 0` |
+| `text-overflow: ellipsis` removed | RED (clip triple) |
+| both floor-lifters removed | RED on the floor test AND the clip triple — the defect restored |
+| the inert `flex: 0 1 auto` added | RED on the no-inert-declaration test |
+
+### What was not established
+
+**No rendered width was measured.** jsdom performs no layout, so nothing in
+the unit suite can witness a pixel; the acceptance criterion above is a
+DERIVATION from the shrink algorithm, font-independent but still a derivation.
+An e2e **could** witness it — unlike issue 2160's pill, flexbox is reproduced
+faithfully by the Playwright engines, and `issue229-umodes-on-connect.spec.ts`
+already establishes the path to a rendered indicator. It is not here because
+it could not be red-firsted without the e2e lane, and shipping a spec nobody
+has ever seen fail is the hollow-green this project keeps paying for.
+
+**The same class survives one level down, unfixed.** The unread badge inside
+the window button is also a content-sized flex item with no min-width lift,
+so it floors the slug's own line. Derived at the reported geometry the slug
+still clears roughly one character plus its ellipsis, which is why the
+reported cure is sufficient for the reported symptom — but that margin is set
+by the badge's width, not by anything this change controls. Not touched: it is
+a second instance, not this issue.
+
+**The rail floor itself is out of scope** (issue 2165, blocked on a ruling);
+`sidebarWidths.ts` is untouched.
