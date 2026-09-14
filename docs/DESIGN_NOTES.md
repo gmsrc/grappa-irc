@@ -13140,3 +13140,128 @@ premise of the defect, not an oversight — and making the edges visible is
 a redesign of the inversion, not a slice. What changed is that the
 eleventh closure is now guarded like the other ten, and that the set has
 a rationale in one place instead of none.
+<!-- entry #2138 -->
+
+---
+
+## 2026-09-14 — issue 2138: the rollover is enforced, and August leaves the live log
+
+`docs/DESIGN_NOTES.md` is the CURRENT month plus the undated preamble;
+closed months are archived verbatim under `docs/design_notes/` (#1537).
+Nothing enforced that, so it stopped after July and nobody noticed for six
+weeks. Measured on `aad1e8ef2`: 3,315,240 bytes, 613 level-2 headings, of
+which **495 August entries** were still inline — 78% of the file, carried
+by every grep of the log and by every append to a `merge=union` path.
+
+### The check is FILE-scoped, and that is the finding, not an oversight
+
+Every other check in `scripts/design-notes-gate.sh` is diff-scoped because
+it judges the SHAPE of what a branch WROTE, and most of this file's history
+predates the convention. A stale month is the opposite kind of fact: a
+property of the FILE that every branch is about to build on, whose fixer is
+whichever branch comes next rather than whoever wrote the entries. So check
+0 ignores the diff, and — the load-bearing half — it runs even when the
+branch appends nothing. Most PRs never touch the log; gated behind the diff
+the enforcement would be dead exactly where the debt lives. The fast path
+that used to `exit 0` on such a branch now exits with the check's status,
+and it prints the "nothing to roll over" summary only when there is nothing
+to roll over: that is the one path where the summary and a finding can be
+emitted together, and a line claiming the opposite of the finding above it
+is the log-honesty bug in its purest form. There is a case for it.
+
+### "CLOSED" is read off the FILE, never off the clock
+
+The newest month with an inline entry is the current one; every older month
+is closed. The wall-clock alternative — "older than today's month" — turns
+main red at midnight on the 1st for work nobody did, blocks every unrelated
+PR until someone does a 2.5 MB move, and cannot be tested without a time
+seam. The file-relative rule goes red on the branch that OPENS a new month:
+attributable to a change, and the exact moment the rollover falls due. It
+is also deterministic, so the bats cases assert it without freezing time.
+
+The price, stated: a month that closes with nobody writing anything in the
+new one stays green until the first new-month entry lands. That lag is
+harmless — nothing is inconsistent, the archive is merely not yet cut — and
+it is what buys the absence of a clock-driven red.
+
+### The trap this check is one regex away from: its subject documents itself
+
+The rollover's own index table carries a `| 2026-08 | ... |` row forever
+after; the preamble names the boundary month in prose; entries quote entry
+headings inside fences. A matcher that reads any of those is GREEN on a
+broken file and RED on a correct one — an assertion passing on the
+documentation of its own rule. So the check anchors on the KEY line and
+nothing else: `^## YYYY-MM-DD` outside a fenced block, which is already the
+definition of an entry everywhere else in this gate. The bats case feeds a
+fixture all three prose shapes at once, asserts green, then un-fences the
+same heading text and asserts red — two-sided on one file, because a green
+that nothing can turn red is what a check reading nothing also produces.
+Both controls are EXACT (`-eq 0` against `-eq 1`); a `>= 1` threshold
+acquits the tool precisely when it is broken.
+
+### August was not contiguous, and one entry decided the membership rule
+
+`## 2026-08-31 — #1883c` was appended in September and sat at line 45664,
+among September entries. It moves with August, to the tail of the archive,
+where it keeps BOTH orders: it was appended last among August entries, and
+08-31 is the last August date. Leaving it inline was the alternative and is
+worse in every direction — a grep for an August ruling would find 494
+entries on one path and one on the other, and the gate would need a
+permanent exemption for a single entry, which is an exclusion list.
+
+So membership is read off the DATE in the heading, the only month signal
+the file carries; append order is not recoverable from it. That is a
+MEMBERSHIP rule and deliberately not an answer to the open question of
+whether this log is ordered by date or by append order: an entry dated
+08-31 and appended in September belongs to August under either reading.
+
+### The arithmetic was written down before the first byte moved
+
+Predicted, then measured, both sides:
+
+```
+DESIGN_NOTES.md  3,315,240 B / 56,929 L  ->  726,304 B / 12,647 L
+design_notes/2026-08.md      (new)       ->  2,588,931 B / 44,280 L
+```
+
+The 5-byte / 2-line difference is the `---` + blank that glued the preamble
+to the first August entry and belongs to neither side — the archives all
+begin at a `## ` heading. Then the stronger check, because equal totals
+prove nothing about content: the three files were reassembled into the
+original and `cmp`'d — rc=0, with a one-byte perturbation of the
+reconstruction returning rc=1, so the comparison is known to look. The
+prefix that must not move was checked the way BSD `cmp` allows (`head -c K`
+on both sides, K the byte length of the surviving preamble) with the K+1
+negative control returning rc=1, since `cmp -n K` cannot prove a prefix.
+
+### The failure mode for THIS branch is resurrection, not loss
+
+`merge=union` takes the additions from both sides and never the deletions.
+The usual hazard on this file is an eaten separator; a branch that DELETES
+in bulk has the mirror one — any branch forked before the move brings the
+text back, with rc=0, no conflict and zero deleted lines. All three success
+signals agree while the work has been undone.
+
+`scripts/union-rebase.sh` cannot express that: its verdict is
+`add_before == add_after && del_after == 0` (line 150), so on a deleting
+branch it is a guaranteed false RED — and, worse, it would report
+"contribution intact" in exactly the case where the driver ATE the
+deletions. Re-specified for this shape, the two-sided check is
+`add_before == add_after && del_before == del_after`, plus a CONTENT
+assertion the numstat cannot give: zero `^## 2026-08-` headings in the live
+log after the rebase, with the pre-rebase 495 as the positive control, and
+the archive's sha256 unchanged (it carries `merge=text`, so interference
+there conflicts loudly instead of silently).
+
+The standing detector, from here on, is check 0 itself: if a union rebase
+ever puts an archived month back into the live log, the gate is red on the
+next run.
+
+### What this does not guard
+
+Nothing asserts that text deleted from the live log ARRIVED in an archive.
+A rollover that deletes a month and forgets to write the file is green
+here, and the only thing standing in front of it is the arithmetic above,
+performed by a human. Closing that would mean comparing against history, a
+different and much heavier check; it is named here rather than left for
+someone to discover.
