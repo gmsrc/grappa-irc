@@ -134,6 +134,43 @@ defmodule Grappa.PresenceFilterTest do
              neither.
              """
     end
+
+    # issue 2176 — the kind-set gate above can no longer see the whole rule,
+    # and saying so is the point of this test existing beside it. `mode` is in
+    # the suppressed set on BOTH sides and stays there; what decides whether a
+    # given mode row folds is now the per-ROW tag the server writes
+    # (`Message.structural_meta_key/0`) and cic reads (`STRUCTURAL_META_KEY`).
+    # Rename one spelling and the sets still match, both suites still pass, and
+    # every ban on a denoised channel silently goes back to being invisible —
+    # the #1262 defect, restored by a typo no gate was watching. The gate had to
+    # GROW an axis, not merely keep comparing the old one.
+    test "STRUCTURAL_META_KEY equals Message.structural_meta_key/0" do
+      source = File.read!(@cic_path)
+
+      cic_key =
+        case Regex.run(~r/export\s+const\s+STRUCTURAL_META_KEY\s*=\s*"([a-z_]+)"/, source) do
+          [_, key] ->
+            key
+
+          _ ->
+            flunk(~s(Could not locate `export const STRUCTURAL_META_KEY = "<key>"` in #{@cic_path}))
+        end
+
+      assert cic_key == Atom.to_string(Message.structural_meta_key()),
+             """
+             The structural-mode EXEMPTION key has drifted between the two languages.
+
+               #{@cic_path}: #{inspect(cic_key)}
+               Grappa.Scrollback.Message:        #{inspect(Message.structural_meta_key())}
+
+             The server writes this key into `meta` at persist time for a MODE
+             row that changed the channel (a ban, a key, a limit, a flag); both
+             the REST history filter and cic's live-tail render filter exempt a
+             row carrying it. They MUST be the same string. While they differ
+             the kind sets still agree, so the gate above stays green, and a
+             `+b` is invisible on every denoised channel again (issue 2176).
+             """
+    end
   end
 
   # #1769 — the PAUSABLE set is a second cross-language pair, and it fails

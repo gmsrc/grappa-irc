@@ -302,7 +302,7 @@ export const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): C
   // the per-channel UI filter (issue 2071) that the shared module must not
   // reach for itself.
   const eventCount = unreadRows.filter(
-    (m) => countsAsUnreadEvent(m, ctx) && presenceRowVisible(key, memberCountFor(key), m.kind),
+    (m) => countsAsUnreadEvent(m, ctx) && presenceRowVisible(key, memberCountFor(key), m),
   ).length;
 
   // #1229 — the protected region has a ceiling of its own, applied BEFORE the
@@ -782,7 +782,7 @@ const exports = identityScopedStore((onIdentityChange) => {
             if (countsAsUnreadMessage(m, arrivalCtx)) arrivedContent++;
           } else if (
             countsAsUnreadEvent(m, arrivalCtx) &&
-            presenceRowVisible(key, memberCount, m.kind)
+            presenceRowVisible(key, memberCount, m)
           ) {
             arrivedEvents++;
           }

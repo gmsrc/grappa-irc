@@ -1713,7 +1713,7 @@ const ScrollbackPane: Component<Props> = (props) => {
     // must agree on which rows "count" — reconcile to one predicate, never a
     // forked filter (CLAUDE.md "one feature, one code path").
     const memberCount = (membersByChannel()[key()] ?? []).length;
-    const msgs = allMsgs.filter((m) => presenceRowVisible(key(), memberCount, m.kind));
+    const msgs = allMsgs.filter((m) => presenceRowVisible(key(), memberCount, m));
     // 2026-06-01: invite-ack rows for the $server window only. Mirrors
     // the previous `<Show when={props.kind === "server"}>` gate on
     // the now-deleted sibling render. Flatten across all target-channel
@@ -3161,8 +3161,8 @@ const ScrollbackPane: Component<Props> = (props) => {
       if (!rowsNow || rowsNow.length === 0) return;
       const mc = (membersByChannel()[key()] ?? []).length;
       const cursorNow = getReadCursor(props.networkSlug, props.channelName) ?? 0;
-      const target = trailingHiddenAdvanceTarget(rowsNow, cursorNow, (kind) =>
-        presenceRowVisible(key(), mc, kind),
+      const target = trailingHiddenAdvanceTarget(rowsNow, cursorNow, (row) =>
+        presenceRowVisible(key(), mc, row),
       );
       setCursorIfAdvances(props.networkSlug, props.channelName, target);
     }, PRESENCE_CURSOR_SETTLE_MS);
