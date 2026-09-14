@@ -56620,3 +56620,121 @@ function head destructuring the state map without binding it — `defp
 f(%{isupport: x})` — is invisible to it. Every destructuring site binds
 `state` today, so the exposure is real and empty; the floor catches the walk
 going blind wholesale, not one site drifting out of reach.
+<!-- entry #2128 -->
+
+---
+
+## 2026-09-14 — issue 2128: the banner slot lost its buttons to one long word, and the cure it already had was applied to one element
+
+A phone (Android PWA, ~393 CSS px) showed a DCC offer banner whose **Accept**
+button was cut in half by the right edge and whose `×` was off screen
+entirely. The banner was un-actionable: neither answer could be tapped.
+
+### The cause is one line of CSS that was never written
+
+`.error-banner` is a single-line flex row and `.error-banner-message` carried
+`flex: 1 1 auto` with no `min-width`. A flex item's default `min-width` is
+`auto`, i.e. its **min-content** width, so the message refuses to shrink below
+its longest break-free run. The DCC offer embeds the peer's declared filename,
+whose unbroken run is wider than the phone, so the message claimed the whole
+row and the two `flex: 0 0 auto` controls after it were laid out past the
+right edge — of a container that is `position: fixed; left: 0; right: 0` with
+no overflow affordance. They were not scrollable to. They were gone.
+
+### The defect belongs to the SLOT, and the class had already been cured once
+
+Nothing about this is DCC-shaped. Any banner whose message carries a long
+unbreakable token — a URL, a channel name, a hostname — loses its controls the
+same way; the DCC offer is merely the longest message the app ships, because a
+stranger supplies part of it.
+
+The same root cause already has a cure in this very stylesheet.
+`.compose-box-upload-filename` took `min-width: 0` on 2026-06-10 with a
+comment that states the general rule in full: *"flex items default to
+min-width:auto, so a long filename refuses to shrink and shoves the progress
+bar + cancel/retry buttons off-screen on narrow viewports"*. That fix was
+right and it was scoped to the one element that had been observed failing. The
+class stayed open for fifteen months of new flex rows, and the banner slot —
+shared by nine sources — is where it resurfaced. Recorded because the lesson
+is not "add min-width: 0 more often": it is that a cure written against an
+instance leaves the class, and the shared slot is the altitude the rule
+belonged at.
+
+### Three declarations, and each answers a different half
+
+```css
+.error-banner          { flex-wrap: wrap; }
+.error-banner-message  { min-width: 0; overflow-wrap: anywhere; }
+```
+
+`min-width: 0` lets the item yield. `overflow-wrap: anywhere` gives it
+somewhere to yield TO, and it is chosen over `word-break: break-word`
+deliberately: `anywhere` also shrinks the **min-content size itself**, so the
+run breaks inside the row instead of overflowing a box that has now been told
+it may be narrow. With both in place the row does not normally wrap at all —
+the message simply takes fewer columns and more lines.
+
+`flex-wrap: wrap` is therefore the affordance of LAST resort, for when the
+controls ALONE no longer fit a line (a longer action label, a user text-zoom,
+a viewport narrower than any phone ships). It is kept because the failure it
+prevents is the unreachable one: there is no overflow to scroll.
+
+`margin-left: auto` on `.error-banner-action` was already there and needed no
+change — auto margins resolve **per flex line**, so the wrapped case stays
+right-aligned and in the same order for free. It stays on the action ALONE:
+auto margins SPLIT a line's free space between them, so a second one on the ×
+would park the action mid-line.
+
+### What was NOT done: the tap target
+
+The obvious way to buy horizontal room is to shrink the 44px `×`. That is the
+wrong cure and the issue says so up front — #459 set that box at the HIG/
+Material minimum on purpose, in the screen corner where thumbs are least
+accurate, and it is absolute px rather than rem precisely because the app's
+root font-size is 14px. The e2e below asserts `>= 44` in both dimensions, so
+the wrong cure is red on an assertion the right cure never touches.
+
+### The harness question, measured rather than asserted
+
+The issue asked whether a slot-level test could observe this, and answered
+"jsdom does not lay out flexbox". That is true and it undersells the problem.
+Measured on this branch with a throwaway probe that rendered `BannerSlot` with
+a 120-character filename and injected the real `themes/default.css` as a
+`<style>`:
+
+* every `getBoundingClientRect()` came back `left=0 right=0 width=0 height=0`
+  — slot, action and `×` alike — and `offsetWidth` was `0`;
+* `document.styleSheets.length` was `1` but `cssRules.length` was **`0`**, so
+  `getComputedStyle(slot).display` read `block` and the `×`'s `width` read
+  `auto`.
+
+The second half is the one worth writing down: not one declaration of the
+theme reaches an element under vitest, so the WEAKER oracle — "assert the
+cascade was asked for the right thing" — is unavailable at slot level too, not
+merely the geometric one. A vitest test here could only have pinned the
+declarations as SOURCE TEXT (the `themeCss` / `ruleBody` idiom
+`safeAreaInsetToken.test.ts` uses), whose single failure mode is reverting
+this diff. That was declined: it reads as coverage while observing nothing
+about layout.
+
+### The e2e, and what it cannot say
+
+`e2e/tests/issue2128-banner-controls-narrow-viewport.spec.ts` drives a real
+DCC offer through the ircd (the issue2089 fixture, TEST-NET-3 address so the
+SSRF gate admits it) with a 224-byte unbreakable filename, then measures the
+live geometry at 393 CSS px (the reported device) and 320 CSS px (the issue's
+contract). The oracle is the slot's own box as the outer reference, plus the
+viewport width, plus `getComputedStyle(slot).paddingRight` read rather than
+assumed so the right-alignment assertion carries no magic constant.
+
+The filename is deliberately longer than the wire will carry:
+`Grappa.Dcc.Report.display_filename/1` truncates at `@filename_max_bytes`
+(120) and appends `…`, so the DOM gets the widest string the wire can produce
+— 120 bytes of peer text plus the ellipsis, 121 characters. The spec locates
+the banner by that 120-character head, so a cap that shrank would fail to
+collect the banner rather than quietly weaken the case.
+
+🔴 One engine. The default project is chromium — the reporter's engine family,
+not WebKit and not a real Android device. The defect is plain CSS flexbox with
+no engine-specific feature in it, which is why one engine is judged sufficient
+here. That is a judgement, not a measurement, and it is written down as one.
