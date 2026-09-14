@@ -2318,6 +2318,23 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   `vjt` non distingue lui da noi. Leggere la regola nella forma larga fa buttare via un dato buono —
   ed e' lo stesso difetto gia' registrato qui sotto: *"«e' un'etichetta» e' una proprieta' del
   SINGOLO PORTATORE, non della classe."*
+  🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
+  2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
+  UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
+  `author.login = vjt`, letti come "parla vjt": erano di **`Hypnotize`, un utente su IRC**,
+  relayati dall'ircbot **col token di vjt**. vjt non aveva toccato il thread. Ho scritto nel
+  brief *"vjt lo classifica LANDMINE, guard in review, not a fix in this issue"* — cioe' ho
+  consegnato a una worker **una ruling che non esiste**, e l'ho pure ripetuta su
+  `#grappa-live`.
+  🥇 **La distinzione operativa, ed e' netta: le MISURE sopravvivono all'errore di
+  attribuzione** (un numero non cambia con chi l'ha preso: inset 0px, pane 417×685, shell a
+  ~393 restano); **le LETTURE, le CLASSIFICAZIONI e gli SCOPING no** — *"e' un landmine"*,
+  *"e' fuori scope"*, *"e' una inaccuratezza separata"* sono **la lettura del REPORTER**, non
+  una decisione. ⇒ **Quando citi un commento in un brief, cita il FATTO e MAI la qualifica; se
+  ti serve la qualifica, quella e' una ruling e la chiedi.**
+  🥇 *E la cura e' un ordine di correzione alla worker che dice esplicitamente **cosa NON
+  cambia** (l'ordine operativo) e **cosa cambia** (la forza della frase) — piu' la ritrattazione
+  DOVE SI E' SPARSO. Una ragione sbagliata a verbale e' peggio di nessuna ragione.*
   🔴🔴 **IL NOME DEL RAMO NON IDENTIFICA IL PANE — misurato 2026-08-30, e questa riga diceva il
   contrario.** Dispatchata la #1877 al pane **`%16`** (titolo `grappa-worker`, cioè w1 per
   l'handoff), un minuto dopo sull'host compare la worktree **`w2-1877`**. Sembrava che il lavoro
