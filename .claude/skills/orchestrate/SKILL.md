@@ -1574,6 +1574,18 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   pane **BUSY** ⇒ indicatore di coda + attributo SGR. Armare il metro sbagliato produce un `FLAT` che
   invita al re-invio, e un re-invio su un pane che ha già l'ordine in coda è la **doppia/tripla
   sottomissione** che questo file registra come danno reale.
+  🔴🔴 **QUARTA FACCIA, 2026-09-14: LA GUARDIA A RISPOSTA NOTA DEL WAITER HA ABORTITO **SUL
+  SUCCESSO**.** Avevo messo, correttamente, un controllo *"il primo giro DEVE vedere il valore
+  vecchio, altrimenti il righello è storto"* — la cura scritta due paragrafi più su. Su w2 ha dato
+  `ABORT: first read [$8.77] != OLD [$8.65]`, **e la consegna era riuscita**: la worker aveva
+  processato l'ordine nei ~5 s fra il blocco del send e il blocco del waiter.
+  🥇 **La premessa nascosta è *"il soggetto non può aver agito ancora"*, ed è vera SOLO se il waiter
+  è armato NELLO STESSO BLOCCO del send.** Armato in un blocco successivo, quel controllo
+  **squalifica esattamente il caso in cui tutto ha funzionato**, e la direzione è quella che costa:
+  un `ABORT` invita a re-inviare.
+  ⇒ **Se il waiter sta in un blocco successivo, la guardia è `first_read == OLD || first_read !=
+  OLD ⇒ MOSSO`**, cioè: un primo valore diverso **è** la prova di consegna, non un difetto di
+  strumento. La guardia "deve vedere il vecchio" si tiene solo dentro il blocco del send.
 - 🔴🔴 **UN WARNING PUO' AVERE LA FORMA DI UN ERRORE, E IN CODA A UN LOG SI LEGGE COME IL FALLIMENTO
   (misurato 25-08-2026).** `tail -3` del log di `check.sh` mostrava uno stack trace bats
   (`from function 'run' ... in test file ..., line 308`) **immediatamente sopra `rc=0`** — cioe' la
@@ -1965,6 +1977,22 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   ⚠️ Ma `infra/**` NON c'è (dei suoi file compare solo `infra/packaging/version.sh`), e `.github/**`
   nemmeno in generale: una PR che tocca SOLO `infra/packaging/credits.sh` non farebbe girare nulla.
   **Il file del workflow è il grimaldello per far gatare una cura di CI; `infra/` da solo no.**
+- 🥇🥇 **UN ROSSO PUO' VENIRE DALL'ORACOLO SBAGLIATO INVECE CHE DAL DATO: PER UNO SPOSTAMENTO
+  **FILTRANTE** LA FETTA CONTIGUA NON E' L'ORACOLO, IL MULTINSIEME SI' (orch, 2026-09-14, #2138).**
+  Verificando il rollover di `DESIGN_NOTES` (44287 righe fuori, 44280 in `design_notes/2026-08.md`)
+  ho confrontato l'archivio con la **fetta contigua** del file di partenza: `cmp` → `DIFFER` a riga
+  44205, cioe' la firma di una perdita. **Non lo era.** Il log non e' ordinato per data — `#1883c`,
+  datata **08-31**, era stata appesa **in mezzo a settembre** — quindi il mese e' un **SOTTOINSIEME
+  SPARSO**, non un intervallo, e nessuna fetta contigua puo' coincidere con esso.
+  🥇 **L'oracolo che risponde alla domanda vera** (*"e' arrivato tutto e non e' comparso niente?"*)
+  **e' il confronto a MULTINSIEME**: `comm` fra le righe CANCELLATE e le righe dell'ARCHIVIO ⇒ **0
+  inventate**, **7 "perse"** che erano la prosa del preambolo riscritta dalle righe aggiunte, cioe'
+  zero contenuto di entry perso. **Con neg ctrl DENTRO lo strumento**: iniettata una riga impossibile
+  nell'archivio, il conteggio deve passare a 1 — senza quello, lo zero non e' misurato.
+  🥇 **La regola generale: prima di leggere un rosso, chiediti se lo strumento sta assumendo
+  ORDINE o CONTIGUITA' che il dato non garantisce.** Stessa famiglia del contatore di righe che non
+  conta una grandezza stabile, vista da un'altra porta: li' il righello si muoveva, qui presuppone
+  una forma che il soggetto non ha.
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
