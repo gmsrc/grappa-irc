@@ -36,6 +36,28 @@
 // Per `feedback_cicchetto_browser_smoke`: vitest jsdom renders no banner
 // region and speaks to no ircd, so the CTCP → hold → user-topic → derivation
 // chain is exactly the class of break it cannot see.
+//
+// ## issue 2127 — what this spec covers, and the leg it CANNOT
+//
+// The spec gained the routing axis: the offer's banner mints no window
+// (#546, unchanged) while the post-accept OUTCOME is filed in the query with
+// the peer and mints that window. Both halves are visible here, and both go
+// red if the routing is put back.
+//
+// 🔴 It does NOT cover the DELIVERED link — the absolute, extension-carrying
+// `https://host/dcc_files/<slug>.<ext>` that 2127's first two defects are
+// about. That is not a coverage choice, it is not constructible: a delivered
+// row needs bytes to actually arrive, `Grappa.Dcc.Policy.admit_offer/1` runs
+// `Ssrf.safe_public_ip?/1` before an offer is held, and every address that
+// routes back to this harness is docker-private. The same wall
+// `Grappa.Session.DccConsentTest` records in its own moduledoc. The chosen
+// TEST-NET-3 address is the closest constructible thing: admitted by the
+// SSRF gate, guaranteed to answer nothing, so the transfer FAILS — which
+// exercises the post-accept routing but never mints a URL.
+//
+// So the link's shape is pinned where it is constructible (`Grappa.DccTest`,
+// `public_url/2`) and its rendering in cic's own suite. Anyone claiming the
+// tappable link is covered end to end is wrong, and this paragraph is why.
 
 import {
   dccOfferBanner,
@@ -124,21 +146,46 @@ test("a stranger's DCC SEND raises a consent banner, and refuse vs accept differ
     await expect(acceptedBanner).toHaveCount(0, { timeout: 15_000 });
 
     // ------------------------------------------------- the visible difference
-    // Both offers are placed in `$server`, so that is where the outcomes are.
-    await selectChannel(page, NETWORK_SLUG, "$server", { awaitWsReady: false });
+    // issue 2127 — the two outcomes no longer share a window, and that is the
+    // second axis this spec now carries. The OFFER still routes to `$server`
+    // (asserted above: no sidebar window existed for the peer while the
+    // banner was up, which is #546 holding). The POST-ACCEPT outcome does
+    // not: once the operator has said yes, the result of their own transfer
+    // is a conversation with that nick.
+    //
+    // So the accept MINTS the window it is filed in. Waiting for the sidebar
+    // entry is also the correct barrier — `QueryWindows.open/4` broadcasts
+    // the window list, and the server orders that broadcast AFTER the row is
+    // persisted (#422), so an entry here means the history has already
+    // landed. Budgeted above the server's 5s connect timeout.
+    const peerWindow = sidebarWindow(page, NETWORK_SLUG, peer.nick);
+    await expect(peerWindow).toHaveCount(1, { timeout: 25_000 });
+
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
 
     // The ACCEPTED file earns a row: the transfer was admitted and dialled,
     // and TEST-NET-3 answers nothing, so it reports why it did not arrive.
-    // Budgeted above the server's 5s connect timeout.
+    // It is HERE, in the query, and nowhere else.
     await expect(scrollbackLines(page).filter({ hasText: ACCEPTED_FILE })).toHaveCount(1, {
       timeout: 25_000,
     });
+
+    // And it is NOT in the home window. Asserted explicitly rather than
+    // implied by the line above: the 2127 defect was a row in the WRONG
+    // place, so "present in the right place" alone would still pass if the
+    // row were filed in both.
+    await selectChannel(page, NETWORK_SLUG, "$server", { awaitWsReady: false });
+    await expect(scrollbackLines(page).filter({ hasText: ACCEPTED_FILE })).toHaveCount(0);
 
     // The REFUSED file earns NOTHING, and this is the half that carries the
     // spec. It is asserted AFTER the accepted row has landed, so the absence
     // is a measured absence rather than a race won by checking early: the
     // refusal was issued first, and the later offer's outcome has already
-    // completed its whole round trip.
+    // completed its whole round trip. Checked in BOTH windows, because
+    // "nothing, anywhere" is the contract and a refusal that merely moved
+    // would satisfy a one-window check.
+    await expect(scrollbackLines(page).filter({ hasText: REFUSED_FILE })).toHaveCount(0);
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
     await expect(scrollbackLines(page).filter({ hasText: REFUSED_FILE })).toHaveCount(0);
   } finally {
     await peer.disconnect("2089 done");
