@@ -5,6 +5,28 @@
     "moduleResolution": "Bundler",
     "esModuleInterop": true,
     "strict": true,
+    // Aligned with ../tsconfig.json (issue 2139). This tree is 496 files /
+    // 80,920 lines against 92,421 lines of non-test src, so a flag that src
+    // pins and this file omits leaves the larger half of the client's
+    // verification surface checked more loosely than the product it drives.
+    // Measured 2026-09-14, one flag at a time against a green tree: these six
+    // cost nothing — five produced zero errors and noUnusedParameters
+    // produced exactly one, fixed in the same commit.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    // noUncheckedIndexedAccess is the SEVENTH and stays OFF, deliberately.
+    // Same measurement: enabled alone it produces 813 errors across 287 of
+    // the 496 files (58%), and 753 of those are one shape — TS2345,
+    // `string | undefined` not assignable to `string`, an index read handed
+    // straight on. The mechanical cure is a `!` at each of the 813 sites,
+    // which buys the flag's name and none of its safety while planting 813
+    // non-null assertions in a tree whose own linter treats them as a smell.
+    // Auditing those reads so the flag means something is a slice of its own,
+    // not a line in this file. Turn it on there, not here.
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "types": ["node", "@playwright/test"]

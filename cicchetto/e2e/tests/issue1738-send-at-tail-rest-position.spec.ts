@@ -251,7 +251,7 @@ test.describe("issue 1738 — a send while already at the tail (desktop, player 
     // VACUITY GUARD. The case is "the reported chrome is under the pane"; if the
     // bar took no space out of the scroller, everything below is a re-run of the
     // no-player case wearing its name.
-    const shrink = await page.getByTestId("scrollback").evaluate((el) => {
+    const shrink = await page.getByTestId("scrollback").evaluate(() => {
       const bar = document.querySelector(".audio-mini-player") as HTMLElement | null;
       if (!bar) throw new Error("the docked player is not mounted");
       return bar.getBoundingClientRect().height;
