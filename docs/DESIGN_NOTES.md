@@ -56513,3 +56513,110 @@ packages install on aarch64, and the runner-side behaviour of
 `dpkg --print-architecture` on `ubuntu-24.04-arm`. The first tag to run this is
 the first real evidence, and the audit is now honest about a half set if it
 comes back with one.
+<!-- entry #2132 -->
+
+---
+
+## 2026-09-14 — issue 2132: the projection that admitted every map, and the half a type cannot see
+
+`EventRouter` ran on a hand-written `@type state` naming five keys and
+closing with `optional(any()) => any()`. That type is inhabited by every
+map, so Dialyzer had nothing to disagree with, and #1390's drift pin — which
+guards `Session.Server`'s own two declarations against each other — said so
+in its moduledoc: the projection was the other face and nothing asserted
+anything about it.
+
+Two tools were needed, not one, and finding that out cost one demolished
+proposal.
+
+### The review's number was a grep over its own prose
+
+The architecture review (A1, parent #2118) reported **24** fields read as
+`state.<field>`, and proposed AST-walking exactly that form. An AST walk
+says **6**. Every missing name is in a COMMENT — this module documents its
+own state access in prose (`# comes from \`state.isupport\` (005-derived)…`,
+`# gated on \`state.admin_pending\``), so a grep counts the documentation.
+The review declared its own caveat, that it ran with no toolchain and every
+number was a grep; that caveat turned out to be the reason the proposed fix
+looked adequate rather than a footnote to it. Three other numbers moved too:
+5 declared keys not 4 (`optional(:ignores)` is declared, and the review
+lists `ignores` among the reads), the type is `@type state` not `@type t`,
+and `Session.Server.@type t` is 82 keys, not 71. The review's own
+enumeration — 19 names "plus the four declared" — sums to 23, contradicting
+its own 24.
+
+### Loud and silent are different bugs, and the proposal covered the loud one
+
+Measured, on a map missing the key:
+
+| form | result |
+|---|---|
+| `state.absent` | `KeyError` — LOUD |
+| `%{state \| absent: 1}` | `KeyError` — LOUD |
+| `%{absent: x} = state` | `FunctionClauseError` — LOUD |
+| `Map.get(state, :absent)` | `nil` — SILENT |
+| `Map.get(state, :absent, [])` | `[]` — SILENT, and a plausible default |
+
+The real surface is **38 keys across six forms**, and it is dominated by the
+silent one: `Map.get` is 31 distinct keys over 97 call sites, `Map.put` 8
+over 14. `state.<field>` is 6. So the proposed walk would have pinned 16% of
+the surface, and specifically the part that already crashes on its own.
+
+### What shipped: the type takes the loud half, a test takes the silent one
+
+`@type state :: Session.Server.t()` — the projection is deleted, not
+enlarged. There is now one declaration of this state in the codebase, which
+is the only version that cannot drift.
+
+The three-point measurement that chose it, renaming `whois_pending` in the
+host's `@type t` alone:
+
+| tree | Dialyzer | where |
+|---|---|---|
+| baseline, unmutated | **0** | — |
+| baseline + rename | **2** | `server.ex` only — the router is BLIND |
+| unified type + rename | **6** | + **3 in `event_router.ex`**, its three `%{state \| whois_pending: …}` sites |
+
+Three map-update sites, three errors: exact. And the same tree leaves the
+router's **seven** `Map.get(state, :whois_pending, …)` sites at **zero**
+errors — no type system sees through `Map.get`. That is the half
+`StateContractDriftTest` now pins, and it is scoped to exactly that half:
+re-asserting what Dialyzer already proves would be a second copy of a fact,
+and a second copy drifts.
+
+SUBSET, not equality: 44 of the host's 82 keys are never reached by the
+router. A key the router reaches and the host does not declare is a bug; the
+converse is none of the router's business.
+
+The two claims are asserted separately because they are different bugs. An
+undeclared **read** goes `nil` forever; an undeclared `Map.put` **injects** a
+field behind the host's contract — invisible to #1390's pin too, since such
+a key is neither declared by `@type t` nor built by the init path. One
+mutation each, and each kills exactly one assertion.
+
+### Three things worth keeping
+
+The unified type's only cost was one `@spec userinfo_text(map())` that had
+always been a supertype of what the function accepts; Dialyzer could only
+say so once `state.profile` had a real type. The warning was the mechanism
+working, not a price.
+
+The cardinality floor's first act was to fail on **my own** arithmetic: I set
+it to 33, the size of the whole `Map.*` surface, when the reads alone are 31.
+An instrument that cannot fail is not an instrument, and this one failed
+before it ever guarded anything.
+
+The negative control on `:entries` is kept although the defect it names is
+gone. The first census of this surface was a grep and it invented that key
+out of a nested `%{accum | entries: …}` inside `%{state | links_pending: …}`.
+A base-anchored AST walk cannot see it; the control asserts that property
+rather than trusting it, so a rewrite that loses the anchoring fails loudly
+instead of quietly inflating the set.
+
+### Known limit, stated rather than discovered
+
+The router walk is anchored on a variable literally named `state`. A
+function head destructuring the state map without binding it — `defp
+f(%{isupport: x})` — is invisible to it. Every destructuring site binds
+`state` today, so the exposure is real and empty; the floor catches the walk
+going blind wholesale, not one site drifting out of reach.

@@ -114,21 +114,29 @@ defmodule Grappa.Session.EventRouter do
   }
 
   @typedoc """
-  The Session.Server state subset this module reads + mutates. The
-  full Session.Server state has additional fields (`subject_label`,
-  `network_slug`, `autojoin`, `client`, etc.) — this typespec uses
-  `optional(any()) => any()` to admit them without enforcing them.
+  The host state this module runs on: `Session.Server`'s, not a projection
+  of it (issue 2132).
+
+  This used to be a hand-written five-key map closed with
+  `optional(any()) => any()`, described as "the subset this module reads +
+  mutates". It was neither. It named 5 of the 38 keys the module actually
+  reaches, and the catch-all made the type inhabited by EVERY map, so
+  Dialyzer had nothing to disagree with: renaming a field in
+  `Session.Server.@type t` produced zero errors here. Measured on that
+  rename — `whois_pending`, declaration side only — the old shape gave 2
+  errors, both in `server.ex`; naming the host's type directly gives 6, the
+  three new ones being this module's own `%{state | whois_pending: …}`
+  sites, 3 for 3.
+
+  Deriving it instead of restating it is also the only version that cannot
+  drift: there is now one declaration of this state in the codebase.
+
+  What the type still cannot see is `Map.get(state, :key)`, which returns
+  nil for an absent key and earns no warning from anybody — the same rename
+  leaves this module's seven such sites silent. That half is pinned by
+  `Grappa.Session.StateContractDriftTest`, deliberately scoped to it.
   """
-  @type state :: %{
-          # #162: optional so a bare unit-test state still routes; the filter
-          # reads it with a `[]` default. Session.Server always sets it.
-          optional(:ignores) => [Mask.compiled()],
-          required(:subject) => Session.subject(),
-          required(:network_id) => integer(),
-          required(:nick) => String.t(),
-          required(:members) => members(),
-          optional(any()) => any()
-        }
+  @type state :: Session.Server.t()
 
   @type members :: %{
           String.t() => %{String.t() => [String.t()]}
@@ -3456,7 +3464,12 @@ defmodule Grappa.Session.EventRouter do
 
   # Composes the KVIrc-shaped `Age=…; Gender=…; Location=…; Languages=…;
   # <custom>` reply text, joining only the parts that are actually set.
-  @spec userinfo_text(map()) :: String.t()
+  # The spec was `map()` until issue 2132 unified `state()` with the host's
+  # own type. `map()` was always a supertype of what this accepts — it is
+  # only fed `state.profile` — but nothing could say so while `state` was
+  # inhabited by every map. Dialyzer named it the moment the type became
+  # real, which is the mechanism working rather than a cost of it.
+  @spec userinfo_text(Session.Server.profile()) :: String.t()
   defp userinfo_text(profile) do
     [
       userinfo_part("Age", Map.get(profile, :age)),
