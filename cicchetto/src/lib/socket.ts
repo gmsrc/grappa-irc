@@ -242,7 +242,28 @@ let _socket: Socket | null = null;
 //
 // `MIN_SERVER_PROTOCOL_VERSION` stays at 9: this bundle requires nothing
 // from v22, so it still serves an older server.
-export const CLIENT_PROTOCOL_VERSION = 22;
+//
+// 23 (issue 2150) — two new user-topic push kinds for the remembered leave
+// reasons: `quit_part_reason_changed` and `auto_away_reason_changed`. Each
+// carries one `string | null` field named after its key, and `null` is a
+// VALUE — it is how "I cleared it" travels — so the key is always present.
+//
+// This bundle DOES change for it: `userTopic.ts` grows an arm per kind, and
+// each arm validates its payload against the generated schema before it
+// touches a store. That is what makes the bump load-bearing rather than
+// bookkeeping — a v23 bundle mirrors state a pre-23 server never pushes.
+//
+// 22 is not ours and the gap is deliberate: #2143 claimed it concurrently
+// and landed first, so this branch took 23 and sits one above. The number
+// must stay MONOTONIC on main — a client reading `server >= N` as "has
+// everything N had" is entitled to, and walking it backwards makes that
+// reading false forever (#1393d, the floor that lies).
+//
+// `MIN_SERVER_PROTOCOL_VERSION` stays at 9: the two arms are additive
+// pushes an older server simply never sends, and an absent push leaves the
+// stores at the value the REST read already gave them, so this bundle is
+// still served by an older server.
+export const CLIENT_PROTOCOL_VERSION = 23;
 
 // #193 — force the correct WS scheme from the page origin, absolutely.
 //
