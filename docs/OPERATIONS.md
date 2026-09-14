@@ -21,6 +21,7 @@ production runs on the pi.
 - [Hot vs cold deploy — when each path triggers](#hot-vs-cold-deploy--when-each-path-triggers)
 - [Emergency DB rollback (cold + irreversible migrations)](#emergency-db-rollback-cold--irreversible-migrations)
 - [Letting a locked-out visitor back in (#982)](#letting-a-locked-out-visitor-back-in-982)
+- [Running an identd (RFC 1413, issue 227)](#running-an-identd-rfc-1413-issue-227)
 - [CSP / security headers (BEAM-emitted, NOT nginx — #485)](#csp--security-headers-beam-emitted-not-nginx--485)
 - [The Docker compose stack (compose.yaml)](#the-docker-compose-stack-composeyaml)
 - [The two images: Dockerfile (toolchain) vs Dockerfile.release](#the-two-images-dockerfile-toolchain-vs-dockerfilerelease)
@@ -2783,6 +2784,126 @@ factor, because the identity has no first one. Therefore:
   not expect the mint to be deniable.
 * **Incognito visitors are refused (403).** An incognito session is
   deliberately non-portable (#363); there is nothing to restore.
+
+## Running an identd (RFC 1413, issue 227)
+
+When grappa opens an upstream IRC connection, the server looks the
+source port back up on `113/tcp`. With nobody answering, it falls back
+to a `~`-prefixed **unverified** username — and some server configs gate
+features on a *verified* ident, notably oper **O:lines that require
+`identd` active**, which a grappa-connected user therefore cannot match.
+Running the identd removes the `~` and satisfies those blocks.
+
+Scope is grappa's **own** outbound connections. This is not a
+general-purpose system identd, and it changes nothing on the networks
+that never ask — which is most of them today.
+
+### Turning it on
+
+Three env vars, all in `.env.example` and `compose.yaml`:
+
+```
+GRAPPA_IDENTD_ENABLED=true     # default false — nothing starts while it is off
+GRAPPA_IDENTD_PORT=10113       # default 10113 — high and unprivileged
+GRAPPA_IDENTD_BIND=::          # default :: — dual-stack, answers both families
+```
+
+With `GRAPPA_IDENTD_ENABLED` unset, `Grappa.Application` adds **no
+children at all** and the supervision tree is byte-identical to a build
+without the feature.
+
+Boot prints one line naming what it bound:
+
+```
+identd listening on :: port 10113 (32 acceptors, 2000ms wait budget)
+```
+
+A bind that fails **stops the listener with the real posix reason**
+rather than degrading to a process that is up and deaf. You asked for
+it; you get told when it could not happen.
+
+### Getting queries from 113 to that port — your job, not the release's
+
+**grappa never binds 113 and never assumes it could.** The port is a
+setting whose default is unprivileged, and bridging the gap is a
+deployment decision with two ordinary answers.
+
+**A packet-filter redirect** (preferred — no privilege anywhere):
+
+```
+# FreeBSD pf, e.g. the m42 jail's host
+rdr pass on $ext_if proto tcp from <upstream-ircds> to ($ext_if) port 113 -> port 10113
+
+# Linux nftables
+table ip nat {
+  chain prerouting {
+    type nat hook prerouting priority dstnat;
+    tcp dport 113 ip saddr @upstream_ircds redirect to :10113
+  }
+}
+```
+
+🔴 **The redirect MUST preserve the destination address.** The plain
+`rdr ... -> port N` / `redirect to :N` forms above do; a form that
+rewrites the destination (e.g. `rdr ... -> 127.0.0.1 port N`) does not,
+and the listener will answer `NO-USER` to everything. The address a
+query lands on is **half the lookup key**, because it is the address the
+ircd saw grappa connect *from*, and grappa's source addresses are plural
+and per-network.
+
+🔴 **Scope the rule to the networks you connect to, not to `any`.**
+Reachability is the flood defence here and there is no other: a refusal
+is deliberately held for the full wait budget so it cannot be timed
+apart from a hit (see below), which means anyone who can reach the port
+can keep all 32 acceptors parked. The cost of that is the `~` coming
+back, not anything worse — but it is avoidable for the price of a
+source filter.
+
+**Or, on Linux, grant the capability** — an explicit opt-in, never
+shipped:
+
+```
+# /etc/systemd/system/grappa.service.d/identd.conf
+[Service]
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+```
+
+then set `GRAPPA_IDENTD_PORT=113`. The shipped
+`infra/packaging/grappa.service` runs `User=grappa` with
+`NoNewPrivileges=true` and **no `AmbientCapabilities`**, and stays that
+way: a release that granted itself the capability would be deciding for
+you.
+
+### What it will and will not tell a querier
+
+* The answer is the session's own ident — the exact value already sent
+  as `USER <ident>` (`Grappa.IRC.Identity.effective_ident/2`, which
+  falls back to the nick). There is no identd-specific override.
+* **It answers only the peer.** A lookup is keyed on the querier's own
+  address, so a query from anyone but the far end of the connection it
+  asks about simply misses.
+* **Every refusal is the same** — `ERROR : NO-USER`, same bytes, same
+  wall clock, whether the tuple is unknown, belongs to somebody else, or
+  the query was gibberish. A reply that varied with the reason would let
+  anyone reachable enumerate grappa's idents by guessing port pairs.
+
+### If the `~` is still there
+
+In order of likelihood:
+
+1. **The network never asks.** Most do not. Measured on Azzurra: 50k
+   lines of traffic contain zero non-oper users without a `~`.
+2. **Azzurra specifically skips IPv4.** Its bahamut carries an
+   `AZZURRA`-marked branch (`src/s_auth.c:112`) that skips the ident
+   check outright for v4-mapped addresses, so the lookup can only ever
+   fire for native IPv6 clients there.
+3. **The redirect rewrote the destination address** — see the 🔴 above.
+4. **The listener never came up.** Grep the boot log for `identd
+   listening`; its absence with `GRAPPA_IDENTD_ENABLED=true` means the
+   bind failed, and the stop reason names why.
+5. **A session could not publish its tuple.** A `Logger.warning`
+   naming that session says so explicitly; it keeps its `~` for the
+   life of that connection.
 
 ## CSP / security headers (BEAM-emitted, NOT nginx — #485)
 

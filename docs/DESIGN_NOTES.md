@@ -56738,3 +56738,192 @@ collect the banner rather than quietly weaken the case.
 not WebKit and not a real Android device. The defect is plain CSS flexbox with
 no engine-specific feature in it, which is why one engine is judged sufficient
 here. That is a judgement, not a measurement, and it is written down as one.
+<!-- entry #227 -->
+
+---
+
+## 2026-09-14 — issue 227: an identd that answers only the peer, and takes the same time to refuse everybody else
+
+grappa now answers RFC 1413 ident lookups for its own outbound IRC
+connections. An ircd that gets no answer on `113/tcp` falls back to a
+`~`-prefixed unverified username, and some configs gate features on a
+verified one — oper O:lines that require `identd` active are the case that
+filed the issue. Three new modules (`Grappa.Identd` + `.Bindings`,
+`.Listener`, `.Protocol`), one new field of knowledge in `IRC.Client`, and
+a supervision group that is empty unless an operator turns it on.
+
+This is the first INBOUND socket the bouncer has ever owned:
+`:gen_tcp.listen/2` had zero occurrences under `lib/` before it, because
+everything else grappa speaks it dials out to.
+
+### The race, and why the fix is a wait rather than a pre-bound port
+
+The ircd starts its ident lookup when it ACCEPTS — the same instant
+`:gen_tcp.connect/4` returns on our side — so the query can arrive before
+we have written down which tuple it belongs to. A cold `NO-USER` is not a
+missed optimisation; it is exactly the failure that leaves the `~` in
+place, which is the whole of what the slice was for.
+
+Two shapes could close it. Bind an explicit local `port:` BEFORE
+connecting, so the mapping is known up front; or register after the
+connect from `:inet.sockname/1` and let the identd wait briefly on a miss.
+We took the second, on three grounds that are properties of THIS codebase
+rather than preferences:
+
+  * **The source address is not knowable before the connect on the common
+    path.** `resolve_and_ifaddr/1` returns `{[], :inet}` when there is no
+    v6 pool — no `ifaddr`, kernel-default selection. Pre-binding a port
+    would pin only half the key; pinning the other half means binding an
+    explicit source address on every upstream connect, which changes
+    production egress to satisfy a subsystem that is off by default.
+  * **The peer address is not fixed before the connect either.** #271
+    rotates over the resolved leaf set, so a tuple registered ahead of the
+    dial can name a leaf that then fails — a lie in the table rather than
+    a gap in it.
+  * **Claiming an ephemeral port races the kernel's allocator.** That
+    means `EADDRINUSE` retries and `reuseaddr` on every session's outbound
+    socket: real blast radius bought for an optional feature.
+
+`:inet.sockname/1` after the connect is exact, is all four elements at
+once, and costs a bounded wait that is only ever paid on a miss. The
+budget is 2s — three orders above the real race (the scheduling gap
+between `connect/4` returning and the cast landing) and comfortably under
+the ident timeouts ircds use (solanum's `ident_timeout` defaults to 5s).
+
+### The querier is IN the key, so answering the wrong host is unrepresentable
+
+The obvious shape is: look the port pair up, then compare the entry's
+`peer_ip` against whoever is asking. We did not write that. The lookup key
+is `{source_ip, local_port, peer_ip, peer_port}` and the `peer_ip` slot is
+filled from the QUERIER's own address, so a query from anybody but the far
+end of the connection it asks about simply misses.
+
+The difference is not stylistic. A comparison is a branch, and a branch is
+a thing a later reader can simplify away or an early `return` can skip;
+the key's shape is not. It also collapses the two failure modes the
+anti-enumeration property depends on — wrong querier and unknown tuple —
+into literally one code path, so they cannot drift apart.
+
+The source ADDRESS is in the key for a separate reason: grappa's sources
+are plural and per-network (`client.ex` binds a fixed `ifaddr` or rolls a
+v6-pool entry), so two sessions can legitimately hold the same ephemeral
+port on two different addresses. The price is a deployment constraint,
+documented: a 113→N redirect must PRESERVE the destination address, which
+the plain `rdr … -> port N` / `redirect to :N` forms do.
+
+### Uniform in bytes AND in wall clock
+
+Every refusal is `<p1> , <p2> : ERROR : NO-USER`, byte for byte, whatever
+caused it. `Bindings.lookup/2` already parks a miss for the wait budget
+and `Listener.refuse/4` tops up anything faster to the same figure, so a
+tuple that exists but belongs to somebody else, a tuple that does not
+exist, and a query too malformed to name one all take the same time too.
+
+That second half is not decoration. Identical bytes with a fast path for
+"this tuple exists" re-opens by the clock precisely the enumeration the
+identical bytes closed: an attacker learns which port pairs are live by
+timing, and a live pair is a session to keep probing. The one fast path
+left is the genuine hit for the genuine peer.
+
+`listener_test.exs` pins it with three probes on a FIXED port pair —
+nothing registered, the tuple registered to an off-path peer, then the
+same tuple registered to the host actually asking. Holding the pair still
+is what lets the two refusals be compared byte for byte instead of by
+shape, and the third probe is the positive control: without it,
+byte-equality is also satisfied by a listener that answers nobody. The
+plausible weakening it is built to catch — dropping the querier from the
+key — turns the first assertion red by leaking the ident to the wrong
+host.
+
+### One error type, deliberately not the RFC's four
+
+RFC 1413 offers `INVALID-PORT`, `NO-USER`, `HIDDEN-USER` and
+`UNKNOWN-ERROR`. We emit only `NO-USER`, per the issue's ruling. A reply
+that varies with WHY is the oracle; the distinction buys an operator
+nothing the logs do not. A query too malformed to yield ports is answered
+`0 , 0 : ERROR : NO-USER` — `0` is not a legal port, so the line can never
+be read as an answer about a real connection.
+
+The ports in a reply are re-rendered from the PARSED INTEGERS and never
+echoed as bytes. The reply is a single CRLF-framed line, which is what
+makes an unvalidated byte an injection rather than a cosmetic defect.
+
+### `safe_userid?/1` is NOT `valid_ident?/1`, on purpose
+
+The obvious reuse is to gate the binding on
+`Grappa.IRC.Identifier.valid_ident?/1`, the predicate the USER line's
+ident already passed. It is the wrong predicate here, and using it would
+have been a silent feature hole: an ident that was never set falls back to
+the NICK (`Identity.effective_ident/2`), and a nick may carry RFC-2812
+punctuation — `foo[1]`, `a|b` — that `valid_ident?/1` refuses. Those
+sessions would have been registered nowhere and kept their `~` with
+nothing but a log line to say so.
+
+The identd's job is to name the value already on the wire, whatever shape
+it has. The only thing it may refuse is a value that would corrupt its own
+framing: CR, LF, NUL, the field-delimiting colon, the empty string, and
+the format's 512-octet ceiling. That rule lives in the module whose wire
+it protects, and it is checked at the moment a binding is WRITTEN, so an
+unsafe value never reaches a table the reply path can read from.
+
+### Off by default, and the release grants itself nothing
+
+The ruling, in code. `identd_children/0` returns `[]` unless
+`GRAPPA_IDENTD_ENABLED` is set, so the supervision tree is byte-identical
+to a build without the feature. The port is `GRAPPA_IDENTD_PORT` and its
+default is high and unprivileged; nothing hardcodes 113 or assumes it can
+bind it. Bridging 113 to that port is a packet-filter redirect or a Linux
+`CAP_NET_BIND_SERVICE` grant, and `infra/packaging/grappa.service` keeps
+`User=grappa` + `NoNewPrivileges=true` with no `AmbientCapabilities`.
+
+`GRAPPA_IDENTD_BIND` (default `::`, dual-stack via `ipv6_v6only: false`)
+is a third knob rather than a constant because a host that cannot do
+dual-stack needs `0.0.0.0` and an operator whose redirect lands on
+loopback wants to say so. A bind that fails stops the listener with the
+real posix reason — an opt-in feature that cannot start should say so, not
+run deaf.
+
+The three children sit before the Endpoint because a session publishes its
+binding on connect and the REST connect door is the earliest one; a cast
+into a not-yet-started table is silently dropped, and that session would
+keep its `~` for the life of the connection.
+
+### Registration is a cast, and that is a contract
+
+`IRC.Client` publishes its tuple with `GenServer.cast/2`. A call would
+block the connect path on an optional subsystem and EXIT the Client if
+that subsystem were wedged — trading a missing `~` fix for a dropped IRC
+session. The same property is the off switch: with identd disabled the
+process does not exist, and a cast to an unregistered name is a no-op, so
+no caller needs to know. The cost is that a rejected ident cannot be
+reported to the caller; `Bindings` logs it instead, which is where the
+knowledge of the wire lives anyway.
+
+### What is NOT measured, said out loud
+
+  * **The dual-stack bind is exercised by no test.** The suite binds
+    `127.0.0.1` so the accepted socket's family is deterministic on every
+    host it runs on; the v4-mapped normalisation a `::` bind needs is
+    pinned as a pure unit test on `unmap_v4/1` instead. The listen call
+    itself, on a real dual-stack socket, is unverified here.
+  * **Nothing proves the feature changes anything on Azzurra.** Item 7 of
+    the issue holds: `DO_IDENTD` is rewritten by the build's `config`
+    script so the source tree cannot answer whether the check runs, the
+    lookup additionally needs `@` in the I:line, and an `AZZURRA`-marked
+    branch (`src/s_auth.c:112`) skips it outright for v4-mapped addresses
+    — so even where it fires it can only fire for native IPv6. The
+    empirical reading (50k lines, zero non-oper users without a `~`) is
+    consistent with the check being off AND with it being on with nobody
+    answering. This slice makes grappa answerable; it does not
+    demonstrate that anyone asks.
+  * **The listener is not flood-proof and no mechanism here makes it so.**
+    Because every refusal is held for the full budget, anyone who can
+    reach the port can keep all 32 acceptors parked. The cost is the `~`
+    coming back, not anything worse, and the mitigation is reachability:
+    scope the redirect rule to the upstream networks rather than `any`.
+    A per-source rate limit was considered and declined — it is a second
+    mechanism guarding a degradation that equals the pre-227 baseline.
+  * **A crash of `Bindings` loses every binding.** Live sessions then get
+    `NO-USER` until they reconnect. Re-deriving the table would mean
+    reaching into every Client's socket from outside it, which is a
+    bigger structure than the failure it insures.
