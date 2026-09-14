@@ -713,7 +713,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       "presence_filter" => %{},
       "show_bottom_bar" => true,
       "strip_formatting" => false,
-      "show_event_badge" => false
+      "show_event_badge" => false,
+      "bold_mentions" => true
     }
   end
 
@@ -769,6 +770,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
                "colored_nicklist" => true,
                "presence_filter" => %{"libera #bofh" => "hide"},
                "show_bottom_bar" => true,
+               "bold_mentions" => true,
                "strip_formatting" => false,
                "show_event_badge" => false
              }
@@ -868,6 +870,34 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
       assert %{"display_prefs" => returned} = json_response(conn, 200)
       assert returned["strip_formatting"] == false
+    end
+
+    # issue 2167 — the seventh key through the HTTP door, and the non-default
+    # side is `false` here because this default is TRUE (the bold exists
+    # today). Same trap as #2029's above, mirrored: a payload that carried the
+    # key and normalised it away would pass every other test in this block,
+    # and the operator would watch the bold come back on the next load.
+    test "200 + round-trips bold_mentions: false", %{conn: conn, user: user} do
+      body = %{"display_prefs" => Map.put(default_display_prefs_wire(), "bold_mentions", false)}
+
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"display_prefs" => returned} = json_response(conn, 200)
+      assert returned["bold_mentions"] == false
+      assert UserSettings.get_display_prefs({:user, user.id}).bold_mentions == false
+    end
+
+    # The absence tolerance, for the seventh key. `deploy-m42.sh --cic` can
+    # ship a bundle ahead of the server or leave an old tab open, so a body
+    # without this key must not 422 — that would break that tab's OTHER
+    # display toggles — and must read back as the bold-ON default.
+    test "200 for a body with no bold_mentions", %{conn: conn} do
+      body = %{"display_prefs" => Map.delete(default_display_prefs_wire(), "bold_mentions")}
+
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"display_prefs" => returned} = json_response(conn, 200)
+      assert returned["bold_mentions"] == true
     end
 
     test "PUT response carries persisted:true", %{conn: conn} do

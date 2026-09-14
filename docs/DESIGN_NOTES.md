@@ -14300,6 +14300,21 @@ touch points, and both are silent when wrong:
   impossible to turn on from a second device — the exact cross-device failure
   #449 exists to end, reintroduced by one character.
 
+### The key set has SEVEN homes, and the coordinator's moduledoc lists four
+
+`displayPrefs.ts` warns that a new key has four touch points. True of the
+runtime code, and it under-counts the work: the **tests** enumerate the whole
+wire map in places the context's own suite does not reach. A scoped
+`scripts/test.sh test/grappa/user_settings_display_prefs_test.exs` was GREEN
+here while `scripts/check.sh` was RED on three assertions in the display-prefs
+CONTROLLER test, which spells the map out twice.
+
+The census, for whoever adds the eighth key —
+`grep -rn show_event_badge lib/ test/ cicchetto/src/` names every site (seven
+files at the time of writing). Run it up front; do not discover the next one
+from a red gate. Generalises past this key: **a scoped green over the module
+you changed is not evidence about a map that several files restate.**
+
 Eleven mutants, each killing exactly what it should — eight on cic, three on
 the server, every one sha-verified as applied before the run and sha-verified
 as restored after it. The one worth naming is the COLLAPSE mutant: routing
