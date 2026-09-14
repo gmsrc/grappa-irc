@@ -370,6 +370,7 @@ import { channelKey } from "../lib/channelKey";
 import { deleteAccountBody } from "../lib/lifecycle";
 import { NOTIFICATION_SOUNDS } from "../lib/notificationSound";
 import { SHARE_SESSION_LABEL } from "../lib/shareModal";
+import { VIDEO_PROCESSING_LABEL } from "../lib/videoProcessing";
 import SettingsDrawer from "../SettingsDrawer";
 
 const wrap = (open: boolean, onClose = vi.fn()) =>
@@ -1344,22 +1345,25 @@ describe("SettingsDrawer (issue 2157 — video processing switch)", () => {
     localStorage.clear();
   });
 
-  it("renders the toggle CHECKED on a browser that has never touched it", () => {
+  it("renders the toggle UNCHECKED on a browser that has never touched it (issue 2173)", () => {
     wrap(true);
     openSub("general-settings-entry");
     const toggle = screen.getByTestId("video-processing-toggle") as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
+    expect(toggle.checked).toBe(false);
   });
 
-  it("reflects a stored OFF", () => {
-    localStorage.setItem("cicchetto.videoProcessing", "false");
+  it("reflects a stored ON", () => {
+    localStorage.setItem("cicchetto.videoProcessing", "true");
     wrap(true);
     openSub("general-settings-entry");
-    expect((screen.getByTestId("video-processing-toggle") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId("video-processing-toggle") as HTMLInputElement).checked).toBe(true);
   });
 
   it("writes DEVICE-LOCAL: localStorage moves and no server write is made", async () => {
     const orch = await import("../lib/uploadOrchestrator");
+    // Seeded ON so the click under test is the OFF write — the direction that
+    // actually disables the transcode, and the one worth proving stays local.
+    localStorage.setItem("cicchetto.videoProcessing", "true");
     wrap(true);
     openSub("general-settings-entry");
     const toggle = screen.getByTestId("video-processing-toggle");
@@ -1376,12 +1380,27 @@ describe("SettingsDrawer (issue 2157 — video processing switch)", () => {
     expect(orch.saveUploadConfirmEnabled).not.toHaveBeenCalled();
   });
 
-  it("turns back ON", () => {
-    localStorage.setItem("cicchetto.videoProcessing", "false");
+  // From the shipped default, not from a seeded OFF: since #2173 that IS the
+  // state every new browser is in, so this is the opt-IN an operator who hits
+  // the over-cap refusal performs.
+  it("turns ON from the default", () => {
     wrap(true);
     openSub("general-settings-entry");
     fireEvent.click(screen.getByTestId("video-processing-toggle"));
     expect(localStorage.getItem("cicchetto.videoProcessing")).toBe("true");
+  });
+
+  // #2173 option A — the orchestrator's over-cap refusal QUOTES this label so
+  // the operator is sent to a control they can actually find. Same shape, and
+  // the same reason, as SHARE_SESSION_LABEL above: two surfaces rendering one
+  // name from one constant is the only arrangement in which they cannot come
+  // to disagree. This pins the checkbox half; the refusal half is pinned in
+  // uploadOrchestrator.test.ts, also against the constant.
+  it("labels the switch with the exported name the over-cap refusal quotes", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const label = screen.getByTestId("video-processing-toggle").closest("label");
+    expect(label).toHaveTextContent(VIDEO_PROCESSING_LABEL);
   });
 
   // The copy has to price the switch, not just describe it: off means big

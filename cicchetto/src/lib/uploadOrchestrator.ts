@@ -24,7 +24,7 @@ import {
 // lands in a lazy chunk, off the cold-start main bundle (Task 6
 // quality-review follow-up, landed with Task 7, 2026-06-09).
 import { MAX_DURATION_SECONDS, probeDuration } from "./videoPolicy";
-import { getVideoProcessingEnabled } from "./videoProcessing";
+import { getVideoProcessingEnabled, VIDEO_PROCESSING_LABEL } from "./videoProcessing";
 
 // Upload orchestration — images cluster I-2 (2026-05-15), generalized
 // to video + document categories (uploads cluster Task 5, 2026-06-09;
@@ -431,6 +431,26 @@ function unsupportedTypeMessage(host: UploadHost): string {
   return `Unsupported file type — supported: ${exts.join(", ")}.`;
 }
 
+// issue 2173 — the recourse clause the cap refusal carries, or "" when there
+// is none. #2157 shipped the transcode switch ON; #2173's ruling turned it
+// OFF, and the cost the ruling accepts is that an operator who never touched
+// the switch meets a refusal where they used to get an upload. This is how
+// that cost is paid (the issue's option A): the ONE message they see names
+// the control that would have fixed it.
+//
+// Both conditions are load-bearing, and each has a negative control in
+// uploadOrchestrator.test.ts. Off the video category the switch does nothing,
+// so the advice would be a dead end; with the switch already ON the transcode
+// has run and still failed to get under the cap, so the advice would be a
+// lie. In both cases the plain cap copy is the honest one.
+//
+// The label comes from `videoProcessing.ts`, never retyped here — the whole
+// value of a pointer is that it points at something findable under that name.
+function overCapRecourse(category: UploadCategory): string {
+  if (category !== "video" || getVideoProcessingEnabled()) return "";
+  return ` Turn on "${VIDEO_PROCESSING_LABEL}" in Settings to compress it first.`;
+}
+
 // Single category-dispatched pipeline (uploads cluster Task 5):
 // categoryOf → host accept gate → transform hook → per-category cap →
 // upload → emoji-prefixed PRIVMSG. async so the Task 6 video transcode
@@ -499,7 +519,7 @@ async function dispatchUpload(
       loaded: 0,
       total: 0,
       phase: "uploading",
-      error: `File is too large (max ${formatBytes(cap)}).`,
+      error: `File is too large (max ${formatBytes(cap)}).${overCapRecourse(category)}`,
     });
     return;
   }

@@ -107,7 +107,11 @@ import {
   uploadTtlSecondsValue,
 } from "../lib/uploadOrchestrator";
 import * as userSettings from "../lib/userSettings";
-import { setVideoProcessingEnabled, VIDEO_PROCESSING_STORAGE_KEY } from "../lib/videoProcessing";
+import {
+  setVideoProcessingEnabled,
+  VIDEO_PROCESSING_LABEL,
+  VIDEO_PROCESSING_STORAGE_KEY,
+} from "../lib/videoProcessing";
 
 const slug = "freenode";
 const channel = "#a";
@@ -616,6 +620,11 @@ describe("category dispatch", () => {
   beforeEach(() => {
     localStorage.setItem("image-upload-privacy-acknowledged:test-host", "1");
     vi.mocked(activeHost).mockReturnValue(categoryHost());
+    // issue 2173 — the switch now defaults OFF, so the transcode path has to
+    // be ASKED for. Setup, not a weakened assert: the one video test in this
+    // block is about where a transcoded clip is ROUTED, which presupposes a
+    // transcode. The default itself is pinned in the 2157/2173 block below.
+    setVideoProcessingEnabled(true);
   });
 
   it("document upload → host.upload called + 📄-prefixed PRIVMSG", async () => {
@@ -752,6 +761,13 @@ describe("video transcode branch", () => {
     localStorage.setItem("image-upload-privacy-acknowledged:test-host", "1");
     vi.mocked(activeHost).mockReturnValue(categoryHost());
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // issue 2173 — the switch now defaults OFF, so every test in this block
+    // that exercises the TRANSCODE has to ask for it. This is setup, not an
+    // assertion weakened to reach green: the subject of those tests is what
+    // the transcode branch does, and with the switch off there is no branch
+    // to describe. The tests that pin the DEFAULT remove the key again and
+    // say so.
+    setVideoProcessingEnabled(true);
   });
 
   afterEach(() => {
@@ -994,15 +1010,33 @@ describe("video transcode branch", () => {
   // The lazy-chunk half of the claim — that the mediabunny `import()` itself
   // never happens — cannot be measured here (thirty tests above have already
   // warmed the module registry) and lives in uploadVideoChunk.test.ts.
+  //
+  // issue 2173 — the default flipped ON → OFF, so "off" is now the state a
+  // browser arrives in rather than one it has to be put into. Two things
+  // follow and both are asserted below: the untouched browser uploads the
+  // original, and the over-cap refusal — which the untouched browser now
+  // reaches on the FIRST clip it sends — names the switch that would have
+  // shrunk it (option A of the issue's two ways to not pay the cost).
   // ------------------------------------------------------------------
 
-  it("2157: the switch defaults ON — a browser that never touched it still transcodes", async () => {
-    // beforeEach clears localStorage, so this is a genuinely untouched browser.
+  it("2173: the switch defaults OFF — a browser that never touched it does NOT transcode", async () => {
+    // This block's beforeEach turns the switch ON for the transcode tests, so
+    // the untouched browser has to be rebuilt here — and ASSERTED, not
+    // assumed: a genuinely untouched browser is one where the key is absent.
+    localStorage.removeItem(VIDEO_PROCESSING_STORAGE_KEY);
     expect(localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY)).toBeNull();
+    const clip = videoClip();
+    vt.probeDuration.mockResolvedValue(30);
 
-    triggerUploadConfirmed(key, slug, channel, videoClip());
+    triggerUploadConfirmed(key, slug, channel, clip);
 
-    await awaitTranscodeStart(1);
+    // Referential: the untouched browser sends the very File the picker gave
+    // it. "No transcode" is asserted on the outcome (the original reached the
+    // host) as well as on the counter, so a transcode that ran and happened to
+    // return an identical-looking File could not pass this.
+    await vi.waitFor(() => expect(pendingResolvers.length).toBe(1));
+    expect(pendingResolvers[0]?.file).toBe(clip);
+    expect(vt.transcodes).toHaveLength(0);
   });
 
   it("2157: OFF — transcodeVideo is never called and the ORIGINAL is dispatched", async () => {
@@ -1052,17 +1086,65 @@ describe("video transcode branch", () => {
     expect(pendingResolvers).toHaveLength(0);
   });
 
-  it("2157: OFF — an over-cap original is still rejected by the downstream cap check", async () => {
+  it("2173: OFF — the over-cap refusal NAMES the switch that would have shrunk it", async () => {
     setVideoProcessingEnabled(false);
     vt.probeDuration.mockResolvedValue(30);
 
-    // 6MB against categoryHost's 5MB video cap. With the transcode gone there
-    // is no "processing failed (reason)" to name — the plain cap copy is the
-    // honest one, because nothing failed: the file is simply too big to send.
+    // 6MB against categoryHost's 5MB video cap. This is the cost #2173's
+    // ruling accepts, and option A is how it is paid: with the transcode off
+    // the refusal is the FIRST and ONLY thing the operator sees, so it has to
+    // carry the recourse. Nothing failed — the clip is simply too big and the
+    // one mechanism that would have fixed it is switched off.
     triggerUploadConfirmed(key, slug, channel, videoClip(6 * 1024 * 1024));
 
-    await vi.waitFor(() => expect(uploadState(key)?.error).toBe("File is too large (max 5 MB)."));
+    // Built from the production constant, never retyped: the label the
+    // message quotes and the label the checkbox renders are one string, and a
+    // test that retyped it would keep passing after they drifted apart.
+    await vi.waitFor(() =>
+      expect(uploadState(key)?.error).toBe(
+        `File is too large (max 5 MB). Turn on "${VIDEO_PROCESSING_LABEL}" in Settings to compress it first.`,
+      ),
+    );
     expect(vt.transcodes).toHaveLength(0);
+    expect(pendingResolvers).toHaveLength(0);
+  });
+
+  // ── the two negative controls for the hint above ──────────────────────
+  //
+  // A hint that appears on every over-cap refusal is not a hint, it is noise
+  // — and worse, it is WRONG advice in both cases below. These are what
+  // makes the assertion above mean "named because it is actionable" rather
+  // than "named because the string is unconditional".
+
+  it("2173: ON — an over-cap TRANSCODED clip gets the plain copy, with no switch to suggest", async () => {
+    // The switch is already on (this block's beforeEach), the transcode ran
+    // and still could not get under the cap. Telling the operator to turn on
+    // the thing that just failed them would be a lie.
+    triggerUploadConfirmed(key, slug, channel, videoClip());
+    await awaitTranscodeStart(1);
+    vt.transcodes[0]?.resolve({
+      ok: new File([new Uint8Array(6 * 1024 * 1024)], "clip.mp4", { type: "video/mp4" }),
+    });
+
+    await vi.waitFor(() => expect(uploadState(key)?.error).toBe("File is too large (max 5 MB)."));
+    expect(uploadState(key)?.error).not.toMatch(/Settings/);
+    expect(pendingResolvers).toHaveLength(0);
+  });
+
+  it("2173: an over-cap IMAGE gets the plain copy — the switch does not touch images", async () => {
+    setVideoProcessingEnabled(false);
+
+    // 2MB against categoryHost's 1MB image cap. The transcode is video-only,
+    // so the recourse it offers does not exist for this file.
+    triggerUploadConfirmed(
+      key,
+      slug,
+      channel,
+      new File([new Uint8Array(2 * 1024 * 1024)], "shot.png", { type: "image/png" }),
+    );
+
+    await vi.waitFor(() => expect(uploadState(key)?.error).toBe("File is too large (max 1 MB)."));
+    expect(uploadState(key)?.error).not.toMatch(/Settings/);
     expect(pendingResolvers).toHaveLength(0);
   });
 

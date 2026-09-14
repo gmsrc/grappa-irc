@@ -7,43 +7,48 @@ import {
 } from "../lib/videoProcessing";
 
 // issue 2157 — the device-local switch for cic's client-side video transcode.
-//
-// Default ON is load-bearing: the transcode is the only thing that shrinks an
-// over-cap clip to fit, so a browser that has never been told otherwise must
-// keep doing it. The three tests below are the whole contract; the ORCHESTRATOR
-// consequences (no transcodeVideo call, no lazy-chunk fetch, the duration
-// ceiling still binding) live in uploadOrchestrator.test.ts and
-// uploadVideoChunk.test.ts.
+// issue 2173 — the default moved ON → OFF (owner's ruling), and the READ
+// spelling moved with it, from the `v !== "false"` family (showBottomBar.ts)
+// to the `v === "true"` family (colorNicklist.ts / eventBadge.ts /
+// hideNextActive.ts). The two are not interchangeable: they disagree on every
+// value that is neither "true" nor "false", and that disagreement is the
+// difference between "a corrupt value transcodes" and "a corrupt value does
+// not". The ORCHESTRATOR consequences (no transcodeVideo call, no lazy-chunk
+// fetch, the duration ceiling still binding, the over-cap copy) live in
+// uploadOrchestrator.test.ts and uploadVideoChunk.test.ts.
 
 describe("videoProcessing (issue 2157 — device-local switch)", () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it("defaults ON when the key was never written", () => {
-    expect(getVideoProcessingEnabled()).toBe(true);
+  it("defaults OFF when the key was never written (issue 2173)", () => {
+    expect(getVideoProcessingEnabled()).toBe(false);
   });
 
   it("round-trips through localStorage under the cic-namespaced key", () => {
-    setVideoProcessingEnabled(false);
-    expect(localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY)).toBe("false");
-    expect(getVideoProcessingEnabled()).toBe(false);
-
     setVideoProcessingEnabled(true);
     expect(localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY)).toBe("true");
     expect(getVideoProcessingEnabled()).toBe(true);
+
+    setVideoProcessingEnabled(false);
+    expect(localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY)).toBe("false");
+    expect(getVideoProcessingEnabled()).toBe(false);
   });
 
-  // The read is deliberately NOT `stored === "true"` — the shape colorNicklist
-  // uses. That shape is right for an OFF-default pref, where garbage falling to
-  // `false` lands on the default anyway. Here the default is ON, so the same
-  // spelling would let a corrupt value silently DISABLE the only mechanism that
-  // shrinks an over-cap clip. Only the exact string "false" turns it off.
-  it("a corrupt stored value falls back to the default (ON), never to OFF", () => {
-    localStorage.setItem(VIDEO_PROCESSING_STORAGE_KEY, "yes-please");
-    expect(getVideoProcessingEnabled()).toBe(true);
-
-    localStorage.setItem(VIDEO_PROCESSING_STORAGE_KEY, "");
-    expect(getVideoProcessingEnabled()).toBe(true);
+  // THE discriminating test for the new spelling, and the one the old code
+  // would fail. With the default OFF the thing that must not happen is a
+  // value nobody deliberately wrote turning the transcode ON — and that is
+  // exactly what the previous reader (`stored === "false" ? false :
+  // DEFAULT_ON`) and the showBottomBar-family mutant (`v !== "false"`) both
+  // do: every string below is "not false", so both answer ON.
+  //
+  // "TRUE" is in the list on purpose: it kills a case-insensitive mutant,
+  // which no other case here would.
+  it('a value that is not the literal "true" reads OFF, never ON', () => {
+    for (const corrupt of ["yes-please", "", "1", "TRUE", "on", "null"]) {
+      localStorage.setItem(VIDEO_PROCESSING_STORAGE_KEY, corrupt);
+      expect(getVideoProcessingEnabled()).toBe(false);
+    }
   });
 });
