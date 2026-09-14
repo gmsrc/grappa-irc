@@ -13763,3 +13763,111 @@ Three mutants were run against the new tests and all three were killed:
 timestamp group removed (6 red), sigil group removed (6 red), and the
 head widened to accept anything (9 red, including two PRE-EXISTING
 tests).
+<!-- entry #2159 -->
+
+---
+
+## 2026-09-14 — issue 2159: the trigger the instrument could see and the writer could not
+
+An iPadOS Split View pane drag left cicchetto's shell painted at roughly half
+the pane, with a dead band below the window bar and no keyboard on screen.
+Reported by Hypnotize with numbers rather than pictures — iPadOS 26.7, iPad
+Pro 11, installed PWA, narrow multitasking pane.
+
+### The diagnosis was settled by measurement, not by hypothesis
+
+Two readings did it. All four `env(safe-area-inset-*)` are **0px**, in Safari
+and in the installed PWA both, which kills the oversized-inset hypothesis
+outright: there is no inset to be oversized. And in the very pane whose
+screenshots show the shell at **~393 px**, the probe reads
+`documentElement.client` = **417 x 685** with `100dvh` = **685px** and
+`visualViewport`, `window.inner` and `documentElement.client` mutually
+consistent. The viewport is fully there and correctly reported at the moment of
+measurement. The shell is painted against an older, smaller `--vh`.
+
+So the input is right whenever it is read, and the defect is that nothing reads
+it: a Split View resize backgrounds nothing, so `visibilitychange`, `pageshow`
+and `focus` — the three triggers #649/#654 added for exactly this shape of
+failure — never fire.
+
+### The evidence that fixed the SHAPE came from this repo, not from the report
+
+The issue proposed window `resize` routed through the existing `writeAndSettle`
+and explicitly marked it *not ruled*. What promoted it from a suggestion to the
+obvious answer is a census of the tree: **four production modules already pair
+`window.addEventListener("resize", …)` with
+`window.visualViewport?.addEventListener("resize", …)`** — `ScrollbackPane`
+(#360), `RailActions` (#588), `AdminDebugTab` and `DiagFloat` (#1791) — and
+`viewportHeight.ts` was the only one listening to the visual viewport alone.
+
+`DiagFloat` is the sharp end of that. It exists to sample the geometry at the
+instants this writer settles at, and it listens to both events. **The
+instrument built to observe the writer could see a window resize the writer
+itself was deaf to.** That asymmetry is visible entirely on-repo, without an
+iPad, and it is the strongest argument the slice has.
+
+### `writeAndSettle`, not the one-shot the sibling handler uses
+
+The new trigger is a FOURTH caller of the existing settle helper, not a new
+mechanism and not a second writer — the rule this module has already produced
+three bug reports from when broken. It matters that it is `writeAndSettle` and
+not `writeViewport`: WebKit can settle the pane geometry AFTER the event that
+announced it, and a read at event time latches the pre-settle height. That is
+precisely the shape of the `visualViewport` resize handler this module already
+had, which is why adding a one-shot window handler would have reproduced the
+bug on a second event.
+
+Mutation is what separates those two lines. **M2** — keep the trigger, make it
+one-shot — kills exactly ONE test, the settle test; every other test in the
+file stays green because behaviour is otherwise unchanged. No other mutant
+distinguishes them.
+
+A second mutant earned a better test. **M3b** — shorten the settle schedule to
+its first re-read — SURVIVED the first version of that test, because the test
+let the corrective height land before the 100ms re-read ran. WebKit's
+pane-settle delay is not a number anyone here has measured, so the property
+worth defending is *"a correction arriving late is still caught"*, not *"it
+arrives within 100ms"*. The test now lands the settle after the first re-read
+has already seen the stale height, and M3b dies with M2 and M3.
+
+### Two adjacent things, measured and declared rather than cured
+
+**The 9px PWA gap is a different defect.** In the installed app
+`visualViewport.height` (676) is 9 px shorter than
+`documentElement.clientHeight` (685), and `100dvh` follows the DOCUMENT — so
+`--vh`, written from `vv.height`, is born 9 px short of its own
+`var(--viewport-height, 100dvh)` fallback even when the tracker runs. It is not
+the same cause and the distinction is mechanical, not a judgement: a stale
+height is a value from an earlier TIME and a later re-read cures it; those 9 px
+are a value from a different SOURCE at the same instant, and no schedule closes
+a constant offset. They are also 9 px of a ~292 px deficit, so they cannot
+account for the report. A test pins that the new trigger writes `vp.height`
+verbatim, so the slice can neither introduce nor hide the gap.
+
+**`100lvh` has no consumer to guard.** `lvh` measures the SCREEN, not the
+window — 777 px against a 676 px pane — so it would overshoot badly in
+multitasking. A census of the whole `cicchetto/` tree (ts, tsx, css, html,
+json; excluding `node_modules` and `dist`) finds **zero** occurrences, in code
+and in comments alike, with a positive control that matches `100lvh` and a
+negative control that correctly rejects `dvh`/`svh`. cic's fallback is `100dvh`
+throughout and reads correctly. Nothing to guard, so nothing was added.
+
+The census tool's first version reported zero for the wrong reason and its own
+duplicate self-test caught it: `\blvh\b` cannot match `100lvh`, because the
+character before `l` is a digit and there is no word boundary there. A tool
+that answers "zero" when it can see nothing is indistinguishable from a tool
+that answers "zero" because there is nothing — which is why the controls live
+inside the instrument and it prints no counts when one fails.
+
+### What this entry does NOT claim
+
+The fix is not verified on a device; it ships and gets dogfooded, per the
+standing rule that a real-device check does not block. No e2e asserts it
+either, and that is a limit rather than an omission: Playwright's
+`setViewportSize` is an atomic, already-settled resize that fires
+`visualViewport` `resize` too, so the existing one-shot handler already answers
+it — an e2e written against this harness would be green before the fix as well
+as after. The two conditions that create the bug, a pane resize that the visual
+viewport does not announce and a geometry that settles after the event, have no
+primitive in the harness that produces them. Zero of the twenty existing specs
+that touch `--vh` assert it after a resize.
