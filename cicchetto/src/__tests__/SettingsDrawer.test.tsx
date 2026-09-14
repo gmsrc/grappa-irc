@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { allRules, ruleBody, selectorList } from "./helpers/themeCss";
 
 vi.mock("@solidjs/router", () => ({
   useNavigate: () => vi.fn(),
@@ -2536,8 +2537,13 @@ describe("SettingsDrawer — auto-away debounce (#348)", () => {
 // are the same state on the server, so cic must post the empty box rather
 // than skip the call — a control that did nothing on an empty field would
 // leave the user unable to remove a message they had set.
+//
+// issue 2181 moved the TRIGGER and nothing else: the `save` buttons are gone
+// and both fields commit on blur, with Enter as the keyboard commit, the way
+// the notification allow-lists already did. The four cases above are asked of
+// the new trigger rather than deleted — they were never about the button.
 
-describe("SettingsDrawer — leave reasons (issue 2150)", () => {
+describe("SettingsDrawer — leave reasons (issue 2150, issue 2181)", () => {
   it("hydrates both stores when the drawer opens with a token", async () => {
     const store = await import("../lib/leaveReasons");
     wrap(true);
@@ -2562,14 +2568,13 @@ describe("SettingsDrawer — leave reasons (issue 2150)", () => {
     expect((screen.getByTestId("auto-away-reason-input") as HTMLInputElement).value).toBe("");
   });
 
-  it("sends what was typed in the quit/part box", async () => {
+  it("sends what was typed in the quit/part box when the field loses focus", async () => {
     wrap(true);
     openSub("general-settings-entry");
 
-    fireEvent.input(screen.getByTestId("quit-part-reason-input"), {
-      target: { value: "see you" },
-    });
-    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+    const input = screen.getByTestId("quit-part-reason-input");
+    fireEvent.input(input, { target: { value: "see you" } });
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(leaveReasonHolder.savedQuitPart).toBe("see you");
@@ -2581,11 +2586,14 @@ describe("SettingsDrawer — leave reasons (issue 2150)", () => {
     wrap(true);
     openSub("general-settings-entry");
 
-    fireEvent.input(screen.getByTestId("quit-part-reason-input"), { target: { value: "" } });
-    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+    const input = screen.getByTestId("quit-part-reason-input");
+    fireEvent.input(input, { target: { value: "" } });
+    fireEvent.blur(input);
 
     // `toBe("")`, NOT a loose falsy check: `undefined` here would mean the
-    // save was never called at all, which is the bug this test exists for.
+    // save was never called at all, which is the bug this test exists for —
+    // and since issue 2181 it is also the bug the unchanged-field guard could
+    // introduce, if it ever decided an emptied box was "nothing to send".
     await waitFor(() => {
       expect(leaveReasonHolder.savedQuitPart).toBe("");
     });
@@ -2596,8 +2604,9 @@ describe("SettingsDrawer — leave reasons (issue 2150)", () => {
     wrap(true);
     openSub("general-settings-entry");
 
-    fireEvent.input(screen.getByTestId("quit-part-reason-input"), { target: { value: "" } });
-    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+    const input = screen.getByTestId("quit-part-reason-input");
+    fireEvent.input(input, { target: { value: "" } });
+    fireEvent.blur(input);
 
     // The mock mirrors the server: `""` in, "nothing stored" out. The box
     // must follow THAT, not the string it posted.
@@ -2606,14 +2615,13 @@ describe("SettingsDrawer — leave reasons (issue 2150)", () => {
     });
   });
 
-  it("sends what was typed in the auto-away reason box", async () => {
+  it("sends what was typed in the auto-away reason box when the field loses focus", async () => {
     wrap(true);
     openSub("general-settings-entry");
 
-    fireEvent.input(screen.getByTestId("auto-away-reason-input"), {
-      target: { value: "sono a pranzo" },
-    });
-    fireEvent.click(screen.getByTestId("auto-away-reason-save"));
+    const input = screen.getByTestId("auto-away-reason-input");
+    fireEvent.input(input, { target: { value: "sono a pranzo" } });
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(leaveReasonHolder.savedAutoAway).toBe("sono a pranzo");
@@ -2627,10 +2635,11 @@ describe("SettingsDrawer — leave reasons (issue 2150)", () => {
     wrap(true);
     openSub("general-settings-entry");
 
-    fireEvent.input(screen.getByTestId("quit-part-reason-input"), {
-      target: { value: "bye\r\nJOIN #evil" },
-    });
-    fireEvent.click(screen.getByTestId("quit-part-reason-save"));
+    // The error row is the ONLY feedback a failed commit has left now that
+    // the button is gone (issue 2181), which is why it outlived the button.
+    const input = screen.getByTestId("quit-part-reason-input");
+    fireEvent.input(input, { target: { value: "bye\r\nJOIN #evil" } });
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(screen.getByTestId("quit-part-reason-error")).toHaveTextContent(/CR, LF or NUL/);
@@ -2683,6 +2692,144 @@ describe("SettingsDrawer — leave reasons (issue 2150)", () => {
     const scope = screen.queryByTestId("settings-network-scope");
     expect(scope?.contains(screen.getByTestId("quit-part-reason-input")) ?? false).toBe(false);
     expect(scope?.contains(screen.getByTestId("auto-away-reason-input")) ?? false).toBe(false);
+  });
+
+  // issue 2181 — Enter is the KEYBOARD commit, and the point of it is that it
+  // commits WITHOUT leaving the field: a user who tabs away gets the blur
+  // commit anyway, so an Enter that only blurred would be the same gesture
+  // spelled twice. Focus is asserted, not assumed.
+  it("commits the quit/part box on Enter and leaves the caret where it was", async () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const input = screen.getByTestId("quit-part-reason-input") as HTMLInputElement;
+    input.focus();
+    fireEvent.input(input, { target: { value: "ci vediamo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(leaveReasonHolder.savedQuitPart).toBe("ci vediamo");
+    });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("commits the auto-away reason box on Enter", async () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const input = screen.getByTestId("auto-away-reason-input") as HTMLInputElement;
+    input.focus();
+    fireEvent.input(input, { target: { value: "torno subito" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(leaveReasonHolder.savedAutoAway).toBe("torno subito");
+      expect(leaveReasonHolder.savedQuitPart).toBeUndefined();
+    });
+  });
+
+  // issue 2181, the guard that makes the blur trigger affordable. Opening the
+  // drawer and closing it again walks focus through both fields; if a blur
+  // posted unconditionally, merely LOOKING at the settings would write to the
+  // server twice per visit.
+  it("does not POST when a field is blurred without being typed in", async () => {
+    leaveReasonHolder.quitPart = "gone fishing";
+    leaveReasonHolder.autoAway = "sono a pranzo";
+    wrap(true);
+    openSub("general-settings-entry");
+
+    fireEvent.blur(screen.getByTestId("quit-part-reason-input"));
+    fireEvent.blur(screen.getByTestId("auto-away-reason-input"));
+
+    // A save is a promise, so an assertion taken on the spot would pass
+    // before it could have run. Give the microtask queue a turn first — and
+    // take a POSITIVE reading on the same turn, so "nothing was posted"
+    // cannot be "nothing has happened yet".
+    await waitFor(() => {
+      expect((screen.getByTestId("quit-part-reason-input") as HTMLInputElement).value).toBe(
+        "gone fishing",
+      );
+    });
+    expect(leaveReasonHolder.savedQuitPart).toBeUndefined();
+    expect(leaveReasonHolder.savedAutoAway).toBeUndefined();
+  });
+
+  // The other half of "unchanged": the field WAS touched, and the text ended
+  // up where it started. A draft-is-not-null test would call this dirty and
+  // post a string the server already holds.
+  it("does not POST when the text is typed back to what is stored", async () => {
+    leaveReasonHolder.quitPart = "gone fishing";
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const input = screen.getByTestId("quit-part-reason-input");
+    fireEvent.input(input, { target: { value: "gone fishin" } });
+    fireEvent.input(input, { target: { value: "gone fishing" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe("gone fishing");
+    });
+    expect(leaveReasonHolder.savedQuitPart).toBeUndefined();
+  });
+
+  // issue 2181's removal, pinned in both directions. The third `save` button
+  // in this area — the auto-away CUSTOM MINUTES one — is a different control
+  // and was explicitly out of the ruling, so it is the negative control: a
+  // sweep that took all three would turn this red.
+  it("drops the two reason save buttons and keeps the custom-minutes one", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    expect(screen.queryByTestId("quit-part-reason-save")).toBeNull();
+    expect(screen.queryByTestId("auto-away-reason-save")).toBeNull();
+
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "custom" } });
+    expect(screen.getByTestId("auto-away-custom-save")).toBeInTheDocument();
+  });
+
+  // issue 2181 (scope addendum) — "reason:" used to be a bare text node in a
+  // flex row, which is an ANONYMOUS flex item: real in the layout, reachable
+  // by no selector. Wrapping it is what gives the label an identity of its
+  // own, and it has to come BEFORE the input for the stack to read
+  // label-then-field. The <span> stays INSIDE the <label>, so the implicit
+  // association — and `getByLabelText(/reason:/i)` above — is untouched.
+  it("wraps the auto-away label in a real element ahead of its input", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+
+    const input = screen.getByTestId("auto-away-reason-input");
+    const row = input.closest(".leave-reason-row");
+    expect(row).not.toBeNull();
+
+    const label = row?.querySelector(".leave-reason-label");
+    expect(label?.textContent).toMatch(/reason:/i);
+    // `DOCUMENT_POSITION_FOLLOWING` = the input comes after the label.
+    expect((label?.compareDocumentPosition(input) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  // The stacking itself is a source-level invariant over the stylesheet:
+  // jsdom loads no CSS, so nothing in this file can observe the computed
+  // layout. On the CLASS and not the instance, which is the whole point —
+  // the leave-message row carries no visible text, so the column is inert
+  // there and the two rows keep answering identically.
+  it("stacks the leave-reason rows on the class, not on one instance", () => {
+    const body = ruleBody(".leave-reason-row");
+
+    expect(body).toMatch(/flex-direction:\s*column/);
+    expect(body).toMatch(/align-items:\s*stretch/);
+
+    // ...and it is the sheet's ONLY answer for these rows: no
+    // `.leave-reason-fieldset .leave-reason-row`, no `@media` re-statement,
+    // nothing keyed to one of the two. Read off the parsed selector lists
+    // rather than a regex over the raw text, because a rule sitting inside an
+    // at-rule block is exactly the kind a text scan reads as absent.
+    const mentioning = allRules()
+      .flatMap((rule) => selectorList(rule.selectors))
+      .filter((one) => one.includes(".leave-reason-row"));
+    expect(mentioning).toEqual([".leave-reason-row"]);
   });
 });
 

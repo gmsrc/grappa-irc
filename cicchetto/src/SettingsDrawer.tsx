@@ -1134,6 +1134,30 @@ const SettingsDrawer: Component<Props> = (props) => {
     }
   };
 
+  // issue 2181 — the two reason fields commit the way the notification
+  // allow-lists next door already did (`commitChannelsOnly` /
+  // `commitNicksOnly`): on blur, with Enter as the explicit keyboard commit.
+  // The `save` buttons are gone; the two handlers ABOVE are untouched and
+  // remain the commit path, so the empty-string-clears-it gesture, the
+  // dropped draft and the server round-trip all behave exactly as before —
+  // only the trigger moved.
+  //
+  // The guard asks "is the box different from what is STORED", not "has the
+  // user touched it". Two things follow, and both are the reason it is not a
+  // `draft() !== null` test. A draft typed and then undone is unchanged text,
+  // and a blur must not POST it. And a successful save drops the draft, so
+  // the box reads back through to the server's echo — which makes
+  // Enter-then-tab-away a SINGLE write rather than two.
+  const commitQuitPartReason = () => {
+    if (quitPartReasonText() === (quitPartReasonValue() ?? "")) return;
+    void onQuitPartReasonSave();
+  };
+
+  const commitAutoAwayReason = () => {
+    if (autoAwayReasonText() === (autoAwayReasonValue() ?? "")) return;
+    void onAutoAwayReasonSave();
+  };
+
   const onAutoAwayCustomSave = async () => {
     // An empty box is not a zero: `Number("")` is 0, which is the OFF
     // sentinel, so committing a blank input would silently switch
@@ -2092,8 +2116,15 @@ const SettingsDrawer: Component<Props> = (props) => {
                   group. Empty means the bouncer keeps its own wording,
                   which is deliberately not printed here as a placeholder —
                   that string is server-owned and a copy would drift. */}
+              {/* issue 2181 — `reason:` used to be a bare text node sharing
+                  the flex row with the input and its save button. A bare text
+                  node is an ANONYMOUS flex item: it lays out, but no selector
+                  can reach it, so the label could not be moved anywhere. The
+                  <span> is what gives it an identity; it stays INSIDE the
+                  <label>, so the implicit association is untouched and the
+                  input keeps its accessible name. */}
               <label class="leave-reason-row">
-                reason:
+                <span class="leave-reason-label">reason:</span>
                 <input
                   type="text"
                   autocapitalize="none"
@@ -2103,16 +2134,14 @@ const SettingsDrawer: Component<Props> = (props) => {
                   data-testid="auto-away-reason-input"
                   value={autoAwayReasonText()}
                   onInput={(e) => setAutoAwayReasonDraft(e.currentTarget.value)}
-                />
-                <button
-                  type="button"
-                  data-testid="auto-away-reason-save"
-                  onClick={() => {
-                    void onAutoAwayReasonSave();
+                  onBlur={commitAutoAwayReason}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitAutoAwayReason();
+                    }
                   }}
-                >
-                  save
-                </button>
+                />
               </label>
               <Show when={autoAwayReasonSavingError() !== null}>
                 <p class="auto-away-error" role="alert" data-testid="auto-away-reason-error">
@@ -2144,16 +2173,14 @@ const SettingsDrawer: Component<Props> = (props) => {
                   data-testid="quit-part-reason-input"
                   value={quitPartReasonText()}
                   onInput={(e) => setQuitPartReasonDraft(e.currentTarget.value)}
-                />
-                <button
-                  type="button"
-                  data-testid="quit-part-reason-save"
-                  onClick={() => {
-                    void onQuitPartReasonSave();
+                  onBlur={commitQuitPartReason}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitQuitPartReason();
+                    }
                   }}
-                >
-                  save
-                </button>
+                />
               </label>
               {/* ONE sentence, and not by taste: a general-subpage test
                   counts full stops across every `.settings-section-blurb`

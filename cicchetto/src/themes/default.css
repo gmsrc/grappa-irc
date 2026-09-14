@@ -10649,14 +10649,30 @@ button.topic-bar-windows-opener {
   width: 100%;
 }
 
-/* issue 2150 — the two leave-reason rows: a free-text input that should eat
- * the row, with a save button at its natural width. `.settings-drawer label`
- * is already a flex row, so the only thing missing is telling the input to
- * grow; the button is left alone and keeps its own size. Same posture as the
- * select rule above — on the CLASS, so both rows answer identically. */
-.leave-reason-row > input[type="text"] {
-  flex: 1;
-  min-width: 0;
+/* issue 2150 / issue 2181 — the two leave-reason rows. They used to be flex
+ * ROWS with the input told to grow (`flex: 1; min-width: 0`) beside a save
+ * button; both buttons are gone, and vjt asked for the label on a line of its
+ * own so the field is not pushed in by a word ("altrimenti mangia spazio nel
+ * rail").
+ *
+ * A COLUMN is what says that, and it replaces the grow rule rather than
+ * joining it: `align-items: stretch` overrides the `center` inherited from
+ * `.settings-drawer label` and sizes the input to the row on the CROSS axis,
+ * where there is no automatic minimum to fight, so neither `flex: 1` nor
+ * `min-width: 0` has anything left to do.
+ *
+ * On the CLASS, same posture as the select rule above. The leave-message row
+ * carries no visible text, so the column is inert there and the two rows keep
+ * answering identically — which is the point: one rule, two rows, no instance
+ * ever singled out. */
+.leave-reason-row {
+  flex-direction: column;
+  align-items: stretch;
+  /* Tighter than the 0.5rem this label inherits, which was the horizontal gap
+   * between a field and its button. Stacked, the pair wants the rhythm the
+   * drawer's other label-above-input column already uses
+   * (`.settings-identity`), not the block rhythm between controls. */
+  gap: 0.35rem;
 }
 
 .settings-subpage {
