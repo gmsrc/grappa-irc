@@ -13423,3 +13423,128 @@ failed** — `tsc (e2e)` included. #484 tracks pre-existing type errors in that
 tree; on this base there are none, so every error the new flags surfaced is
 attributable to the flags. Stage 1 exists precisely so that a stale toolchain
 reports as a stale toolchain rather than as a defect in the code under test.
+<!-- entry #2140 -->
+
+---
+
+## 2026-09-14 — #2140: every membership sigil is tracked, and a seed may only deny from the top DOWN to what it named
+
+A member holding `+v` was given `+o` and then `-o`, and the nicklist drew
+them as a plain user. A manual `/names` repaired the pane, so the loss was
+ours. The report names op and voice; the defect is generic over the
+ISUPPORT PREFIX table (`~ & @ % +`).
+
+The roster is a SET of sigils per member at every stage but one — the
+seed. Without `multi-prefix` a 353 RPL_NAMREPLY carries the member's
+HIGHEST sigil and nothing else, so `state.members[channel][nick]` held a
+one-element list for a member upstream knew as two, and `-o` →
+`toggle_mode(_, _, :remove)` → `List.delete/2` emptied it.
+
+**Second half of the same root, opposite sign:** the 353 fold was
+`Map.merge(existing, new_entries)`, so the seed WON per nick and a member
+the live MODE stream had correctly tracked as `["@", "+"]` was overwritten
+down to `["@"]`. A `/names` repaired the reported direction and silently
+broke this one. Any cure built on re-seeding inherits that.
+
+### The rule, and why it is NOT "union" — a declared deviation
+
+vjt ruled the shape ("we keep track of the sigils in grappa, full stop":
+no NAMES storm, no per-MODE query). The issue body then gave two
+formulations that do not coincide: the SEMANTICS *"a seed asserts the top
+sigil, it never denies a lower one"* and the MECHANISM *"union, not
+overwrite"*. They diverge in two cases, and pure union is the weaker:
+
+| live set | 353 token | pure union | deny-from-the-top |
+| --- | --- | --- | --- |
+| `["@","+"]` | `@bob` | `["@","+"]` | `["@","+"]` |
+| `["@"]` | `bob` (bare) | `["@"]` | `[]` |
+| `["@","+"]` | `+bob` | `["@","+"]` | `["+"]` |
+
+A 353 token is not partial information at random: it is the claim *this is
+the top*, so everything ranking ABOVE it is provably absent, and a BARE
+token is the limit case (top = none, therefore nothing — a COMPLETE
+statement). Pure union makes a stale sigil PERMANENT for the life of the
+membership and so removes a repair that exists today: `/names` currently
+fixes exactly that case. A cure that withdraws a working remedy owes a
+proof it did not pay here. **The ruling to implement the semantics rather
+than the stated mechanism is the orchestrator's, not vjt's** — recorded
+under that name so it can be reversed in one line at review.
+
+The implementation is `merge_seeded_sigils/3` and carries no branch: keep
+the tracked sigils ranking strictly BELOW the LOWEST sigil the seed named,
+take the seed's run for everything at or above it. Rank comes from the
+advertised run (`ISupport.sigils/1`, highest first), never from the
+token's byte order — `multi-prefix` sends highest-first by convention, and
+a convention is not a contract.
+
+### Two properties that fall out instead of being coded
+
+**No reconnect clause.** The one window where the local set must be
+dropped wholesale is a reconnect, where we were genuinely blind. Self-JOIN
+already wipes `members[channel]` (`event_router.ex`, the "wipe stale state
+for this channel" arm) and every reconnect goes through it, so `tracked`
+is empty by the time the seed lands and the rule passes over it silently.
+
+**No cap branch.** As the reported run grows the rule degrades toward "the
+seed is the whole truth": with `multi-prefix` the run is complete, its
+lowest member is the member's lowest grade, and nothing survives
+underneath it. Nothing reads whether the cap is active.
+
+### `multi-prefix` joins the opportunistic caps
+
+Added to `AuthFSM`'s `@opportunistic_caps` for the three properties the
+two entries before it have: advertised-gated, no follow-up exchange, NAK
+non-fatal. It makes even the seed complete on solanum-family networks. No
+consumer branches on it — the 353 peel was already greedy and the fold
+reads a run of any length — so the cap changes what upstream SENDS and
+nothing about what we do with it.
+
+**H9 edge, accepted rather than discovered.** The combined-REQ NAK
+fallback re-requests `:sasl` alone and drops it. For `account-notify` that
+loss was theoretical (the fallback exists for bahamut-family servers,
+which do not offer it); **that argument does not transfer** — the fallback
+also covers Solanum variants, which advertise `multi-prefix`. The loss is
+real there and costs the seed's completeness, i.e. it degrades exactly to
+this issue's accepted residual, never to a wrong roster. The alternative
+is a second in-flight REQ the FSM would have to correlate against its own
+ACK, and an ACK carrying no `"sasl"` is already read as "SASL refused" in
+all three `:awaiting_cap_ack*` phases — that ladder buys a complete seed
+at the price of a login.
+
+**`@tracked_caps` stays at two, and the split is now load-bearing.**
+#2097 recorded that the two lists held the same names and were kept apart
+anyway, "two readings that may legitimately diverge". This is that
+divergence arriving: `multi-prefix` is opportunistic (we ask) and NOT
+tracked (no branch reads its ACK). Consequence, named: a DEL/NEW cycle of
+`multi-prefix` is not re-requested, so the seed reverts to top-sigil-only
+— the accepted residual again.
+
+### Accepted residual
+
+On a network without `multi-prefix`, a grade held BEFORE our seed and
+hidden under a higher one is unknowable — probed on Azzurra, `353` gives
+`:@nick` and `352` gives `HS@`, one status char, so no client can see it
+either. No query chases it. A second residual is new and belongs to the
+rule: a grade our live set holds STALE and the seed ranks below its lowest
+survives. That needs a MODE we never applied (#878 withholds derived state
+from a malformed line) and clears the moment the member's grades move.
+
+### The prose that had to move with the code
+
+Four comments asserted a present that this slice changes, and all four
+were rewritten in the commit that falsified them: the "GREEDY on purpose —
+`multi-prefix` is not in grappa's CAP REQ today" note and its copy in
+`event_router_test.exs`; `auth_fsm.ex`'s "unchanged in BYTES for every
+existing case" (false for any network advertising the cap) together with
+the KNOWN EDGE paragraph; and `server.ex`'s "`@tracked_caps` … holds the
+same two names". This is the #2127 / #2125 class: prose explaining a
+choice is a claim about the present and moves with the code.
+
+### What is not measured
+
+Nothing was probed against a live ircd in this slice — the Azzurra and
+Libera figures are vjt's, quoted from the issue, not re-measured here. The
+cure is exercised at the router and FSM level only: no `Session.Server`
+integration test drives a real 353 burst, and cic was read (`modeApply.ts`
+keeps `modes` an array, `memberSigil.ts` picks by the advertised rank) but
+not re-run against a multi-sigil member.
