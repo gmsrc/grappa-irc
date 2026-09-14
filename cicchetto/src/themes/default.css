@@ -1848,8 +1848,23 @@ html.resize-dragging * {
   padding-top: var(--safe-area-inset-top);
 }
 
+/* issue 2128 — `flex-wrap: wrap` is the slot's overflow affordance of LAST
+   resort. The region is `position: fixed; left: 0; right: 0` with no
+   overflow of its own, so anything laid out past the right edge is not
+   scrollable to — it is simply unreachable, and the controls are the last
+   thing in the row. With `.error-banner-message` able to yield (below) the
+   row does not normally wrap at all; it wraps when the CONTROLS alone no
+   longer fit the line (a longer action label, a user text-zoom, a narrower
+   viewport than any phone ships), and then they drop to a second line
+   instead of leaving the slot.
+
+   `margin-left: auto` on `.error-banner-action` keeps working per FLEX LINE,
+   so the wrapped case stays right-aligned and in the same order. It stays on
+   the action ALONE: auto margins SPLIT a line's free space between them, so
+   a second one on the × would park the action mid-line. */
 .error-banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
@@ -1874,8 +1889,30 @@ html.resize-dragging * {
   background: #2a6;
 }
 
+/* issue 2128 — the SLOT's defect, not the DCC offer's. A flex item's default
+   `min-width: auto` is its MIN-CONTENT width, so without these two the
+   message refuses to shrink below its longest break-free run and the two
+   `flex: 0 0 auto` controls after it are laid out past the right edge: the
+   Accept button cut in half, the × off screen entirely, on a 393 CSS px
+   phone. Any banner can carry such a run — a URL, a channel name, a
+   hostname; a peer-declared filename is merely the longest one shipped
+   (`Grappa.Dcc.Report` caps the displayed name at 120 BYTES, plus the `…`
+   it appends when it truncates).
+
+   Both declarations, because they answer different halves. `min-width: 0`
+   lets the item yield; `overflow-wrap: anywhere` is what gives it somewhere
+   to yield TO — it also shrinks the min-content size itself, so the run
+   breaks inside the row rather than overflowing the (now narrow) box.
+   `word-break: break-word` would not: it leaves min-content alone.
+
+   The same root cause was cured once before, one element at a time —
+   `.compose-box-upload-filename` (iPhone dogfood 2026-06-10) took
+   `min-width: 0` for a filename shoving that row's buttons off screen. That
+   fix was right and too narrow; this one is on the shared slot. */
 .error-banner-message {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .error-banner-action {
