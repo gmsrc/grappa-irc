@@ -409,6 +409,95 @@ defmodule GrappaWeb.ChannelsControllerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # issue 2150 — the remembered leave message, end to end. Same oracle as
+    # the #1208 test above and for the same reason: the 202 proves nothing.
+    #
+    # Resolution is SERVER-side, so this asserts the whole point of that
+    # choice — the request carries no reason at all and the stored one still
+    # reaches the wire.
+    test "a stored quit/part reason lands on the wire when the request carries none",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, vjt.id},
+          "non trovo utili le bestemmie",
+          Grappa.Subject.label({:user, vjt.name})
+        )
+
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      conn = delete(conn, "/networks/#{network.slug}/channels/%23sniffo")
+
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, "PART #sniffo :non trovo utili le bestemmie\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # The precedence half. Without it the suite would pass on an
+    # implementation that ignored `?reason=` whenever a default was stored —
+    # the opposite of "explicit beats stored".
+    test "an explicit reason BEATS the stored default", %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, vjt.id},
+          "stored",
+          Grappa.Subject.label({:user, vjt.name})
+        )
+
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      conn = delete(conn, "/networks/#{network.slug}/channels/%23sniffo?reason=explicit")
+
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, "PART #sniffo :explicit\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # An explicitly EMPTY `?reason=` is an explicit choice of "no reason",
+    # so it must not pick the default up either — it stays the bare form it
+    # has always been. cic never sends this shape (`api.ts` omits the param
+    # for a null/empty reason), so the case belongs to direct API callers;
+    # it is pinned because it is the boundary between "absent" and "empty",
+    # and the two now mean different things.
+    test "an explicitly empty reason stays bare and does NOT pick up the default",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      network = setup_network(vjt, port)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, vjt.id},
+          "stored",
+          Grappa.Subject.label({:user, vjt.name})
+        )
+
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      conn = delete(conn, "/networks/#{network.slug}/channels/%23sniffo?reason=")
+
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, "PART #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     # S29 C1 for the new field: CRLF in the reason would smuggle a second
     # command behind the trailing `:`. Rejected AHEAD of the autojoin UPDATE,
     # so a refused request leaves no half-applied leave behind.

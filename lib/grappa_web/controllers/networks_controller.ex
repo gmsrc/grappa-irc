@@ -53,7 +53,7 @@ defmodule GrappaWeb.NetworksController do
   alias Grappa.Accounts.User
   alias Grappa.Avatars
   alias Grappa.IRC.Identifier
-  alias Grappa.{Networks, ServerSettings, Session, Uploads}
+  alias Grappa.{Networks, ServerSettings, Session, Uploads, UserSettings}
   alias Grappa.Networks.{Credential, Credentials, SessionPlan}
   alias Grappa.Visitors.Visitor
   alias GrappaWeb.{NetworkSpawn, Subject}
@@ -599,8 +599,8 @@ defmodule GrappaWeb.NetworksController do
           Credential.connection_state(),
           String.t() | nil
         ) :: {:ok, Credential.t()} | {:error, atom()}
-  defp apply_transition(_, _, credential, :parked, reason) do
-    Networks.disconnect(credential, reason || "user-disconnect")
+  defp apply_transition(_, subject, credential, :parked, reason) do
+    Networks.disconnect(credential, reason || parked_reason(subject))
   end
 
   defp apply_transition(conn, subject, credential, :connected, _) do
@@ -626,6 +626,39 @@ defmodule GrappaWeb.NetworksController do
          {:ok, _} <- NetworkSpawn.orchestrate(conn, subject, credential, plan),
          {:ok, updated_cred} <- Networks.connect(credential) do
       {:ok, updated_cred}
+    end
+  end
+
+  # issue 2150 — the leave message, in precedence order: the one this
+  # request carried, else the subject's remembered default, else the
+  # `"user-disconnect"` literal every park has sent since T32.
+  #
+  # Resolved HERE, and that is the whole design decision. Doing it in cic
+  # would make the default apply only for a client that has hydrated the
+  # setting — the same "saved but never applied" gap the save-time
+  # validation exists to close — and would leave every other door (a
+  # second client, a direct PATCH) sending `user-disconnect` instead. The
+  # server always has the row.
+  #
+  # It therefore covers the per-network park from the sidebar × as well as
+  # `/quit`'s park-all, because both are the subject leaving and both come
+  # through this verb. `Grappa.Operator` is the OTHER caller of
+  # `Networks.disconnect/2` and is deliberately NOT routed through here:
+  # an operator-forced disconnect is not the user leaving, and it keeps
+  # its own constant.
+  #
+  # Nothing is validated here: `put_quit_part_reason/3` already refused
+  # CR/LF/NUL at save time, so a stored value is safe on the wire by
+  # construction, and `Session.send_quit/3` re-checks at the domain
+  # boundary regardless.
+  @spec parked_reason(Subject.t()) :: String.t()
+  defp parked_reason(subject) do
+    subject
+    |> Subject.to_session()
+    |> UserSettings.get_quit_part_reason()
+    |> case do
+      nil -> "user-disconnect"
+      stored -> stored
     end
   end
 

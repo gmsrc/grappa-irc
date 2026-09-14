@@ -170,11 +170,21 @@ defmodule GrappaWeb.ChannelsController do
   # `send_join/4` does for its key: this controller is one door into PART,
   # not the only one.
   #
-  # An absent param is `{:ok, nil}`, which frames the bare PART — the
-  # pre-#1208 behaviour for every caller that never learns this param exists.
-  @spec part_reason(map()) ::
+  # An absent param falls back to the subject's remembered leave message
+  # (issue 2150) and, failing that, to `nil` — which frames the bare PART,
+  # the pre-#1208 behaviour for every caller that never learns this param
+  # exists. A subject with no stored default is therefore byte-identical
+  # on the wire to before this setting existed.
+  #
+  # The stored value skips the two checks above it, and legitimately:
+  # `UserSettings.put_quit_part_reason/3` refused CR/LF/NUL AT SAVE TIME
+  # and bounded the bytes there, so a stored reason is safe by
+  # construction — that is the whole point of validating at save rather
+  # than at use. `Session.send_part/4` re-checks at the domain boundary
+  # anyway, as it does for every caller.
+  @spec part_reason(map(), Grappa.Session.subject()) ::
           {:ok, String.t() | nil} | {:error, :bad_request | :invalid_line | :body_too_large}
-  defp part_reason(%{"reason" => reason}) when is_binary(reason) do
+  defp part_reason(%{"reason" => reason}, _) when is_binary(reason) do
     with :ok <- BodyLimit.check(reason) do
       if Grappa.IRC.Identifier.safe_line_token?(reason),
         do: {:ok, reason},
@@ -182,8 +192,8 @@ defmodule GrappaWeb.ChannelsController do
     end
   end
 
-  defp part_reason(%{"reason" => _}), do: {:error, :bad_request}
-  defp part_reason(_), do: {:ok, nil}
+  defp part_reason(%{"reason" => _}, _), do: {:error, :bad_request}
+  defp part_reason(_, subject), do: {:ok, Grappa.UserSettings.get_quit_part_reason(subject)}
 
   @doc """
   `DELETE /networks/:network_id/channels/:channel_id` — casts
@@ -219,7 +229,7 @@ defmodule GrappaWeb.ChannelsController do
     # #1208 — `part_reason/1` is FIRST in the chain on purpose: a refused
     # reason must not leave the autojoin UPDATE below already applied, or a
     # 400 would still have half-performed the leave.
-    with {:ok, reason} <- part_reason(params),
+    with {:ok, reason} <- part_reason(params, subject),
          :ok <- validate_channel_name(channel),
          :ok <- remove_from_autojoin(conn.assigns.current_subject, network, channel),
          :ok <- Session.send_part(subject, network.id, channel, reason) do

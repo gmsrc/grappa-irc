@@ -314,6 +314,144 @@ defmodule GrappaWeb.NetworksControllerTest do
       assert cred.connection_state_reason == "manual"
     end
 
+    # -------------------------------------------------------------------
+    # issue 2150 — the remembered leave message on the park door
+    # -------------------------------------------------------------------
+    #
+    # `Networks.disconnect/2` threads ONE value into two places: the
+    # upstream `QUIT :<reason>` and the row's `connection_state_reason`.
+    # The cheap tests below read the column, which is that same variable
+    # observed one layer up; the last test in the block reads the actual
+    # wire line, because a column is a proxy and a proxy can agree with a
+    # broken emit.
+    test "a stored reason replaces the user-disconnect literal when none is given",
+         %{conn: conn} do
+      vjt = user_fixture(name: "vjt-park-2150-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-park-2150-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, vjt.id},
+          "gone fishing",
+          Grappa.Subject.label({:user, vjt.name})
+        )
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}", %{connection_state: "parked"})
+
+      body = json_response(conn, 200)
+      assert body["connection_state_reason"] == "gone fishing"
+
+      cred = Repo.get_by!(Credential, user_id: vjt.id, network_id: network.id)
+      assert cred.connection_state_reason == "gone fishing"
+    end
+
+    test "an explicit reason BEATS the stored default", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-park-2150x-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-park-2150x-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, vjt.id},
+          "stored",
+          Grappa.Subject.label({:user, vjt.name})
+        )
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}", %{connection_state: "parked", reason: "explicit"})
+
+      assert json_response(conn, 200)["connection_state_reason"] == "explicit"
+    end
+
+    test "with nothing stored the literal is unchanged — today's behaviour", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-park-2150n-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-park-2150n-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}", %{connection_state: "parked"})
+
+      assert json_response(conn, 200)["connection_state_reason"] == "user-disconnect"
+    end
+
+    test "another subject's stored reason does NOT leak into this park", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-park-2150i-#{u()}")
+      other = user_fixture(name: "other-park-2150i-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-park-2150i-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      _ = credential_fixture(vjt, network)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, other.id},
+          "somebody else's message",
+          Grappa.Subject.label({:user, other.name})
+        )
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}", %{connection_state: "parked"})
+
+      assert json_response(conn, 200)["connection_state_reason"] == "user-disconnect"
+    end
+
+    test "the stored reason reaches the WIRE as the QUIT trailing param", %{conn: conn} do
+      vjt = user_fixture(name: "vjt-park-2150w-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-park-2150w-#{u()}"
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {network, _} = network_with_server(port: port, slug: slug)
+      _ = credential_fixture(vjt, network, %{nick: "grappa-test", autojoin_channels: []})
+
+      {:ok, _} =
+        Grappa.UserSettings.put_quit_part_reason(
+          {:user, vjt.id},
+          "gone fishing",
+          Grappa.Subject.label({:user, vjt.name})
+        )
+
+      pid = start_session_for(vjt, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+      ref = Process.monitor(pid)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/networks/#{slug}", %{connection_state: "parked"})
+
+      assert json_response(conn, 200)
+
+      # The oracle the column cannot be: this is the byte sequence the
+      # ircd actually receives.
+      assert {:ok, "QUIT :gone fishing\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "QUIT"), 1_000)
+
+      # `disconnect/2` stops the session as part of the park; wait for it
+      # rather than leaving a racing process behind for the next test.
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+    end
+
     test "returns 400 when already parked", %{conn: conn} do
       vjt = user_fixture(name: "vjt-patch-park2-#{u()}")
       session = session_fixture(vjt)
