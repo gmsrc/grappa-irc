@@ -478,7 +478,52 @@ defmodule Grappa.Protocol do
   # `not_held` reads a 404 with an unfamiliar token and falls back to its
   # generic error path — the same thing it already does for every token
   # added since v1 — so an old bundle is degraded in wording, not broken.
-  @protocol_version 20
+  #
+  # v21 (issue 2127) — the accepted-DCC-file door MOVES. `GET
+  # /networks/:network_id/dcc_files/:slug` behind `:authn` +
+  # `ResolveNetwork` becomes `GET /dcc_files/:slug[.ext]` at top level on
+  # `pipe_through [:api]`, the same public surface as `GET /uploads/:slug`,
+  # with the 26-char base32 slug as the access token.
+  #
+  # ⚠️ Same shape as v10 and v11, and the gate is green either way for the
+  # same reason they record: the digest spans the GENERATED artefacts,
+  # which come from `Grappa.*.Wire` typespecs, and a route whose shape
+  # lives in a controller is invisible to it. Measured here too — `mix
+  # grappa.wire_pin --check` answered «wire shape and protocol 20 agree»
+  # with the moved route already in the router, and the same command
+  # answered rc=1 when a named `@type` was perturbed, so the green is a
+  # live gate's silence rather than a dead one's.
+  #
+  # So the number moves on the RULE. This is a STRONGER case than v10/v11,
+  # which were purely additive: a path was TAKEN AWAY, so the break runs
+  # both ways. A client holding the old path gets a 404 from this server,
+  # and a client built for the new one gets a 404 from any server
+  # predating it — and reason (1) covers the second direction exactly.
+  #
+  # 🔴 Two consequences stated rather than left for someone to find.
+  #
+  # The route is now UNAUTHENTICATED: whoever holds the URL reads the
+  # bytes, with no login, until `Grappa.Dcc.Reaper` expires the row. That
+  # is the posture `/uploads/:slug` has had since UX-6-B1 on the same 128
+  # bits, and it is the POINT of the change rather than a cost of it —
+  # `GrappaWeb.Plugs.Authn` reads only a bearer HEADER, so a tapped
+  # scrollback link collected a 401 and the delivery row was unusable by
+  # the one person it was minted for.
+  #
+  # Delivery rows ALREADY IN SCROLLBACK carry the old relative path and
+  # now point at a route that does not exist. Nothing usable is lost —
+  # those strings never linkified (no scheme, no `host.tld`) and 401'd
+  # when pasted — so they go from one kind of dead to another, and no
+  # migration rewrites them. Not measured against production: the prod
+  # jail is not reachable from here, so the row COUNT is unknown.
+  #
+  # @min_protocol_version stays at 1. No client has ever CONSTRUCTED this
+  # URL — the server mints it into the scrollback body and cic only
+  # linkifies what it is handed — so no bundle predating v21 asks for the
+  # old path, and every one of them renders the new absolute URL as an
+  # ordinary link. The break is real but it is new-client → old-server,
+  # which is the axis this number carries and not the floor.
+  @protocol_version 21
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -489,7 +534,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 20
+  @spec version() :: 21
   def version, do: @protocol_version
 
   @doc """

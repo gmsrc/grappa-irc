@@ -456,7 +456,30 @@ Acting on one:
 |---|---|
 | `POST /networks/:network_id/dcc_offers/:offer_id/accept` | **202** `{"ok": true}` — admitted, not arrived |
 | `DELETE /networks/:network_id/dcc_offers/:offer_id` | 200 `{"ok": true}` |
-| `GET /networks/:network_id/dcc_files/:slug` | the bytes |
+
+Fetching the file is **not** on this prefix (protocol v21, issue 2127):
+
+| route | answer |
+|---|---|
+| `GET /dcc_files/:slug[.ext]` | the bytes — top level, **no auth**, same surface as `GET /uploads/:slug` |
+
+The 26-char base32 slug IS the access token, exactly as it is for an
+upload: whoever holds the URL fetches the file, with no bearer, until the
+retention reaper removes it. You do not build this URL — the server mints
+it absolute into the delivery row's body and you render it as an ordinary
+link. It moved off `/networks/:network_id/dcc_files/:slug` because that
+route required an `Authorization` header, and a link tapped out of
+scrollback opens a tab that carries none, so the row's link only ever
+collected a 401.
+
+An optional extension may follow the slug (`<slug>.mp4`), derived from the
+peer's declared filename and whitelist-normalised. It is **decoration**:
+the lookup uses the 26 characters alone, so `<slug>`, `<slug>.mp4` and
+`<slug>.zip` all fetch the same bytes. The response is always
+`application/octet-stream` + `Content-Disposition: attachment` +
+`X-Content-Type-Options: nosniff`, with no branch — never treat the
+extension as a content type. Every miss (unknown slug, malformed slug,
+reaped file) is the same 404 `{"error": "not_found"}`.
 
 404 `{"error": "not_held"}` on either write door means the handle names
 nothing — resolved on another device, or the hold elapsed. 429 and 507 on
