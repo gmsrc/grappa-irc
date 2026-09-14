@@ -12,10 +12,9 @@ defmodule Grappa.IRC.ClientIdentdTest do
   """
   use ExUnit.Case, async: true
 
-  alias Grappa.Identd
+  alias Grappa.{Identd, IRCServer}
   alias Grappa.Identd.Bindings
   alias Grappa.IRC.Client
-  alias Grappa.IRCServer
 
   setup do
     start_supervised!(Bindings)
@@ -42,7 +41,7 @@ defmodule Grappa.IRC.ClientIdentdTest do
 
   test "a connected client binds its {source, local_port, peer, peer_port} tuple to its ident" do
     {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
-    _client = start_client(port)
+    _ = start_client(port)
     :ok = IRCServer.await_handshake(server, 1_000)
 
     {:ok, {source_ip, local_port}} = IRCServer.peername(server)
@@ -55,7 +54,7 @@ defmodule Grappa.IRC.ClientIdentdTest do
     # map and the binding by the Client from its. Reading the ident back
     # off the wire is what pins them to one value.
     {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
-    _client = start_client(port)
+    _ = start_client(port)
     :ok = IRCServer.await_handshake(server, 1_000)
 
     {:ok, user_line} =

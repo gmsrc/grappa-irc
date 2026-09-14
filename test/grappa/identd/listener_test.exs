@@ -17,8 +17,7 @@ defmodule Grappa.Identd.ListenerTest do
   use ExUnit.Case, async: true
 
   alias Grappa.Identd
-  alias Grappa.Identd.Bindings
-  alias Grappa.Identd.Listener
+  alias Grappa.Identd.{Bindings, Listener}
 
   @crlf <<13, 10>>
   @loopback {127, 0, 0, 1}
