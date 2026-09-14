@@ -213,6 +213,33 @@ jobs:
           # (public-repo HTTPS, no deploy key needed). Without this the
           # script bails at the submodule-empty check.
           submodules: recursive
+          # 🔴 Whole history, because this suite BAKES an aggregate over it
+          # (issue 1773). `scripts/integration.sh` derives GRAPPA_CREDITS from
+          # `infra/packaging/credits.sh`, whose contributor list is a
+          # `git shortlog` over everything — and this action's default is
+          # `fetch-depth: 1` (its own action.yml, at the sha pinned above).
+          # One commit is not a smaller history, it is a false one: every
+          # green run here baked `[{"name":"Marcello Barnaba","commits":1}]`
+          # against a repository where that author has 5667, and nothing was
+          # red because a wrong roll has the same shape as a right one. The
+          # red that finally exposed it was a dependabot PR, where the single
+          # fetched commit is the auto-merge commit authored by
+          # `dependabot[bot]` and the #1927 bot filter drops it, leaving the
+          # empty list the spec does refuse.
+          #
+          # credits.sh now withholds the list on a shallow repo instead of
+          # guessing it, so leaving this at the default is no longer a silent
+          # wrong roll — it is a red suite. Pinned by
+          # `test/infra/integration_checkout_depth_test.bats`.
+          fetch-depth: 0
+          # `fetch-depth: 0` alone would drag the whole 491M of historical
+          # blobs onto four shard runners on every run. A blobless partial
+          # clone reaches the same 6293 commits — which is all `shortlog`
+          # reads — in 25M with the working tree checked out, measured
+          # against 15M for today's single-commit fetch. Blobs for the
+          # checked-out commit are fetched on demand, which is the same work
+          # the shallow fetch was already doing.
+          filter: blob:none
 
       - name: Verify submodule populated
         run: |
