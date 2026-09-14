@@ -147,7 +147,7 @@ defmodule Grappa.Scrollback.MessageTest do
       # the writer uses, once inside `'$.structural'`. Nothing in the source
       # holds those two together — this does, and it does it by reading the
       # SQL the query actually emits rather than re-asserting the source text.
-      {sql, _params} =
+      {sql, _} =
         Ecto.Adapters.SQL.to_sql(:all, Grappa.Repo, from(m in Message, where: Message.structural_row?(m.meta)))
 
       assert sql =~ "json_extract"
@@ -169,7 +169,7 @@ defmodule Grappa.Scrollback.MessageTest do
     test "the SQL pin is not vacuous — a query without the macro does NOT name the path" do
       # Positive control for the pin above: `=~` against a path that appears in
       # every query would pass no matter what the macro emitted.
-      {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Grappa.Repo, from(m in Message, where: m.kind == :mode))
+      {sql, _} = Ecto.Adapters.SQL.to_sql(:all, Grappa.Repo, from(m in Message, where: m.kind == :mode))
 
       refute sql =~ "'$." <> Atom.to_string(Message.structural_meta_key()) <> "'"
     end

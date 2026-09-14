@@ -3107,7 +3107,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg(:mode, ["#italia", "+b", "troll!*@*"], {:nick, "op", "u", "h"})
 
-      assert {:cont, _state, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
+      assert {:cont, _, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
 
       assert attrs.meta == %{
                Grappa.Scrollback.Message.structural_meta_key() => true,
@@ -3121,7 +3121,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg(:mode, ["#italia", "+o", "alice"], {:nick, "op", "u", "h"})
 
-      assert {:cont, _state, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
+      assert {:cont, _, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
 
       refute Map.has_key?(attrs.meta, Grappa.Scrollback.Message.structural_meta_key()),
              "a status-prefix row must stay untagged: the tag has no `false` form"
@@ -3132,7 +3132,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg(:mode, ["#italia", "+ob", "alice", "troll!*@*"], {:nick, "op", "u", "h"})
 
-      assert {:cont, _state, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
+      assert {:cont, _, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
 
       assert attrs.meta[Grappa.Scrollback.Message.structural_meta_key()] == true,
              "an op grade riding the same line must not buy the ban invisibility"

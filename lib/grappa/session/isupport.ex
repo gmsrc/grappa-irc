@@ -367,7 +367,7 @@ defmodule Grappa.Session.ISupport do
   end
 
   @spec structural_mode_letter?(t(), String.t()) :: boolean()
-  defp structural_mode_letter?(_isupport, sign) when sign in ["+", "-"], do: false
+  defp structural_mode_letter?(_, sign) when sign in ["+", "-"], do: false
   defp structural_mode_letter?(isupport, letter), do: user_prefix(isupport, letter) == :error
 
   @doc """
