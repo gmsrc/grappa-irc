@@ -13693,3 +13693,73 @@ cannot tell a live gate's silence from a dead gate's. What is NOT claimed
 is that the gate's coverage should widen here — that is a coverage change,
 which the pin deliberately cannot distinguish from a shape change, and it
 does not belong in a product slice.
+<!-- entry #2156 -->
+
+---
+
+## 2026-09-14 — issue 2156: the reply-quote head was never too narrow by accident
+
+vjt pasted a line from another client into `#grappa` and it did not go
+grey. The boundary is one regex, `PREVIOUS_QUOTE` in
+`cicchetto/src/lib/quotableBody.ts`, and against that body it returns no
+match for TWO reasons that are each sufficient alone — measured, not
+reasoned: strip only the leading `19:19:22 ` and it still misses (the
+channel-status sigil in `<@Johnny^Lizard>`); strip only the sigil and it
+still misses (the timestamp); strip both and it matches.
+
+That pair is the whole finding. `replyQuote` builds the quote from the
+MESSAGE, explicitly so the row's own timestamp and prefix glyph stay out
+of it, so neither decoration can ever appear on a quote of OURS. The
+regex was exactly as narrow as what we emit, and what another client
+pastes carries two things we never produce. The cure is therefore the
+HEAD alone: two optional groups in front of a wrapper that stays
+MANDATORY. `12:30 roba << altro` is still somebody's sentence and
+`shift << 2` is still not a quote — pinned, not assumed.
+
+### Three doors, not the two the issue counted
+
+The issue names the renderer and `withoutPreviousQuote`. There is a
+third: `startsWithReplyQuote` (#1688) classifies a compose DRAFT, and it
+derives from the same `exec`. So the widening moves all three, and two of
+them change behaviour:
+
+- **requote (`withoutPreviousQuote`)** — re-quoting a pasted line now
+  drops the pasted timestamp and sigil with the quote. Intended: the
+  strip means "what the sender actually wrote".
+- **draft ordering (`startsWithReplyQuote`)** — a draft the operator
+  pasted now reads as quote-shaped, so a new quote goes BEHIND it instead
+  of in front of it.
+
+Both are pinned by tests rather than left to be found. The alternative —
+two regexes, a wide one for the render and a narrow one for the other two
+— was BUILT and measured rather than estimated, and then reverted: `+14 /
+-3` lines in `quotableBody.ts`, of which four are code and nine are the
+comment explaining why there are two, with exactly two `it` blocks
+inverting. A handful of lines, so it stays a small change if it is ever
+wanted.
+
+It is not taken here because it costs issue 2086's ruling that the dimmed
+region and the stripped region are ONE region by construction. Split, the
+renderer would dim a head the compose box says is not one, and nothing
+but a test would keep the two in step.
+
+### What is deliberately still refused
+
+A bracketed `[HH:MM]`, a timestamp behind a leading date, and irssi's
+padded `<    nick>`. None was reported, each is another client's dialect,
+and a head that accepts anything in front of a `<<` is how `shift << 2`
+becomes a quote again. All three are pinned as a 0.
+
+### The gate, and why no e2e
+
+`e2e/tests/issue2112-reply-quote-presence-grey.spec.ts` exists and was
+read: its subject is the COLOUR — a cascade plus a composite that jsdom
+cannot resolve. This slice changes neither the class nor the paint, only
+which characters carry it, which is a pure string boundary plus a span
+split. So it is gated by the two unit doors instead — the offset in
+`replyQuote.test.ts` and the rendered spans in `MircText.test.tsx`, off
+one shared fixture so the two cannot come to describe different pastes.
+Three mutants were run against the new tests and all three were killed:
+timestamp group removed (6 red), sigil group removed (6 red), and the
+head widened to accept anything (9 red, including two PRE-EXISTING
+tests).

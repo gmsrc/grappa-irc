@@ -28,16 +28,45 @@ import { mircPlainText } from "./mircFormat";
 // `<foo[1]> ` head, and a wider one starts eating ordinary prose.
 const NICK = "[A-Za-z\\[\\]\\\\`_^{|}][\\w\\[\\]\\\\`_^{|}-]{0,29}";
 
+// issue 2156 — the channel-status sigil a client prints INSIDE the wrapper
+// (`<@Johnny^Lizard>`). Not a nick character: RFC 2812's specials are
+// ``[]\`_^{|}`` and none of these five is among them, so the sigil can never be
+// read as the nick itself and admitting it costs no ambiguity. Deliberately
+// WIDER than cic's own `MODE_PREFIX_TABLE` (`@%+`, the ohv we model): the paste
+// comes from somebody else's client on somebody else's network, where `~`
+// (founder) and `&` (admin) are printed too.
+const STATUS_SIGIL = "[@%+~&]?";
+
+// issue 2156 — the clock a client prints in front of the line. `HH:MM`, with
+// optional seconds and a one-digit hour, and the separating space INSIDE the
+// group so the whole thing is absent-or-complete.
+//
+// This is the entire list, and the narrowness is the point. A bracketed
+// `[HH:MM]`, a leading date, and irssi's padded `<    nick>` are each another
+// client's dialect, none was reported, and a head that accepts anything in
+// front of a `<<` is how `shift << 2` becomes a quote again.
+const PASTED_TIMESTAMP = "(?:\\d{1,2}:\\d{2}(?::\\d{2})? )?";
+
 // A previous reply-quote sitting at the head of a body. Anchored at position 0
 // and shaped like what `replyQuote` emits — `<nick> ` for speech, `* nick ` for
 // an action (#1126) — because a bare `<<` search would eat ordinary text
 // (`shift << 2`, `cat <<EOF`), which is worse than the nesting it fixes.
 //
+// issue 2156 widened the HEAD and only the head, with the two optional groups
+// above. WHY the head and not the shape: cic never emits either decoration
+// (`replyQuote` builds the quote from the MESSAGE precisely so the row's
+// timestamp and prefix glyph stay out of it), so this regex was never too
+// narrow by accident — it was exactly as narrow as what WE produce, and a
+// quote another client pasted carries two things we do not. The nick wrapper
+// stays MANDATORY: a timestamp alone does not make a quote.
+//
 // `[\s\S]*` is greedy on purpose: the cut lands on the LAST tail, so a body
 // persisted before this fix sheds every hop it accumulated, not just the
 // oldest. The tail also counts flush against the end of the body — a sender
 // whose whole message was a quote wrote nothing of their own.
-const PREVIOUS_QUOTE = new RegExp(`^(?:<${NICK}>|\\* ${NICK}) [\\s\\S]*<<(?: |$)`);
+const PREVIOUS_QUOTE = new RegExp(
+  `^${PASTED_TIMESTAMP}(?:<${STATUS_SIGIL}${NICK}>|\\* ${NICK}) [\\s\\S]*<<(?: |$)`,
+);
 
 // What the sender actually wrote: their body minus the quote they were
 // answering. Returns the body untouched when it is not quote-shaped.
@@ -119,6 +148,13 @@ export function replyQuoteHeadLength(text: string): number {
 // `<<` search calls `shift << 2` a quote, and on the draft side that
 // mis-classification is what decides whether the operator's own sentence gets
 // reordered. One nick charset, one anchor, one answer.
+//
+// issue 2156 therefore moved this door too, and the change is deliberate: a
+// draft the operator PASTED from another client used to read as their own text
+// and take the new quote in FRONT, and now reads as quote-shaped and takes it
+// behind. Sharing the predicate is what makes the three doors agree on what a
+// quote looks like; splitting it here to keep the old ordering would mean the
+// renderer dimming a head the compose box says is not one.
 export function startsWithReplyQuote(text: string): boolean {
   return replyQuoteHeadLength(text) > 0;
 }

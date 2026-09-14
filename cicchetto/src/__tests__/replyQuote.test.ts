@@ -12,6 +12,11 @@ import {
   replyQuote,
   replyToMessage,
 } from "../lib/replyQuote";
+import {
+  PASTED_REPLY_ANSWER,
+  PASTED_REPLY_BODY,
+  PASTED_REPLY_HEAD,
+} from "./helpers/pastedReplyQuote";
 
 // #1067 — the reply verb: a swipe (or the menu's Reply item) drops
 // `<nick> quoted message<< ` into the compose box with the caret at the end,
@@ -648,5 +653,110 @@ describe("replyQuoteHeadLength — how far the quote reaches (issue 2086)", () =
     ]) {
       expect(body.slice(replyQuoteHeadLength(body)).trim()).toBe(quotableBody(msg({ body })));
     }
+  });
+});
+
+// issue 2156 — the same head, wearing the decorations ANOTHER client prints.
+// vjt pasted a line from an irssi-shaped client into #grappa and the grey did
+// not reach it. Two decorations sit at the head and EITHER ONE alone takes the
+// match to 0: the pasting client's `HH:MM:SS ` in front, and the channel-status
+// sigil inside the wrapper. cic produces neither, by an explicit decision
+// (`replyQuote.ts`: the quote is built from the MESSAGE so the row's timestamp
+// and prefix glyph stay out of it) — so the detector was never too narrow by
+// accident, it was exactly as narrow as what WE emit.
+//
+// Only the HEAD widens. The nick wrapper stays mandatory and the tail is
+// untouched, which is what keeps `shift << 2` somebody's sentence.
+describe("replyQuoteHeadLength — a quote pasted by another client (issue 2156)", () => {
+  const head = (body: string): string => body.slice(0, replyQuoteHeadLength(body));
+
+  // The fixture is evidence, so it is checked before it is used: a head plus an
+  // answer that do not reconstitute the transcript would let every assertion
+  // below pass against a paste nobody ever sent.
+  it("pins the reported transcript: head + answer IS the pasted body", () => {
+    expect(PASTED_REPLY_HEAD + PASTED_REPLY_ANSWER).toBe(PASTED_REPLY_BODY);
+  });
+
+  it("reaches through the timestamp AND the sigil — the body vjt reported", () => {
+    expect(head(PASTED_REPLY_BODY)).toBe(PASTED_REPLY_HEAD);
+  });
+
+  // Each decoration on its own, because the fix is two independent widenings
+  // and a test that only carried both would stay green with one of them gone.
+  it("reaches through a leading timestamp alone, at every width a paste carries", () => {
+    expect(head("19:19:22 <bob> ciao << risposta")).toBe("19:19:22 <bob> ciao << ");
+    expect(head("19:19 <bob> ciao << risposta")).toBe("19:19 <bob> ciao << ");
+    expect(head("9:19 <bob> ciao << risposta")).toBe("9:19 <bob> ciao << ");
+  });
+
+  // Wider than cic's own `MODE_PREFIX_TABLE` (`@%+`, the ohv we model) on
+  // purpose: the paste comes from somebody else's client on somebody else's
+  // network, where `~` (founder) and `&` (admin) are printed too. A sigil is
+  // not a nick character in RFC 2812, so none of these can be read as the nick
+  // itself and the widening buys no ambiguity.
+  it("reaches through a channel-status sigil alone, for every prefix a paste carries", () => {
+    for (const sigil of ["@", "%", "+", "~", "&"]) {
+      expect(head(`<${sigil}bob> ciao << risposta`)).toBe(`<${sigil}bob> ciao << `);
+    }
+  });
+
+  it("still lands on the LAST tail when the paste is itself a chain", () => {
+    expect(head("19:00 <@a> uno << 19:01 <+b> due << tre")).toBe(
+      "19:00 <@a> uno << 19:01 <+b> due << ",
+    );
+  });
+
+  // The nick wrapper stays MANDATORY. A timestamp is not what makes a quote —
+  // if it were, every line somebody pasted with a `<<` in it would go grey.
+  it("keeps the nick wrapper mandatory — a timestamp alone is not a quote", () => {
+    expect(replyQuoteHeadLength("12:30 roba << altro")).toBe(0);
+    expect(replyQuoteHeadLength("19:19:22 shift << 2 gives four")).toBe(0);
+    expect(replyQuoteHeadLength("<@> ciao << risposta")).toBe(0);
+    expect(replyQuoteHeadLength("19:19:22<bob> ciao << risposta")).toBe(0);
+  });
+
+  // Deliberately NOT widened (issue 2156 says so, and these are the spellings
+  // that would take the head back to "accepts anything in front of a `<<`").
+  // None was ever reported; each is another client's dialect.
+  it("stays shut on the spellings this issue deliberately did not widen", () => {
+    expect(replyQuoteHeadLength("[19:19] <bob> ciao << risposta")).toBe(0);
+    expect(replyQuoteHeadLength("2026-09-14 19:19:22 <bob> ciao << risposta")).toBe(0);
+    expect(replyQuoteHeadLength("19:19 <       bob> ciao << risposta")).toBe(0);
+  });
+
+  // THE SECOND DOOR, stated rather than discovered. `PREVIOUS_QUOTE` is also
+  // what a REQUOTE strips, so widening the head means re-quoting a pasted line
+  // now drops the pasted timestamp and sigil along with the quote. That is the
+  // intent — the strip means "what the sender actually wrote" — and this is
+  // where it is written down.
+  it("strips the pasted decorations at the requote door too — one region", () => {
+    const body = PASTED_REPLY_BODY;
+    expect(quotableBody(msg({ body }))).toBe(PASTED_REPLY_ANSWER);
+    expect(body.slice(replyQuoteHeadLength(body)).trim()).toBe(quotableBody(msg({ body })));
+  });
+});
+
+// THE THIRD DOOR — `startsWithReplyQuote` (#1688), which decides whether a
+// compose draft already carries a quote and so whether a new one is appended or
+// prepended. Issue 2156 names two consumers; there are three, and this one also
+// changes behaviour: a draft the operator PASTED from another client used to
+// read as their own text and take the quote in front, and now reads as
+// quote-shaped and takes it behind. Consistent with the head being the only
+// discriminator anywhere, but it is a change, so it is pinned.
+describe("draft ordering against a PASTED quote (issue 2156, third door)", () => {
+  it("appends behind a draft that is a quote pasted from another client", () => {
+    mountCompose();
+    setDraft(KEY, "19:19:22 <@Johnny^Lizard> ciao << lol");
+    replyToMessage(msg({}), NET, CHAN);
+    expect(getDraft(KEY)).toBe("19:19:22 <@Johnny^Lizard> ciao << lol<vjt> ciao mondo << ");
+  });
+
+  // The other side of the same discriminator, so the arm above cannot be
+  // satisfied by an implementation that simply stopped prepending.
+  it("still puts the quote in FRONT of a draft that merely opens with a time", () => {
+    mountCompose();
+    setDraft(KEY, "19:19:22 la mia risposta");
+    replyToMessage(msg({}), NET, CHAN);
+    expect(getDraft(KEY)).toBe("<vjt> ciao mondo << 19:19:22 la mia risposta");
   });
 });

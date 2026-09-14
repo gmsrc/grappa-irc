@@ -2,6 +2,7 @@ import { render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setStripFormatting } from "../lib/stripFormatting";
 import { MircBody } from "../MircText";
+import { PASTED_REPLY_BODY, PASTED_REPLY_HEAD } from "./helpers/pastedReplyQuote";
 
 // #220 — per-surface link-vs-surface event routing.
 //
@@ -400,5 +401,26 @@ describe("MircText reply-quote dimming (issue 2086)", () => {
     const { container } = render(() => <MircBody body={"<vjt> ciao \x0304mondo << sì certo"} />);
     expect(dimmedText(container)).toBe("<vjt> ciao mondo << ");
     expect(container.textContent).toBe("<vjt> ciao mondo << sì certo");
+  });
+
+  // issue 2156 — the acceptance criterion, rendered: the body vjt pasted from
+  // another client must dim through `… O:) << ` and leave the answer plain.
+  // `replyQuote.test.ts` proves the OFFSET off the same two constants; this
+  // proves the span boundary the operator actually sees, which is the half a
+  // pure-function test cannot reach (the cut can land mid-run).
+  it("dims a head pasted by another client — timestamp and status sigil (issue 2156)", () => {
+    const { container } = render(() => <MircBody body={PASTED_REPLY_BODY} />);
+    expect(dimmedText(container)).toBe(PASTED_REPLY_HEAD);
+    // Muted, never hidden — constraint 1 still holds for a pasted head.
+    expect(container.textContent).toBe(PASTED_REPLY_BODY);
+  });
+
+  // The widening is the HEAD only. A line that merely opens with a time is
+  // still somebody's sentence, and dimming it would be worse than not dimming
+  // the paste: it eats text nobody quoted.
+  it("leaves a body that merely opens with a timestamp undimmed (issue 2156)", () => {
+    const { container } = render(() => <MircBody body="12:30 roba << altro" />);
+    expect(container.querySelector(DIMMED)).toBeNull();
+    expect(container.textContent).toBe("12:30 roba << altro");
   });
 });
