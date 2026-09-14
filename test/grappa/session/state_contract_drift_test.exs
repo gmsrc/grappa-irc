@@ -316,7 +316,7 @@ defmodule Grappa.Session.StateContractDriftTest do
       end)
 
     unclassified =
-      hits |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.reject(&(&1 in @map_reads ++ @map_creates))
+      hits |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.reject(&(&1 in (@map_reads ++ @map_creates)))
 
     if unclassified != [] do
       flunk("""
