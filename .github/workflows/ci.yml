@@ -166,14 +166,20 @@ jobs:
         # disagree about what "clean" means.
         run: scripts/shellcheck.sh
 
-      - name: DESIGN_NOTES entry boundaries (#1271)
+      - name: DESIGN_NOTES entry boundaries + rollover (#1271, issue 2138)
         # `merge=union` auto-resolves concurrent appends to the decision log
         # and used to eat the separator of the rebased entry — silently, with
         # rc=0 and zero deletions, four times on 2026-08-13. The only thing
         # that ever caught it was a human pinning `git diff --numstat` before
-        # the rebase. This is that ritual, automated, and diff-scoped so it
-        # carries no opinion about the 426 headings that predate the
-        # convention. Needs the fetch-depth: 0 above.
+        # the rebase. This is that ritual, automated, and the SHAPE checks are
+        # diff-scoped so they carry no opinion about the 426 headings that
+        # predate the convention. Needs the fetch-depth: 0 above.
+        #
+        # One check is NOT diff-scoped (issue 2138): a closed month still
+        # inline is a property of the FILE, so it runs on every PR, including
+        # the ones that never touch the log. That is deliberate — gated behind
+        # the diff it would be dead exactly where the debt accumulates, which
+        # is how 495 August entries stayed inline for six weeks.
         run: scripts/design-notes-gate.sh
 
       - name: POSIX-parse the sh-dialect scripts (#503, derived by #1377)
