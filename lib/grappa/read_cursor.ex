@@ -532,9 +532,13 @@ defmodule Grappa.ReadCursor do
   # `maybe_exclude_presence/2`: this aggregate is what SEEDS the unread badge,
   # so if only the history fetch learned about structural mode rows the pane
   # would render a ban the badge refused to count — the #239 "the count and
-  # the pane must agree on which rows count" invariant, one table out. The
-  # fragment answers exactly true or false (`IS 1`, never NULL), which is what
-  # lets it sit under this `not`.
+  # the pane must agree on which rows count" invariant, one table out.
+  #
+  # The fragment answers exactly true or false (`IS 1`, never NULL) rather than
+  # relying on NULL behaving itself under this `not`. Measured, `= 1` would
+  # also pass here — a NULL `ON` is "not matched", which is what an untagged
+  # row wants anyway — so the spelling buys composability, not a fix. See
+  # `Message.structural_row?/1`.
   @spec exclude_hidden_presence(Ecto.Query.dynamic_expr(), %{
           String.t() => MapSet.t(String.t())
         }) :: Ecto.Query.dynamic_expr()

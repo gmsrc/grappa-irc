@@ -14998,8 +14998,19 @@ rendered a ban the badge refused to count.
 One fragment serves both — `Message.structural_row?/1`, a query macro, the
 `Identifier.nick_fold/1` shape. It uses SQLite's null-safe `IS 1` and not
 `= 1`: `json_extract` returns SQL NULL for an absent path, the untagged row is
-the common case, and the ReadCursor site NEGATES the predicate. Under `=` that
-negation propagates NULL instead of the false it means. Ecto refuses a module
+the common case, and the ReadCursor site NEGATES the predicate, so under `=`
+that negation propagates NULL instead of the false it means.
+
+**🔴 That last sentence is true about the SQL and it does NOT justify the
+choice, which is what it was first written to do.** The mutant that swaps
+`IS 1` for `= 1` SURVIVES: both suites stay green, because a NULL predicate is
+"not true" in a `WHERE` and in a LEFT JOIN `ON` alike, and "not true" is
+exactly what an untagged row wants at both of today's sites. The three-valued
+logic never reaches an outcome. `IS 1` is kept as a COMPOSABILITY choice — the
+fragment is a shared macro, and the first call site that wants the NULL case
+INCLUDED is where the two spellings finally differ — and the retraction is
+recorded rather than the reasoning quietly rewritten, because a rationale that
+no test can falsify is the kind that gets cited later as measured. Ecto refuses a module
 attribute as `fragment/n`'s first argument, so the JSON path is a literal and
 the key exists twice in `Message`; the pin is a test that renders the REAL SQL
 via `Ecto.Adapters.SQL.to_sql` and looks for `structural_meta_key/0` in it,
@@ -15037,6 +15048,23 @@ collision is visible only to whoever holds both branches, and the published
 number must stay monotonic on main. `@min_protocol_version` stays at 1: the
 key is absent-tolerant by construction, since the pre-2176 behaviour IS what
 absence encodes.
+
+### Mutants
+
+Twelve, eleven killed. The two the issue named: strip the tag from `+b` and
+the ban goes invisible (9 red); tag `+o` and the churn comes back (9 red).
+Then `Enum.any?` → `Enum.all?` on the mixed line (10 red), each query door
+dropped on its own (1 red each, and they are DIFFERENT reds — which is the
+whole argument for touching both), the JSON path off by one byte (3 red,
+including the SQL pin), the meta allowlist entry removed (2 red), and the two
+halves of the rename that the kind-set gate could not see: server-side (1 red,
+the new axis) and client-side (1 red, the SAME test — cic's own suite stays
+green, which is the point of the axis existing).
+
+**The twelfth SURVIVED and is recorded above**: `IS 1` → `= 1` is green. A
+surviving mutant is a finding about the PROSE here, not a hole in the tests —
+there is no behaviour to assert, so the honest move was to retract the claim
+rather than write a test that pins an accident.
 
 ### What was NOT established
 

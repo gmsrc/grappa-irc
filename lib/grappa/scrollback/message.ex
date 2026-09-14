@@ -373,13 +373,18 @@ defmodule Grappa.Scrollback.Message do
   `exclude_hidden_presence/2` for the #505 unread aggregate) cannot drift
   into two different JSON paths.
 
-  `IS 1` rather than `= 1` deliberately: SQLite's `json_extract/2` returns
-  SQL NULL for an absent path, and an untagged row is the COMMON case (every
-  `:join`, every `:part`, every `+o`). Under `=` the comparison is NULL, and
-  a caller that negates it — `not (kind in suppressed and not structural)` —
-  gets NULL propagated instead of the false it meant. `IS` is SQLite's
-  null-safe equality, so this fragment is always exactly true or false and
-  composes under `not/1`.
+  `IS 1` rather than `= 1`, and the honest reason is narrower than the one
+  this docstring first gave. SQLite's `json_extract/2` returns SQL NULL for an
+  absent path, and an untagged row is the COMMON case (every `:join`, every
+  `:part`, every `+o`), so under `=` the comparison is NULL and a caller that
+  negates it propagates NULL rather than the false it meant. That is true
+  about the SQL — **and MEASURED, it changes nothing at either of today's two
+  sites.** A mutant swapping `IS 1` for `= 1` left both suites green, because
+  a NULL predicate in a `WHERE` and in a LEFT JOIN's `ON` is "not true", which
+  is exactly the outcome an untagged row wants at both sites. So this is a
+  choice about COMPOSABILITY, not a bug fix: the fragment is a shared macro
+  whose next call site may want the NULL case to be INCLUDED, and there the
+  two spellings diverge. Stated as a preference because that is what it is.
 
   The JSON path is the literal `'$.structural'` and it HAS to be — Ecto
   requires `fragment/n`'s first argument to be a literal string, so a module
