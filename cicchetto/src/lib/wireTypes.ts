@@ -1560,6 +1560,21 @@ export type UserSettingsWireAutoAwayDebounceChangedPayload = {
   auto_away_debounce_seconds: number | null;
 };
 
+export type UserSettingsWireQuitPartReasonChangedPayload = {
+  kind: "quit_part_reason_changed";
+  quit_part_reason: string | null;
+};
+
+export type UserSettingsWireAutoAwayReasonChangedPayload = {
+  kind: "auto_away_reason_changed";
+  auto_away_reason: string | null;
+};
+
+export type WireUserSettingsEvent =
+  | UserSettingsWireAutoAwayDebounceChangedPayload
+  | UserSettingsWireQuitPartReasonChangedPayload
+  | UserSettingsWireAutoAwayReasonChangedPayload;
+
 // === Grappa.Vhosts.AdminWire ===
 
 export type VhostsAdminWireVhostJson = {

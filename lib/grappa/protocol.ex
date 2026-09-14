@@ -549,7 +549,46 @@ defmodule Grappa.Protocol do
   # @min_protocol_version stays at 1: additive, and no bundle predating v22
   # asks for a route it has never heard of, so every one of them is served
   # unchanged.
-  @protocol_version 22
+  #
+  # v23 (issue 2150) — two new user-topic push kinds for the remembered
+  # leave reasons: `quit_part_reason_changed` (the message sent when the
+  # subject leaves without typing one) and `auto_away_reason_changed` (the
+  # one the bouncer sends when IT marks them away). Both carry a single
+  # `string | null` field named after the key, and `null` is a VALUE — it
+  # is how "I cleared it" travels — so the key is always present.
+  #
+  # Purely additive, and the number moves anyway: that is the #1393d rule,
+  # and the reason applies literally here. cic's `userTopic.ts` grows an
+  # arm that REQUIRES each payload to validate against its generated
+  # schema, so a bundle built against v23 cannot be served by a server
+  # predating it — new-client → old-server, the axis this number carries.
+  #
+  # MEASURED, not assumed: `mix grappa.wire_pin --check` was run BEFORE
+  # touching this line and reported the digest moving
+  # `sha256:74cb9003…628fdb` -> `sha256:75e60cc5…c9764` with the protocol
+  # «21 (unchanged)». The bump is that gate's verdict rather than a
+  # judgement call — had the digest stood still, the honest act would have
+  # been to leave the number alone and say so. That BEFORE digest is the
+  # one v22 left standing (measured on `origin/main`'s own `shape.pin`,
+  # `74cb9003…628fdb`), so the rebase onto v22 put no second shape change
+  # into the number and `75e60cc5…c9764` is this slice's contribution
+  # alone.
+  #
+  # ⚠️ 22 IS NOT OURS, and the gap in this comment's history is deliberate.
+  # #2143 claimed it concurrently; the collision was visible only to
+  # whoever held both branches, and the orchestrator ruled this one to 23
+  # rather than have two branches merge the same number. The number must
+  # stay MONOTONIC on main, so #2143 had to land FIRST — landing this one
+  # while main still read 21 would have walked the published version
+  # backwards the moment 22 arrived behind it. It has landed: main carried
+  # `@protocol_version 22` when this branch was rebased onto it, and 23
+  # now sits exactly one above.
+  #
+  # @min_protocol_version stays at 1. Both events are pushes a client may
+  # simply not have an arm for, and an unrecognised `kind` has always been
+  # ignorable (unknown-is-never-fatal); no bundle predating v23 is left
+  # unable to talk to this server.
+  @protocol_version 23
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -560,7 +599,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 22
+  @spec version() :: 23
   def version, do: @protocol_version
 
   @doc """
