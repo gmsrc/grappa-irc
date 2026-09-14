@@ -1728,10 +1728,14 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     Lei chiese *"poto `preserved-w1-2128`?"*; io risposi *"potali pure, li ho sul Pi con sha256
     verificati ai due lati"* — **vero di 4 file su 8**. La directory conteneva DUE gruppi
     (`cp15-b6/` che avevo tirato, e `issue1964/` che **non avevo mai visto**): cancellati tutti.
-    🥇 **Danno reale nullo, e la ragione ASSOLVE il fatto ma NON il ragionamento:** quel rosso e'
-    **deterministico e si rigenera a comando** ⇒ il suo artefatto **non porta una misura che non
-    esista altrove**, che e' proprio il criterio scritto qui sopra. **Me la sono cavata per
-    fortuna.** ⇒ **Prima di autorizzare una potatura, CONTA i file dall'altro lato contro la tua
+    ✅ **NON SI E' PERSO NIENTE, e non per merito mio: LEI aveva una SECONDA COPIA** in
+    `/tmp/2128-artifacts/`, e me l'ha detto nello stesso turno in cui riportava la cancellazione.
+    Tirati sul Pi, **4 su 4, sha256 identici ai due lati.** *Il fatto e' salvo, il ragionamento no —
+    e la distanza fra i due la copriva una worker, non io.*
+    🥇 **Anche a perderli il danno sarebbe stato nullo, e la ragione ASSOLVE il fatto ma NON il
+    ragionamento:** quel rosso e' **deterministico e si rigenera a comando** ⇒ il suo artefatto
+    **non porta una misura che non esista altrove**, che e' proprio il criterio scritto qui sopra.
+    **Due salvagenti, nessuno dei due mio.** ⇒ **Prima di autorizzare una potatura, CONTA i file dall'altro lato contro la tua
     copia** (`find | wc -l` ai due lati, non il ricordo di quanti ne hai tirati): il gruppo che non
     hai mai visto e' invisibile esattamente come lo zero falso. *Stesso difetto del punto 12, un
     piano sotto: avevo verificato un GRUPPO e generalizzato alla DIRECTORY.*
