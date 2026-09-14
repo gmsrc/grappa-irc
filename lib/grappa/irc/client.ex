@@ -2113,7 +2113,7 @@ defmodule Grappa.IRC.Client do
   # occurrences under `lib/`, because grappa only ever dialled out and the
   # kernel's choice of ephemeral port was nobody's business. An identd
   # answer is keyed on exactly that choice.
-  @spec transport_sockname(%__MODULE__{}) :: peername_result()
+  @spec transport_sockname(t()) :: peername_result()
   defp transport_sockname(%{socket: nil}), do: {:error, :no_socket}
 
   defp transport_sockname(%{transport: :tcp, socket: sock}),
@@ -2126,7 +2126,7 @@ defmodule Grappa.IRC.Client do
   # is about to carry. The failure arm is loud rather than silent: losing
   # the binding costs this session its verified ident for the whole
   # connection, and an operator chasing a stubborn `~` needs to see it.
-  @spec register_identd_binding(%__MODULE__{}, String.t()) :: :ok
+  @spec register_identd_binding(t(), String.t()) :: :ok
   defp register_identd_binding(state, ident) do
     case {transport_sockname(state), transport_peername(state)} do
       {{:ok, {source, local_port}}, {:ok, {peer, peer_port}}} ->

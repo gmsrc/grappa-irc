@@ -202,9 +202,18 @@ defmodule Grappa.Identd.Listener do
   defp serve(connection, wait_ms) do
     started = System.monotonic_time(:millisecond)
 
+    # Both arms settle on `:ok`: a send that fails has nowhere to be
+    # reported to — the querier is the thing that went away — and a recv
+    # that times out means a peer that connected and said nothing. Neither
+    # is a condition this side can act on, and leaving the case's value
+    # unmatched would hide the day one of them stops being `:ok`.
     case :gen_tcp.recv(connection, 0, @recv_timeout_ms) do
-      {:ok, line} -> _ = :gen_tcp.send(connection, answer(connection, line, wait_ms, started))
-      {:error, _} -> :ok
+      {:ok, line} ->
+        _ = :gen_tcp.send(connection, answer(connection, line, wait_ms, started))
+        :ok
+
+      {:error, _} ->
+        :ok
     end
 
     # Half-close before closing, so the reply is on its way out before the
