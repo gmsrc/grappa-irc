@@ -13763,3 +13763,131 @@ Three mutants were run against the new tests and all three were killed:
 timestamp group removed (6 red), sigil group removed (6 red), and the
 head widened to accept anything (9 red, including two PRE-EXISTING
 tests).
+<!-- entry #2150 -->
+
+---
+
+## 2026-09-14 — issue 2150: the leave message the bouncer remembers for you
+
+Two keys land in `user_settings.data`: `quit_part_reason`, the message the
+subject leaves with when they type no reason of their own, and
+`auto_away_reason`, the one the bouncer sends on their behalf when IT
+marks them away. They are two keys and not one because they answer
+different questions and are read at different moments — but they share
+one validator (`validate_leave_reason/3`), one write path
+(`update_data/2`, the #1375 frame), and one byte ceiling
+(`@leave_reason_max_bytes 512`), so the CRLF refusal and the limit are
+stated once rather than twice with a drift between them.
+
+`""` CLEARS the key rather than storing an empty string. A stored `""`
+and an absent key would be two spellings of one state, and
+`put_or_delete/3` already existed to collapse exactly that — `nil` and
+`""` both reach it as `nil` from `validate_leave_reason/3`.
+
+Validation is AT SAVE: a bad reason earns a 422 with `field_errors`
+inline, not a silent trim at send time. A reason that cannot be put on
+the wire is a setting the subject believes they have, and the gap between
+believing and having is the whole complaint this slice answers.
+
+### The default resolves SERVER-SIDE — a deviation, and the orchestrator's
+
+The issue verifies the default client-side. It resolves server-side here:
+`NetworksController.parked_reason/1` for the QUIT and
+`ChannelsController.part_reason/2` for the PART, each folding the stored
+value in when the request carries none. cic is UNCHANGED on that path.
+
+The reason is that a default applied only by a client that HYDRATED it is
+the same "saved but never applied" gap the save-time validation closes —
+a second door (a script, another client, a future listener facade) would
+not get it. And the third leg has no client at all: the auto-away reason
+is emitted by the bouncer while nobody is looking, so it MUST resolve
+server-side. One feature answering in two places is the half-migration
+CLAUDE.md forbids, so both answer in one.
+
+What is NOT claimed is that this makes the issue's own verification
+false: with nothing stored the body still carries no reason key, which is
+the sentence the issue wrote. Reversible by moving two expressions.
+
+### `AwayState.set_auto_away/1` is deleted, not kept delegating
+
+The arity-1 clause injected the module constant as a default. Keeping it
+beside the new arity-2 would be a silent degradation path: a caller that
+forgot the subject's preference would still compile, still run, and
+quietly send the constant. Six test call sites moved to arity-2; the
+production resolution now lives in one place,
+`Session.Server.resolve_auto_away_reason/1`, whose `nil` clause is where
+the constant is reached and the only place it is.
+
+### Two facts the issue does not state, and they shaped the design
+
+`/quit` with no reason does not send a bare QUIT today — the controller
+already passed `reason || "user-disconnect"`, so the chain the stored
+value joins is explicit-then-stored-then-literal rather than
+explicit-then-stored-then-nothing. `Session.send_quit/3` guards
+`is_binary(reason)`, so a bare QUIT is not even expressible. PART is
+asymmetric: an absent reason stays `nil` and the frame stays bare.
+
+An explicitly EMPTY `?reason=` stays bare and does NOT pick up the
+default. cic never sends that shape (it omits the param for null and
+empty), so the case belongs to direct API callers, for whom "I said
+empty" is a statement and not an omission. Pinned by a test, because it
+is the kind of distinction a later refactor collapses by accident.
+
+### Protocol 23, the 22 that is not ours, and a tripwire the rebase hid
+
+`@protocol_version` moves 21 → 23. 22 was claimed concurrently by #2143
+and the collision was visible only to whoever held both branches; rather
+than have two branches merge the same number, this one took 23 and #2143
+landed first. The ordering is the point: the published number must never
+walk BACKWARDS on main, because a client reading `server >= N` as "has
+everything N had" would be lied to permanently — the floor that lies,
+#1393d.
+
+The bump is the pin's verdict rather than a judgement call:
+`mix grappa.wire_pin --check` reported the digest moving
+`sha256:74cb9003…628fdb` → `sha256:75e60cc5…c9764` BEFORE the number was
+touched. Measured again after the rebase onto v22, and the digest did not
+move a second time: v22's own bump left the shape untouched (its routes
+live in a controller the digest does not span), so `74cb9003…628fdb` is
+both this branch's BEFORE and main's AFTER, and the rebased tree still
+answers `wire shape and protocol 23 agree.`
+
+🔴 **The `@spec version() :: N` tripwire is silent across a rebase, and
+this is the case it exists for.** The number lives in two places about
+ten lines apart. Two branches that both bump it conflict on the
+ATTRIBUTE, whose neighbouring prose diverged — and merge the `@spec` line
+CLEAN, because that line is byte-identical on both sides. Measured here:
+git raised one conflict, took the base's `:: 22` for the spec with no
+marker, and the tree compiled. The general rule, now also written next to
+the spec itself: a conflict on one site of a duplicated constant is
+positive evidence that the OTHER site was decided for you, so grep the
+whole file for the old value before continuing the rebase.
+
+### The red-first that measured nothing, and why the mutants are the evidence
+
+Reverting every changed `lib/` file to the base and running the suites at
+HEAD produced 54 failures out of 441 — and all 54 are worthless. Opened
+one by one, every single one dies in its SETUP on
+`UndefinedFunctionError: Grappa.UserSettings.put_quit_part_reason/3`;
+not one reaches its own assertion. The red proves the API is NEW. It
+says nothing about whether the behaviour is pinned, which is the only
+thing a red-first is run to learn.
+
+The structural reason generalises: when a test's arrangement calls the
+same new API its assertion exercises, reverting the implementation
+wholesale cannot produce a behavioural red, because the arrangement dies
+first. A red-first is only informative where the consumer is reverted and
+the producer is left standing — which is a MUTANT, not a revert.
+
+Five mutants, each with a did-not-apply guard on the file digest and a
+verified revert, run on a detached bench worktree with its own
+`GRAPPA_CACHE_ID`, against a baseline proven to speak (441 tests, 0
+failures) before any of them: `put_or_delete`'s `nil` arm storing instead
+of deleting kills the three clear-to-absent tests; dropping the stored
+lookup in `parked_reason/1` kills the two QUIT resolution tests; dropping
+it in `part_reason/2` kills the PART one; making
+`apply_auto_away_reason/2` never re-emit kills exactly the `:away_auto`
+test; making it re-emit unconditionally kills the `:away_explicit` and
+`:present` tests and NOT the `:away_auto` one. That last pair biting
+DISJOINT sets is what pins the conditional — either mutant alone would be
+satisfied by a test that merely asserts the state field.
