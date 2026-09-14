@@ -117,7 +117,24 @@ defmodule GrappaWeb.RouterScopeTest do
     # secret, and refusing it would leave a headless client unable to
     # tell whether the badges it renders are even being populated.
     {"GET", "/me/settings/show-peer-profiles"},
-    {"PUT", "/me/settings/show-peer-profiles"}
+    {"PUT", "/me/settings/show-peer-profiles"},
+    # issue 2150 — the two remembered leave reasons. Client-usable, and the
+    # capability being granted is named rather than waved through: a
+    # per-client token that writes these chooses the text this account puts
+    # on the wire when it parts, quits, or is marked away. That is visible
+    # to the channel, so it is worth saying out loud — but it is the same
+    # class as `aliases` and `vhost` above (both already here, both more
+    # revealing), it reaches no credential, reads back nothing secret, and
+    # `auto-away-debounce-seconds` two entries up is the exact sibling: the
+    # timer is client-usable, and refusing its TEXT while allowing its
+    # TIMING would be a boundary drawn by accident rather than by
+    # reasoning. The write is refused at save time for CR/LF/NUL and capped
+    # at 512 bytes, so the worst case is a rude quit message, not an
+    # injected line.
+    {"GET", "/me/settings/quit-part-reason"},
+    {"PUT", "/me/settings/quit-part-reason"},
+    {"GET", "/me/settings/auto-away-reason"},
+    {"PUT", "/me/settings/auto-away-reason"}
   ]
 
   # Routes with no bearer gate at all — the login doors, the public
