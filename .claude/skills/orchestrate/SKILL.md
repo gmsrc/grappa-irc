@@ -1883,6 +1883,25 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   riarmata.** *Ennesima faccia dello zero falso e plausibile: non lo strumento rotto, non
   l'artefatto sbagliato, ma il PRIVILEGIO insufficiente — e l'unica cosa che lo rivela è un
   controllo a risposta IMPOSSIBILE da sbagliare.*
+- 🥇🥇 **UN ASSERT SU CONFIGURAZIONE IL CUI SOGGETTO *DOCUMENTA SÉ STESSO* PASSERÀ SULLA
+  DOCUMENTAZIONE, E SOLO CANCELLARE LA COSA CHE SORVEGLIA LO RIVELA (w1, 2026-09-14, #2125).**
+  Gate bats nuovo su `integration.yml`: match a substring per `fetch-depth: 0`. **Cancellata la
+  chiave dallo YAML, il test è rimasto VERDE** — lo step si spiega in prosa che CONTIENE quella
+  stringa, quindi il matcher leggeva la **giustificazione** e riferiva sulla **configurazione**.
+  Cura: strippare le righe di commento e ancorarsi a una riga-CHIAVE
+  (`^[[:space:]]+fetch-depth:[[:space:]]*0[[:space:]]*$`), così né la prosa né un valore più lungo
+  (`10`) la soddisfano. 🥇 **La classe è più larga dello YAML**: vale per qualunque file che porti
+  accanto al valore il commento che lo spiega — workflow, `biome.json`, `compose.yaml`,
+  `.tool-versions`. **Chiedi la mutazione «cancella la chiave, lascia il commento» nei brief.**
+  ⚠️ Compagno misurato nello stesso giro: un controllo negativo scritto `! predicato` in un body
+  bats **NON PUÒ far fallire il test** — serve `refute`. L'ha beccato il nostro stesso
+  `bats_assertion_style_test.bats`.
+- 🔑 **`.github/workflows/integration.yml` È NEI SUOI STESSI `paths:`** (ultima voce, sia `push`
+  sia `pull_request`) ⇒ **una PR che modifica il workflow FA girare integration, e la cura è
+  esercitata dalla CI che la porta.** Misurato 2026-09-14: temevo il contrario e mi sbagliavo.
+  ⚠️ Ma `infra/**` NON c'è (dei suoi file compare solo `infra/packaging/version.sh`), e `.github/**`
+  nemmeno in generale: una PR che tocca SOLO `infra/packaging/credits.sh` non farebbe girare nulla.
+  **Il file del workflow è il grimaldello per far gatare una cura di CI; `infra/` da solo no.**
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
