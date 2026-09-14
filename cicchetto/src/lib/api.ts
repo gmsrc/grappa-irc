@@ -2564,7 +2564,16 @@ export async function countMessagesAfter(
 // `notice_target` are mutually exclusive on the wire (the server answers 400 to
 // a POST carrying both), and a union is how that gets said in the type system
 // instead of in a comment nobody reads.
-export type MessageRelay = { kind: "ctcp" | "notice"; target: string };
+//
+// issue 2179 — `statusmsg` is the third member and the ODD one: for the other
+// two `channelName` is the SOURCE window and the target is payload, while here
+// the target is a channel at a membership level (`@#chan`) and it DECIDES the
+// window — the server peels the sigil and keys the echo to the channel behind
+// it, where the ingress router already files everyone else's copy. So
+// `channelName` must be that same channel, and the server answers 400 when it
+// is not. Same union all the same: the three keys stay mutually exclusive on
+// the wire, and what varies is which fact the caller has to get right.
+export type MessageRelay = { kind: "ctcp" | "notice" | "statusmsg"; target: string };
 
 // #1400 / #1430 — this door is a union discriminated by STATUS, not by a field
 // in the body, and until now the client did not read the discriminant.
@@ -2596,7 +2605,9 @@ export async function sendMessage(
       ? { body }
       : relay.kind === "ctcp"
         ? { body, ctcp_target: relay.target }
-        : { body, notice_target: relay.target };
+        : relay.kind === "notice"
+          ? { body, notice_target: relay.target }
+          : { body, statusmsg_target: relay.target };
   const res = await fetch(
     `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channelName)}/messages`,
     {

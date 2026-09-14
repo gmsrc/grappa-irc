@@ -431,7 +431,15 @@ describe("parseSlash — /msg", () => {
   // WHY (/msg addresses nicks), and WHAT to type instead (open/join the
   // channel window). Pin that actionable guidance so it can never regress to
   // the bare "not supported" string.
-  it.each(["#foo", "&local", "!12345chan", "+modeless"])(
+  // issue 2179 — `+#chan` is in this list on purpose, and it is the ONE shape
+  // the ops-only cure does NOT reach. `@#chan` and `%#chan` open with a
+  // MEMBERSHIP sigil and pass this guard, so compose peels them with the
+  // network's `PREFIX=`; `+#chan` opens with a CHANTYPE and is refused here,
+  // before compose sees anything to peel. Telling the two apart needs a
+  // per-network fact this pure function deliberately does not have, on a
+  // target genuinely ambiguous with a legal channel name. Declared gap, not a
+  // regression: refused before 2179, refused after.
+  it.each(["#foo", "&local", "!12345chan", "+modeless", "+#chan"])(
     "/msg to a channel (%s) is rejected with explicit guidance (#12/#343)",
     (chan) => {
       const r = parseSlash(`/msg ${chan} hello`);

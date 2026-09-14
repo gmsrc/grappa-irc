@@ -308,6 +308,10 @@ const isupportMock = vi.hoisted(() => ({
   // #1861 — the network's advertised CASEMAPPING, which tab-completion now
   // folds by. Default `"ascii"`: bahamut/Azzurra, all of production.
   casemapping: "ascii" as "ascii" | "rfc1459" | "rfc1459_strict",
+  // issue 2179 — the network's membership sigils (`PREFIX=`), which the /msg
+  // arm peels a STATUSMSG target with. Default is the bahamut/Azzurra run, so
+  // `@#chan` is ops-only here exactly as it is in production.
+  memberSigils: ["@", "%", "+"] as readonly string[],
 }));
 vi.mock("../lib/isupport", () => ({
   isupportForNetwork: () => ({
@@ -326,6 +330,9 @@ vi.mock("../lib/isupport", () => ({
   chantypesForNetwork: () => isupportMock.chantypes,
   // #1861 — and which fold it applies to identifiers, for tab-completion.
   casemappingForNetwork: () => isupportMock.casemapping,
+  // issue 2179 — the membership sigil run the /msg arm peels with. Overridable
+  // per test so the "network advertises no `%`" case is reachable.
+  sigilRankForNetwork: () => isupportMock.memberSigils,
 }));
 
 vi.mock("../lib/modeModal", () => ({
@@ -377,6 +384,8 @@ beforeEach(() => {
   // Reset to the production posture (bahamut/Azzurra) here; the rfc1459 tests
   // opt in explicitly.
   isupportMock.casemapping = "ascii";
+  // issue 2179 — same module-lifetime leak hazard as the fold above.
+  isupportMock.memberSigils = ["@", "%", "+"];
 });
 
 describe("compose draft state", () => {
@@ -2038,6 +2047,216 @@ describe("compose submit — slash command dispatch", () => {
 
     expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "alice", "ciao");
     expect(result).toEqual({ ok: true });
+  });
+
+  // issue 2179 — `/msg @#chan hi` is an ops-only CHANNEL message, not a new
+  // conversation. Pre-fix it took the query path: a sidebar row literally named
+  // `@#chan` that no network knows about, focus moved into it, and a 400 from
+  // the send door on top (the plain arm refuses a sigil, correctly — there the
+  // target IS the persist key).
+  it("issue 2179 — /msg @#chan routes the send to the CHANNEL and opens no query window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qw = await import("../lib/queryWindows");
+    const sel = await import("../lib/selection");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg @#b ops only");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    // The URL window is the channel BEHIND the sigil — the server re-derives
+    // that key from its own 005 and 400s a POST whose URL disagrees, so sending
+    // `@#b` as the window would not merely misfile the row, it would not send.
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#b", "ops only", {
+      kind: "statusmsg",
+      target: "@#b",
+    });
+    expect(result).toEqual({ ok: true });
+
+    // The two mutations that reinstate the phantom, asserted separately because
+    // they fail independently: the window and the focus.
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+    expect(sel.setSelectedChannel).not.toHaveBeenCalled();
+  });
+
+  // The DISCRIMINATING control for the test above: the peel must not swallow an
+  // ordinary /msg. If it did, every DM in the client would stop opening its
+  // window, and the test above would still pass on its own.
+  it("issue 2179 — a plain /msg <nick> still opens and focuses its query window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qw = await import("../lib/queryWindows");
+    const sel = await import("../lib/selection");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg alice ciao");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(qw.openQueryWindowState).toHaveBeenCalledWith(1, "alice", expect.any(String));
+    expect(sel.setSelectedChannel).toHaveBeenCalledWith({
+      networkSlug: "freenode",
+      channelName: "alice",
+      kind: "query",
+    });
+    // …and with NO relay: an ordinary DM is a plain PRIVMSG to the window.
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "alice", "ciao");
+  });
+
+  // issue 2179 — the sigil set is the NETWORK's `PREFIX=`, not a literal here.
+  // bahamut advertises `PREFIX=(ohv)@%+` while `STATUSMSG=@+`, so `%#chan`
+  // peels on the client and is REFUSED by the server — which IS the acceptance
+  // ("a sigil the network does not advertise is still refused, not silently
+  // stripped"), and the refusal belongs to the party holding the 005. What cic
+  // owes is the absence of the phantom window, and that is what is asserted.
+  it("issue 2179 — a half-op address is relayed for the server to rule on, not turned into a window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qw = await import("../lib/queryWindows");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg %#b half");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#b", "half", {
+      kind: "statusmsg",
+      target: "%#b",
+    });
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+  });
+
+  it("issue 2179 — a network whose PREFIX has no `%` does not peel one", async () => {
+    // The negative half of the test above: the set is READ, so narrowing it
+    // changes the answer. Without this, a hardcoded `@%+` passes the case above
+    // and nothing notices.
+    localStorage.setItem("grappa-token", "tok");
+    isupportMock.memberSigils = ["@", "+"];
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg %#b half");
+    await compose.submit(k, "freenode", "#a");
+
+    // No `statusmsg` relay: it never became a membership address on THIS
+    // network, so the arm must not claim a level the network does not have.
+    expect(sb.sendMessage).not.toHaveBeenCalledWith("freenode", "#b", "half", {
+      kind: "statusmsg",
+      target: "%#b",
+    });
+  });
+
+  // issue 2179 / #1303 — the WHOLE run reaches the door, and the window is the
+  // channel behind ALL of it. `@+#b` is addressed to ops AND voiced members, so
+  // a peel that stopped at the first viable split would key the echo to `+#b`
+  // — a channel nobody is in — while telling the server a level (`@`) narrower
+  // than the one the line actually reaches.
+  it("issue 2179 — /msg @+#chan keys the echo past the WHOLE run, target verbatim", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qw = await import("../lib/queryWindows");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg @+#b both levels");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#b", "both levels", {
+      kind: "statusmsg",
+      target: "@+#b",
+    });
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+  });
+
+  // issue 2179 — the `+` collision, at the ARM rather than at the peel. `+` is
+  // both the voice sigil and an RFC channel sigil, so `@+chan` is level `@` on
+  // the modeless channel `+chan`. Two mutations die here and nowhere else in
+  // this file: a peel that runs GREEDY finds no channel behind `@+` and drops
+  // the target down the query path (the phantom, back), while an arm that
+  // strips every leading sigil instead of reading `peelStatusmsg`'s channel
+  // sends to `chan`, which is not a channel at all.
+  it("issue 2179 — /msg @+chan addresses the modeless channel, not `chan`", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qw = await import("../lib/queryWindows");
+    const sel = await import("../lib/selection");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg @+chan ops only");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "+chan", "ops only", {
+      kind: "statusmsg",
+      target: "@+chan",
+    });
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+    expect(sel.setSelectedChannel).not.toHaveBeenCalled();
+  });
+
+  // issue 2179 — an OVER-TRIGGER guard, and by construction it cannot die from
+  // removing the cure (like the plain-/msg control above): it asserts what the
+  // arm must NOT claim. A sigil over a NICK is not a membership address —
+  // `peelStatusmsg` declines unless a CHANNEL starts behind the run — so an arm
+  // that tested `sigils.includes(target[0])` instead of reading the peel would
+  // relay `@bob` as an ops-only channel message. What `/msg @bob` does INSTEAD
+  // is out of this issue's scope and deliberately not pinned here.
+  it("issue 2179 — a sigil over a NICK is never relayed as a membership address", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg @bob ciao");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ kind: "statusmsg" }),
+    );
+  });
+
+  // issue 2179 — the KNOWN GAP, pinned as the refusal it is rather than left to
+  // prose. `+` is also a chantype, so `+#b` hits the #12/#343 channel guard in
+  // the PURE parser before compose ever sees it. Curing that means teaching
+  // `parseSlash` a per-network membership fact it does not have, on a target
+  // genuinely ambiguous with a legal channel name (`+#b` IS a valid RFC
+  // channel spelling) — declined, and accepted as a gap.
+  //
+  // What this test buys: the gap is a REFUSAL and not a regression. The 2179
+  // shapes `@#b` / `%#b` reach the new path, this one does not reach it, and
+  // — the half that matters — it does not fall back into the phantom window
+  // the issue exists to remove. If the parser guard is ever taught the
+  // membership set, this test goes red and points at the decision.
+  it("issue 2179 — /msg +#chan stays refused by the parser, with no phantom window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qw = await import("../lib/queryWindows");
+    const sel = await import("../lib/selection");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/msg +#b ops only");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    // The #343 guidance, not a silent drop.
+    expect(result).toMatchObject({ error: expect.stringContaining("+#b") });
+    // Nothing sent under ANY spelling, and no window invented for it.
+    expect(sb.sendMessage).not.toHaveBeenCalled();
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+    expect(sel.setSelectedChannel).not.toHaveBeenCalled();
   });
 
   // #723 — the residue has exactly ONE owner. `/msg` redirects the unsent

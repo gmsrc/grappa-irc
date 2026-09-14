@@ -78,7 +78,7 @@ import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
 import { identityScopedStore } from "./identityScopedStore";
-import { chantypesForNetwork } from "./isupport";
+import { chantypesForNetwork, sigilRankForNetwork } from "./isupport";
 import { joinedChannelsOnNetwork } from "./joinedChannels";
 import { membersByChannel } from "./members";
 import { splitMessageLines } from "./messageLines";
@@ -89,10 +89,12 @@ import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 // #1225 — the seam sends a PRIVMSG to the window OR relays a NOTICE/CTCP to a
 // different recipient while echoing here, so it is named for the window, not
 // for one of the verbs it can carry.
+import { sendMessage as sendWindowMessage } from "./scrollback";
 import { selectedChannel, setSelectedChannel } from "./selection";
 import { draftLines, sendBodyLines, wireBody } from "./sendPipeline";
 import { isServicesSender } from "./servicesSender";
 import { parseSlash } from "./slashCommands";
+import { peelStatusmsg } from "./statusmsg";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
 
 // #1255 — the channel sigils this NETWORK advertised (005 CHANTYPES),
@@ -879,6 +881,32 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // the optimistic UI-state mutations are skipped.
           const networkId = requireNetworkId(networkSlug, "msg");
           if (typeof networkId !== "number") return networkId;
+          // issue 2179 — a STATUSMSG target (`@#chan`) is a CHANNEL at a
+          // membership level, not a new conversation. It must not reach
+          // `openQueryWindowState` / `setSelectedChannel` below: that is what
+          // put a sidebar row literally named `@#chan` next to a 400 from the
+          // send door, and a window nobody is in is the client half of the
+          // phantom #1303 removed on the inbound side.
+          //
+          // The echo is addressed to the channel BEHIND the run — the server
+          // re-derives that key from its own 005 and refuses a POST whose URL
+          // disagrees, so this is a prediction it checks, not a key cic
+          // originates. No focus switch: the row lands where the operator's
+          // channel-mates read it, and no IRC client moves your eyes for a
+          // channel message.
+          //
+          // A single await, no #666 pacing plan — the `/notice` precedent
+          // (#1225): a slash command is one line, so there is nothing to pace,
+          // and a throttled send surfaces its 429 the way a lone /msg does.
+          const opsOnly = peelStatusmsg(cmd.target, sigilRankForNetwork(networkId));
+          if (opsOnly !== null) {
+            await sendWindowMessage(networkSlug, opsOnly.channel, cmd.body, {
+              kind: "statusmsg",
+              target: cmd.target,
+            });
+            result = { ok: true };
+            break;
+          }
           if (isServicesSender(cmd.target)) {
             // #666 — resumable + paced; residue keyed on the source window
             // `key`, because a services target opens no query window to move
