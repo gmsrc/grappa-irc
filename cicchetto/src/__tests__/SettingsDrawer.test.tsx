@@ -1335,6 +1335,89 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   });
 });
 
+// issue 2157 — the client-side video-processing switch. Deliberately NOT
+// mocked: `videoProcessing.ts` IS localStorage, jsdom gives us a real one, and
+// a mock here would make the device-local claim untestable — the whole point
+// of the pref is WHERE it is written.
+describe("SettingsDrawer (issue 2157 — video processing switch)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("renders the toggle CHECKED on a browser that has never touched it", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const toggle = screen.getByTestId("video-processing-toggle") as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+  });
+
+  it("reflects a stored OFF", () => {
+    localStorage.setItem("cicchetto.videoProcessing", "false");
+    wrap(true);
+    openSub("general-settings-entry");
+    expect((screen.getByTestId("video-processing-toggle") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("writes DEVICE-LOCAL: localStorage moves and no server write is made", async () => {
+    const orch = await import("../lib/uploadOrchestrator");
+    wrap(true);
+    openSub("general-settings-entry");
+    const toggle = screen.getByTestId("video-processing-toggle");
+
+    fireEvent.click(toggle);
+
+    expect(localStorage.getItem("cicchetto.videoProcessing")).toBe("false");
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    // The load-bearing half of "device-local": nothing went to the account.
+    // The two account-scoped writers reachable from this page are the upload
+    // pair; a synced pref would have gone through the displayPrefs PUT, which
+    // this drawer only ever reaches through its `syncedSet*` setters.
+    expect(orch.saveUploadTtlSeconds).not.toHaveBeenCalled();
+    expect(orch.saveUploadConfirmEnabled).not.toHaveBeenCalled();
+  });
+
+  it("turns back ON", () => {
+    localStorage.setItem("cicchetto.videoProcessing", "false");
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.click(screen.getByTestId("video-processing-toggle"));
+    expect(localStorage.getItem("cicchetto.videoProcessing")).toBe("true");
+  });
+
+  // The copy has to price the switch, not just describe it: off means big
+  // clips are REFUSED rather than shrunk, and the length limit binds anyway.
+  // All three facts share one sentence because issue 1993's blurb-shape test
+  // (below) allows exactly one full stop per blurb on this page.
+  it("the hint states the cost and the scope, not only the benefit", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const hint = screen.getByTestId("video-processing-hint");
+    expect(hint).toHaveTextContent(/refused instead of shrunk/i);
+    expect(hint).toHaveTextContent(/length limit still applies/i);
+    expect(hint).toHaveTextContent(/this device only/i);
+  });
+
+  // Structural, and deliberately narrow. The claim is that the toggle does not
+  // inherit the upload fieldset's HOST gate (`ttlOptions.length > 0`), and the
+  // honest way to prove that here is that it lives in a fieldset of its own,
+  // outside that one. It is NOT proven by rendering a ladder-less host: both
+  // shipped hosts (embedded, litterbox) carry a ladder, so that case cannot be
+  // built from production code and is not asserted.
+  it("lives in its own fieldset, outside the host-gated upload one", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const own = screen.getByTestId("video-processing-toggle").closest("fieldset");
+    const uploadFieldset = screen.getByTestId("upload-ttl-select").closest("fieldset");
+
+    expect(own).toHaveClass("video-processing-fieldset");
+    expect(own).not.toBe(uploadFieldset);
+    expect(uploadFieldset?.contains(screen.getByTestId("video-processing-toggle"))).toBe(false);
+    const legend = screen.getByText("video processing");
+    expect(legend.tagName).toBe("LEGEND");
+    expect(legend.closest("fieldset")).toBe(own);
+  });
+});
+
 // Session-sharing — the share entry mirrors what the server actually
 // mints. #1306 widened that to a user subject, so the entry shows for
 // BOTH kinds; the exclusions left are #363's incognito visitor (whose
@@ -2650,6 +2733,10 @@ describe("SettingsDrawer (issue 1993 — general sub-page rework)", () => {
     const group = screen.getByTestId("settings-network-scope");
     expect(group.contains(screen.getByTestId("upload-ttl-select"))).toBe(false);
     expect(group.contains(screen.getByTestId("auto-away-select"))).toBe(false);
+    // issue 2157 — the video switch is DEVICE-scoped, which is neither of the
+    // two scopes this group sorts by, so it belongs on the same side of the
+    // line as the account knobs: outside.
+    expect(group.contains(screen.getByTestId("video-processing-toggle"))).toBe(false);
   });
 
   // ── (2) one apply for identity + NickServ password ────────────────────

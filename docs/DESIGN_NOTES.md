@@ -13891,3 +13891,97 @@ test; making it re-emit unconditionally kills the `:away_explicit` and
 `:present` tests and NOT the `:away_auto` one. That last pair biting
 DISJOINT sets is what pins the conditional — either mutant alone would be
 satisfied by a test that merely asserts the state field.
+<!-- entry #2157 -->
+
+---
+
+## 2026-09-14 — issue 2157: a switch that must not be reached through the import it is skipping
+
+vjt asked for a switch that turns cic's client-side video transcode off: iOS
+re-encodes a clip on its way OUT of the Photos picker, so `prepareVideo`'s
+transcode is a second pass over bytes that were compressed seconds earlier.
+Default ON, device-local, and it does not touch the duration ceiling or the
+size cap.
+
+### The ONE placement that is not a matter of taste
+
+The short-circuit sits ABOVE the dynamic `import("./videoTranscode")`, and that
+is the whole of the phone-side win that is not CPU: the chunk is **533.81 kB
+parsed / 133.16 kB gzipped** (`bun run build`, 2026-09-14, `videoTranscode-*.js`)
+and a guard one line lower downloads all of it before declining to use it.
+
+That number is also a correction. The issue, `videoPolicy.ts`'s moduledoc and
+`uploadOrchestrator.ts`'s both say **~495kB**; the same build measures the main
+chunk at 780.75 kB against the moduledoc's *"~305kB after the split"*. Neither
+stale figure was ever wrong on the day it was written — mediabunny grew. The
+lesson is narrower than "update the comments": a size that justifies an
+architectural choice (the lazy split) is a MEASUREMENT with a date, and a
+measurement quoted without one rots into a claim.
+
+Placement is pinned by a test that cannot live beside the others.
+`uploadVideoChunk.test.ts` counts how many times the `vi.mock` factory for
+`videoTranscode` RUNS — the factory fires once per module registry, on the
+first `import()`, so the count is only readable while the registry is cold, and
+thirty tests in `uploadOrchestrator.test.ts` have already warmed it. Vitest
+isolates the registry per test FILE; that isolation is the instrument. The file
+carries its own positive control (processing ON ⇒ the counter reaches 1),
+because a zero from a counter nothing ever moves measures nothing.
+
+The mutation that proves it is **M2**: move the guard below the `import()` and
+leave everything else alone. Behaviour is unchanged, every duration and cap
+test stays green, and exactly two tests go red — the chunk counter, and the
+assertion that no `"transcoding"` phase entry exists. No other mutant separates
+those two lines.
+
+### Device-local, and the criterion was already fixed
+
+`localStorage` (`videoProcessing.ts`), NOT a key in the synced `displayPrefs`
+bundle. The criterion is not invented here: #1766 set it and #2029 restated it
+— per-DEVICE when the complaint is about the device, synced when it is about
+the ACCOUNT. The double encode is a property of the iOS picker and of this
+device's CPU, and syncing it would carry "don't process" to the desktop
+browser, where the transcode is the only thing that shrinks a 200MB capture
+into the cap.
+
+The price of the other answer was measured rather than guessed, on #2029 — the
+most recent pref to take the synced road — by separating its sync PLUMBING from
+its feature. The delta a device-local pref does NOT pay is **+107/−24 production
+lines across 7 files** (`user_settings.ex` 28/10, `protocol.ex` 25/2 + 7/1,
+`priv/wire/shape.pin` 1/1, `displayPrefs.ts` 29/9, `userSettings.ts` 6/0,
+cic's `socket.ts` 11/1) plus **+265/−18 test lines across 3 files**: ≈ **+372/−42
+over 9 files and 4 commits**, against ≈ **+55 in one new cic module** here. The
+shape of that number matters more than its size: it is not a cic edit, it is a
+`protocol_version` bump (#1393d — `display_prefs` is a client-facing REST
+payload), a server changeset, and a wire pin. Synced is available for a ruling;
+it is not a variant of this slice.
+
+The choice also decides the MARKUP. The toggle gets a fieldset of its own
+instead of joining the upload pair, for two reasons that agree: the
+upload-retention fieldset is host-gated on `ttlOptions.length > 0`, and a
+transcode is a property of the browser, not of the host — but mainly because
+the checkbox already in there (`upload_confirm_enabled`) is account-synced, and
+#2029 named two adjacent checkboxes that persist differently as *"a promise the
+interface should not break"*.
+
+### One rejection, three gates
+
+A third copy of the `too_long` block would have made "the copy is the same with
+the switch off" a coincidence three literals have to keep. `rejectTooLong/3`
+and `originalUnderPolicy/4` are that block and that probe, once: the
+transcode's own `too_long`, the capability fallback, and the processing-off
+path now share them, and the orchestrator is SHORTER than before the feature.
+Mutant **M4** (drop the duration gate inside the shared helper) kills the new
+test AND two pre-existing capability-fallback tests — which is the evidence
+that the sharing is real and not a parallel copy that happens to agree today.
+
+The test for the copy COMPARES the two paths' error strings against each other
+rather than retyping one literal twice, and pins the text once besides, so a
+regression that moved both is still caught.
+
+### What this entry does NOT claim
+
+The toggle is not proven to render against a host with no TTL ladder: both
+shipped hosts carry one, so that case cannot be built from production code, and
+the test asserts the structural separation it can prove instead. The
+phone-side battery saving is not measured at all — the chunk bytes are, the
+second encode not being run is a code path, and no device was instrumented.

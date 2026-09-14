@@ -107,6 +107,7 @@ import {
   uploadTtlSecondsValue,
 } from "../lib/uploadOrchestrator";
 import * as userSettings from "../lib/userSettings";
+import { setVideoProcessingEnabled, VIDEO_PROCESSING_STORAGE_KEY } from "../lib/videoProcessing";
 
 const slug = "freenode";
 const channel = "#a";
@@ -978,6 +979,115 @@ describe("video transcode branch", () => {
     await awaitTranscodeStart(2);
     expect(vt.transcodes[1]?.signal.aborted).toBe(false);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------------
+  // issue 2157 — the device-local switch that turns the transcode off.
+  //
+  // iOS re-encodes a clip on its way out of the Photos picker, so cic's
+  // transcode is a SECOND pass over bytes that were just compressed. The
+  // switch skips it. What the switch must NOT skip is the part of the video
+  // path that is POLICY rather than capability: the duration ceiling and the
+  // downstream cap check both keep binding, because "don't spend my battery
+  // shrinking this" is not "let me upload anything".
+  //
+  // The lazy-chunk half of the claim — that the mediabunny `import()` itself
+  // never happens — cannot be measured here (thirty tests above have already
+  // warmed the module registry) and lives in uploadVideoChunk.test.ts.
+  // ------------------------------------------------------------------
+
+  it("2157: the switch defaults ON — a browser that never touched it still transcodes", async () => {
+    // beforeEach clears localStorage, so this is a genuinely untouched browser.
+    expect(localStorage.getItem(VIDEO_PROCESSING_STORAGE_KEY)).toBeNull();
+
+    triggerUploadConfirmed(key, slug, channel, videoClip());
+
+    await awaitTranscodeStart(1);
+  });
+
+  it("2157: OFF — transcodeVideo is never called and the ORIGINAL is dispatched", async () => {
+    setVideoProcessingEnabled(false);
+    const clip = videoClip();
+    vt.probeDuration.mockResolvedValue(30);
+
+    triggerUploadConfirmed(key, slug, channel, clip);
+
+    // No "processing video…" phase is ever entered: ComposeBox renders that
+    // label off `phase === "transcoding"` and nothing is being transcoded, so
+    // the entry must not exist yet. (The ON path sets it synchronously here —
+    // see the happy-path test above.)
+    expect(uploadState(key)).toBeNull();
+
+    await vi.waitFor(() => expect(pendingResolvers.length).toBe(1));
+    // Referential, not by name: the host gets the very File the picker gave us.
+    expect(pendingResolvers[0]?.file).toBe(clip);
+    expect(vt.transcodes).toHaveLength(0);
+    expect(uploadState(key)?.phase).toBe("uploading");
+  });
+
+  it("2157: OFF — the duration ceiling still binds, with the copy ON produces", async () => {
+    settingsWithVideoDuration(45);
+
+    // (a) today's path: the transcode itself reports too_long.
+    triggerUploadConfirmed(key, slug, channel, videoClip());
+    await awaitTranscodeStart(1);
+    vt.transcodes[0]?.resolve({ error: { kind: "too_long", durationSeconds: 90 } });
+    await vi.waitFor(() => expect(uploadState(key)?.error).toBeTruthy());
+    const withProcessing = uploadState(key)?.error;
+    dismissUpload(key);
+
+    // (b) the switch off: the <video> probe reports the same over-long clip.
+    setVideoProcessingEnabled(false);
+    vt.probeDuration.mockResolvedValue(90);
+    triggerUploadConfirmed(key, slug, channel, videoClip());
+    await vi.waitFor(() => expect(uploadState(key)?.error).toBeTruthy());
+
+    // COMPARED, not retyped — "the same copy as today" is the claim, so the
+    // two strings are asserted against each other rather than against two
+    // copies of one literal that could drift apart in a later edit.
+    expect(uploadState(key)?.error).toBe(withProcessing);
+    // …and pinned once, so a regression that moved BOTH would still be caught.
+    expect(withProcessing).toBe("Video too long (max 45 seconds).");
+    expect(vt.transcodes).toHaveLength(1); // (a)'s only — (b) never transcoded
+    expect(pendingResolvers).toHaveLength(0);
+  });
+
+  it("2157: OFF — an over-cap original is still rejected by the downstream cap check", async () => {
+    setVideoProcessingEnabled(false);
+    vt.probeDuration.mockResolvedValue(30);
+
+    // 6MB against categoryHost's 5MB video cap. With the transcode gone there
+    // is no "processing failed (reason)" to name — the plain cap copy is the
+    // honest one, because nothing failed: the file is simply too big to send.
+    triggerUploadConfirmed(key, slug, channel, videoClip(6 * 1024 * 1024));
+
+    await vi.waitFor(() => expect(uploadState(key)?.error).toBe("File is too large (max 5 MB)."));
+    expect(vt.transcodes).toHaveLength(0);
+    expect(pendingResolvers).toHaveLength(0);
+  });
+
+  it("2157: OFF — cancelling during the duration probe uploads nothing", async () => {
+    setVideoProcessingEnabled(false);
+    let releaseProbe: (seconds: number | null) => void = () => {};
+    vt.probeDuration.mockImplementation(
+      () =>
+        new Promise<number | null>((resolve) => {
+          releaseProbe = resolve;
+        }),
+    );
+
+    triggerUploadConfirmed(key, slug, channel, videoClip());
+    await Promise.resolve();
+    cancelUpload(key);
+    releaseProbe(10);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The stale-controller guard after the probe await: a cancelled attempt
+    // must not resurrect state, and must not fall through to the upload.
+    expect(uploadState(key)).toBeNull();
+    expect(pendingResolvers).toHaveLength(0);
   });
 });
 

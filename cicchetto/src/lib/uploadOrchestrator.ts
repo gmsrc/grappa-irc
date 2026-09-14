@@ -24,6 +24,7 @@ import {
 // lands in a lazy chunk, off the cold-start main bundle (Task 6
 // quality-review follow-up, landed with Task 7, 2026-06-09).
 import { MAX_DURATION_SECONDS, probeDuration } from "./videoPolicy";
+import { getVideoProcessingEnabled } from "./videoProcessing";
 
 // Upload orchestration — images cluster I-2 (2026-05-15), generalized
 // to video + document categories (uploads cluster Task 5, 2026-06-09;
@@ -590,6 +591,54 @@ function videoTooLongMessage(maxSeconds: number): string {
   return `Video too long (max ${durationLabel(maxSeconds)}).`;
 }
 
+// The duration ceiling's ONE rejection. Three gates can reach it — the
+// transcode's own `too_long`, the capability-fallback probe, and (issue 2157)
+// the probe on the processing-off path — and all three owe the operator the
+// same sentence. Collapsed into one function rather than a third copy of an
+// eight-line block, so "the copy is the same with the switch off" is a
+// structural fact instead of a coincidence three literals have to keep.
+//
+// `phase` is "transcoding" on all three, including the path where nothing
+// transcodes: the field is documented meaningless once `error` is set (see
+// UploadStateEntry) and ComposeBox's error branch never reads it. Returns null
+// so a caller can `return rejectTooLong(...)` in one line.
+function rejectTooLong(key: ChannelKey, file: File, maxSeconds: number): null {
+  inflight.delete(key);
+  setEntry(key, {
+    filename: file.name,
+    loaded: 0,
+    total: 0,
+    phase: "transcoding",
+    error: videoTooLongMessage(maxSeconds),
+  });
+  return null;
+}
+
+// Upload the file EXACTLY as the picker handed it over, under the one policy
+// gate that survives without a transcoder: the duration ceiling, read through
+// the <video>-element probe (which needs no WebCodecs). Shared by the
+// capability fallback and by issue 2157's processing-off path — the two
+// situations where cic uploads an original — so a change to what "as-is under
+// policy" means cannot apply to one of them and not the other.
+//
+// Returns the file to upload, or null when the attempt is over (rejected, or
+// cancelled while the probe was in flight). The SIZE cap is deliberately not
+// checked here: the two callers want different copy for it, and dispatchUpload
+// checks it downstream for both.
+async function originalUnderPolicy(
+  key: ChannelKey,
+  file: File,
+  controller: AbortController,
+  maxDurationSeconds: number,
+): Promise<File | null> {
+  const durationSeconds = await probeDuration(file);
+  if (inflight.get(key)?.controller !== controller) return null; // cancelled
+  if (durationSeconds !== null && durationSeconds > maxDurationSeconds) {
+    return rejectTooLong(key, file, maxDurationSeconds);
+  }
+  return file;
+}
+
 // Video transform — Task 6 (2026-06-09). Returns the file to upload
 // (transcoded mp4, or the ORIGINAL on a capability fallback), or null
 // when an error entry was set / the upload was cancelled mid-transcode.
@@ -613,6 +662,23 @@ async function prepareVideo(
   file: File,
   controller: AbortController,
 ): Promise<File | null> {
+  // Read ONCE per attempt so no gate below can straddle an admin change
+  // mid-upload and reject against a value the message never named. Read
+  // BEFORE the dynamic import() rather than after it (issue 2157): both
+  // paths need it, and one read that precedes every await is strictly less
+  // straddle than one that follows an await.
+  const maxDurationSeconds = videoMaxDurationSeconds();
+
+  // issue 2157 — the switch, and it sits HERE, above the setEntry and above
+  // the `import()`, on purpose. Half the win on a phone is the ~534kB
+  // mediabunny chunk never being FETCHED, and a short-circuit one line lower
+  // would fetch it and then decline to use it. Above the setEntry for a
+  // second reason: ComposeBox renders "processing video…" off
+  // `phase === "transcoding"`, and with the switch off nothing is processing.
+  if (!getVideoProcessingEnabled()) {
+    return originalUnderPolicy(key, file, controller, maxDurationSeconds);
+  }
+
   setEntry(key, { filename: file.name, loaded: 0, total: 1, phase: "transcoding" });
 
   // Lazy chunk: mediabunny only loads the first time someone actually
@@ -624,10 +690,6 @@ async function prepareVideo(
   // size the transcode for the embedded default (50MiB) and let the
   // host's actual limit reject the upload if it disagrees.
   const capBytes = host.maxFileSizeBytes("video") ?? 50 * 1024 * 1024;
-  // Read ONCE per attempt so the gate inside transcodeVideo and the
-  // fallback gate below cannot straddle an admin change mid-upload and
-  // reject against a value the message never named.
-  const maxDurationSeconds = videoMaxDurationSeconds();
   const result = await transcodeVideo(
     file,
     capBytes,
@@ -643,32 +705,14 @@ async function prepareVideo(
   if ("ok" in result) return result.ok;
 
   if (result.error.kind === "too_long") {
-    inflight.delete(key);
-    setEntry(key, {
-      filename: file.name,
-      loaded: 0,
-      total: 0,
-      phase: "transcoding",
-      error: videoTooLongMessage(maxDurationSeconds),
-    });
-    return null;
+    return rejectTooLong(key, file, maxDurationSeconds);
   }
 
   // Capability failure → fall back to the original, reason logged.
   console.warn("video transcode unavailable, uploading original:", result.error);
-  const durationSeconds = await probeDuration(file);
-  if (inflight.get(key)?.controller !== controller) return null; // cancelled
-  if (durationSeconds !== null && durationSeconds > maxDurationSeconds) {
-    inflight.delete(key);
-    setEntry(key, {
-      filename: file.name,
-      loaded: 0,
-      total: 0,
-      phase: "transcoding",
-      error: videoTooLongMessage(maxDurationSeconds),
-    });
-    return null;
-  }
+  // Gate only — the helper answers `file` itself when the clip is in policy,
+  // so there is nothing to rebind; null means rejected or cancelled.
+  if ((await originalUnderPolicy(key, file, controller, maxDurationSeconds)) === null) return null;
 
   // Cap-check the fallback original HERE, not downstream: the generic
   // "File is too large" hides WHY a raw original reached the cap check

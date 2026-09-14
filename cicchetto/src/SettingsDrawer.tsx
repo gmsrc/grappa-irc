@@ -109,6 +109,7 @@ import {
   putVhostSelection,
   type VhostSettingsView,
 } from "./lib/userSettings";
+import { getVideoProcessingEnabled, setVideoProcessingEnabled } from "./lib/videoProcessing";
 import PerformSettings from "./PerformSettings";
 import ThemeGallery from "./ThemeGallery";
 import TotpSettings from "./TotpSettings";
@@ -158,6 +159,10 @@ const SettingsDrawer: Component<Props> = (props) => {
   const [size, setSize] = createSignal<FontSizeKey>(getFontSize());
   const [timeFmt, setTimeFmt] = createSignal<TimeFormatKey>(getTimeFormat());
   const [coloredNicklist, setColoredNicklistSig] = createSignal<boolean>(getColoredNicklist());
+  // issue 2157 — device-local, so the checkbox's state is a plain local signal
+  // seeded from storage, exactly as `size` above is. No module signal is needed:
+  // `videoProcessing.ts` is read once per upload attempt, never in a render path.
+  const [videoProcessing, setVideoProcessing] = createSignal<boolean>(getVideoProcessingEnabled());
 
   const [devices, setDevices] = createSignal<PushDeviceSummary[]>([]);
   // #964 — the server row THIS browser registered, so its list entry can say
@@ -1922,6 +1927,48 @@ const SettingsDrawer: Component<Props> = (props) => {
                 </Show>
               </fieldset>
             </Show>
+
+            {/* issue 2157 — the client-side video transcode, on this device.
+                OUTSIDE the host-gated Show above, and in a fieldset of its
+                own rather than joining the upload pair: the transcode is a
+                property of this BROWSER (WebCodecs, its CPU, its battery),
+                so a host with no TTL ladder must not hide it — and the
+                toggle it would have sat beside is account-synced, which
+                #2029 named as the thing not to do ("two adjacent checkboxes
+                that persist differently is a promise the interface should
+                not break"). Device-local for the same reason the switch
+                exists: iOS re-encodes on export, which is not true of the
+                desktop browser where the transcode is the only thing that
+                shrinks a 200MB capture to something the cap accepts. */}
+            <fieldset class="video-processing-fieldset">
+              <legend>video processing</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  data-testid="video-processing-toggle"
+                  checked={videoProcessing()}
+                  onChange={(e) => {
+                    const on = e.currentTarget.checked;
+                    setVideoProcessingEnabled(on);
+                    setVideoProcessing(on);
+                  }}
+                />
+                Shrink videos before sending
+              </label>
+              {/* Says what it COSTS, not just what it does. Turning it off
+                  does not make big clips upload — it makes them get refused,
+                  and that is the sentence an operator needs before flipping
+                  it, not after. The length limit is named too because it is
+                  POLICY and survives either way: it is the one rejection the
+                  switch cannot buy you out of. ONE sentence, one full stop —
+                  issue 1993 pins the shape of every blurb on this page, and
+                  four facts in one line is what that costs. */}
+              <p class="settings-section-blurb" data-testid="video-processing-hint">
+                On this device only: Grappa shrinks a clip to fit the upload limit before sending
+                it, iPhones already re-encode on export, and with this off an over-limit clip is
+                refused instead of shrunk while the length limit still applies.
+              </p>
+            </fieldset>
 
             {/* #348 — how long after your last device goes away the bouncer
                 tells the network you are away. The delay and the off switch
