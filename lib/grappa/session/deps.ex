@@ -4,11 +4,20 @@ defmodule Grappa.Session.Deps do
 
   These eleven are dependencies, not state. Nothing in a session's lifetime
   writes them: `init/1` reads them out of the resolved plan and every later
-  read is a call. Carried as opaque function references rather than module
-  aliases because the producing contexts (Networks, Visitors, QueryWindows)
-  already depend on `Grappa.Session`, so a literal alias would close a
-  Boundary cycle — the per-type notes below record which cycle each one
-  dodges.
+  read is a call. TEN of them are carried as opaque function references
+  rather than module aliases because the producing contexts (Networks,
+  Visitors) already depend on `Grappa.Session`, so a literal alias would
+  close a Boundary cycle — the per-type notes below record which cycle each
+  one dodges.
+
+  **`query_window_open?` is the eleventh field and is NOT one of them, and
+  the distinction is load-bearing rather than pedantic.** Its default is the
+  STATIC `&Grappa.QueryWindows.open?/3`; this module aliases
+  `Grappa.QueryWindows` by name; and `Grappa.Session` declares that module
+  in its `deps:`. `Boundary` SEES that edge — there is no cycle to dodge and
+  nothing invisible about it. Measured for issue 2137, which had counted it
+  among the invisible ones: what the two producers inject is ELEVEN closures
+  (the ten below plus `refresh_plan`), and this field is not among them.
 
   Grouping them costs no behaviour and buys two things. `Session.Server`'s
   state drops from 85 top-level keys to 76, and the `EventRouter` state
@@ -22,7 +31,7 @@ defmodule Grappa.Session.Deps do
   ## Why the door takes the subject (#1398)
 
   A closure carries no module reference, so `Boundary` cannot follow the
-  edge and nothing at compile time can see these ten. Built with
+  edge and nothing at compile time can see the ten below. Built with
   `Map.get/2`, an omitted injection produced a `nil` field, and a `nil`
   field is a persist that silently does not happen — not a compile error,
   not a crash, not a log line.
@@ -253,7 +262,8 @@ defmodule Grappa.Session.Deps do
   @type away_persister :: (String.t() | nil, DateTime.t() | nil -> :ok | {:error, term()})
 
   @typedoc """
-  The eleven injected callbacks. Ten field defaults are `nil`, and a `nil`
+  The eleven struct fields: the ten a producer injects, plus
+  `query_window_open?`, which none does. Ten field defaults are `nil`, and a `nil`
   on a LIVE session still means "this session cannot do that thing" (a
   user session has no `recover_source`; a visitor session has no
   `away_persister`) — but which nils are legitimate is decided at the
@@ -375,7 +385,8 @@ defmodule Grappa.Session.Deps do
   A key in this list that is not due for the session's tag is ALIEN: a
   visitor closure on a user session is a mis-wired plan, not a spare
   capability, and `from_opts/2` refuses it. See `t:injectable/0` for why
-  the list holds nine keys and not the review's ten.
+  the list holds TEN keys and not the eleven this struct carries — measured
+  for issue 2137, which found this line claiming nine.
   """
   @spec injectable_keys() :: [injectable(), ...]
   def injectable_keys, do: @injectable_keys

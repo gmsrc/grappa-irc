@@ -26,11 +26,14 @@ defmodule Grappa.Session.DepsTest do
 
   Out of scope, measured and deliberate:
 
-  * `query_window_open?` is the tenth struct field and is due on NEITHER
+  * `query_window_open?` is the ELEVENTH struct field and is due on NEITHER
     tag. Neither `SessionPlan` injects it, it carries a real production
     default (`&Grappa.QueryWindows.open?/3`), and the injection point
     exists so a test can keep `EventRouter` a sandbox-free classifier. So
-    it is accepted on both tags and required on neither.
+    it is accepted on both tags and required on neither. It is also NOT one
+    of the closures that hide an edge from `Boundary`: that default is a
+    static reference, and `Grappa.Session` declares `Grappa.QueryWindows`
+    in its `deps:` (issue 2137).
   * `refresh_plan` is NOT a `Deps` field, though both plans inject it and
     it belongs to the same silent class. `Server.init/1` reads it from the
     raw opts BEFORE `do_init/1` builds this struct, because its return
@@ -88,7 +91,7 @@ defmodule Grappa.Session.DepsTest do
   end
 
   describe "from_opts/2 on a complete plan" do
-    test "a resolved user plan builds a struct with the user five set and the visitor four nil" do
+    test "a resolved user plan builds a struct with the user six set and the visitor four nil" do
       {user, network, _} = user_with_credential(6667, %{})
       subject = {:user, user.id}
       {:ok, plan} = SessionPlan.resolve(Credentials.get_credential!(user, network))
