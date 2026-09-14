@@ -31,12 +31,26 @@
 
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
+// The FULL user arm of `GET /me`, not the four fields this test reads.
+// `GrappaWeb.MeJSON.show/1` has exactly two clauses and both `Map.put` all
+// of `read_cursors` / `unread_counts` / `badge_count` / `home_data`
+// unconditionally — there is no degraded or partial arm, so a server that
+// could not supply one would raise rather than omit it. A fixture shorter
+// than that is not a smaller fixture, it is a body no grappa ever sends,
+// and `narrowMeResponse` is right to refuse it (issue 2135 / 2145).
+// `networks: []` is the faithful shape for a subject with no attached
+// credential, which is what this boot test is: the `/networks` fetch that
+// would populate the pane is the one it deliberately stalls.
 const ME_USER = {
   kind: "user",
   id: "e2e-687",
   name: "e2e-687",
   is_admin: false,
   inserted_at: "2026-01-01T00:00:00Z",
+  read_cursors: {},
+  unread_counts: {},
+  badge_count: 0,
+  home_data: { networks: [], available_networks: [] },
 };
 
 function stage(page: Page, id: string): Locator {

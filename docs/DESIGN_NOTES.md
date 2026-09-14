@@ -57068,3 +57068,51 @@ fixture was REJECTED on first run — `auth_method: "nickserv"`, where the
 generated enum says `nickserv_identify`. Without a control that has to
 answer yes, three rejection assertions would have passed against a narrower
 rejecting everything.
+
+### What the narrow caught first, in CI: two unfaithful e2e fixtures
+
+The first thing this slice rejected was not a server bug — it was four e2e
+tests whose `GET /me` mocks fabricate a body no grappa ever sends. All four
+died the same way (30 s waiting for `.sidebar-home-btn`), and all four DOM
+snapshots carry the same alert: "the server sent a subject profile this
+version of the app cannot read". So the cure was to make the mocks
+FAITHFUL, not to widen the narrow. The two are genuinely different worlds
+and the choice between them is measurable, so it was measured rather than
+assumed: had the real door been able to emit either shape, the narrow would
+have been the defect.
+
+It cannot. `GrappaWeb.MeJSON.show/1` has exactly two clauses and both
+`Map.put` all of `read_cursors` / `unread_counts` / `badge_count` /
+`home_data` from one literal pipeline — there is no degraded arm, so a
+controller unable to supply one raises rather than omitting it.
+`Grappa.Networks.Wire.home_network_row/2` is likewise the sole builder of a
+home row and emits all six keys, `recoverable` included, from one map
+literal.
+
+The two fixtures were unfaithful in DIFFERENT places, which is why the
+mechanism had to be measured per file instead of generalised from the first
+one:
+
+* `issue687-crt-boot-stages.spec.ts`'s `ME_USER` carried five of the nine
+  top-level keys — the four it asserts on, and no more;
+* `registration-wizard.spec.ts`'s `meJson()` carried all nine, and its
+  NESTED `home_data.networks[0]` carried five of six: no `recoverable`.
+
+Measured by feeding both fixture bodies straight into `narrowMeResponse`
+rather than inferring it from the DOM: both rejected, the wizard body
+accepted the moment `recoverable` alone was added, a faithful body accepted
+as the positive control and `42` rejected as the negative one. Only two e2e
+files build a `/me` body by hand at all — the rest talk to the real server,
+which is why ~490 tests ran and exactly four failed.
+
+The lesson is the one `registration-wizard.spec.ts` had already written
+about its own socket mock two months earlier, in a comment thirty lines
+below the fixture this slice had to repair: a mock that fabricates less
+than the server sends "is not a simpler mock, it is an UNFAITHFUL one" that
+"kept a half-finished migration green". A runtime narrow is how that
+sentence stops being advice and starts being enforcement. The price it
+charges is a 30 s browser timeout in a sharded CI job rather than a line in
+the cheap cic gate — a per-fixture schema assertion in vitest would catch
+the same class for a few milliseconds, but it needs the fixtures hoisted
+out of the spec files into a playwright-free module first, which is its own
+slice.

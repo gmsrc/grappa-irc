@@ -64,6 +64,14 @@ function meJson() {
           connection_state: "connected",
           connection_state_reason: null,
           connection_state_changed_at: null,
+          // `Grappa.Networks.Wire.home_network_row/2` is the SOLE builder of
+          // this row and emits all SIX keys from one map literal — there is
+          // no arm that drops this one. `false` is also the truthful value
+          // for the state this spec is in: `recoverable` is
+          // `Credential.has_nickserv_secret?/1`, and the wizard's whole
+          // subject is a nick that has not been registered yet, so there is
+          // no secret on file to recover with (issue 2135 / 2145).
+          recoverable: false,
         },
       ],
       available_networks: [],
