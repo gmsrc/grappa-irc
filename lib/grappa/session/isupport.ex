@@ -330,6 +330,47 @@ defmodule Grappa.Session.ISupport do
   end
 
   @doc """
+  Whether a MODE token says anything about the CHANNEL rather than about a
+  member's status prefix — the write-time denoise classification (issue
+  2176).
+
+  A status-prefix change (`+o`, `-v`, `+h`, and whatever else THIS network
+  put in `PREFIX=`) is the per-JOIN churn the denoise filter exists to fold.
+  Everything else a MODE line can carry — `+b`, `+k`, `+l`, `+m`, `+i`,
+  `+t`, `+n`, `+s`, a ban exception, a network's own vendor letter — changes
+  the channel, and an operator who cannot see a ban being set is being
+  denied operator-relevant signal.
+
+  The split is derived from `PREFIX=` and nothing else, for the reason
+  `user_prefix/2` exists at all: the membership letter set is per-network.
+  A hardcoded `~w[o v h]` would miscategorise `+q`/`+a` on a network that
+  advertises them as churn-bearing prefixes, and would miscategorise a
+  vendor status mode as structural forever.
+
+  **A mixed token is structural if ANY letter is** (`MODE #chan +ob nick
+  mask`). Showing a mixed line is the safe failure: the alternative hides a
+  ban because an op grade rode the same line.
+
+  Signs are skipped, not classified. A letter this network never advertised
+  as a prefix — including the bytes of a MALFORMED token, which
+  `EventRouter` persists as a transcript row even while it withholds the
+  derived state (#878) — falls on the structural side by the same
+  safe-failure argument. A token with no letters at all (`""`, `"+"`)
+  states nothing about the channel and so is NOT structural; it is also
+  already a line whose derived state was refused.
+  """
+  @spec structural_mode_token?(t(), String.t()) :: boolean()
+  def structural_mode_token?(isupport, token) when is_map(isupport) and is_binary(token) do
+    token
+    |> String.graphemes()
+    |> Enum.any?(&structural_mode_letter?(isupport, &1))
+  end
+
+  @spec structural_mode_letter?(t(), String.t()) :: boolean()
+  defp structural_mode_letter?(_isupport, sign) when sign in ["+", "-"], do: false
+  defp structural_mode_letter?(isupport, letter), do: user_prefix(isupport, letter) == :error
+
+  @doc """
   The membership mode letters this network advertised, HIGHEST RANK FIRST —
   the order `PREFIX=(qaohv)~&@%+` states and `prefix` cannot hold.
 

@@ -3098,6 +3098,68 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.sender == "ChanServ"
     end
 
+    # issue 2176 — the write-time denoise classification rides on the persisted
+    # meta, so the ONE parser is here and both filters read a tag. The reported
+    # defect was a `+b` invisible to anyone whose window was denoised while a
+    # colleague on the same grappa saw it.
+    test "MODE +b tags the row structural — a ban is not churn" do
+      state = base_state(%{members: %{"#italia" => %{"alice" => []}}})
+
+      m = msg(:mode, ["#italia", "+b", "troll!*@*"], {:nick, "op", "u", "h"})
+
+      assert {:cont, _state, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
+
+      assert attrs.meta == %{
+               Grappa.Scrollback.Message.structural_meta_key() => true,
+               modes: "+b",
+               args: ["troll!*@*"]
+             }
+    end
+
+    test "MODE +o carries NO tag — absence is what the denoise filter folds" do
+      state = base_state(%{members: %{"#italia" => %{"alice" => []}}})
+
+      m = msg(:mode, ["#italia", "+o", "alice"], {:nick, "op", "u", "h"})
+
+      assert {:cont, _state, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
+
+      refute Map.has_key?(attrs.meta, Grappa.Scrollback.Message.structural_meta_key()),
+             "a status-prefix row must stay untagged: the tag has no `false` form"
+    end
+
+    test "MODE +ob tags the MIXED line structural — showing it is the safe failure" do
+      state = base_state(%{members: %{"#italia" => %{"alice" => []}}})
+
+      m = msg(:mode, ["#italia", "+ob", "alice", "troll!*@*"], {:nick, "op", "u", "h"})
+
+      assert {:cont, _state, [{:persist, :mode, attrs} | _]} = EventRouter.route(m, state)
+
+      assert attrs.meta[Grappa.Scrollback.Message.structural_meta_key()] == true,
+             "an op grade riding the same line must not buy the ban invisibility"
+    end
+
+    test "the churn letters come from the network's PREFIX, not a constant" do
+      # `+q` is a channel mode on bahamut/Azzurra (default `PREFIX=(ohv)`) and
+      # a founder STATUS mode on a network that advertises it. Same token, two
+      # honest answers — which is why the classifier reads ISUPPORT.
+      bahamut = base_state(%{members: %{"#italia" => %{"alice" => []}}})
+
+      solanum =
+        base_state(%{
+          members: %{"#italia" => %{"alice" => []}},
+          isupport: ISupport.merge_isupport(["s", "PREFIX=(qaohv)~&@%+"], ISupport.default())
+        })
+
+      m = msg(:mode, ["#italia", "+q", "alice"], {:nick, "op", "u", "h"})
+      key = Grappa.Scrollback.Message.structural_meta_key()
+
+      assert {:cont, _, [{:persist, :mode, bahamut_attrs} | _]} = EventRouter.route(m, bahamut)
+      assert bahamut_attrs.meta[key] == true
+
+      assert {:cont, _, [{:persist, :mode, solanum_attrs} | _]} = EventRouter.route(m, solanum)
+      refute Map.has_key?(solanum_attrs.meta, key)
+    end
+
     test "MODE -o removes @ from target nick's mode list" do
       state = base_state(%{members: %{"#italia" => %{"alice" => ["@"]}}})
 
@@ -3186,7 +3248,15 @@ defmodule Grappa.Session.EventRouterTest do
 
       persist = Enum.find(effects, fn {tag, _, _} -> tag == :persist end)
       assert {:persist, :mode, attrs} = persist
-      assert attrs.meta == %{modes: "+b", args: ["*!*@spammer.net"]}
+      # issue 2176 — a ban changes the CHANNEL, so the row is tagged structural
+      # and a denoised window renders it. The assertion carries the whole map
+      # rather than the two keys it used to, so a tag appearing or vanishing is
+      # a red here as well as in the tests that target it directly.
+      assert attrs.meta == %{
+               Grappa.Scrollback.Message.structural_meta_key() => true,
+               modes: "+b",
+               args: ["*!*@spammer.net"]
+             }
 
       refute Enum.any?(effects, fn
                {:channel_modes_changed, _, _} -> true
@@ -3342,7 +3412,16 @@ defmodule Grappa.Session.EventRouterTest do
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
       assert {:persist, :mode, attrs} = Enum.find(effects, &match?({:persist, :mode, _}, &1))
-      assert attrs.meta == %{modes: "+n!$ ", args: []}
+
+      # issue 2176 — and the transcript row is tagged STRUCTURAL, because none
+      # of `n`, `!`, `$` or the space is a PREFIX letter. That is the safe
+      # failure on purpose: a line the parser refused to derive state from is
+      # not churn anyone should be hiding from the operator.
+      assert attrs.meta == %{
+               Grappa.Scrollback.Message.structural_meta_key() => true,
+               modes: "+n!$ ",
+               args: []
+             }
     end
 
     test "#878 one verdict, two readers: a rejected token leaves the member roster alone" do

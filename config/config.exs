@@ -504,6 +504,12 @@ config :logger, :console,
     # satisfy the known_keys↔metadata sync test even though no Logger
     # call carries it today.
     :link_failure,
+    # issue 2176 — the denoise classification of a `:mode` row: present and
+    # `true` when the line changed the CHANNEL (a ban, a key, a limit, a
+    # flag) rather than a member's status prefix. In the allowlist to
+    # satisfy the known_keys↔metadata sync test even though no Logger call
+    # carries it today.
+    :structural,
     # Auth context (Phase 2): bearer-token session lifecycle. `session_ref`
     # is a non-reversible SHA-256 handle of the session-id (S9: the raw id
     # IS the bearer token, so it must NEVER hit the log stream) — it rides

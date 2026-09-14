@@ -1067,7 +1067,7 @@ defmodule Grappa.Session.EventRouter do
           target,
           sender,
           nil,
-          %{modes: modes, args: args}
+          channel_mode_meta(state, modes, args)
         )
 
       {:cont, state, [eff | mode_effects]}
@@ -4554,6 +4554,32 @@ defmodule Grappa.Session.EventRouter do
 
   defp mode_token_letters?(<<letter::binary-size(1), rest::binary>>),
     do: Identifier.valid_mode_letter?(letter) and mode_token_letters?(rest)
+
+  # issue 2176 — the persisted `:mode` row's meta, classified at WRITE time so
+  # neither the server's history filter nor cic's render filter has to parse
+  # mode letters. `+o`/`+v`/`+h` (and whatever else THIS network advertised in
+  # `PREFIX=`) is the per-JOIN churn a denoised channel folds; anything else
+  # the token states changes the CHANNEL and must stay visible.
+  #
+  # The tag is written ONLY when true. There is no `structural: false` form,
+  # because the absent case already has to mean "fold" for every row persisted
+  # before this key existed, and two spellings of one outcome is a second state
+  # to keep in step for nothing (`Message.structural_meta_key/0`).
+  #
+  # This is the CHANNEL branch only. The self-MODE arm above writes its row to
+  # the synthetic `$server` window, which has no member count, so
+  # `PresenceFilter.hidden?/2` already resolves it to SHOW — tagging it would
+  # change nothing there except to override an operator who explicitly pinned
+  # that window to `hide`, which is not what this issue asked for.
+  @spec channel_mode_meta(state(), String.t(), [String.t()]) :: map()
+  defp channel_mode_meta(state, modes, args) do
+    isupport = Map.get(state, :isupport, ISupport.default())
+    meta = %{modes: modes, args: args}
+
+    if ISupport.structural_mode_token?(isupport, modes),
+      do: Map.put(meta, Grappa.Scrollback.Message.structural_meta_key(), true),
+      else: meta
+  end
 
   # The gated channel-MODE application: on a valid token both readers run and
   # the cache delta is emitted; on a rejected one the roster, the cache and
