@@ -1,12 +1,14 @@
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/auth";
+import { getBoldMentions, setBoldMentions } from "../lib/boldMentions";
 import { channelKey } from "../lib/channelKey";
 import { getColoredNicklist, setColoredNicklist } from "../lib/colorNicklist";
 import {
   applyServerPrefs,
   buildWireMap,
   mountDisplayPrefsSync,
+  syncedSetBoldMentions,
   syncedSetChannelPresencePref,
   syncedSetColoredNicklist,
   syncedSetShowBottomBar,
@@ -58,6 +60,7 @@ function resetLocal(): void {
   setShowBottomBar(true);
   setStripFormatting(false);
   setShowEventBadge(false);
+  setBoldMentions(true);
   setToken(null);
 }
 
@@ -90,13 +93,14 @@ afterEach(() => {
 });
 
 describe("buildWireMap", () => {
-  it("reads the six module getters into the wire shape", () => {
+  it("reads the seven module getters into the wire shape", () => {
     setTimeFormat("hm");
     setColoredNicklist(true);
     replacePresencePrefs({ [KEY_A]: "hide" });
     setShowBottomBar(false);
     setStripFormatting(true);
     setShowEventBadge(true);
+    setBoldMentions(false);
 
     expect(buildWireMap()).toEqual({
       time_format: "hm",
@@ -105,6 +109,7 @@ describe("buildWireMap", () => {
       show_bottom_bar: false,
       strip_formatting: true,
       show_event_badge: true,
+      bold_mentions: false,
     });
   });
 
@@ -115,6 +120,16 @@ describe("buildWireMap", () => {
   it("defaults show_event_badge to false — the events pill is opt-in", () => {
     expect(getShowEventBadge()).toBe(false);
     expect(buildWireMap().show_event_badge).toBe(false);
+  });
+
+  // issue 2167 — the seventh key, and its default runs the OTHER way: ON, so
+  // the mention rows keep the bold they have today and the opt-out is a
+  // choice. Pinned for the mirror of #2037's reason — a bundle that shipped
+  // this opt-IN by accident would silently take the bold away from everyone,
+  // which is precisely the change vjt's ruling declined to make by default.
+  it("defaults bold_mentions to true — the opt-out never ships by accident", () => {
+    expect(getBoldMentions()).toBe(true);
+    expect(buildWireMap().bold_mentions).toBe(true);
   });
 
   it("emits an empty presence_filter when no channel is pinned", () => {
@@ -174,6 +189,44 @@ describe("applyServerPrefs", () => {
     });
 
     expect(getStripFormatting()).toBe(false);
+  });
+
+  // issue 2167 — the absent-key skew for the seventh key. The direction that
+  // bites is the same as its six predecessors' (`--cic` ships this bundle
+  // ahead of the server), but the SAFE value is the opposite one: an older
+  // server omits `bold_mentions`, and the apply must land on TRUE, because
+  // writing `undefined` — or defaulting to false — would take the bold away
+  // from every reader the moment a bundle outran the server.
+  it("an absent bold_mentions (older server) takes the default TRUE, not undefined", () => {
+    setBoldMentions(false);
+
+    applyServerPrefs({
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+      show_bottom_bar: true,
+    });
+
+    expect(getBoldMentions()).toBe(true);
+  });
+
+  // `??` and not `||`, and for THIS key it is the load-bearing one of the
+  // seven. The default is TRUE, so under `||` a server-sent `false` would
+  // coalesce straight back to `true` and the preference would be impossible
+  // to turn on from a second device — the exact cross-device failure #449
+  // exists to prevent, reintroduced by one character.
+  it("a server-sent false OVERWRITES a local true (the coalesce is ??, not ||)", () => {
+    setBoldMentions(true);
+
+    applyServerPrefs({
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+      show_bottom_bar: true,
+      bold_mentions: false,
+    });
+
+    expect(getBoldMentions()).toBe(false);
   });
 
   // #1766 — the skew this bundle can be deployed INTO. `--cic` ships the
@@ -263,12 +316,15 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
     // #1766 — the fourth pref joins the seed-up with a NON-default value, so
     // "the key is in the body" cannot pass by accident: a coordinator that
     // forgot to read the owner module would push `true` here. #2029's fifth
-    // key follows the same rule, inverted (its default is `false`).
+    // key follows the same rule, inverted (its default is `false`), and issue
+    // 2167's seventh follows it back again (its default is `true`, so `false`
+    // is the value that cannot appear by accident).
     setTimeFormat("hm");
     setColoredNicklist(true);
     replacePresencePrefs({ [KEY_A]: "hide" });
     setShowBottomBar(false);
     setStripFormatting(true);
+    setBoldMentions(false);
 
     const serverDefaults: DisplayPrefs = {
       time_format: "hms",
@@ -306,6 +362,7 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
         show_bottom_bar: false,
         strip_formatting: true,
         show_event_badge: false,
+        bold_mentions: false,
       },
     });
 
@@ -314,6 +371,7 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
     expect(getColoredNicklist()).toBe(true);
     expect(getShowBottomBar()).toBe(false);
     expect(getStripFormatting()).toBe(true);
+    expect(getBoldMentions()).toBe(false);
     dispose();
   });
 
@@ -383,6 +441,7 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
         show_bottom_bar: true,
         strip_formatting: false,
         show_event_badge: false,
+        bold_mentions: true,
       },
     });
   });
@@ -458,6 +517,44 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string).display_prefs.strip_formatting).toBe(true);
   });
+
+  it("syncedSetBoldMentions sets local and PUTs the full wire map", async () => {
+    setToken(TOKEN);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
+        status: 200,
+      }),
+    );
+
+    syncedSetBoldMentions(false);
+    await flush();
+
+    expect(getBoldMentions()).toBe(false);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/me/settings/display-prefs");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string).display_prefs.bold_mentions).toBe(false);
+  });
+
+  // issue 2167 — the same full-map guard as strip_formatting's above, and it
+  // is worth a seventh copy: the value that must survive a sibling's PUT is
+  // `false`, the NON-default one, so a missing `buildWireMap` entry would send
+  // nothing and the server's `true` default would silently put the bold back.
+  it("a sibling's PUT carries bold_mentions too (the full map, not a diff)", async () => {
+    setToken(TOKEN);
+    setBoldMentions(false);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
+        status: 200,
+      }),
+    );
+
+    syncedSetColoredNicklist(true);
+    await flush();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).display_prefs.bold_mentions).toBe(false);
+  });
 });
 
 // S1 (review) — clear-on-logout so a shared browser / visitor→user upgrade can
@@ -473,6 +570,7 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     show_bottom_bar: true,
     strip_formatting: false,
     show_event_badge: false,
+    bold_mentions: true,
   };
 
   // Phase-mutable fetch stub: the GET body changes across A-login / B-login.
@@ -491,11 +589,16 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     // and the never-seed-a-prior-subject guarantees are exercised for the
     // fifth key too. A default-valued residual would be indistinguishable
     // from a cleared one and would assert nothing.
+    // issue 2167 — and the seventh key rides along for the same reason, with
+    // its residual set to the NON-default `false`: with a default of TRUE, a
+    // residual of `true` is exactly the value a clear produces, so only the
+    // opted-out value can tell "cleared" from "never touched".
     const aPrefs = {
       time_format: "hm",
       colored_nicklist: true,
       presence_filter: { [KEY_A]: "hide" },
       strip_formatting: true,
+      bold_mentions: false,
     };
     getBody = { display_prefs: aPrefs, persisted: true };
     installPhaseFetch();
@@ -510,6 +613,7 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     await flush();
     expect(getTimeFormat()).toBe("hm");
     expect(getStripFormatting()).toBe(true);
+    expect(getBoldMentions()).toBe(false);
 
     setToken(null); // A logs out
     await flush();
@@ -518,6 +622,7 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     expect(getColoredNicklist()).toBe(false);
     expect(getAllPresencePrefs()).toEqual({});
     expect(getStripFormatting()).toBe(false);
+    expect(getBoldMentions()).toBe(true);
     dispose();
   });
 

@@ -738,7 +738,6 @@ const RailActions: Component<Props> = (props) => {
                 close();
               };
               return (
-                // biome-ignore lint/a11y/noLabelWithoutControl: the <select> below IS this label's control (implicit association); biome misses it because the control is nested behind two sibling spans.
                 <label
                   class="shell-chrome-btn rail-action rail-action-mute"
                   data-testid="rail-action-mute"

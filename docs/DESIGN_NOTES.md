@@ -14640,3 +14640,116 @@ survives and is declared EQUIVALENT rather than chased: it differs by at most
 1px at two rungs, violates nothing the contract states, and tightening the
 proportionality tolerance to catch it would pin the implementation instead of
 the property.
+<!-- entry #2167 -->
+
+---
+
+## 2026-09-14 — issue 2167: a scoped preference, because the criterion was already written down
+
+The ask was a free-form **custom CSS** block in settings, so per-user cosmetic
+preferences would not each become a new toggle ("per evitare di mettere una
+madonna di opzioni"). vjt ruled **option A — scoped preferences** instead,
+reason given: *"così sono accessibili a tutti"* — a real preference is usable
+by everyone, a CSS block only by people who write CSS. Custom CSS is declined
+in BOTH forms the issue offered, the client-local one (localStorage + a
+`<style>` in the shell) and the theme-payload one; the issue's own
+recommendation of B+A is superseded, not merely outvoted. The ruling reached
+this branch RELAYED rather than read first-hand.
+
+The first preference under it, and the case that started the issue: an opt-out
+for the bold on own-nick mention rows.
+
+### The fork that was not one
+
+The brief framed the storage choice as two houses: `fontSize.ts` (client-local
+— localStorage plus a custom property, no server, no wire) and `customTheme.ts`
+(server-owned, and therefore on the wire). Measured, there are **three**, and
+the third is the one built for this: `displayPrefs.ts` (#449) already
+coordinates six server-backed display preferences over
+`GET`/`PUT /me/settings/display-prefs`.
+
+More usefully, the choice between per-device and synced is **not a judgement
+call here, because the criterion is in the source and has been applied three
+times**: *a per-device toggle is right when the complaint is about a VIEWPORT,
+and wrong when it is about the ACCOUNT* (`showBottomBar.ts`, #1766;
+`eventBadge.ts`, #2037; `stripFormatting.ts`, #2029, which names it explicitly
+as being decided "on #1766's criterion rather than a coin toss"). "The bold
+annoys me" is identical on a phone and on a desktop — the account axis. And
+`fontSize.ts` stays client-local precisely because it is the VIEWPORT side of
+the same criterion: a screen-size property. So this is synced, and the nearest
+neighbour by shape, `strip_formatting`, is synced for the same stated reason.
+
+Recorded because the general point outlives this key: **when a codebase has
+already written its own discriminator down, the work is to find and apply it,
+not to re-derive a preference from first principles.** A fork that looks open
+in a brief can be closed by measurement.
+
+### The constraint: the bold carries weight
+
+`.scrollback-line.scrollback-highlight` (watchlist match) is deliberately NOT
+bold — the stylesheet comment says so — so the bold is one of the axes telling
+a mention row from a highlight row, and removing it must not collapse the two.
+Measured, it does not, and on TWO axes rather than the one the issue names: the
+backgrounds DIFFER (flat `--mention` against a 12% `--accent` mix — the issue
+says the highlight "does not have" a background, which is not so), and the
+highlight paints a 2px accent bar via `::before` (#1298) that the mention has
+no counterpart for.
+
+The guard that makes this durable is not an assertion that the two rules look
+different today — it is that `--mention-font-weight` reaches **exactly one
+declaration in the whole stylesheet**. A later edit routing either background
+through the same property is what a collapse would actually look like, and
+`mentionBoldDistinction.test.ts` goes red on the second consumer. The default
+lives in the CSS as `var(--mention-font-weight, bold)`, so the pre-boot frame,
+a server predating the key, and JS-disabled all render today's appearance.
+
+### Two different wire verdicts, recorded as different
+
+`mix grappa.wire_pin --check` was run BEFORE the number was touched and was
+GREEN at 23. After the bump the digest is **unchanged** —
+`sha256:75e60cc5…9764` on both sides of `--update`, only `protocol_version`
+moved 23 → 24. So the bump is owed under **#1393d** (every wire-shape change
+moves the number) and is **not** the shape gate's verdict: the display-prefs
+body is hand-typed in `userSettings.ts`, not generated, so it lies outside the
+three components the digest spans. This is the same case the pin's own header
+records for #2037. Stating which of the two verdicts applies matters because
+they justify the bump for different reasons, and only one of them is a gate.
+
+`min_protocol_version` stays at 1: the key is absent-tolerant in both
+directions by construction.
+
+### Shape notes worth keeping
+
+The default is TRUE, making this the first of the recent display keys that is
+an **opt-out of something currently on screen**. That inverts the sign at two
+touch points, and both are silent when wrong:
+
+* the read is `v !== "false"` (showBottomBar.ts's shape), not `v === "true"`
+  (stripFormatting.ts's). With a TRUE default the latter reads unparseable
+  storage as "opt out" and takes the bold from someone who never asked;
+* the coalesce is `??`, never `||`. With a TRUE default, `||` sends a
+  server-sent `false` straight back to `true`, so the preference becomes
+  impossible to turn on from a second device — the exact cross-device failure
+  #449 exists to end, reintroduced by one character.
+
+### The key set has SEVEN homes, and the coordinator's moduledoc lists four
+
+`displayPrefs.ts` warns that a new key has four touch points. True of the
+runtime code, and it under-counts the work: the **tests** enumerate the whole
+wire map in places the context's own suite does not reach. A scoped
+`scripts/test.sh test/grappa/user_settings_display_prefs_test.exs` was GREEN
+here while `scripts/check.sh` was RED on three assertions in the display-prefs
+CONTROLLER test, which spells the map out twice.
+
+The census, for whoever adds the eighth key —
+`grep -rn show_event_badge lib/ test/ cicchetto/src/` names every site (seven
+files at the time of writing). Run it up front; do not discover the next one
+from a red gate. Generalises past this key: **a scoped green over the module
+you changed is not evidence about a map that several files restate.**
+
+Eleven mutants, each killing exactly what it should — eight on cic, three on
+the server, every one sha-verified as applied before the run and sha-verified
+as restored after it. The one worth naming is the COLLAPSE mutant: routing
+`.scrollback-highlight`'s weight through the same custom property, i.e. the
+edit that would actually undo the ruling's constraint. It goes red. See the
+pull request for the table.
