@@ -33,11 +33,16 @@ defmodule Grappa.Session.DccConsentTest do
   alias Grappa.Dcc.{Policy, Report}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.PubSub.Topic
+  alias Grappa.QueryWindows
 
   @nick "grappa-test"
   @wire_timeout 1_000
   @public_ip "1.2.3.4"
   @filename "holiday.jpg"
+  # The peer. Named rather than repeated as a literal: since issue 2127
+  # this nick is a WINDOW KEY as well as a sender, so every assertion
+  # about where a row landed has to name the same string the offer did.
+  @peer "alice"
   @size 12_345
 
   describe "refuse — the operator declines" do
@@ -168,8 +173,10 @@ defmodule Grappa.Session.DccConsentTest do
                      @wire_timeout
 
       assert {:ok, []} = Session.list_dcc_offers(ctx.subject, ctx.network.id)
-      assert [row] = eventually_rows(ctx)
-      assert row.body == Report.render({:refused, :rate_limited}, "alice").body
+      # A policy-gate refusal has NO accept behind it, so it stays where
+      # the offer rendered (issue 2127) — the `$server` window here.
+      assert [refusal] = eventually_rows(ctx, "$server")
+      assert refusal.body == Report.render({:refused, :rate_limited}, @peer).body
     end
   end
 
@@ -178,10 +185,10 @@ defmodule Grappa.Session.DccConsentTest do
       ctx = held_offer()
       :ok = Session.accept_dcc_offer(ctx.subject, ctx.network.id, ctx.offer_id)
 
-      send(ctx.pid, transfer_done(ctx, Dcc.mint_slug(), {:error, :connect_refused}))
+      send(ctx.pid, transfer_done(Dcc.mint_slug(), {:error, :connect_refused}))
 
-      assert [row] = eventually_rows(ctx)
-      assert row.body == Report.render({:failed, @filename, :connect_refused}, "alice").body
+      assert [row] = eventually_rows(ctx, @peer)
+      assert row.body == Report.render({:failed, @filename, :connect_refused}, @peer).body
       assert row.kind == :server_event
       assert Process.alive?(ctx.pid)
     end
@@ -191,16 +198,16 @@ defmodule Grappa.Session.DccConsentTest do
       :ok = Session.accept_dcc_offer(ctx.subject, ctx.network.id, ctx.offer_id)
       slug = Dcc.mint_slug()
 
-      send(ctx.pid, transfer_done(ctx, slug, {:ok, @size}))
+      send(ctx.pid, transfer_done(slug, {:ok, @size}))
 
-      assert [row] = eventually_rows(ctx)
-      assert row.sender == "alice"
+      assert [row] = eventually_rows(ctx, @peer)
+      assert row.sender == @peer
       assert row.kind == :privmsg
       assert row.body =~ Report.display_filename(@filename)
       assert row.body =~ slug
 
       assert {:ok, spooled} = Dcc.get_by_slug(slug)
-      assert spooled.peer_nick == "alice"
+      assert spooled.peer_nick == @peer
       assert spooled.bytes == @size
       assert spooled.filename == Report.display_filename(@filename)
       assert Process.alive?(ctx.pid)
@@ -209,18 +216,128 @@ defmodule Grappa.Session.DccConsentTest do
     test "a report for a transfer this session never started is ignored, not a crash" do
       ctx = connected_session()
 
-      send(ctx.pid, transfer_done(ctx, Dcc.mint_slug(), {:error, :idle_timeout}))
+      send(ctx.pid, transfer_done(Dcc.mint_slug(), {:error, :idle_timeout}))
 
-      assert [_] = eventually_rows(ctx)
+      assert [_] = eventually_rows(ctx, @peer)
       assert Process.alive?(ctx.pid)
+    end
+  end
+
+  describe "issue 2127 — where a POST-ACCEPT row is filed" do
+    # The routing axis, asserted on BOTH sides of the consent line. A test
+    # that only checked "the row exists" passed before this change too:
+    # the row was there, in `$server`, which is the defect.
+
+    test "the OFFER still renders in $server — #546 is untouched" do
+      # The premise the rest of this describe is a departure from. If a
+      # stranger's offer ever starts minting a window, these tests stop
+      # measuring consent and start measuring nothing.
+      ctx = held_offer()
+
+      # The banner routes to `$server`, and the offer writes NO scrollback
+      # row at all — it mints even less than a window. Both halves are the
+      # premise: if either changed, the post-accept tests below would be
+      # measuring something other than the consent line.
+      assert ctx.channel == "$server"
+      assert rows_in(ctx, "$server") == []
+      refute QueryWindows.open?(ctx.subject, ctx.network.id, @peer)
+    end
+
+    test "a DELIVERED row lands in the query with the peer, not in $server" do
+      ctx = held_offer()
+      :ok = Session.accept_dcc_offer(ctx.subject, ctx.network.id, ctx.offer_id)
+      slug = Dcc.mint_slug()
+
+      send(ctx.pid, transfer_done(slug, {:ok, @size}))
+
+      assert [row] = eventually_rows(ctx, @peer)
+      assert row.body =~ slug
+
+      # And it is NOT also in the home window. Asserted explicitly: the
+      # bug was a row in the wrong place, so "present in the right place"
+      # alone would still pass if it were filed in both.
+      refute Enum.any?(rows_in(ctx, "$server"), &(&1.body =~ slug))
+    end
+
+    test "a FAILED row follows the delivered one — the accept is the consent" do
+      ctx = held_offer()
+      :ok = Session.accept_dcc_offer(ctx.subject, ctx.network.id, ctx.offer_id)
+
+      send(ctx.pid, transfer_done(Dcc.mint_slug(), {:error, :idle_timeout}))
+
+      failure = Report.render({:failed, @filename, :idle_timeout}, @peer).body
+
+      assert [row] = eventually_rows(ctx, @peer)
+      assert row.body == failure
+      refute Enum.any?(rows_in(ctx, "$server"), &(&1.body == failure))
+    end
+
+    test "the query window is OPENED by the delivery, not merely written into" do
+      # The row would otherwise land in a window with no tab in the
+      # sidebar — scrollback nobody can navigate to.
+      ctx = held_offer()
+      refute QueryWindows.open?(ctx.subject, ctx.network.id, @peer)
+
+      :ok = Session.accept_dcc_offer(ctx.subject, ctx.network.id, ctx.offer_id)
+      send(ctx.pid, transfer_done(Dcc.mint_slug(), {:ok, @size}))
+
+      window = eventually_window(ctx, @peer)
+
+      # RAW-cased: a nick's case is presentation, and the fold lives on the
+      # index rather than in the stored value.
+      assert window.target_nick == @peer
+      assert QueryWindows.open?(ctx.subject, ctx.network.id, @peer)
+      assert [_] = eventually_rows(ctx, @peer)
+    end
+
+    test "an EXPIRED offer stays where the offer rendered — no accept behind it" do
+      # The other half of the ruling, and the one that keeps #546 intact:
+      # an unanswered banner must not mint a window for a stranger who
+      # only had to send one DCC line.
+      ctx = held_offer()
+
+      send(ctx.pid, {:dcc_offer_expired, ctx.offer_id})
+
+      assert [expiry] = eventually_rows(ctx, "$server")
+      assert expiry.body == Report.render({:expired, @filename}, @peer).body
+      refute QueryWindows.open?(ctx.subject, ctx.network.id, @peer)
+      assert rows_in(ctx, @peer) == []
+    end
+
+    test "a PARSER-refused offer stays in $server — it never even reached the operator" do
+      # The `:refused` arm the ruling names is the one with no accept
+      # behind it: the parser or the policy gate turned the offer away.
+      # Driven through a real wire line, not the operator's own refuse
+      # verb — that one writes no row at all, by design, because the
+      # operator already knows what they clicked.
+      #
+      # A passive (reverse) offer is the cheapest real refusal: port 0,
+      # well-formed, declined on policy. It is also exactly the capability
+      # #546 denies — one line from a stranger must not mint a window.
+      ctx = connected_session()
+
+      IRCServer.feed(
+        ctx.server,
+        ":#{@peer}!u@h PRIVMSG #{@nick} :\x01DCC SEND f.bin #{@public_ip} 0 1\x01\r\n"
+      )
+
+      assert [refusal] = eventually_rows(ctx, "$server")
+      assert refusal.body == Report.render({:refused, :passive_unsupported}, @peer).body
+      refute QueryWindows.open?(ctx.subject, ctx.network.id, @peer)
+      assert rows_in(ctx, @peer) == []
     end
   end
 
   # The exact message `Session.Server`'s detached task sends back. Spelled
   # here so a change to that tuple breaks these tests loudly rather than
   # leaving them green against a shape nothing emits.
-  defp transfer_done(ctx, slug, result) do
-    {:dcc_transfer_done, slug, "alice", ctx.channel, @filename, result}
+  #
+  # issue 2127 dropped the `channel` element: post-accept there is no
+  # inherited window to carry, every row the transfer can produce belongs
+  # to the query with `from`, and a field nothing reads is a field the
+  # next reader will file a row into.
+  defp transfer_done(slug, result) do
+    {:dcc_transfer_done, slug, @peer, @filename, result}
   end
 
   # Spends the subject's whole allowance through the PRODUCTION verb, so
@@ -237,7 +354,7 @@ defmodule Grappa.Session.DccConsentTest do
 
     IRCServer.feed(
       ctx.server,
-      ":alice!u@h PRIVMSG #{@nick} :\x01DCC SEND #{@filename} #{@public_ip} 5000 #{@size}\x01\r\n"
+      ":#{@peer}!u@h PRIVMSG #{@nick} :\x01DCC SEND #{@filename} #{@public_ip} 5000 #{@size}\x01\r\n"
     )
 
     assert_receive %Phoenix.Socket.Broadcast{payload: %{kind: :dcc_offer} = payload},
@@ -246,23 +363,59 @@ defmodule Grappa.Session.DccConsentTest do
     Map.merge(ctx, %{offer_id: payload.offer_id, live_payload: payload, channel: payload.channel})
   end
 
-  defp eventually_rows(ctx), do: eventually_rows(ctx, 50)
+  # Polls one window until it holds at least `want` rows. `want` is a
+  # parameter rather than "non-empty" because issue 2127 made the counts
+  # matter: an expiry leaves TWO rows in `$server` (the offer's own, then
+  # the expiry), and a poll that stopped at the first would read the
+  # offer row and assert against it.
+  defp eventually_rows(ctx, channel), do: eventually_rows(ctx, channel, 1)
 
-  defp eventually_rows(ctx, 0), do: server_rows(ctx)
+  defp eventually_rows(ctx, channel, want), do: eventually_rows(ctx, channel, want, 50)
 
-  defp eventually_rows(ctx, tries) do
-    case server_rows(ctx) do
-      [] ->
-        Process.sleep(20)
-        eventually_rows(ctx, tries - 1)
+  defp eventually_rows(ctx, channel, _want, 0), do: rows_in(ctx, channel)
 
-      rows ->
-        rows
+  defp eventually_rows(ctx, channel, want, tries) do
+    rows = rows_in(ctx, channel)
+
+    if length(rows) >= want do
+      rows
+    else
+      Process.sleep(20)
+      eventually_rows(ctx, channel, want, tries - 1)
     end
   end
 
-  defp server_rows(ctx) do
-    Scrollback.fetch(ctx.subject, ctx.network.id, "$server", nil, 50, @nick, false)
+  defp rows_in(ctx, channel) do
+    Scrollback.fetch(ctx.subject, ctx.network.id, channel, nil, 50, @nick, false)
+  end
+
+  # Polls for the query window itself rather than inferring it from the
+  # row. MEASURED, not defensive: `apply_effects/2` persists the row and
+  # THEN opens the window (#422 orders it that way deliberately, so the
+  # `query_windows_list` broadcast is a truthful "history already landed"
+  # barrier), so a poll that stops at the row can land in the gap between
+  # the two and read an empty window list — which is exactly what this
+  # test did before, deterministically. The row is not evidence of the
+  # window; only the window is.
+  defp eventually_window(ctx, nick), do: eventually_window(ctx, nick, 50)
+
+  defp eventually_window(ctx, nick, 0) do
+    flunk("no query window for #{nick} after waiting; windows: #{inspect(windows(ctx))}")
+  end
+
+  defp eventually_window(ctx, nick, tries) do
+    case Enum.find(windows(ctx), &(&1.target_nick == nick)) do
+      nil ->
+        Process.sleep(20)
+        eventually_window(ctx, nick, tries - 1)
+
+      window ->
+        window
+    end
+  end
+
+  defp windows(ctx) do
+    ctx.subject |> QueryWindows.list_for_subject() |> Map.get(ctx.network.id, [])
   end
 
   defp connected_session do

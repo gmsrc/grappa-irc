@@ -3660,12 +3660,16 @@ defmodule Grappa.Session.Server do
   # it is contracted to do, and the reason the session and not the task
   # writes the row: the report is scrollback, and scrollback goes through
   # `apply_effects/2`, which is session state.
-  def handle_info({:dcc_transfer_done, slug, from, channel, filename, {:ok, bytes}}, state) do
-    {:noreply, store_dcc_delivery(state, slug, from, channel, filename, bytes)}
+  def handle_info({:dcc_transfer_done, slug, from, filename, {:ok, bytes}}, state) do
+    {:noreply, store_dcc_delivery(state, slug, from, filename, bytes)}
   end
 
-  def handle_info({:dcc_transfer_done, _, from, channel, filename, {:error, failure}}, state) do
-    {:noreply, persist_dcc_report(state, channel, Report.render({:failed, filename, failure}, from))}
+  # issue 2127 — filed in the query with the peer, like the delivered row
+  # and for the same reason: the operator accepted THIS transfer, so how
+  # it ended is a conversation with that nick rather than home-window
+  # noise. `persist_dcc_report/3` opens the window if it is not already.
+  def handle_info({:dcc_transfer_done, _, from, filename, {:error, failure}}, state) do
+    {:noreply, persist_dcc_report(state, from, Report.render({:failed, filename, failure}, from))}
   end
 
   # #581 — recover overall deadline: fail the sequence (never hang the
@@ -7475,8 +7479,13 @@ defmodule Grappa.Session.Server do
   defp admit_dcc_accept(state, offer_id, %{offer: offer, from: from, channel: channel}) do
     case Policy.admit_accept(state.subject) do
       :ok ->
+        # The banner comes down in the window the OFFER rendered in —
+        # unchanged, that is where a client is showing it. The TRANSFER
+        # takes no channel at all (issue 2127): every row it can still
+        # produce belongs to the query with `from`, so there is nothing
+        # left to inherit.
         broadcast_dcc_resolved(state, channel, offer_id, :accepted)
-        :ok = start_dcc_transfer(offer, from, channel)
+        :ok = start_dcc_transfer(offer, from)
         {:reply, :ok, state}
 
       {:error, refusal} = err ->
@@ -7500,8 +7509,8 @@ defmodule Grappa.Session.Server do
   # The slug is minted BEFORE the dial so the bytes have a home the moment
   # the first packet lands; `Transfer.run/3` opens the file before the
   # socket and unlinks it on every failure branch.
-  @spec start_dcc_transfer(Offer.t(), String.t(), String.t()) :: :ok
-  defp start_dcc_transfer(%Offer{} = offer, from, channel) do
+  @spec start_dcc_transfer(Offer.t(), String.t()) :: :ok
+  defp start_dcc_transfer(%Offer{} = offer, from) do
     slug = Dcc.mint_slug()
     path = Dcc.storage_path(slug)
     opts = Dcc.transfer_opts()
@@ -7510,7 +7519,7 @@ defmodule Grappa.Session.Server do
     {:ok, _} =
       Task.Supervisor.start_child(Grappa.TaskSupervisor, fn ->
         result = Transfer.run(offer, path, opts)
-        send(session, {:dcc_transfer_done, slug, from, channel, offer.filename, result})
+        send(session, {:dcc_transfer_done, slug, from, offer.filename, result})
       end)
 
     :ok
@@ -7526,9 +7535,8 @@ defmodule Grappa.Session.Server do
   # longest retention this deployment offers a user for their OWN content,
   # and `nil` — the DEFAULT of that setting — means the ceiling here, not
   # "never expires" as it does for uploads.
-  @spec store_dcc_delivery(t(), String.t(), String.t(), String.t(), String.t(), non_neg_integer()) ::
-          t()
-  defp store_dcc_delivery(state, slug, from, channel, filename, bytes) do
+  @spec store_dcc_delivery(t(), String.t(), String.t(), String.t(), non_neg_integer()) :: t()
+  defp store_dcc_delivery(state, slug, from, filename, bytes) do
     display = Report.display_filename(filename)
 
     meta = %{
@@ -7542,7 +7550,7 @@ defmodule Grappa.Session.Server do
       {:ok, row} ->
         persist_dcc_report(
           state,
-          channel,
+          from,
           Report.render({:delivered, filename, Dcc.public_url(row.slug, filename)}, from)
         )
 
@@ -7562,17 +7570,38 @@ defmodule Grappa.Session.Server do
         )
 
         _ = File.rm(Dcc.storage_path(slug))
-        persist_dcc_report(state, channel, Report.render({:failed, filename, {:fs, :rejected}}, from))
+        persist_dcc_report(state, from, Report.render({:failed, filename, {:fs, :rejected}}, from))
     end
   end
 
-  # One report row, wherever the offer died. Same shape and same reasoning
-  # as `persist_link_failure/2` above — `Grappa.Dcc.Report` has already
+  # One report row. Same shape and same reasoning as
+  # `persist_link_failure/2` above — `Grappa.Dcc.Report` has already
   # decided the kind and the sender, and the split it encodes is the whole
   # attribution ruling: a DELIVERED file is the peer speaking (`:privmsg`,
   # their raw nick), everything else is grappa speaking (`:server_event`,
   # the anonymous sentinel), because appending our sentence to a
   # stranger's nick fabricates words they never said.
+  #
+  # 🔴 `channel` is the SECOND axis and it does NOT follow the kind (issue
+  # 2127). It follows CONSENT:
+  #
+  #   * post-ACCEPT (`:delivered`, `:failed`, and the `{:fs, :rejected}`
+  #     storage failure) — the peer's nick, so the row lands in the query
+  #     with them. The callers pass `from`. Once the operator has clicked
+  #     accept on a stranger's file, the progress and the outcome of their
+  #     OWN transfer are a conversation with that nick.
+  #   * pre-accept (`:refused`, `:expired`) — whatever
+  #     `EventRouter.ctcp_query_channel/3` chose for the OFFER: `$server`
+  #     for a stranger, the query if one was already open. Routing those
+  #     to a query would mint a window for anyone who sent one malformed
+  #     `DCC` line, which is exactly the capability #546 denies.
+  #
+  # The window is OPENED as a consequence, not by a second call: the
+  # `{:persist, …}` arm of `apply_effects/2` already runs
+  # `maybe_open_query_window/2` on every row, and a nick-shaped `channel`
+  # with no `dm_with` is the orphan shape `numeric_router` already files
+  # query-window rows in. `QueryWindows.open/4` broadcasts the list, so
+  # cic gets the tab.
   @spec persist_dcc_report(t(), String.t(), Report.t()) :: t()
   defp persist_dcc_report(state, channel, %Report{kind: kind, sender: sender, body: body}) do
     attrs =
