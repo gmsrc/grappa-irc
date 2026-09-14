@@ -105,6 +105,23 @@ defmodule Grappa.Scrollback.Meta do
                                                                   user@host as for join/part)
       :nick_change                  →  %{new_nick: String.t()}
       :mode                         →  %{modes: String.t(), args: [String.t()]}
+                                    OR + %{structural: true}
+                                                                 (issue 2176: the row changed the
+                                                                  CHANNEL — a ban, a key, a limit, a
+                                                                  flag — rather than a member's status
+                                                                  prefix, so the denoise filter (#1262)
+                                                                  must NOT fold it. Classified at WRITE
+                                                                  time from the network's own ISUPPORT
+                                                                  `PREFIX` letters
+                                                                  (`ISupport.structural_mode_token?/2`)
+                                                                  so both sides filter on the tag and
+                                                                  neither re-parses mode letters.
+                                                                  ABSENT on a status-prefix (`+o`/`+v`)
+                                                                  row and on every row written before
+                                                                  the tag existed — there is no `false`
+                                                                  form, presence IS the test, and
+                                                                  absence means "fold", which is exactly
+                                                                  today's behaviour for old rows.)
       :kick                         →  %{target: String.t()}     (body carries reason)
       :server_event (link failure)  →  %{link_failure: %{reason: String.t()}}
                                                                  (#1675: an upstream connect attempt that
@@ -228,10 +245,11 @@ defmodule Grappa.Scrollback.Meta do
             | :statusmsg
             | :nick_fallback
             | :link_failure
+            | :structural
           ) => term()
         }
 
-  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix sender_kind ctcp_verb ctcp_args ctcp_target notice_target statusmsg nick_fallback link_failure]a
+  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix sender_kind ctcp_verb ctcp_args ctcp_target notice_target statusmsg nick_fallback link_failure structural]a
 
   @doc """
   The atom-key allowlist. Exposed so the test suite can assert that
@@ -264,7 +282,8 @@ defmodule Grappa.Scrollback.Meta do
           | :notice_target
           | :statusmsg
           | :nick_fallback
-          | :link_failure,
+          | :link_failure
+          | :structural,
           ...
         ]
   def known_keys, do: @known_keys

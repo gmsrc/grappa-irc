@@ -1,7 +1,13 @@
 defmodule Grappa.Scrollback.MessageTest do
   use ExUnit.Case, async: true
 
+  import Ecto.Query
+
   alias Grappa.Scrollback.Message
+
+  # issue 2176 — `Message.structural_row?/1` is a query macro (the shared Ecto
+  # fragment for the structural-mode exemption).
+  require Message
 
   # Phase 2 (sub-task 2e): user_id is binary_id (UUID), network_id is
   # an integer FK. assoc_constraint on both is DB-level so it doesn't
@@ -114,11 +120,67 @@ defmodule Grappa.Scrollback.MessageTest do
 
     test "#1262 — :mode IS suppressed (the #458 carve-out is withdrawn)" do
       # vjt, 2026-08-13: `:mode` may go into the suppressed set as a plain
-      # fifth kind. The accepted cost is that +b/+k/+l/+m/+i transitions are
+      # fifth kind. The accepted cost was that +b/+k/+l/+m/+i transitions were
       # omitted from the fetch too while the channel is denoised — see
-      # DESIGN_NOTES. A future write-time split (#1262 body) can narrow this
-      # again; until then this assertion is the ruling.
+      # DESIGN_NOTES.
+      #
+      # issue 2176 paid that cost off and the kind STAYS here, deliberately: a
+      # `+o` is still churn, and the narrowing is the per-row exemption
+      # `structural_meta_key/0`, not a shorter list. An implementation that
+      # narrowed by pulling `:mode` back OUT would un-fold the op churn this
+      # set exists for.
       assert :mode in Message.suppressed_presence_kinds()
+    end
+  end
+
+  # issue 2176 — the per-ROW exemption from the set above. The suppressed set
+  # answers "is this KIND churn?" and for `:mode` the honest answer needs the
+  # LETTERS, so the server classifies once at persist time and tags the row.
+  describe "structural_meta_key/0 (issue 2176)" do
+    test "is :structural" do
+      assert Message.structural_meta_key() == :structural
+    end
+
+    test "structural_row?/1 renders SQL that names structural_meta_key/0" do
+      # The macro's fragment string MUST be a literal (Ecto refuses a module
+      # attribute there), so the key lives twice in `Message`: once as the atom
+      # the writer uses, once inside `'$.structural'`. Nothing in the source
+      # holds those two together — this does, and it does it by reading the
+      # SQL the query actually emits rather than re-asserting the source text.
+      {sql, _} =
+        Ecto.Adapters.SQL.to_sql(:all, Grappa.Repo, from(m in Message, where: Message.structural_row?(m.meta)))
+
+      assert sql =~ "json_extract"
+
+      assert sql =~ "'$." <> Atom.to_string(Message.structural_meta_key()) <> "'",
+             """
+             `structural_row?/1` emits a JSON path that no longer names
+             `structural_meta_key/0`:
+
+               #{sql}
+
+             The writer tags `meta.#{Message.structural_meta_key()}`; this query
+             would then match nothing, and every structural MODE row would be
+             folded again on a denoised channel (issue 2176) with both suites
+             green.
+             """
+    end
+
+    test "the SQL pin is not vacuous — a query without the macro does NOT name the path" do
+      # Positive control for the pin above: `=~` against a path that appears in
+      # every query would pass no matter what the macro emitted.
+      {sql, _} = Ecto.Adapters.SQL.to_sql(:all, Grappa.Repo, from(m in Message, where: m.kind == :mode))
+
+      refute sql =~ "'$." <> Atom.to_string(Message.structural_meta_key()) <> "'"
+    end
+
+    test "is an allowlisted meta key — otherwise the tagged row is REJECTED" do
+      # `Grappa.Scrollback.Meta` is strict IN: `cast/1` and `dump/1` refuse a
+      # key outside `@known_keys`. A writer tagging a row with a key that is
+      # not on the list does not degrade to an untagged row — the whole
+      # changeset fails and the transcript line is lost. This is the one
+      # assertion standing between the tag and that outcome.
+      assert Message.structural_meta_key() in Grappa.Scrollback.Meta.known_keys()
     end
   end
 

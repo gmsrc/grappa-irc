@@ -61,6 +61,9 @@ defmodule Grappa.Scrollback do
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment, #121/#525).
   require Identifier
   require Logger
+  # issue 2176 — `Message.structural_row?/1` is a macro (the shared Ecto
+  # fragment for the structural-mode exemption), like `Identifier.nick_fold/1`.
+  require Message
 
   @max_limit 500
 
@@ -1406,10 +1409,25 @@ defmodule Grappa.Scrollback do
   # their Ecto.Enum string values (same mechanism as count_after_split/6).
   # There is no index on `messages.kind` (#458 note): the predicate rides the
   # existing composite after the index scan — fine at current volumes.
+  #
+  # issue 2176 — the second disjunct is the per-row exemption: a `:mode` row
+  # the server tagged STRUCTURAL at persist time (a ban, a key, a limit, a
+  # flag — never a `+o`) survives the fold. `Message.structural_row?/1` is the
+  # shared fragment; `ReadCursor.exclude_hidden_presence/2` composes the same
+  # one, so the history page and the unread aggregate cannot disagree about a
+  # ban. Written as `kind NOT IN (…) OR structural` rather than the equivalent
+  # `NOT (kind IN (…) AND NOT structural)` because SQL short-circuits OR: on
+  # the overwhelming majority of rows — every `:privmsg` — the left disjunct
+  # is already true and `json_extract` is never called.
   defp maybe_exclude_presence(query, false), do: query
 
-  defp maybe_exclude_presence(query, true),
-    do: where(query, [m], m.kind not in ^@suppressed_presence_kinds)
+  defp maybe_exclude_presence(query, true) do
+    where(
+      query,
+      [m],
+      m.kind not in ^@suppressed_presence_kinds or Message.structural_row?(m.meta)
+    )
+  end
 
   @doc """
   UX-1 (2026-05-17) — deletes all scrollback rows for a DM peer in a

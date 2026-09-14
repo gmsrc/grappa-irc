@@ -100,6 +100,7 @@ export const SCROLLBACK_META_TKEY = [
   "statusmsg",
   "nick_fallback",
   "link_failure",
+  "structural",
 ] as const;
 export type ScrollbackMetaTKey = (typeof SCROLLBACK_META_TKEY)[number];
 

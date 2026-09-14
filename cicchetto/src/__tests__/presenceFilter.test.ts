@@ -186,17 +186,17 @@ describe("presenceFilter module", () => {
     it("content kinds are always visible, even when the channel hides presence", async () => {
       const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
       setChannelPresencePref(key(), "hide");
-      expect(presenceRowVisible(key(), 999, "privmsg")).toBe(true);
-      expect(presenceRowVisible(key(), 999, "notice")).toBe(true);
-      expect(presenceRowVisible(key(), 999, "action")).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "privmsg" })).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "notice" })).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "action" })).toBe(true);
     });
 
     it("non-suppressed event kinds (topic/kick/server_event) stay visible when hiding", async () => {
       const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
       setChannelPresencePref(key(), "hide");
-      expect(presenceRowVisible(key(), 999, "topic")).toBe(true);
-      expect(presenceRowVisible(key(), 999, "kick")).toBe(true);
-      expect(presenceRowVisible(key(), 999, "server_event")).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "topic" })).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "kick" })).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "server_event" })).toBe(true);
     });
 
     // #1262 — the behavioural half of the ruling: a channel MODE row is folded
@@ -206,9 +206,61 @@ describe("presenceFilter module", () => {
     it("mode is hidden when the channel hides presence, visible otherwise", async () => {
       const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
       setChannelPresencePref(key(), "hide");
-      expect(presenceRowVisible(key(), 999, "mode")).toBe(false);
+      expect(presenceRowVisible(key(), 999, { kind: "mode" })).toBe(false);
       setChannelPresencePref(key(), "show");
-      expect(presenceRowVisible(key(), 999, "mode")).toBe(true);
+      expect(presenceRowVisible(key(), 999, { kind: "mode" })).toBe(true);
+    });
+
+    // issue 2176 — the split. The reported defect: on a denoised channel a
+    // `+b` was folded with the `+o` churn, so one operator could not see a ban
+    // their colleague (same version, channel on `show`) could.
+    it("a mode row TAGGED structural renders even while the channel hides presence", async () => {
+      const { presenceRowVisible, setChannelPresencePref, STRUCTURAL_META_KEY } = await import(
+        "../lib/presenceFilter"
+      );
+      setChannelPresencePref(key(), "hide");
+      expect(
+        presenceRowVisible(key(), 999, { kind: "mode", meta: { [STRUCTURAL_META_KEY]: true } }),
+      ).toBe(true);
+    });
+
+    it("an UNTAGGED mode row still folds — absence is what the old rows and the +o churn carry", async () => {
+      const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
+      setChannelPresencePref(key(), "hide");
+      // The `+o` shape the server writes today...
+      expect(presenceRowVisible(key(), 999, { kind: "mode", meta: { modes: "+o" } })).toBe(false);
+      // ...and a row from before the tag existed, which is not backfilled.
+      expect(presenceRowVisible(key(), 999, { kind: "mode", meta: {} })).toBe(false);
+      expect(presenceRowVisible(key(), 999, { kind: "mode" })).toBe(false);
+    });
+
+    it("the tag is read STRICTLY — a truthy non-true value does not exempt", async () => {
+      // `meta` values are `unknown` on the generated wire type, so a truthy
+      // check would let any stray string turn every mode row permanently
+      // visible. The server writes the boolean `true` and nothing else.
+      const { presenceRowVisible, setChannelPresencePref, STRUCTURAL_META_KEY } = await import(
+        "../lib/presenceFilter"
+      );
+      setChannelPresencePref(key(), "hide");
+      expect(
+        presenceRowVisible(key(), 999, { kind: "mode", meta: { [STRUCTURAL_META_KEY]: "yes" } }),
+      ).toBe(false);
+      expect(
+        presenceRowVisible(key(), 999, { kind: "mode", meta: { [STRUCTURAL_META_KEY]: 1 } }),
+      ).toBe(false);
+      expect(
+        presenceRowVisible(key(), 999, { kind: "mode", meta: { [STRUCTURAL_META_KEY]: false } }),
+      ).toBe(false);
+    });
+
+    it("the tag does not resurrect a join/part/quit the operator asked to fold", async () => {
+      // Only the channel-MODE writer tags, so this shape does not occur; the
+      // assertion that matters is the inverse — an UNTAGGED join still folds,
+      // i.e. the new disjunct did not widen the predicate for everything else.
+      const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
+      setChannelPresencePref(key(), "hide");
+      expect(presenceRowVisible(key(), 999, { kind: "join", meta: {} })).toBe(false);
+      expect(presenceRowVisible(key(), 999, { kind: "nick_change", meta: {} })).toBe(false);
     });
 
     it("suppressed kinds hidden when the channel hides presence, visible otherwise", async () => {
@@ -219,16 +271,16 @@ describe("presenceFilter module", () => {
         LARGE_CHANNEL_THRESHOLD,
       } = await import("../lib/presenceFilter");
       // Small channel, pref unset → follow-size default → visible.
-      expect(presenceRowVisible(key(), 3, "join")).toBe(true);
+      expect(presenceRowVisible(key(), 3, { kind: "join" })).toBe(true);
       // Large channel, pref unset → hidden by the size default.
-      expect(presenceRowVisible(key(), LARGE_CHANNEL_THRESHOLD, "join")).toBe(false);
+      expect(presenceRowVisible(key(), LARGE_CHANNEL_THRESHOLD, { kind: "join" })).toBe(false);
       // Explicit hide on a tiny channel → hidden (unset would SHOW here, so
       // the override is what the assertion pins).
       setChannelPresencePref(key(), "hide");
-      expect(presenceRowVisible(key(), 3, "part")).toBe(false);
+      expect(presenceRowVisible(key(), 3, { kind: "part" })).toBe(false);
       // Explicit show on a huge channel → visible (unset would HIDE here).
       setChannelPresencePref(key(), "show");
-      expect(presenceRowVisible(key(), LARGE_CHANNEL_THRESHOLD, "quit")).toBe(true);
+      expect(presenceRowVisible(key(), LARGE_CHANNEL_THRESHOLD, { kind: "quit" })).toBe(true);
       clearChannelPresencePref(key());
     });
   });
@@ -240,7 +292,7 @@ describe("presenceFilter module", () => {
   describe("trailingHiddenAdvanceTarget() — skip the trailing hidden run (#239)", () => {
     type Row = { id: number; kind: ScrollbackMessage["kind"] };
     const hidden = new Set<ScrollbackMessage["kind"]>(["join", "part", "quit", "nick_change"]);
-    const isVisible = (kind: ScrollbackMessage["kind"]): boolean => !hidden.has(kind);
+    const isVisible = (row: { kind: ScrollbackMessage["kind"] }): boolean => !hidden.has(row.kind);
 
     it("returns the cursor unchanged when nothing is past it", async () => {
       const { trailingHiddenAdvanceTarget } = await import("../lib/presenceFilter");
@@ -290,6 +342,30 @@ describe("presenceFilter module", () => {
         { id: 3, kind: "join" }, // hidden, past cursor
       ];
       expect(trailingHiddenAdvanceTarget(rows, 2, isVisible)).toBe(3);
+    });
+
+    // issue 2176 — the auto-advance skips the trailing run of HIDDEN rows, and
+    // a structural mode row is not hidden. Injecting the REAL predicate here
+    // (not the synthetic one above) is the point: this is the seam where the
+    // cursor could silently mark a ban read that the operator never saw.
+    it("a structural mode row is a CEILING — the cursor never advances past a visible ban", async () => {
+      const {
+        trailingHiddenAdvanceTarget,
+        presenceRowVisible,
+        setChannelPresencePref,
+        STRUCTURAL_META_KEY,
+      } = await import("../lib/presenceFilter");
+      setChannelPresencePref(key(), "hide");
+
+      const rows = [
+        { id: 10, kind: "join" as const },
+        { id: 11, kind: "mode" as const, meta: { [STRUCTURAL_META_KEY]: true } },
+        { id: 12, kind: "part" as const },
+      ];
+
+      expect(
+        trailingHiddenAdvanceTarget(rows, 9, (row) => presenceRowVisible(key(), 999, row)),
+      ).toBe(10);
     });
 
     it("is order-independent — never advances past a visible unread even when array order diverges from id order", async () => {

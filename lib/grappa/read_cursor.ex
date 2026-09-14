@@ -102,6 +102,9 @@ defmodule Grappa.ReadCursor do
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment) used by
   # rename_dm_peer/4 to match a DM cursor by the fold of the peer nick.
   require Identifier
+  # issue 2176 — Message.structural_row?/1 is the same shape: a query macro,
+  # here composing the structural-mode exemption into the #505 join condition.
+  require Message
 
   # ---------------------------------------------------------------------------
   # Types
@@ -523,6 +526,19 @@ defmodule Grappa.ReadCursor do
   # `dynamic(false)`: a subject with no pins and no oversized channels is the
   # overwhelmingly common case, and it deserves the exact pre-#505 SQL rather
   # than a tautology the planner has to see through.
+  #
+  # issue 2176 — the `not Message.structural_row?/1` conjunct is the per-row
+  # exemption, and it has to be HERE as well as in `Scrollback`'s
+  # `maybe_exclude_presence/2`: this aggregate is what SEEDS the unread badge,
+  # so if only the history fetch learned about structural mode rows the pane
+  # would render a ban the badge refused to count — the #239 "the count and
+  # the pane must agree on which rows count" invariant, one table out.
+  #
+  # The fragment answers exactly true or false (`IS 1`, never NULL) rather than
+  # relying on NULL behaving itself under this `not`. Measured, `= 1` would
+  # also pass here — a NULL `ON` is "not matched", which is what an untagged
+  # row wants anyway — so the spelling buys composability, not a fix. See
+  # `Message.structural_row?/1`.
   @spec exclude_hidden_presence(Ecto.Query.dynamic_expr(), %{
           String.t() => MapSet.t(String.t())
         }) :: Ecto.Query.dynamic_expr()
@@ -542,7 +558,11 @@ defmodule Grappa.ReadCursor do
             dynamic([rc, n, _], ^acc or (n.slug == ^slug and rc.channel in ^list))
           end)
 
-        dynamic([_, _, m], ^join_on and not (m.kind in ^suppressed and ^hidden))
+        dynamic(
+          [_, _, m],
+          ^join_on and
+            not (m.kind in ^suppressed and not Message.structural_row?(m.meta) and ^hidden)
+        )
     end
   end
 

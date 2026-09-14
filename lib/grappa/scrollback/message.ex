@@ -178,14 +178,23 @@ defmodule Grappa.Scrollback.Message do
   #
   # #1262 (2026-08-13) — `:mode` is IN. It was carved out by #458 on the rule
   # "the broad presence/control kinds carry operator-relevant signal and MUST
-  # stay visible"; vjt withdrew that rule. The accepted cost, recorded here so
-  # nobody rediscovers it as a bug: while a channel is denoised, STRUCTURAL mode
-  # transitions (`+b` / `+k` / `+l` / `+m` / `+i`) are folded along with the
-  # status-prefix churn the issue was aimed at. A write-time split that folds
-  # only the churn is a possible follow-up, not a precondition. Own-nick mode
-  # rows (#154(b)) are untouched: they land on the synthetic `$server` window,
-  # which has no member count, so `PresenceFilter.hidden?/2` resolves it to
-  # SHOW. See DESIGN_NOTES 2026-08-13.
+  # stay visible"; vjt withdrew that rule.
+  #
+  # issue 2176 (2026-09-14) — and the cost #1262 wrote down came due. While
+  # `:mode` was wholly in this set a denoised channel folded the STRUCTURAL
+  # transitions (`+b` / `+k` / `+l` / `+m` / `+i`) along with the status-prefix
+  # churn the issue was aimed at, so an operator could not see a ban being set
+  # while a colleague on the same version with the channel on `show` could.
+  # The kind STAYS here — a `+o` is still churn — and the split is the
+  # per-ROW exemption below: `structural_meta_key/0`, written at persist time
+  # by the ONE classifier that already holds the network's PREFIX table
+  # (`Grappa.Session.ISupport.structural_mode_token?/2`). A row carrying the
+  # tag is exempt from suppression on BOTH sides; a row without it — a
+  # prefix-mode row, or any row written before the tag existed — keeps
+  # today's behaviour exactly. Own-nick mode rows (#154(b)) are untagged and
+  # untouched: they land on the synthetic `$server` window, which has no
+  # member count, so `PresenceFilter.hidden?/2` resolves it to SHOW.
+  # See DESIGN_NOTES 2026-08-13 and the issue-2176 entry.
   #
   # Mirrors cic's SUPPRESSED_PRESENCE_KINDS (cicchetto/src/lib/presenceFilter.ts),
   # SAME ORDER, so the server history filter and the client live-tail
@@ -208,6 +217,10 @@ defmodule Grappa.Scrollback.Message do
   # (cicchetto/src/lib/presencePause.ts), same order; the subset relation and
   # the cross-language agreement are both gated by `presence_filter_test.exs`.
   @pausable_presence_kinds [:join, :part, :quit]
+
+  # issue 2176 — the per-ROW exemption from `@suppressed_presence_kinds`. See
+  # `structural_meta_key/0`.
+  @structural_meta_key :structural
 
   # M8 fix 2026-05-08: kinds for which `:dm_with` may legitimately
   # carry a peer nick. CP23 cluster `code-reload` extended the list to
@@ -280,8 +293,12 @@ defmodule Grappa.Scrollback.Message do
   control rows rather than churn and stay visible.
 
   `:mode` joined the set in #1262, when vjt withdrew #458's
-  "mode carries operator-relevant signal" carve-out; the accepted cost is that
-  structural `+b`/`+k`/`+l`/`+m`/`+i` rows are folded too while denoised. Mirrors
+  "mode carries operator-relevant signal" carve-out. Its accepted cost — a
+  structural `+b`/`+k`/`+l`/`+m`/`+i` folded along with the churn — is paid off
+  by issue 2176 NOT by taking the kind back out, but by the per-row exemption
+  `structural_meta_key/0`: a mode row the server tagged structural is exempt
+  even though its KIND is in this set. Read the two together; this list alone
+  no longer answers "will this row be folded?". Mirrors
   the cic `SUPPRESSED_PRESENCE_KINDS` set
   (`cicchetto/src/lib/presenceFilter.ts`); the two MUST agree, in the same
   order, so the server history filter and the client live-tail render-filter
@@ -313,6 +330,76 @@ defmodule Grappa.Scrollback.Message do
   """
   @spec pausable_presence_kinds() :: [:join | :part | :quit, ...]
   def pausable_presence_kinds, do: @pausable_presence_kinds
+
+  @doc """
+  The `meta` key whose presence exempts a row from
+  `suppressed_presence_kinds/0` — `:structural`. issue 2176 SINGLE SOURCE.
+
+  The suppressed set answers "is this KIND churn?", and for `:mode` the
+  honest answer is "it depends on the letters": `+o`/`+v` is the per-JOIN
+  churn the denoise filter exists for, `+b`/`+k`/`+l`/`+m`/`+i` changes the
+  channel and an operator must see it. Rather than teach both sides to parse
+  mode letters — one parser per language, the exact drift the cross-language
+  gate exists to catch, and a gate that compares sets of KINDS would not
+  catch it — the SERVER classifies once at persist time, where the network's
+  own ISUPPORT `PREFIX` table already is
+  (`Grappa.Session.ISupport.structural_mode_token?/2`), and tags the row.
+  Both sides then filter on the tag.
+
+  There is no `false` form: the key is written ONLY when the row is
+  structural, so **absence means fold**. That collapses the two absent cases
+  into one rule — a status-prefix row and a row persisted before this key
+  existed are both folded, which for the old rows is precisely today's
+  behaviour. There is no backfill; a `+b` from before the tag stays folded
+  while denoised.
+
+  The cic twin is `STRUCTURAL_META_KEY` in
+  `cicchetto/src/lib/presenceFilter.ts`, and `presence_filter_test.exs` gates
+  the two spellings against each other — a rename on one side alone would
+  otherwise leave both suites green while page-up and the live tail disagree
+  about every ban.
+  """
+  @spec structural_meta_key() :: :structural
+  def structural_meta_key, do: @structural_meta_key
+
+  @doc """
+  The query-side twin of `structural_meta_key/0`: an Ecto fragment that is
+  TRUE for a row carrying the structural tag.
+
+  Same shape and same reason as `Grappa.IRC.Identifier.nick_fold/1` — a rule
+  that has to hold in SQL as well as in memory is expressed once, as a macro,
+  so the two SQL sites that must honour it (`Grappa.Scrollback`'s
+  `maybe_exclude_presence/2` for the history fetch, `Grappa.ReadCursor`'s
+  `exclude_hidden_presence/2` for the #505 unread aggregate) cannot drift
+  into two different JSON paths.
+
+  `IS 1` rather than `= 1`, and the honest reason is narrower than the one
+  this docstring first gave. SQLite's `json_extract/2` returns SQL NULL for an
+  absent path, and an untagged row is the COMMON case (every `:join`, every
+  `:part`, every `+o`), so under `=` the comparison is NULL and a caller that
+  negates it propagates NULL rather than the false it meant. That is true
+  about the SQL — **and MEASURED, it changes nothing at either of today's two
+  sites.** A mutant swapping `IS 1` for `= 1` left both suites green, because
+  a NULL predicate in a `WHERE` and in a LEFT JOIN's `ON` is "not true", which
+  is exactly the outcome an untagged row wants at both sites. So this is a
+  choice about COMPOSABILITY, not a bug fix: the fragment is a shared macro
+  whose next call site may want the NULL case to be INCLUDED, and there the
+  two spellings diverge. Stated as a preference because that is what it is.
+
+  The JSON path is the literal `'$.structural'` and it HAS to be — Ecto
+  requires `fragment/n`'s first argument to be a literal string, so a module
+  attribute cannot be interpolated there. The key therefore exists twice in
+  this module, once as the atom a writer uses and once inside a SQL string,
+  and the pin is a test that renders the REAL SQL (`Ecto.Adapters.SQL.to_sql`)
+  and looks for `structural_meta_key/0` in it — measuring the emitted
+  statement rather than re-asserting the source, the same posture as
+  `Identifier.nick_fold_sql/1`'s byte-pin against the folded-index migrations.
+  """
+  defmacro structural_row?(meta_column) do
+    quote do
+      fragment("json_extract(?, '$.structural') IS 1", unquote(meta_column))
+    end
+  end
 
   @type kind ::
           :privmsg

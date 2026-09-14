@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import type { ScrollbackMessage } from "./api";
 import type { ChannelKey } from "./channelKey";
 import { moduleRoot } from "./moduleRoot";
+import type { ScrollbackMetaTKey } from "./wireTypes";
 
 // #222 — hide join/part/quit/nick-change signalling (and, since #1262,
 // channel mode churn) on large channels by default, with a per-channel opt-in
@@ -76,12 +77,11 @@ export const LARGE_CHANNEL_THRESHOLD = 200;
 //
 // `mode` joined the set in #1262. It was previously carved OUT by #458 on the
 // rule "mode carries operator-relevant signal and MUST stay visible"; vjt
-// withdrew that rule on 2026-08-13. The accepted cost, stated so nobody
-// rediscovers it as a bug: while a channel is denoised, structural mode
-// transitions (`+b` / `+k` / `+l` / `+m` / `+i`) are folded along with the
-// status-prefix churn this was aimed at. A write-time split that folds only
-// the churn is a possible follow-up, not a precondition. See DESIGN_NOTES
-// 2026-08-13.
+// withdrew that rule on 2026-08-13. Its accepted cost — a denoised channel
+// folding the structural transitions (`+b` / `+k` / `+l` / `+m` / `+i`) along
+// with the status-prefix churn it was aimed at — came due on issue 2176, and
+// is paid off NOT by taking the kind back out but by the per-row exemption
+// `STRUCTURAL_META_KEY` below. `mode` stays here: a `+o` is still churn.
 //
 // Own-nick mode rows (#154(b): `/umode +i`, the services-pushed `+r`/`+a` at
 // IDENTIFY) are NOT affected — they land on the synthetic `$server` window,
@@ -98,6 +98,47 @@ export const SUPPRESSED_PRESENCE_KINDS: ReadonlySet<ScrollbackMessage["kind"]> =
   "nick_change",
   "mode",
 ]);
+
+// issue 2176 — the per-ROW escape hatch out of the set above. The server tags
+// a `:mode` row `meta.structural = true` when its token changed the CHANNEL (a
+// ban, a key, a limit, a flag) rather than a member's status prefix; a tagged
+// row renders even while the channel is denoised. Everything else about the
+// filter is unchanged.
+//
+// WHY A TAG AND NOT A PARSE HERE: the decision needs the mode LETTERS, and the
+// churn letters are per-network (`PREFIX=`). Parsing `meta.modes` on both sides
+// would be two copies of one parser, which is the drift this module's gate
+// exists to catch — and that gate compares sets of KINDS, so it would not
+// catch it. The server parses once, where the network's ISUPPORT already is,
+// and both sides read the tag. cic NEVER parses IRC (CLAUDE.md invariant).
+//
+// ABSENCE MEANS FOLD, and that is load-bearing rather than incidental: a `+o`
+// row and a row written before the tag existed both arrive without the key, and
+// both must keep behaving exactly as they did. There is no `false` form to
+// check for.
+//
+// Typed `satisfies ScrollbackMetaTKey` so the key is checked at COMPILE time
+// against the server's generated meta allowlist — if the server ever drops it,
+// tsc says so here. The runtime spelling is additionally gated against
+// `Grappa.Scrollback.Message.structural_meta_key/0` by
+// `test/grappa/presence_filter_test.exs`, which parses this literal.
+export const STRUCTURAL_META_KEY = "structural" satisfies ScrollbackMetaTKey;
+
+// The row shape the presence predicate needs: the kind, and the meta that may
+// carry the structural tag. `meta` is optional because callers that build a
+// synthetic row (and the `trailingHiddenAdvanceTarget` element type) have no
+// reason to carry one — an absent meta is the untagged case, which folds.
+export type PresenceRow = {
+  readonly kind: ScrollbackMessage["kind"];
+  readonly meta?: ScrollbackMessage["meta"];
+};
+
+// The one place the tag is read. Strict `=== true`: `meta` values are `unknown`
+// on the generated type, and a truthy-check would promote a stray string into
+// "always visible".
+export function isStructuralRow(row: PresenceRow): boolean {
+  return row.meta?.[STRUCTURAL_META_KEY] === true;
+}
 
 // unset (key absent) = follow the size default.
 export type PresencePref = "show" | "hide";
@@ -223,12 +264,19 @@ export function channelPresenceVisible(key: ChannelKey, memberCount: number): bo
 // pref signal (via `channelPresenceVisible`) ONLY for a suppressed kind, so the
 // consumer memo/effect re-runs on toggle / membership-threshold changes exactly
 // when a suppressed row is present. Never fold a second copy of this rule.
+//
+// issue 2176 — takes the ROW, not just its kind, because the suppressed set is
+// no longer the whole answer for `mode`: a row the server tagged structural is
+// exempt. The tag check sits BEFORE the pref read on purpose — a structural row
+// is visible whatever the channel's preference says, so reading the signal for
+// it would subscribe the consumer memo to a pref that cannot change the answer.
 export function presenceRowVisible(
   key: ChannelKey,
   memberCount: number,
-  kind: ScrollbackMessage["kind"],
+  row: PresenceRow,
 ): boolean {
-  if (!SUPPRESSED_PRESENCE_KINDS.has(kind)) return true;
+  if (!SUPPRESSED_PRESENCE_KINDS.has(row.kind)) return true;
+  if (isStructuralRow(row)) return true;
   return channelPresenceVisible(key, memberCount);
 }
 
@@ -250,22 +298,27 @@ export function presenceRowVisible(
 // is no ceiling, so the target is the tail id. Returns `cursor` when nothing is
 // skippable, so the caller's forward-only `setCursorIfAdvances` (#233 monotonic
 // clamp) makes it a no-op. Pure (predicate injected) — unit-testable without
-// DOM/timers; the caller injects `presenceRowVisible(key, memberCount, kind)`.
+// DOM/timers; the caller injects `presenceRowVisible(key, memberCount, row)`.
+//
+// issue 2176 — the injected predicate takes the whole ROW rather than its kind,
+// for the same reason `presenceRowVisible` does: a structural mode row is
+// VISIBLE, so it is a ceiling, and skipping past it would mark a ban read that
+// the operator never saw.
 export function trailingHiddenAdvanceTarget(
-  msgs: readonly { readonly id: number; readonly kind: ScrollbackMessage["kind"] }[],
+  msgs: readonly ({ readonly id: number } & PresenceRow)[],
   cursor: number,
-  isVisible: (kind: ScrollbackMessage["kind"]) => boolean,
+  isVisible: (row: PresenceRow) => boolean,
 ): number {
   // Lowest-id VISIBLE unread — the ceiling. +Infinity when the whole
   // post-cursor tail is hidden (no visible unread to protect).
   let ceiling = Number.POSITIVE_INFINITY;
   for (const m of msgs) {
-    if (m.id > cursor && isVisible(m.kind) && m.id < ceiling) ceiling = m.id;
+    if (m.id > cursor && isVisible(m) && m.id < ceiling) ceiling = m.id;
   }
   // Highest HIDDEN unread id strictly below the ceiling — the skippable run.
   let target = cursor;
   for (const m of msgs) {
-    if (m.id > cursor && !isVisible(m.kind) && m.id < ceiling && m.id > target) {
+    if (m.id > cursor && !isVisible(m) && m.id < ceiling && m.id > target) {
       target = m.id;
     }
   }

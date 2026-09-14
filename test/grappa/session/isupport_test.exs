@@ -18,6 +18,9 @@ defmodule Grappa.Session.ISupportTest do
     must consume the param of but never record as a channel flag.
   - `user_prefix/2` — mode letter → sigil for per-user (membership)
     modes, or `:error` for channel-level modes.
+  - `structural_mode_token?/2` (issue 2176) — whether a MODE token says
+    anything about the CHANNEL rather than about a member's status
+    prefix, the write-time denoise classification.
   - `presence_mechanism/1` (#247) — MONITOR=/WATCH= token capture and
     the monitor-over-watch mechanism pick for the `/notify` arm.
   """
@@ -316,6 +319,79 @@ defmodule Grappa.Session.ISupportTest do
       end
 
       refute ISupport.list_mode?(solanum, "z")
+    end
+  end
+
+  # issue 2176 — the write-time denoise classification. A denoised channel
+  # folds the status-prefix churn (`+o`/`+v`) and must NOT fold what changes
+  # the channel (`+b`/`+k`/`+l`/…). The letter split is derived from this
+  # network's own PREFIX table, never from a constant.
+  describe "structural_mode_token?/2 (issue 2176)" do
+    test "a status-prefix-only token is CHURN on the default table" do
+      d = ISupport.default()
+
+      for token <- ["+o", "-o", "+v", "-v", "+h", "+ov", "-ov", "+o-v"] do
+        refute ISupport.structural_mode_token?(d, token),
+               "expected #{token} to classify as churn (status prefixes only)"
+      end
+    end
+
+    test "anything that changes the channel is STRUCTURAL" do
+      d = ISupport.default()
+
+      # The set the issue names, plus the two list modes the default table
+      # advertises beyond `b`.
+      for token <- ["+b", "-b", "+k", "+l", "+m", "+i", "+t", "+n", "+s", "+e", "+I"] do
+        assert ISupport.structural_mode_token?(d, token),
+               "expected #{token} to classify as structural (it changes the channel)"
+      end
+    end
+
+    test "a MIXED token is structural if ANY letter is — showing it is the safe failure" do
+      d = ISupport.default()
+
+      # `MODE #chan +ob nick mask!*@*` — the op grade must not buy the ban
+      # invisibility.
+      assert ISupport.structural_mode_token?(d, "+ob")
+      assert ISupport.structural_mode_token?(d, "+bo")
+      assert ISupport.structural_mode_token?(d, "+o-b")
+      assert ISupport.structural_mode_token?(d, "-o+b")
+    end
+
+    test "the churn letters are PER-NETWORK, read from the advertised PREFIX" do
+      # A network advertising founder/admin grades: `q` and `a` are status
+      # prefixes THERE, so they are churn there — and `+q` on a network that
+      # does NOT advertise them (bahamut/Azzurra's default `(ohv)`) is a
+      # channel mode, so it is structural. A hardcoded ~w[o v h] would call
+      # the first structural and both networks would be wrong one way each.
+      solanum =
+        ISupport.merge_isupport(["s", "PREFIX=(qaohv)~&@%+"], ISupport.default())
+
+      refute ISupport.structural_mode_token?(solanum, "+q")
+      refute ISupport.structural_mode_token?(solanum, "+a")
+      refute ISupport.structural_mode_token?(solanum, "+qaohv")
+      assert ISupport.structural_mode_token?(ISupport.default(), "+q")
+      assert ISupport.structural_mode_token?(ISupport.default(), "+a")
+    end
+
+    test "a token with no letters states nothing about the channel — not structural" do
+      d = ISupport.default()
+
+      refute ISupport.structural_mode_token?(d, "")
+      refute ISupport.structural_mode_token?(d, "+")
+      refute ISupport.structural_mode_token?(d, "+-")
+    end
+
+    test "a MALFORMED token falls on the structural side (safe failure)" do
+      # #878 persists the transcript row for a token whose derived state it
+      # refuses. Those bytes are not prefix letters, so the row shows — which
+      # is the right way round: a line nobody could parse is not churn anyone
+      # should be hiding.
+      d = ISupport.default()
+
+      assert ISupport.structural_mode_token?(d, "+o!")
+      assert ISupport.structural_mode_token?(d, "garbage")
+      assert ISupport.structural_mode_token?(d, "+é")
     end
   end
 

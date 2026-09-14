@@ -1,5 +1,6 @@
-// #1262 — channel MODE rows fold into the denoise filter, own-nick mode rows
-// on `$server` do not.
+// #1262 — channel status-prefix MODE rows (the churn) fold into the denoise
+// filter; own-nick mode rows on `$server` do not, and since issue 2176 neither
+// do the STRUCTURAL channel modes (last test in this file).
 //
 // `:mode` was carved OUT of the suppressed set by #458 on the rule "the broad
 // presence/control kinds carry operator-relevant signal and MUST stay
@@ -28,13 +29,35 @@
 // page is populated, so "0 mode rows" means folded rather than "nothing
 // loaded yet" (an empty pane would satisfy the mode assertion vacuously).
 //
+// ## 🔴 The churn exemplar MOVED from `+m` to `-o` (issue 2176)
+//
+// This spec used to set `/mode <chan> +m` as its specimen of "a channel MODE
+// row". Issue 2176 reclassified `+m`: a mode that changes the CHANNEL (`+b`,
+// `+k`, `+l`, `+m`, `+i`, `+t`, `+n`, `+s`) is STRUCTURAL and stays visible
+// while denoised; only a member's status prefix (`+o`/`-o`, `+v`, and whatever
+// else this network put in `PREFIX=`) is the churn this filter folds.
+//
+// So the CLAIM below is untouched and still gated — a channel MODE row that is
+// churn folds, server-side too. What changed is the SPECIMEN, because the old
+// one stopped being churn. This is deliberate, not an assert softened to turn a
+// red green: `+m` now has its own test at the bottom of this file asserting the
+// OPPOSITE outcome, and removing the structural/churn distinction kills that
+// one. Read the two together.
+//
 // ## Why the spec creates its own channel
 //
 // `/join` on a fresh name makes the seeded user the channel creator, hence
-// chanop, hence able to set `+m` — the same trick #240 uses for the mode
-// modal. On a shared autojoin channel the user may not be op, and bahamut
-// only echoes a MODE it actually applied, so a non-op attempt would hang to
-// timeout rather than fail (feedback: the witness must be SERVED by the ircd).
+// chanop — the same trick #240 uses for the mode modal. On a shared autojoin
+// channel the user may not be op, and bahamut only echoes a MODE it actually
+// applied, so a non-op attempt would hang to timeout rather than fail
+// (feedback: the witness must be SERVED by the ircd).
+//
+// That precondition is also WHY the churn specimen is `-o` on our own nick
+// rather than `+v`: being op is a fact this spec already establishes and
+// depends on, so deopping ourselves is guaranteed to be applied and echoed for
+// exactly the same reason the old `+m` was. Nothing new is assumed about how
+// bahamut treats a voice grant to an existing op. It goes LAST — after it we
+// are no longer op, so no further MODE would be applied.
 //
 // Anti-hollow-green: `/umode -i` in `finally` restores the shared seeded
 // session's umode set so sibling specs do not inherit `+i` (mirrors #229).
@@ -46,6 +69,14 @@ import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.setTimeout(90_000);
+
+// A ban mask is `!`, `*`, `@` and dots — every one of them a regex
+// metacharacter. Interpolating it raw would build a pattern that matches
+// something other than the mask, which is the quiet way an e2e stops testing
+// what its name says.
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 test("#1262 — a channel MODE row folds when denoised (server-side too), the $server umode row stays", async ({
   page,
@@ -74,7 +105,7 @@ test("#1262 — a channel MODE row folds when denoised (server-side too), the $s
 
     // Content witness first, then the MODE. Same socket ⇒ ordered.
     await composeSend(page, content);
-    await composeSend(page, `/mode ${channel} +m`);
+    await composeSend(page, `/mode ${channel} -o ${specNick()}`);
 
     const contentRow = page
       .locator('[data-testid="scrollback-line"][data-kind="privmsg"]')
@@ -171,4 +202,118 @@ test("#1262 — a channel MODE row folds when denoised (server-side too), the $s
   } finally {
     await composeSend(page, "/umode -i").catch(() => {});
   }
+});
+
+// issue 2176 — the other side of the same rule, and the reason the specimen
+// above had to move. A STRUCTURAL channel mode (`+b`, the one vjt's ruling
+// names) is exempt from the denoise per-ROW: the server tags it
+// `meta.structural` at write time and both filters honour the tag.
+//
+// The RELOAD half is not decoration. It is the #458 invariant — REST history
+// and the live tail must agree on the same channel — and it is the arm that
+// catches a one-sided fix: tag the row but forget the server's history filter
+// and the ban is visible in the tail and gone on page-up, which is the bug
+// #2176 exists to kill wearing a different hat.
+//
+// Anti-vacuity mirrors the churn test: a content row proves the pane and the
+// served page are populated, so "1 mode row" cannot be satisfied by an empty
+// load, and the churn assertion inside this same denoised channel proves the
+// denoise is actually ON — without it a broken toggle would show the ban for
+// the wrong reason.
+test("#2176 — a structural channel MODE row survives the denoise and the reload", async ({
+  page,
+}) => {
+  const vjt = specUser();
+  const channel = `#t2176-${Date.now()}`;
+  const content = `issue2176-content-${Date.now()}`;
+  const banMask = "nobody!*@structural.invalid";
+
+  await loginAs(page, vjt);
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
+
+  await composeSend(page, `/join ${channel}`);
+  await expect(
+    page.locator(".sidebar-network-section li").filter({ hasText: channel }),
+  ).toHaveCount(1, { timeout: 15_000 });
+  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
+
+  // Content witness, then the STRUCTURAL mode, then the CHURN mode. The churn
+  // goes last for the same reason as in the test above: `-o` costs us op.
+  await composeSend(page, content);
+  await composeSend(page, `/mode ${channel} +b ${banMask}`);
+  await composeSend(page, `/mode ${channel} -o ${specNick()}`);
+
+  const contentRow = page
+    .locator('[data-testid="scrollback-line"][data-kind="privmsg"]')
+    .filter({ hasText: content });
+  const modeRows = page.locator('[data-testid="scrollback-line"][data-kind="mode"]');
+  // Anchored on `sets mode <token> `, not on a bare substring: the ban MASK
+  // contains letters, and a loose `"-o"` match would be satisfied by any row
+  // whose args happen to spell it.
+  const banRow = modeRows.filter({ hasText: new RegExp(`sets mode \\+b ${escapeRe(banMask)}`) });
+  const churnRow = modeRows.filter({ hasText: new RegExp(`sets mode -o ${specNick()}\\b`) });
+
+  await expect(contentRow).toHaveCount(1, { timeout: 15_000 });
+  await expect(banRow).toHaveCount(1, { timeout: 15_000 });
+  await expect(churnRow).toHaveCount(1, { timeout: 15_000 });
+
+  // --- denoise: the ban stays, the churn goes ---------------------------
+  await openRailMenu(page);
+  const toggle = page.locator('[data-testid="presence-toggle"]');
+  await expect(toggle).toBeVisible({ timeout: 5_000 });
+  const hidePut = page.waitForResponse(
+    (r) =>
+      r.url().includes("/me/settings/display-prefs") && r.request().method() === "PUT" && r.ok(),
+  );
+  await toggle.click();
+  await hidePut;
+
+  // The churn disappearing is the proof the denoise is ON. Assert it FIRST:
+  // if the toggle silently did nothing, the ban assertion below would pass
+  // for the wrong reason and this spec would be a mirror.
+  await expect(churnRow).toHaveCount(0, { timeout: 10_000 });
+  await expect(banRow).toHaveCount(1);
+  await expect(contentRow).toHaveCount(1);
+
+  // --- THE SERVER HALF: the cold-load PAGE still carries the ban --------
+  // Same wire-level assertion as the churn test, and for the same measured
+  // reason: a DOM-only check passes while the server-side filter is wrong,
+  // because cic's render filter would be honouring the tag on its own.
+  // A MODE row's `body` is NULL on the wire — measured, not assumed:
+  // `EventRouter` persists it as `build_persist(…, nil, %{modes:, args:})`, so
+  // the token and its arguments live in `meta`. Asserting on `body` here would
+  // have compared `undefined` and passed for the wrong reason.
+  type ServedRow = { kind: string; meta?: { modes?: string; args?: string[] } };
+  const servedPages: ServedRow[][] = [];
+  page.on("response", (r) => {
+    if (
+      r.request().method() !== "GET" ||
+      r.status() !== 200 ||
+      !new URL(r.url()).pathname.endsWith(`/channels/${encodeURIComponent(channel)}/messages`)
+    ) {
+      return;
+    }
+    void r
+      .json()
+      .then((body) => {
+        if (Array.isArray(body)) servedPages.push(body as ServedRow[]);
+      })
+      .catch(() => {});
+  });
+
+  await page.reload();
+  await selectChannel(page, NETWORK_SLUG, channel, { awaitWsReady: false });
+
+  await expect(contentRow).toHaveCount(1, { timeout: 15_000 });
+  await expect(banRow).toHaveCount(1);
+  await expect(churnRow).toHaveCount(0);
+
+  const served = servedPages.flat();
+  expect(servedPages.length).toBeGreaterThan(0);
+  expect(served.some((m) => m.kind === "privmsg")).toBe(true);
+  // The server SERVED the ban row and WITHHELD the churn one — the two
+  // halves of the split, read off the wire rather than off the pane.
+  const servedModes = served.filter((m) => m.kind === "mode");
+  expect(servedModes.filter((m) => m.meta?.modes === "+b")).toHaveLength(1);
+  expect(servedModes.filter((m) => m.meta?.modes === "-o")).toEqual([]);
 });

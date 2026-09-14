@@ -981,6 +981,57 @@ defmodule Grappa.ScrollbackTest do
       end
     end
 
+    # issue 2176 — the split. `:mode` stays in the suppressed set (a `+o` is
+    # churn), but a row the server tagged STRUCTURAL at persist time survives
+    # the fold: an operator who cannot see a ban being set is being denied
+    # operator-relevant signal, and that was the reported defect.
+    test "hide_presence: true KEEPS a mode row tagged structural (+b) and folds an untagged one (+o)",
+         %{user: user, network: net} do
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          sample(user, net, 1, %{
+            kind: :mode,
+            sender: "op",
+            body: nil,
+            meta: %{modes: "+o", args: ["alice"]}
+          })
+        )
+
+      {:ok, ban} =
+        ScrollbackHelpers.insert(
+          sample(user, net, 2, %{
+            kind: :mode,
+            sender: "op",
+            body: nil,
+            meta: %{Message.structural_meta_key() => true, modes: "+b", args: ["troll!*@*"]}
+          })
+        )
+
+      page = Scrollback.fetch({:user, user.id}, net.id, "#sniffo", nil, 50, nil, true)
+
+      assert Enum.map(page, & &1.id) == [ban.id],
+             "the ban must render on a denoised channel; the +o must not"
+    end
+
+    test "hide_presence: true folds an UNTAGGED mode row — the pre-2176 rows, unchanged and not backfilled",
+         %{user: user, network: net} do
+      # The tag is written only when true, so "no tag" covers both a status
+      # prefix change and every mode row persisted before the key existed.
+      # There is no backfill: a `+b` from last week keeps folding, and that is
+      # the declared behaviour rather than an oversight.
+      {:ok, _} =
+        ScrollbackHelpers.insert(
+          sample(user, net, 1, %{
+            kind: :mode,
+            sender: "op",
+            body: nil,
+            meta: %{modes: "+b", args: ["troll!*@*"]}
+          })
+        )
+
+      assert Scrollback.fetch({:user, user.id}, net.id, "#sniffo", nil, 50, nil, true) == []
+    end
+
     test "hide_presence: false returns every kind (unchanged behaviour)", %{user: user, network: net} do
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 0, %{kind: :privmsg, body: "hello"}))
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 1, %{kind: :join, sender: "alice", body: nil}))

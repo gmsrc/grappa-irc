@@ -535,7 +535,7 @@ const exports = identityScopedStore((onIdentityChange) => {
       // uses (reconcile-to-one, not a forked filter) — which is also why the
       // filter is applied HERE and not inside `unreadCount`: it is per-channel
       // UI state, and the shared module must not reach for it.
-      const visible = rows.filter((row) => presenceRowVisible(key, memberCount, row.kind));
+      const visible = rows.filter((row) => presenceRowVisible(key, memberCount, row));
       // issue 2069 — the MESSAGES bucket is `unreadMessagesAfter`, the one
       // function the in-pane divider also calls. No upper bound: the pill is
       // the LIVE answer, so an arrival past the frozen session top still
