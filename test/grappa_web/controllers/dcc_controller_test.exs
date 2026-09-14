@@ -4,9 +4,19 @@ defmodule GrappaWeb.DccControllerTest do
 
   Two nouns, two controllers, and the split is the point: an OFFER is
   per-session memory with a hold that runs out, a FILE is bytes on disk
-  with a retention the reaper enforces. They have different lifetimes and
-  the same gate, so they are separate resources rather than one with a
-  mode.
+  with a retention the reaper enforces. Different lifetimes, and since
+  issue 2127 different GATES too — which is why one resource with a mode
+  was never going to work.
+
+  ## The gate split (issue 2127)
+
+  The offer doors keep `:authn` + `ResolveNetwork`: they act on a live
+  `Session.Server` for a `(subject, network)`, so ownership has to be
+  proved. The FILE door has none — it is `GET /dcc_files/:slug` at top
+  level, beside `GET /uploads/:slug`, and the 26-char base32 slug is the
+  access token. Not a relaxation: the gated shape could not be used at
+  all, because a tapped scrollback link opens a tab with no
+  `Authorization` header and `Plugs.Authn` reads nothing else.
 
   What this file has to pin beyond the happy paths:
 
@@ -16,11 +26,18 @@ defmodule GrappaWeb.DccControllerTest do
     * a handle that names nothing is **404** on both write doors — they
       are HTTP-reachable and must not double as a way to silently succeed;
     * the file door serves `application/octet-stream` with
-      `Content-Disposition: attachment` and `nosniff`. These bytes came
-      off a stranger's socket: anything that lets a browser decide for
-      itself what they are is a stored-XSS door;
-    * a slug belonging to ANOTHER subject is 404 and not 403 — the
-      ownership answer must not double as an existence oracle.
+      `Content-Disposition: attachment` and `nosniff` — **on the
+      unauthenticated path**, which is now the one an attacker reaches.
+      These bytes came off a stranger's socket: anything that lets a
+      browser decide for itself what they are is a stored-XSS door;
+    * the file door answers a request carrying **no bearer at all**. That
+      is the defect issue 2127 closed, so it is asserted rather than
+      implied by the absence of a 401 test;
+    * an `.ext` on the file URL addresses the SAME row and changes NO
+      response header — the lookup is the 26 characters only;
+    * every miss on the file door — expired, unknown, malformed — answers
+      identically. With the pipeline gone, a distinguishing 404 would be
+      a probe for which slugs exist.
 
   `async: false` for the usual singleton reason (`Grappa.SessionRegistry`,
   `Grappa.SessionSupervisor`, `Grappa.PubSub`).
@@ -29,7 +46,8 @@ defmodule GrappaWeb.DccControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Dcc, IRCServer, Session}
+  alias Grappa.{Dcc, IRCServer, Repo, Session}
+  alias Grappa.Dcc.SpoolFile
 
   @nick "grappa-test"
   @public_ip "1.2.3.4"
@@ -105,11 +123,11 @@ defmodule GrappaWeb.DccControllerTest do
     end
   end
 
-  describe "GET /networks/:network_id/dcc_files/:slug" do
+  describe "GET /dcc_files/:slug[.ext] — public, the slug IS the credential" do
     test "serves the bytes as an opaque attachment the browser may not interpret", ctx do
-      %{network: network, slug: slug} = spooled(ctx.vjt)
+      %{slug: slug} = spooled(ctx.vjt)
 
-      conn = get(ctx.conn, "/networks/#{network.slug}/dcc_files/#{slug}")
+      conn = get(ctx.conn, "/dcc_files/#{slug}")
 
       assert response(conn, 200) == @bytes
       assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
@@ -118,32 +136,90 @@ defmodule GrappaWeb.DccControllerTest do
       assert disposition =~ "attachment"
     end
 
-    test "a slug that names nothing is 404", ctx do
-      %{network: network} = connected(ctx.vjt)
-
-      conn = get(ctx.conn, "/networks/#{network.slug}/dcc_files/#{Dcc.mint_slug()}")
-
-      assert json_response(conn, 404) == %{"error" => "not_found"}
-    end
-
-    test "a malformed slug is 404 and never reaches the filesystem", ctx do
-      %{network: network} = connected(ctx.vjt)
-
-      conn = get(ctx.conn, "/networks/#{network.slug}/dcc_files/..%2F..%2Fetc%2Fpasswd")
-
-      assert json_response(conn, 404) == %{"error" => "not_found"}
-    end
-
-    test "another subject's spooled file is 404, not 403 — no existence oracle", ctx do
+    test "a request with NO bearer at all is served — the whole point of issue 2127", ctx do
+      # The load-bearing assertion of the ruling, and the one the old shape
+      # could not pass. `Plugs.Authn` reads only an `authorization: Bearer`
+      # header; a tapped scrollback link opens a plain tab that carries
+      # none, so the gated route answered 401 and the delivery row's link
+      # was unusable by the one person it was minted for.
+      #
+      # `build_conn/0` with no `put_bearer` IS that tab.
       %{slug: slug} = spooled(ctx.vjt)
 
-      mallory = user_fixture(name: "mallory-#{u()}")
-      %{network: other} = connected(mallory)
-      mallory_conn = put_bearer(build_conn(), session_fixture(mallory).id)
+      conn = get(build_conn(), "/dcc_files/#{slug}")
 
-      conn = get(mallory_conn, "/networks/#{other.slug}/dcc_files/#{slug}")
+      assert response(conn, 200) == @bytes
+    end
+
+    test "the three headers hold on the unauthenticated path too", ctx do
+      # Ungating moved these from "defence in depth" to "the defence", so
+      # they are asserted on the door an attacker actually reaches rather
+      # than only on the authenticated one above.
+      %{slug: slug} = spooled(ctx.vjt)
+
+      conn = get(build_conn(), "/dcc_files/#{slug}")
+
+      assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert [disposition] = get_resp_header(conn, "content-disposition")
+      assert disposition =~ "attachment"
+    end
+
+    test "an extension addresses the SAME row — the lookup is the 26 chars only", ctx do
+      %{slug: slug} = spooled(ctx.vjt)
+
+      for ext <- ["jpg", "mp4", "html", "svg"] do
+        conn = get(build_conn(), "/dcc_files/#{slug}.#{ext}")
+
+        assert response(conn, 200) == @bytes,
+               "extension #{ext} must address the same row"
+
+        # And it must not talk the server into a content type. A lying
+        # `.html`/`.svg` is exactly the stored-XSS shape the three
+        # unconditional headers exist for, and the extension reaches
+        # neither the lookup nor the response.
+        assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
+        assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      end
+    end
+
+    test "an EXPIRED row is 404 — the only revocation a public URL has", ctx do
+      %{slug: slug} = spooled(ctx.vjt)
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+      {1, _} = Repo.update_all(SpoolFile, set: [expires_at: past])
+
+      conn = get(build_conn(), "/dcc_files/#{slug}")
 
       assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "a slug that names nothing is 404" do
+      conn = get(build_conn(), "/dcc_files/#{Dcc.mint_slug()}")
+
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "a malformed slug is 404 and never reaches the filesystem" do
+      conn = get(build_conn(), "/dcc_files/..%2F..%2Fetc%2Fpasswd")
+
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "every miss answers identically — no oracle for which slugs exist", ctx do
+      %{slug: live} = spooled(ctx.vjt)
+      {1, _} = Repo.update_all(SpoolFile, set: [expires_at: DateTime.utc_now()])
+
+      misses =
+        for path <- ["/dcc_files/#{live}", "/dcc_files/#{Dcc.mint_slug()}", "/dcc_files/nope"] do
+          conn = get(build_conn(), path)
+          {conn.status, json_response(conn, 404)}
+        end
+
+      # Expired, never-existed and malformed must be indistinguishable.
+      # Asserted as ONE set rather than three equal assertions: a future
+      # change that makes any of them diverge fails here with the pair
+      # visible, which is what the oracle rule is actually about.
+      assert Enum.uniq(misses) == [{404, %{"error" => "not_found"}}]
     end
   end
 

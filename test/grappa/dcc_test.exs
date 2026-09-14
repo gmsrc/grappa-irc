@@ -108,47 +108,45 @@ defmodule Grappa.DccTest do
     end
   end
 
-  describe "get_by_slug/3 — scoped to the subject AND the network" do
+  describe "get_by_slug/1 — the slug alone, because the slug IS the credential" do
     setup ctx do
       slug = Dcc.mint_slug()
       {:ok, row} = Dcc.store(ctx.subject, ctx.network_id, slug, meta())
       {:ok, slug: slug, row: row}
     end
 
-    test "finds the owner's own live row", ctx do
-      assert {:ok, %SpoolFile{id: id}} = Dcc.get_by_slug(ctx.subject, ctx.network_id, ctx.slug)
+    test "finds the live row", ctx do
+      assert {:ok, %SpoolFile{id: id}} = Dcc.get_by_slug(ctx.slug)
       assert id == ctx.row.id
     end
 
-    test "another subject cannot read it, even holding the slug", ctx do
-      # The conjunct that matters most in this context: unlike a cached
-      # avatar, these bytes were sent TO a person.
-      other = {:user, user_fixture().id}
-      assert {:error, :not_found} = Dcc.get_by_slug(other, ctx.network_id, ctx.slug)
-    end
+    # This describe used to pin a subject conjunct AND a network conjunct
+    # ("another subject cannot read it, even holding the slug"). Issue 2127
+    # retired both with the gate they matched, so those two tests are gone
+    # rather than weakened — the arity IS the statement here, and a
+    # duplicate of the happy path asserting "someone else also gets it"
+    # would be a mirror, not a test. The posture is observable at the
+    # ROUTE, so it is pinned there instead: see
+    # `GrappaWeb.DccControllerTest`, "a request with NO bearer at all is
+    # served".
 
-    test "another network cannot read it", ctx do
-      # `ResolveNetwork` proves a credential on the network in the PATH and
-      # nothing beyond it, so a slug-only lookup would grant more than the
-      # route's own gate establishes.
-      assert {:error, :not_found} = Dcc.get_by_slug(ctx.subject, network_fixture().id, ctx.slug)
-    end
-
-    test "an expired row is not found — the retention rule holds at the READ too", ctx do
+    test "an expired row is not found — the ONLY revocation there is", ctx do
+      # Load-bearing since the route was ungated: `expires_at` is now the
+      # whole of what stops a leaked URL, so this is not a tidy edge case.
       past = DateTime.add(DateTime.utc_now(), -60, :second)
       Repo.update_all(SpoolFile, set: [expires_at: past])
 
-      assert {:error, :not_found} = Dcc.get_by_slug(ctx.subject, ctx.network_id, ctx.slug)
+      assert {:error, :not_found} = Dcc.get_by_slug(ctx.slug)
     end
 
-    test "a slug that is not the minted shape is refused before it reaches a query", ctx do
+    test "a slug that is not the minted shape is refused before it reaches a query" do
       for bad <- ["../../etc/passwd", "", "SHOUTING", String.duplicate("a", 25)] do
-        assert {:error, :not_found} = Dcc.get_by_slug(ctx.subject, ctx.network_id, bad)
+        assert {:error, :not_found} = Dcc.get_by_slug(bad)
       end
     end
 
-    test "a missing slug collapses to the same error — no oracle", ctx do
-      assert {:error, :not_found} = Dcc.get_by_slug(ctx.subject, ctx.network_id, Dcc.mint_slug())
+    test "a missing slug collapses to the same error — no oracle" do
+      assert {:error, :not_found} = Dcc.get_by_slug(Dcc.mint_slug())
     end
   end
 

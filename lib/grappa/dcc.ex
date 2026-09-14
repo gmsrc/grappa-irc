@@ -256,28 +256,39 @@ defmodule Grappa.Dcc do
   end
 
   @doc """
-  Looks up a spooled file for the authenticated serving route.
+  Looks up a spooled file for the public serving route.
 
-  Scoped to BOTH the subject and the network, and neither conjunct is
-  redundant. The route is mounted under `/networks/:network_id/...` behind
-  `ResolveNetwork`, which proves a credential on THAT network — so a
-  slug-only lookup would make every subject's spool readable by anyone
-  bound to any network, which is wider than the route's gate proves. The
-  subject conjunct is the one that matters most here: unlike a cached
-  avatar, these bytes were sent TO a person.
+  🔴 **By slug ALONE — no subject conjunct, no network conjunct (issue
+  2127 ruling, vjt, 2026-09-14).** Until then the lookup carried both,
+  because the route sat behind `:authn` + `ResolveNetwork` and a
+  slug-only read would have granted more than that gate proved. The
+  ruling moved the route to the public `/dcc_files/:slug` surface for a
+  measured reason — `GrappaWeb.Plugs.Authn` reads only an
+  `authorization: Bearer` header, cic keeps its token in `localStorage`,
+  and a scrollback link opens a plain tab, so the gated URL collected a
+  401 on every tap and no shape of URL bought its way out. So the
+  conjuncts went with the gate: **the 26-char base32 slug IS the
+  credential**, the same 128 bits `/uploads/:slug` has stood on since
+  UX-6-B1, and the consent behind these particular bytes is stronger —
+  the operator accepted THIS file from THAT nick before a socket was
+  opened.
 
-  `{:error, :not_found}` collapses a bad slug shape, a missing row, an
-  expired one, and another subject's — the serving route leaks no oracle,
-  the same collapse `Avatars.get_by_slug/2` makes.
+  The expiry conjunct STAYS, and it is now the only thing between a
+  leaked URL and an unbounded read: `expires_at` is `NOT NULL`, so the
+  retention ruling binds at the read as well as at the reaper.
+
+  `{:error, :not_found}` collapses a bad slug shape, a missing row and an
+  expired one — the serving route leaks no oracle, the same collapse
+  `Uploads.get_by_slug/2` makes. The slug is UNIQUE
+  (`unique_index(:dcc_files, [:slug])`), so dropping the conjuncts
+  narrowed nothing: the index already answered this lookup.
   """
-  @spec get_by_slug(Subject.t(), integer(), String.t()) ::
-          {:ok, SpoolFile.t()} | {:error, :not_found}
-  def get_by_slug(subject, network_id, slug) when is_integer(network_id) and is_binary(slug) do
+  @spec get_by_slug(String.t()) :: {:ok, SpoolFile.t()} | {:error, :not_found}
+  def get_by_slug(slug) when is_binary(slug) do
     if Regex.match?(@slug_regex, slug) do
       row =
         SpoolFile
-        |> Subject.subject_where(subject)
-        |> where([f], f.network_id == ^network_id and f.slug == ^slug)
+        |> where([f], f.slug == ^slug)
         |> where([f], f.expires_at > ^DateTime.utc_now())
         |> Repo.one()
 
@@ -302,10 +313,19 @@ defmodule Grappa.Dcc do
   end
 
   @doc """
-  Hard-deletes a row. No soft-delete, unlike `Grappa.Uploads`: that exists
-  there to protect a PUBLIC, cacheable URL that may be in flight when the
-  reaper runs, and this spool is served only behind `:authn` +
-  `ResolveNetwork`. The caller (the reaper) unlinks the file first.
+  Hard-deletes a row. No soft-delete, unlike `Grappa.Uploads`.
+
+  The reason is NOT "this spool is private" — since issue 2127 the URL is
+  as public as an upload's. It is that `Grappa.Uploads`' tombstone exists
+  to distinguish an ADMIN delete of live content from expiry, so a URL
+  revoked mid-flight answers 404 rather than resurrecting if the row were
+  re-created. This spool has no admin-delete door: the ONLY thing that
+  removes a row is `Grappa.Dcc.Reaper` retiring a row that has already
+  expired, and an expired row is already unreadable
+  (`get_by_slug/1`'s `expires_at` conjunct). A tombstone would record a
+  state the read path cannot tell apart from the one before it.
+
+  The caller (the reaper) unlinks the file first.
   """
   @spec delete(SpoolFile.t()) :: :ok
   def delete(%SpoolFile{} = row) do

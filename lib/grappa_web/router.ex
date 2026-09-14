@@ -515,10 +515,42 @@ defmodule GrappaWeb.Router do
   # collapse every miss to a uniform 404 with no oracle. Lives at
   # the top level (not `/api/`) so the URL is short + clean for
   # PRIVMSG bodies (`📸 https://host/uploads/<slug>`).
+  #
+  # issue 2127 (vjt ruling, 2026-09-14) — the accepted-DCC-file door, on
+  # the SAME public surface and for the same reason. NO `:authn`, NO
+  # `:resolve_network`: the 26-char base32 slug carries the same 128 bits
+  # and IS the access token.
+  #
+  # It used to live under `/networks/:network_id` behind `:authn` +
+  # `ResolveNetwork`, and that is the defect this closes rather than a
+  # posture being relaxed for convenience. `Plugs.Authn` reads ONLY an
+  # `authorization: Bearer` header — no cookie, no query param — cic keeps
+  # its token in `localStorage`, and a scrollback link renders as
+  # `<a target="_blank">`. A tap therefore opened a tab with no
+  # `Authorization` header and collected a 401: the link in the delivery
+  # row could not be used by the one person it was minted for.
+  #
+  # What makes the slug enough here is stronger than what makes it enough
+  # for an upload: bytes only exist on this route because the operator
+  # ACCEPTED this file from this nick (`Grappa.Dcc.Policy`) before a
+  # socket was opened. The old comment's premise — "not something the
+  # operator's user chose to publish" — described the OFFER, not the
+  # accepted file.
+  #
+  # The trade is explicit: whoever holds the URL reads the file, with no
+  # login, until `Grappa.Dcc.Reaper` expires it. That is the only
+  # revocation, which is why the retention ceiling is a ruling. The
+  # response headers (`DccFilesController`) carry the rest of the posture.
+  #
+  # `:slug[.ext]` — the extension is decoration minted off the peer's
+  # declared filename; `GrappaWeb.Validation.slug_from_path/1` strips it
+  # before any lookup, exactly as `/uploads/:slug` has since #418. One
+  # route entry serves both spellings: Phoenix binds the whole segment.
   scope "/", GrappaWeb do
     pipe_through [:api]
 
     get "/uploads/:slug", UploadsController, :show
+    get "/dcc_files/:slug", DccFilesController, :show
   end
 
   scope "/networks/:network_id", GrappaWeb do
@@ -556,14 +588,26 @@ defmodule GrappaWeb.Router do
 
     # issue 2089 — the DCC consent surface. TWO nouns on purpose: an OFFER
     # is per-session memory whose hold runs out in minutes, a FILE is bytes
-    # on disk with a retention the reaper enforces. Same ResolveNetwork
-    # pipeline (ownership) as every route above, and the file door is
-    # deliberately NOT the public `/uploads/:slug` shape — a stranger's
-    # bytes are not something the operator's user chose to publish.
+    # on disk with a retention the reaper enforces.
+    #
+    # ONLY the offer half is here. An offer is per-(subject, network)
+    # session state — listing it, accepting it and refusing it all act on
+    # a live `Session.Server`, so they need the ResolveNetwork ownership
+    # proof every route above needs.
+    #
+    # 🔴 The FILE door left this scope in issue 2127 and is now
+    # `GET /dcc_files/:slug` at top level, beside `GET /uploads/:slug`. Do
+    # NOT move it back: this comment used to say the file door was
+    # "deliberately NOT the public `/uploads/:slug` shape", and that rule
+    # is retired. `:authn` reads only a bearer HEADER, so a tapped
+    # scrollback link collected a 401 and the delivery row was unusable —
+    # measured, and the whole of issue 2127's first defect. The consent is
+    # the ACCEPT, which already happened before any byte was written; the
+    # guard is the 26-char slug's 128 bits. See the top-level scope for
+    # the full reasoning.
     get "/dcc_offers", DccOffersController, :index
     post "/dcc_offers/:offer_id/accept", DccOffersController, :accept
     delete "/dcc_offers/:offer_id", DccOffersController, :delete
-    get "/dcc_files/:slug", DccFilesController, :show
 
     # #189 — on-connect perform list editor (raw IRC lines run SERVER-side
     # at 001, before the built-in identify + autojoin). Rides the same

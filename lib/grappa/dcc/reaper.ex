@@ -10,12 +10,20 @@ defmodule Grappa.Dcc.Reaper do
   answer to a question this tree already answers.
 
   Hard-deletes, like `Grappa.Avatars.Reaper` and unlike
-  `Grappa.Uploads.Reaper`: a soft-delete exists there to protect a PUBLIC,
-  cacheable URL that may be in flight, and this spool is served only
-  behind `:authn` + `ResolveNetwork`. File unlink FIRST, then the row —
-  the same ordering, so a racing `GET /networks/:id/dcc_files/:slug`
-  between the two sees a live row and ENOENT on disk, i.e. a 404, rather
-  than a row pointing at nothing.
+  `Grappa.Uploads.Reaper` — see `Grappa.Dcc.delete/1` for why the
+  tombstone buys nothing here. NOT because this spool is private: since
+  issue 2127 its URL is as public as an upload's. File unlink FIRST, then
+  the row — the same ordering, so a racing `GET /dcc_files/:slug` between
+  the two sees a live row and ENOENT on disk, i.e. a 404, rather than a
+  row pointing at nothing.
+
+  🔴 Ungating the route made this sweep the ONLY thing that ever revokes
+  access to a spooled file. Before issue 2127 a leaked URL still met
+  `:authn`; now the 26-char slug IS the credential, so `expires_at` —
+  enforced here and at `Grappa.Dcc.get_by_slug/1` — is the whole
+  revocation story. That is the same posture `/uploads/:slug` has had
+  since UX-6-B1, and it is why the retention ceiling is a ruling
+  (`Grappa.Dcc` moduledoc) rather than a default.
 
   ## This is ONE of three reaping axes, and it cannot be the only one
 

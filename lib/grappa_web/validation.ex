@@ -1,6 +1,7 @@
 defmodule GrappaWeb.Validation do
   @moduledoc """
-  Boundary-shape validators shared by the JSON REST controllers.
+  Boundary-shape validators and path-parameter normalisers shared by the
+  JSON REST controllers.
 
   These check input *shape* (channel-name well-formedness, etc.) before
   the controller hands the value to a context. They surface as
@@ -8,6 +9,11 @@ defmodule GrappaWeb.Validation do
   distinct from the wire-injection guard inside
   `Grappa.IRC.Identifier.safe_line_token?/1` which surfaces as
   `:invalid_line` once the channel name reaches `Grappa.Session`.
+
+  `slug_from_path/1` is the second kind: not a verdict but a
+  normalisation, reducing a `:slug[.ext]` path segment to the slug the
+  context will look up. It lives beside the validators for the same
+  reason they live here — two controllers need it and neither owns it.
 
   Live here (not in a per-controller `defp`) so both
   `MessagesController` and `ChannelsController` share one definition
@@ -172,5 +178,32 @@ defmodule GrappaWeb.Validation do
         :error -> acc
       end
     end)
+  end
+
+  @doc """
+  The minted slug inside a `:slug[.ext]` path segment — everything up to
+  the first dot, or the whole segment when there is none.
+
+  Both public byte-serving routes mint a type-carrying URL
+  (`/uploads/<slug>.<ext>` since #418, `/dcc_files/<slug>.<ext>` since
+  issue 2127) and both must look up by the BARE slug: the slug is the
+  access token, the extension is an advisory hint for the client and is
+  IGNORED here. A base32 slug never contains a dot, so the first
+  dot-delimited segment is always the slug; a legacy extensionless link
+  reduces to itself.
+
+  That the extension cannot reach the lookup is the load-bearing half. A
+  lying `.html`/`.svg` therefore changes neither the row found nor the
+  Content-Type served — each controller serves what its own row says,
+  with `nosniff` blocking any browser MIME-sniff on top.
+
+  Returns a string, never a verdict: a slug that survives this and is
+  still malformed is rejected by the context's own shape guard
+  (`Grappa.Uploads.valid_slug?/1`, `Grappa.Dcc.get_by_slug/1`), which
+  collapses it into the route's uniform 404 rather than a distinct 400.
+  """
+  @spec slug_from_path(String.t()) :: String.t()
+  def slug_from_path(segment) when is_binary(segment) do
+    segment |> String.split(".", parts: 2) |> hd()
   end
 end

@@ -199,7 +199,7 @@ defmodule Grappa.Session.DccConsentTest do
       assert row.body =~ Report.display_filename(@filename)
       assert row.body =~ slug
 
-      assert {:ok, spooled} = Dcc.get_by_slug(ctx.subject, ctx.network.id, slug)
+      assert {:ok, spooled} = Dcc.get_by_slug(slug)
       assert spooled.peer_nick == "alice"
       assert spooled.bytes == @size
       assert spooled.filename == Report.display_filename(@filename)

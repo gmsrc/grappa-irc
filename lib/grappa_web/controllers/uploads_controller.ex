@@ -73,7 +73,7 @@ defmodule GrappaWeb.UploadsController do
   use GrappaWeb, :controller
 
   alias Grappa.{ServerSettings, Subject, Uploads}
-  alias GrappaWeb.ByteRange
+  alias GrappaWeb.{ByteRange, Validation}
 
   # `@sobelow_skip` is consumed by the Sobelow analyzer, not by the
   # Elixir compiler. Without this `register_attribute` it would emit
@@ -199,7 +199,7 @@ defmodule GrappaWeb.UploadsController do
   @doc false
   @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show(conn, %{"slug" => slug}) when is_binary(slug) do
-    with {:ok, row} <- Uploads.get_by_slug(strip_ext(slug), DateTime.utc_now()),
+    with {:ok, row} <- Uploads.get_by_slug(Validation.slug_from_path(slug), DateTime.utc_now()),
          path = Uploads.storage_path(storage_root(), row.slug),
          {:ok, %File.Stat{size: size}} <- File.stat(path) do
       conn
@@ -384,16 +384,6 @@ defmodule GrappaWeb.UploadsController do
   # absolute shape without a second hand-rolled copy. Thin delegate here
   # keeps every existing call site in this file unchanged.
   defp public_url(slug, mime), do: Uploads.public_url(slug, mime)
-
-  # #418: the public URL now carries a type extension (`/uploads/<slug>.<ext>`).
-  # The slug IS the access token; the extension is an advisory type hint for
-  # the client and is IGNORED here — we look up by the bare slug and serve the
-  # stored `row.mime` as the authoritative Content-Type. A base32 slug never
-  # contains a dot, so the first dot-delimited segment is always the slug; a
-  # legacy extensionless link strips to itself. A lying `.html`/`.svg`
-  # extension therefore can't change the served type — and `nosniff` (show/2)
-  # additionally blocks any browser MIME-sniff of the declared type.
-  defp strip_ext(slug), do: slug |> String.split(".", parts: 2) |> hd()
 
   defp disposition_header(%{original_filename: nil}), do: "inline"
 
