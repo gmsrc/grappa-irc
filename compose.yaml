@@ -62,6 +62,13 @@ services:
       # Outbound source-alias substrate. Docker cannot alias lo0 nor run
       # AnyIP, so it stays :docker — a no-op adapter (#543).
       GRAPPA_SUBSTRATE: ${GRAPPA_SUBSTRATE:-docker}
+      # issue 227 — RFC 1413 ident server, off by default. Nothing publishes
+      # the port here: an ircd reaching it needs a redirect on the HOST, and
+      # this stack is the local dev one. Literal defaults, not the
+      # empty-default form (#369 X1) — see .env.example.
+      GRAPPA_IDENTD_ENABLED: ${GRAPPA_IDENTD_ENABLED:-false}
+      GRAPPA_IDENTD_PORT: ${GRAPPA_IDENTD_PORT:-10113}
+      GRAPPA_IDENTD_BIND: "${GRAPPA_IDENTD_BIND:-::}"
       # Admission captcha (T31). Export provider + secret + site key to enable.
       GRAPPA_CAPTCHA_PROVIDER: ${GRAPPA_CAPTCHA_PROVIDER:-disabled}
       GRAPPA_CAPTCHA_SITE_KEY: ${GRAPPA_CAPTCHA_SITE_KEY:-}

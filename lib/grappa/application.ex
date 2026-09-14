@@ -12,6 +12,9 @@ defmodule Grappa.Application do
       Grappa.Cic.Bundle,
       Grappa.Health,
       Grappa.HttpHosts,
+      # issue 227 — supervises the RFC 1413 ident server (off unless the
+      # operator turns it on; see identd_children/0).
+      Grappa.Identd,
       Grappa.Net.PtrCache,
       # #543 INC-5: start/2 calls SourceAlias.Config.boot/0 (adapter/cmd DI-seam)
       # and supervises SourceAliasManager (arm gate + ref-count lifecycle).
@@ -413,6 +416,7 @@ defmodule Grappa.Application do
         {DynamicSupervisor,
          name: Grappa.SessionSupervisor, strategy: :one_for_one, max_restarts: 10_000, max_seconds: 60}
       ] ++
+        identd_children() ++
         endpoint_child() ++
         [
           # #543 INC-5: source-alias ref-count manager. Placed AFTER Endpoint
@@ -635,6 +639,38 @@ defmodule Grappa.Application do
   # false in test) so the test suite doesn't try to spawn live IRC sessions
   # against the operator's bound DB credentials when running `mix test`.
   @spec bootstrap_child() :: [] | [Grappa.Bootstrap]
+  # issue 227 — the RFC 1413 ident server, DISABLED BY DEFAULT: an unset
+  # `:identd` keyspace returns `[]` here and the tree is byte-identical to
+  # what it was. The port is the operator's, and its default is high and
+  # unprivileged — nothing in this tree hardcodes 113 or assumes it can
+  # bind it. Reaching the listener from 113 is a packet-filter redirect or
+  # a Linux `CAP_NET_BIND_SERVICE` grant, documented in
+  # `docs/OPERATIONS.md`; the release grants itself neither.
+  #
+  # Placed BEFORE Endpoint, which is the earliest of the two doors that can
+  # spawn a session (`NetworksController.connect/2` and Bootstrap, which is
+  # last), because a session publishes its identd binding on connect and a
+  # binding cast into a not-yet-started table is silently dropped — that
+  # session would then keep its `~` for the life of the connection.
+  #
+  # Order WITHIN the group is load-bearing too: the table before the
+  # acceptors that read it, the acceptor supervisor before the listener
+  # that starts children under it.
+  defp identd_children do
+    config = Application.get_env(:grappa, :identd, [])
+
+    if Keyword.get(config, :enabled, false) do
+      [
+        Grappa.Identd.Bindings,
+        {Task.Supervisor, name: Grappa.Identd.Acceptors, max_children: 64},
+        {Grappa.Identd.Listener,
+         port: Keyword.fetch!(config, :port), bind: Keyword.fetch!(config, :bind)}
+      ]
+    else
+      []
+    end
+  end
+
   defp bootstrap_child do
     if Application.get_env(:grappa, :start_bootstrap, true) do
       [Grappa.Bootstrap]

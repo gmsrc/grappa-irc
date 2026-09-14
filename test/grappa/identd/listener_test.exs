@@ -35,7 +35,7 @@ defmodule Grappa.Identd.ListenerTest do
 
   setup do
     start_supervised!(Bindings)
-    start_supervised!({Task.Supervisor, name: Grappa.Identd.Acceptors, max_children: 4})
+    start_supervised!({Task.Supervisor, name: Grappa.Identd.Acceptors, max_children: 64})
     start_supervised!({Listener, port: 0, bind: "127.0.0.1", wait_ms: @wait_ms})
 
     {:ok, port: Listener.port(Listener)}

@@ -126,6 +126,7 @@ defmodule Grappa.IRC.Client do
   """
   use GenServer
 
+  alias Grappa.Identd
   alias Grappa.IRC.{AuthFSM, FakeLag, Identifier, Message, Parser}
 
   require Logger
@@ -437,7 +438,8 @@ defmodule Grappa.IRC.Client do
   connect: `{ip, port}` on success, or a tagged error when the socket is
   absent / just-closed. Pushed to `dispatch_to` as `{:irc_peer, result}`.
   #550 — the admin Sessions inventory derives the destination address
-  from this.
+  from this. Issue 227 — `transport_sockname/1` reports the LOCAL address
+  in the same shape, so the identd binding can name both ends.
   """
   @type peername_result ::
           {:ok, {:inet.ip_address(), :inet.port_number()}}
@@ -1309,6 +1311,12 @@ defmodule Grappa.IRC.Client do
         # admin read. Separate message from :irc_connected to keep that
         # load-bearing signal's contract byte-unchanged.
         send(state.dispatch_to, {:irc_peer, transport_peername(connected)})
+        # issue 227 — publish this socket's full 4-tuple so the identd can
+        # answer the lookup the ircd has ALREADY started: it begins when it
+        # accepts, which is the instant `do_connect/5` returned above. This
+        # runs before the handshake bytes go out for that reason, and it is
+        # a cast: an optional subsystem may not block nor crash a session.
+        register_identd_binding(connected, opts.ident)
         {fsm, sends} = AuthFSM.initial_handshake(state.fsm)
         # `_ =`-discard: a peer RST between connect-success and the
         # first handshake byte will surface as `{:error, :closed}` from
@@ -2099,4 +2107,39 @@ defmodule Grappa.IRC.Client do
 
   defp transport_peername(%{transport: :ssl, socket: sock}),
     do: :ssl.peername(sock)
+
+  # issue 227 — the LOCAL half of the pair, dispatched over the same
+  # transport tag. Nothing read it before: `:inet.sockname/1` had zero
+  # occurrences under `lib/`, because grappa only ever dialled out and the
+  # kernel's choice of ephemeral port was nobody's business. An identd
+  # answer is keyed on exactly that choice.
+  @spec transport_sockname(%__MODULE__{}) :: peername_result()
+  defp transport_sockname(%{socket: nil}), do: {:error, :no_socket}
+
+  defp transport_sockname(%{transport: :tcp, socket: sock}),
+    do: :inet.sockname(sock)
+
+  defp transport_sockname(%{transport: :ssl, socket: sock}),
+    do: :ssl.sockname(sock)
+
+  # issue 227 — bind this connection's 4-tuple to the ident the USER line
+  # is about to carry. The failure arm is loud rather than silent: losing
+  # the binding costs this session its verified ident for the whole
+  # connection, and an operator chasing a stubborn `~` needs to see it.
+  @spec register_identd_binding(%__MODULE__{}, String.t()) :: :ok
+  defp register_identd_binding(state, ident) do
+    case {transport_sockname(state), transport_peername(state)} do
+      {{:ok, {source, local_port}}, {:ok, {peer, peer_port}}} ->
+        Identd.register({source, local_port, peer, peer_port}, ident)
+
+      addresses ->
+        Logger.warning(
+          "identd: cannot publish this socket's 4-tuple — this session will be answered " <>
+            "NO-USER and keep its `~` for the life of the connection",
+          error: inspect(addresses)
+        )
+
+        :ok
+    end
+  end
 end

@@ -749,4 +749,45 @@ if config_env() == :prod do
     end
 
   config :grappa, :source_alias, substrate: substrate
+
+  # issue 227 — the RFC 1413 ident server. OFF unless the operator says
+  # otherwise: the three keys below are the whole surface, and with
+  # GRAPPA_IDENTD_ENABLED unset `Grappa.Application` adds no children at
+  # all, so the supervision tree is what it was.
+  #
+  # The port DEFAULT is high and unprivileged, and that is the ruling, not
+  # a convenience: grappa must never hardcode 113 nor assume it can bind
+  # it. Getting queries from 113 to this port is a deployment concern —
+  # a `pf` / nftables redirect, or `CAP_NET_BIND_SERVICE` on Linux — and
+  # `docs/OPERATIONS.md` documents both. The shipped
+  # `infra/packaging/grappa.service` runs `User=grappa` with
+  # `NoNewPrivileges=true` and no `AmbientCapabilities`; a release that
+  # granted itself the capability would be deciding for the operator.
+  #
+  # GRAPPA_IDENTD_BIND defaults to `::`, which opens a dual-stack socket
+  # (`ipv6_v6only: false`) and therefore answers both families on one
+  # listener. It is a setting and not a constant because a host that
+  # cannot do dual-stack needs `0.0.0.0`, and an operator whose redirect
+  # lands on loopback wants to say so. A bind that fails STOPS the
+  # listener with the real posix reason rather than running deaf.
+  #
+  # Empty counts as unset for all three, the #1945 semantic: `|| default`
+  # keeps `""`, and an empty string reaches String.to_integer/1 as a crash
+  # and IpLiteral.to_tuple/1 as a stopped listener.
+  identd_port =
+    case System.get_env("GRAPPA_IDENTD_PORT") do
+      unset when unset in [nil, ""] -> 10_113
+      value -> String.to_integer(value)
+    end
+
+  identd_bind =
+    case System.get_env("GRAPPA_IDENTD_BIND") do
+      unset when unset in [nil, ""] -> "::"
+      value -> value
+    end
+
+  config :grappa, :identd,
+    enabled: System.get_env("GRAPPA_IDENTD_ENABLED") in ["1", "true"],
+    port: identd_port,
+    bind: identd_bind
 end

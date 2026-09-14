@@ -30,7 +30,11 @@ defmodule Grappa.IRC do
     # field with it rather than hand-rolling a second one — the
     # strictness is what keeps `017700000001` from decoding to loopback
     # (issue 2089).
-    deps: [Grappa.OutboundV6Pool, Grappa.Net.IpLiteral],
+    # issue 227 — `IRC.Client` publishes every upstream socket's 4-tuple to
+    # the identd the moment the socket is up, so the ircd's RFC 1413 lookup
+    # can be answered with the same ident the USER line carries. The edge
+    # runs THIS way only: `Grappa.Identd` knows nothing about IRC.
+    deps: [Grappa.OutboundV6Pool, Grappa.Net.IpLiteral, Grappa.Identd],
     exports: [
       AuthFSM,
       Client,
