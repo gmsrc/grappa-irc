@@ -14208,3 +14208,102 @@ un-wired (1 red each).
 The issue's other direction — the channel identity no longer being the
 leading element pinned to the top-left — is a product decision and was not
 taken here.
+<!-- entry #2163 -->
+
+---
+
+## 2026-09-14 — issue 2163: the desktop shell's bottom band is a painting gap, and the shell has no paint
+
+An external reporter running cicchetto fullscreen as an installed PWA on an
+iPad Pro 11 (iPadOS 26.7, landscape) saw a dead band along the bottom edge,
+with a physical keyboard attached where nothing on screen needs the clearance.
+Their probe: `safe-area-inset-bottom` 20px, `visualViewport` / `window.inner` /
+`documentElement.client` all agreeing at 748, `100dvh - 100svh` = 748 - 728 =
+exactly the 20px. Nothing is mismeasured — the layout does precisely what the
+stylesheet asks. (The opposite regime to #2159 / #2160, where every inset was
+0; those are the stale-`--vh` band and the multitasking pill, not this.)
+
+**Two corrections to the filed mechanism, and the first one decides the cure.**
+
+The issue reads "the shell's own background stops 20px short of the bottom".
+Measured: no rule at any nesting level whose selector mentions `.shell` sets a
+background on the shell at all. What happens is one step removed. With the
+global `box-sizing: border-box`, `height: 100dvh` puts the shell's BORDER box
+on the physical bottom edge and `padding-bottom` shrinks only the CONTENT box.
+The shell is therefore not lifted: its bottom 20px is a TRANSPARENT strip
+through which `body { background: var(--bg) }` shows. So the brief's first
+option — "paint the shell's background through the inset area" — has no
+subject, and the cure has to be relocated onto the elements that do paint.
+
+The issue also puts the band "below the compose column". Measured, the
+stylesheet cannot produce a contrast there: `.compose-box` is `var(--bg)`, the
+SAME colour as the strip. This is not a claim that the reporter misdescribed
+what they saw — nobody here can see the device — it is a claim about what the
+sheet can produce, and it is why the cure targets the columns it does.
+
+**The set is measured, not assumed.** An element belongs in it when it is the
+bottom-most background painter of a desktop `.shell` column AND paints
+something other than `--bg`: `.shell-sidebar` and `.shell-members` (both
+`--bg-alt`, present in every window kind), `.home-pane` (`--adm-surface-1`) and
+`.crt-splash` (`#000`). The main column's painter varies by window kind, and
+the rest of them are invisible against the strip by measurement rather than by
+luck — `.compose-box` and `.admin-pane` are both `var(--bg)`; `.mentions-window`
+and `.directory-pane` declare no background. The splash is transient and was
+included anyway: `#000` against a `#ffffff` strip is the highest-contrast
+instance of this defect in the app, and excluding it would turn the rule into
+an enumeration with an exception that the next reader has to re-litigate.
+
+**Why paint and not spacing.** Both ways of moving the inset instead of
+painting through it are fenced by a measurement already in this repo. Widening
+or padding an aside's box carries `.rail-radio-picker` — absolutely positioned
+`inset: 0` against `.shell-members` — into the home-indicator gesture strip:
+that is #1751's measurement (at 390px with the token stubbed at 59px, the
+aside's padding-top read 59px while the picker stayed at y=0; padding does not
+move an abspos child, but moving the box does). Putting the inset on the last
+interactive row means `.compose-box`, which is SHARED with the mobile shell, and
+a bottom inset there re-opens #1127's D11: with the soft keyboard up iOS reports
+the inset against the DEVICE, not against the shrunken visual viewport. The
+alternative that moves the inset onto the asides would also have required
+NARROWING the `ipadSafeArea` guard that pins base `.shell-members` as carrying
+no insets on any edge — a guard change, which is a ruling and not a judgement
+call inside a slice. An outer box-shadow needs none of that: it occupies no
+space, moves no descendant, and touches no guard.
+
+**Why box-shadow and not an `::after`.** `.shell-sidebar` is `overflow-y: auto`,
+which clips an absolutely-positioned pseudo-element child; an element's own
+overflow never clips its own outer shadow. Nothing between the painters and the
+viewport clips it either — `.shell` and `.shell-main` declare no overflow, and
+`body { overflow: hidden }` clips at the viewport edge, which is where the strip
+already ends. A three-stop `linear-gradient` on `.shell` reproducing the column
+colours was considered and rejected: it would restate the grid template (whose
+track widths are user-draggable vars) in a second place, and break on the
+`.shell-no-members` arm.
+
+**Scoped by the component's own predicate.** The extenders hang off
+`.shell:not(.shell-mobile)` rather than a `@media (min-width: 769px)` gate, so
+the 768px breakpoint is not restated: `isMobile()` is what puts `shell-mobile`
+on that element. The mobile shell declares `padding-bottom: 0` (#1127) and so
+has no strip to fill; an ungated extender there would paint 20px of colour over
+whatever sits below it.
+
+**What is NOT asserted.** That anyone here has seen the band. jsdom resolves no
+`env()` and Playwright/webkit reports every inset as 0, so the guards are
+source-level — the same limit #205 and #1127 both recorded. That the box-shadow
+renders as reasoned on iPadOS: it is sound per the CSS painting model and the
+measured absence of a clipping ancestor, and it is rendered nowhere reachable
+from here. An e2e IS constructible — stub `--safe-area-inset-bottom` the way
+#1751 stubbed the top token, then read the strip with the pixel oracle #1051's
+wallpaper arm already uses — and is deliberately not in this slice, because it
+needs the exclusive e2e lane.
+
+The three source guards live in `ipadSafeArea.test.ts` beside #205's and
+#1127's. The first reads each painter's expected colour OUT of that painter's
+own rule rather than writing it down, so re-theming an element without
+re-theming its extender is red; the second re-pins the container inset that
+buys the clearance (deliberately overlapping #205's assertion, which exists for
+the TOP edge and could be rewritten wholesale); the third pins that the
+extender rules declare `box-shadow` and nothing else, which is what keeps D11
+and #1751 closed and is why the `.shell-members` no-insets guard is not being
+routed around. Five mutants, no survivors: deleting the aside extender, dropping
+the container inset, a literal `20px` in place of the token, re-theming an aside
+without its extender, and a `padding-bottom` added to an extender rule.
