@@ -62,6 +62,45 @@
 // module deliberately does not consume it — two consumers of one signal
 // is fine, two writers of one var is the conflict.
 //
+// issue 2159 (2026-09-14) — window `resize`, the fourth trigger, and the same
+// failure once more with a third sign. An iPadOS Split View divider drag
+// resizes the pane while the app stays FOREGROUNDED and FOCUSED throughout, so
+// none of the three #649 triggers fires; and the one event that does reach
+// this module, `visualViewport` `resize`, is handled one-shot, which latches
+// the pre-settle height whenever WebKit settles the pane after announcing it.
+// Measured on the reporter's iPad (iPadOS 26.7, iPad Pro 11, installed PWA,
+// narrow pane): the probe reads the pane at 417x685 with `100dvh` = 685px and
+// all four safe-area insets at 0px, in the very configuration whose
+// screenshots show the shell at ~393px. The input is correct whenever it is
+// read, so nothing is reading it — a trigger gap, not a bad reading.
+//
+// Measured in this repo rather than argued from the report: FOUR production
+// modules already pair `window.addEventListener("resize", …)` with
+// `window.visualViewport?.addEventListener("resize", …)` — `ScrollbackPane`
+// (#360), `RailActions` (#588), `AdminDebugTab` and `DiagFloat` (#1791). This
+// module was the only one listening to the visual viewport alone. `DiagFloat`
+// is the sharp end of that: it exists to sample the geometry at the instants
+// THIS writer settles at, and it can observe a window resize the writer it
+// instruments is deaf to.
+//
+// Still one writer, one settle mechanism: the new trigger is a fourth caller
+// of the existing `writeAndSettle`. It costs three extra live re-reads per
+// event on paths that already fire one (a keyboard open under
+// `interactive-widget=resizes-content` resizes the layout viewport too), which
+// is the same redundancy the three resume triggers already accept — each
+// re-read reads the LIVE height, so a redundant one writes the current correct
+// value and never a stale clobber.
+//
+// NOT fixed here, and NOT the same cause: in the installed PWA the same probe
+// reads `visualViewport.height` = 676 against `documentElement.clientHeight` =
+// 685, and `100dvh` follows the DOCUMENT — so `--vh`, written from
+// `vv.height`, is born 9px short of its own `var(--viewport-height, 100dvh)`
+// fallback even when the tracker runs. A stale height is a value from an
+// earlier TIME and a later re-read cures it; those 9px are a value from a
+// different SOURCE at the same instant, and no schedule closes a constant
+// offset. They are also 9px of a ~292px deficit (685 pane against a ~393px
+// shell), so they cannot account for the report either.
+//
 // Mock surface for vitest: `installViewportHeightTracker` accepts an
 // optional viewport argument so unit tests can pass a fake
 // `VisualViewport`-shaped object with a controllable height +
@@ -78,8 +117,14 @@ export interface VisualViewportLike {
   addEventListener(event: "resize", handler: () => void): void;
 }
 
+// `resize` rides the same window seam as the two resume events but is NOT a
+// resume trigger: it fires while the app never leaves the foreground (issue
+// 2159). The name stays `ResumeWindowLike` because `resumeResync.ts` and
+// `staleResume.ts` each declare a sibling interface under it — renaming one of
+// three would cost more in inconsistency than the widened union costs in
+// precision.
 export interface ResumeWindowLike {
-  addEventListener(event: "pageshow" | "focus", handler: () => void): void;
+  addEventListener(event: "pageshow" | "focus" | "resize", handler: () => void): void;
 }
 
 export interface ResumeDocumentLike {
@@ -137,10 +182,12 @@ function writeAndSettle(vp: VisualViewportLike): void {
 /**
  * Boot-time entry. Writes `--vh` (Telegram pattern) AND
  * `--viewport-height` (legacy pattern) from `window.visualViewport`,
- * then re-writes on every resize event, on a short post-boot settle
- * re-read schedule (#285 reopen — the cold-boot settle that fires no
- * resize event), and on each resume trigger (#649 — the app-switch
- * return that likewise fires no resize event).
+ * then re-writes on every visualViewport resize event, on a short
+ * post-boot settle re-read schedule (#285 reopen — the cold-boot settle
+ * that fires no resize event), on each resume trigger (#649 — the
+ * app-switch return that likewise fires no resize event), and on a
+ * window resize (issue 2159 — the Split View pane resize that
+ * backgrounds nothing and settles after the event).
  *
  * Idempotent — main.tsx invokes once.
  *
@@ -170,6 +217,13 @@ export function installViewportHeightTracker(
   });
   win?.addEventListener("pageshow", () => writeAndSettle(vp));
   win?.addEventListener("focus", () => writeAndSettle(vp));
+  // issue 2159 — the iPadOS Split View trigger. A divider drag resizes the pane
+  // without ever backgrounding the app, so none of the three above fires, and
+  // `visualViewport` either emits no resize for it or emits one before WebKit
+  // has settled the pane. `writeAndSettle`, not the one-shot `writeViewport`
+  // the `vp` handler uses: a single read at event time is exactly what latches
+  // the pre-settle height here.
+  win?.addEventListener("resize", () => writeAndSettle(vp));
 }
 
 /**
