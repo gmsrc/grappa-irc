@@ -13763,3 +13763,118 @@ Three mutants were run against the new tests and all three were killed:
 timestamp group removed (6 red), sigil group removed (6 red), and the
 head widened to accept anything (9 red, including two PRE-EXISTING
 tests).
+<!-- entry #2160 -->
+
+---
+
+## 2026-09-14 — issue 2160: the pill is not a safe area, and the gate is the fix
+
+iPadOS 26 paints its multitasking control — the three-dot pill — over the
+top-leading corner of every WINDOWED app. In a narrow Split View pane that
+corner is cicchetto's own pane chrome, and the reporter sees an
+eight-character channel render as its first character, the pill, and its
+last two.
+
+### Why no amount of `env()` can cure it
+
+Two probe samples from the reporter's iPad Pro 11 on iPadOS 26.7, in the
+narrow pane — one in Safari, one in the INSTALLED PWA (`standalone: true`),
+which is the configuration the symptom was reported from:
+
+```
+safe-area top/right/bottom/left : 0px / 0px / 0px / 0px   (BOTH samples)
+visualViewport / window.inner   : 417 x 676 (PWA)   380 x 650 (Safari)
+screen w x h                    : 834 x 1194 (both)
+```
+
+All four insets are zero in both hosts, so WebKit does not declare the pill
+through `env(safe-area-inset-*)` at all. There is nothing to react to. The
+web platform's proper answer for this shape is the Window Controls Overlay
+API (`titlebar-area-*`), which WebKit does not implement and which appears
+zero times in `cicchetto/src`. The clearance therefore has to be taken by
+LAYOUT — and `safeAreaInsetToken.test.ts` stays the authority on `env()`:
+this slice writes none.
+
+Also note what the pre-existing `padding-top: var(--safe-area-inset-top)`
+could never have done even with a correct value: it is a full-width BAND,
+and the pill is inset from the leading edge. A band pushes content below a
+status bar; it cannot reserve a corner.
+
+### The gate is the whole design
+
+Read as one sentence: **the viewport is narrow AND it is narrower than the
+display it is drawn on** — the app does not own the screen, it is a window
+sharing it, which is the only state in which iPadOS paints the pill.
+
+```css
+@media (max-width: 768px) and (min-device-width: 769px)
+```
+
+The second conjunct is not decoration, it is the reason this is not the
+trap #985 spent a band escaping. A pill-sized gap hung on `max-width: 768px`
+alone is paid by every phone, and a phone has no pill: 390px sits squarely
+inside the narrow band. `device-width` separates them with no byte of UA,
+OS or device-model sniffing, because a full-screen app **cannot satisfy the
+conjunction by construction** — its viewport width IS one of the display's
+two edges, so it is never below the shorter one, in either orientation and
+on any device. The measurement is the direct evidence for the iPad half:
+417px of viewport against an 834px screen, in the PWA sample.
+
+768 is not a new number. It is `--breakpoint-mobile`, the shell's own
+switch, which a media query cannot read out of a custom property; 769 is
+its first non-member. The short-landscape block that also retunes this bar
+is gated `min-width: 769px` and can never co-apply.
+
+`device-width` is deprecated in CSS MQ4 and REQUIRED there for compat, so
+WebKit answers it. If an engine ever stops, the gate simply never matches
+and the pane renders as it does today: the degradation is the status quo.
+
+### One token, so the fix reaches both hosts of that corner
+
+`--pane-chrome-inset-inline-start` is split off `--pane-chrome-inset-inline`
+(#1039) and defaults to it, so nothing moves anywhere today. Only the gated
+`:root` override grows it. Splitting the token rather than patching
+`.topic-bar` is what makes one declaration reach BOTH mobile hosts of the
+leading corner — the channel band, and the `.shell-chrome` float that
+carries the window-list ☰ on every non-channel window. That second host
+matters more than the reported one: the ☰ is a CONTROL, and iOS swallows
+touches under its own chrome, so an occluded button is a dead button, not
+merely an unreadable one. The trailing side keeps reading the #1039 token
+alone — only the leading edge has a pill over it.
+
+### The number is an ESTIMATE, and says so
+
+65px, derived from the symptom rather than from the pill: nobody probed the
+pill's box, and Playwright/webkit does not reproduce iPadOS window chrome.
+An eight-character name showing its 1st and its 7th–8th puts the occlusion
+at `[14 + 1x8.4, 14 + 6x8.4]` = `[22.4, 64.4]` px from the leading edge
+(`--font-mono` at `--font-size` 14px, advance 0.6em; text starts at
+`--pane-chrome-inset-inline` = 1rem = 14px, and the left inset measured 0).
+Content clears it at 64.4 → 65px. Absolute px for the reason
+`--chrome-tap-min` carries on `:root`: this reserves OS chrome, which does
+not scale with `--font-size`. It lives in one token so a real device
+measurement is a one-line retune.
+
+`.topic-bar-namebox` is lifted to `max-width: 50%` inside the same gate,
+same value and same "channel name first" reason as the short-landscape
+block: 65px is 16% of the measured 417px pane and the namebox is capped at
+18% of what survives, so the clearance alone would have traded an occluded
+name for a truncated one — the same complaint.
+
+### What was not established
+
+No verification on a real device; none blocks the ship (vjt's rule). No e2e:
+Playwright/webkit renders no iPadOS window chrome and reports no
+`device-width` an iPad would, so an e2e could assert the CSS applied and
+still say nothing about whether the pill is cleared — a green that measures
+the wrong platform. The gate is `windowedPaneChromeInset.test.ts`, which
+reads the media prelude OUT of the stylesheet and evaluates it against the
+two device samples rather than restating them, so a widened gate is red
+rather than invisible. Four mutants, each killing exactly what it should:
+inset removed (7 red), the `min-device-width` conjunct removed (1 red, and
+it is the phone test — the cost-zero half), and each of the two consumers
+un-wired (1 red each).
+
+The issue's other direction — the channel identity no longer being the
+leading element pinned to the top-left — is a product decision and was not
+taken here.
