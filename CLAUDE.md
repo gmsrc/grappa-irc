@@ -483,7 +483,8 @@ not the surrounding code.**
   way, which is why folding is the cure and not a preference.
   **Verify, never eyeball: keep the branch's contribution `--numstat` in a
   FILE before every rebase and diff it against the post-rebase one** — the
-  test is two-sided (additions unchanged AND deletions zero) — **then read
+  test is two-sided (additions unchanged AND deletions **unchanged**, NOT
+  deletions zero — see the correction below) — **then read
   the BOUNDARY SHAPE on the real file** (full stop / blank / `---` / blank /
   heading), because an identical numstat proves nothing when the pre-rebase
   state was already broken.
@@ -495,6 +496,18 @@ not the surrounding code.**
   **131 of 1001** DESIGN_NOTES commits on main delete text, and for **30 of
   those 131 (22.9%)** a tail-appending branch forked just before would
   resurrect it. Both modes report `rc=0`, zero conflicts and zero deletions.
+  **🔴 "deletions ZERO" was wrong, and it was wrong in BOTH directions (issue
+  2138).** Deletions are a quantity CONSERVED, not a quantity forbidden: the
+  branch's own deletion count before the rebase is the number to compare
+  against. A branch whose WORK is a removal — the August rollover moved 44,287
+  lines out of this log — got a false RED for doing nothing wrong, and, the
+  half that matters, a false GREEN exactly when the driver ATE the removal,
+  because `del_after` then falls to 0 and the rule was satisfied. Measured on
+  the fixture `union_rebase_test.bats` builds: the contribution drops to an
+  EMPTY diff, 0 additions and 0 deletions, and `del_after == 0` called that
+  "contribution intact". The verifier was inverted on precisely the failure
+  mode it exists for, and nothing had exercised it because no branch had
+  deleted in bulk from a union path in a long time.
   `scripts/union-rebase.sh` is that ritual automated — it pins, rebases,
   re-pins and compares. **It is a VERB and not a check in
   `design-notes-gate.sh` on purpose:** after a rebase the merge base collapses

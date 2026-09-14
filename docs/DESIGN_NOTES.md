@@ -13242,16 +13242,39 @@ in bulk has the mirror one — any branch forked before the move brings the
 text back, with rc=0, no conflict and zero deleted lines. All three success
 signals agree while the work has been undone.
 
-`scripts/union-rebase.sh` cannot express that: its verdict is
-`add_before == add_after && del_after == 0` (line 150), so on a deleting
-branch it is a guaranteed false RED — and, worse, it would report
-"contribution intact" in exactly the case where the driver ATE the
-deletions. Re-specified for this shape, the two-sided check is
-`add_before == add_after && del_before == del_after`, plus a CONTENT
-assertion the numstat cannot give: zero `^## 2026-08-` headings in the live
-log after the rebase, with the pre-rebase 495 as the positive control, and
-the archive's sha256 unchanged (it carries `merge=text`, so interference
-there conflicts loudly instead of silently).
+`scripts/union-rebase.sh` could not express that, and the cure ships here
+rather than behind an issue, because it is the instrument this very landing
+has to be verified WITH. Its verdict read
+`add_before == add_after && del_after == 0`: deletions treated as a quantity
+FORBIDDEN when they are a quantity CONSERVED. On a branch whose work is a
+removal that is wrong in both directions, and the second one is not a nit —
+
+- **false RED** on a correct rebase, because such a branch's `del_after` is
+  legitimately nonzero;
+- **false GREEN** when the driver EATS the removal, because `del_after` then
+  falls to 0 and the rule is satisfied.
+
+Measured, on a fixture that runs a real rebase rather than a hand-written
+file: with the removed block adjacent to what the base appended, the driver
+puts the deleted text back and the contribution collapses to an **EMPTY
+diff — 0 additions, 0 deletions** — which the old rule called "contribution
+intact". The verifier was inverted on precisely the failure mode it exists
+for, and nothing had caught it because no branch had deleted in bulk from a
+union path in a long time. It is now
+`add_before == add_after && del_before == del_after`, the old form deleted
+in the same commit, with both directions pinned by cases whose rc flips when
+the line is put back.
+
+What did NOT ship is a generic CONTENT assertion inside that tool. Equal
+numstats do not say WHICH lines moved, so one is clearly desirable — but no
+fixture in this suite can make numstat blind while content moves: every
+damage the driver produces here is already visible in the counts, so such an
+assertion would ship with **zero constructible mutants**, unfalsifiable by
+construction. The content checks therefore stay where they ARE falsifiable,
+as the per-branch pin this landing runs by hand: zero `^## 2026-08-`
+headings inline after the rebase with the base's 495 as the positive
+control, and the archive's sha256 unchanged (it carries `merge=text`, so
+interference there conflicts loudly instead of silently).
 
 The standing detector, from here on, is check 0 itself: if a union rebase
 ever puts an archived month back into the live log, the gate is red on the

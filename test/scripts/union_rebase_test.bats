@@ -73,6 +73,46 @@ scratch_resurrected() {
     git commit -qam 'feat B'
 }
 
+# A branch that DELETES from the union path — the shape `del_after == 0` could
+# not express (issue 2138). Two geometries, and they disagree about everything:
+#
+#   scratch_deleting_clean  the removed block sits far from main's append, the
+#                           3-way merge sees two non-overlapping hunks, and the
+#                           deletion SURVIVES. A correct rebase.
+#   scratch_deleting_eaten  the removed block is adjacent to main's append, the
+#                           driver runs, and it puts the deleted text BACK.
+#                           Measured: the contribution goes to an EMPTY diff.
+scratch_deleting_clean() {
+    scratch_init
+    {
+        printf 'INTRO\n\n<!-- entry #A -->\n\n---\n\n## 2026-01-01 — entry A\n\nbody A\nCOST line 1\nCOST line 2\n\n'
+        for i in 1 2 3 4 5 6 7 8 9 10; do printf 'filler %s\n' "$i"; done
+        printf '\n<!-- entry #Z -->\n\n---\n\n## 2026-01-01 — entry Z\n\nbody Z\n'
+    } > docs/DESIGN_NOTES.md
+    git add -A && git commit -qm base
+    git branch feat
+    printf '<!-- entry #C -->\n\n---\n\n## 2026-01-02 — entry C\n\nbody C\n' \
+        >> docs/DESIGN_NOTES.md
+    git commit -qam 'main C'
+    git checkout -q feat
+    grep -v '^COST line ' docs/DESIGN_NOTES.md > docs/DN.tmp && mv docs/DN.tmp docs/DESIGN_NOTES.md
+    git commit -qam 'feat: supersede the accepted cost'
+}
+
+scratch_deleting_eaten() {
+    scratch_init
+    printf 'INTRO\n\n<!-- entry #A -->\n\n---\n\n## 2026-01-01 — entry A\n\nbody A\nCOST line 1\nCOST line 2\n' \
+        > docs/DESIGN_NOTES.md
+    git add -A && git commit -qm base
+    git branch feat
+    printf '<!-- entry #C -->\n\n---\n\n## 2026-01-02 — entry C\n\nbody C\n' \
+        >> docs/DESIGN_NOTES.md
+    git commit -qam 'main C'
+    git checkout -q feat
+    grep -v '^COST line ' docs/DESIGN_NOTES.md > docs/DN.tmp && mv docs/DN.tmp docs/DESIGN_NOTES.md
+    git commit -qam 'feat: supersede the accepted cost'
+}
+
 scratch_clean() {
     scratch_init
     printf 'INTRO\n\n<!-- entry #A -->\n\n---\n\n## 2026-01-01 — entry A\n\nbody A\n' \
@@ -119,6 +159,71 @@ scratch_clean() {
     run scripts/union-rebase.sh main
     [ "$status" -eq 0 ]
     [[ "$output" == *"came through unchanged"* ]]
+}
+
+# ── a branch that DELETES: the verdict was inverted here (issue 2138) ───────
+#
+# The shipped verdict was `add_before == add_after && del_after == 0`, which
+# reads deletions as damage rather than as a quantity to conserve. On a branch
+# whose WORK is a deletion — the August rollover moved 44,287 lines out of the
+# log — that is wrong in BOTH directions, and the second one is why this is not
+# a nit:
+#
+#   false RED    on a correct rebase, because del_after is legitimately nonzero
+#   false GREEN  when the driver EATS the deletion, because del_after becomes
+#                0 and the tool says "contribution intact" about a contribution
+#                that no longer exists
+#
+# The verifier was inverted on precisely the failure mode it exists for.
+
+@test "a deleting branch whose deletion SURVIVED passes (issue 2138)" {
+    # Geometry: the removed block is far from main's append, so the 3-way merge
+    # sees two non-overlapping hunks and never consults the driver. Under
+    # `del_after == 0` this correct rebase was accused.
+    scratch_deleting_clean
+
+    run scripts/union-rebase.sh main
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"came through unchanged"* ]]
+    [[ "$output" == *"-2"* ]]
+
+    # And the deletion really is still applied — the numbers above would also
+    # be produced by a tool reading the wrong two columns.
+    [ "$(grep -c '^COST line ' docs/DESIGN_NOTES.md || true)" -eq 0 ]
+    [ "$(grep -c 'entry C' docs/DESIGN_NOTES.md)" -eq 1 ]
+}
+
+@test "a deleting branch whose deletion the driver ATE is a failure (issue 2138)" {
+    # The false-green case, and the reason the cure ships with the rollover
+    # rather than behind it. Measured on this fixture: the contribution against
+    # the new base is an EMPTY diff — 0 additions, 0 deletions — and the old
+    # verdict read that as intact.
+    scratch_deleting_eaten
+
+    run scripts/union-rebase.sh main
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"deletions 2 -> 0"* ]]
+    [[ "$output" == *"are back"* ]]
+
+    # The damage, from the file rather than from the tool that is under test.
+    [ "$(grep -c '^COST line ' docs/DESIGN_NOTES.md)" -eq 2 ]
+
+    # Not the other diagnosis: additions did not move, and saying they did
+    # would send the next reader hunting an eaten separator.
+    refute grep -q "driver ATE" <<<"$output"
+    refute grep -q "RESURRECTED" <<<"$output"
+}
+
+@test "the contribution going EMPTY is named, not reported as a small drift (issue 2138)" {
+    # 0 and 0 is the arithmetic of "nothing of this branch survives on that
+    # path", and it is the exact pair the old verdict called intact. A report
+    # that prints two zeroes without saying what they mean is how it read as a
+    # pass for as long as it did.
+    scratch_deleting_eaten
+
+    run scripts/union-rebase.sh main
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"EMPTY against the new base"* ]]
 }
 
 # ── the numbers, measured rather than asserted ──────────────────────────────

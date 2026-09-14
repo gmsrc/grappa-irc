@@ -22,8 +22,22 @@
 #
 # Both report `rc=0`, zero conflicts and zero deletions. A check that only asks
 # "did we lose lines?" passes the second one cleanly, which is why the
-# invariant is TWO-SIDED: additions UNCHANGED **and** deletions ZERO. Any drift
-# in EITHER direction means the driver rewrote something nobody asked it to.
+# invariant is TWO-SIDED: additions UNCHANGED **and** deletions UNCHANGED.
+# Any drift in EITHER direction, on EITHER column, means the driver rewrote
+# something nobody asked it to.
+#
+# 🔴 It read "deletions ZERO" until issue 2138, and that is not a wording slip:
+# it is a quantity CONSERVED confused with a quantity FORBIDDEN, and it made
+# the verifier wrong in both directions on a branch whose work is a removal.
+# False RED on a correct rebase, because such a branch's del_after is
+# legitimately nonzero — and, the one that matters, false GREEN when the driver
+# EATS the deletion, because del_after then becomes 0 and the tool reports
+# "contribution intact". Measured on the fixture the bats suite builds: the
+# contribution drops to an EMPTY diff, 0 additions and 0 deletions, and the old
+# rule called that intact. The verifier was inverted on precisely the failure
+# mode it exists for. Found while rolling 44,287 lines of August out of the log
+# — the first branch in a long time to delete in bulk from a union path, which
+# is why it had never been exercised.
 #
 # WHY THIS IS A VERB AND NOT A CHECK IN design-notes-gate.sh
 #
@@ -147,7 +161,7 @@ for i in "${!UNION_PATHS[@]}"; do
 	read -r add_before del_before <<<"${BEFORE[i]}"
 	read -r add_after del_after <<<"$(pin "$base_after" HEAD "$path")"
 
-	if [ "$add_before" -eq "$add_after" ] && [ "$del_after" -eq 0 ]; then
+	if [ "$add_before" -eq "$add_after" ] && [ "$del_before" -eq "$del_after" ]; then
 		say "$path: +$add_after -$del_after — contribution intact"
 		continue
 	fi
@@ -170,9 +184,22 @@ for i in "${!UNION_PATHS[@]}"; do
 			printf '  union takes the additions from both sides and never the deletions, so\n'
 			printf '  text %s deliberately removed is back, glued wherever it landed.\n' "$ONTO"
 		fi
-		if [ "$del_after" -ne 0 ]; then
-			printf '  deletions are %s, not zero: this branch now removes lines from %s.\n' \
-				"$del_after" "$ONTO"
+		if [ "$del_after" -lt "$del_before" ]; then
+			printf '  deletions went DOWN: %s line(s) this branch REMOVED are back.\n' \
+				"$((del_before - del_after))"
+			printf '  This is #1432 in the mirror direction, and it is the one a\n'
+			printf '  deletions-must-be-zero rule could not express: union takes the\n'
+			printf '  additions from both sides and NEVER the deletions, so a branch\n'
+			printf '  whose work IS a removal is exactly what it undoes — rc=0, no\n'
+			printf '  conflict, nothing deleted, all three signals agreeing.\n'
+		elif [ "$del_after" -gt "$del_before" ]; then
+			printf '  deletions went UP: the rebase now removes %s line(s) this branch\n' \
+				"$((del_after - del_before))"
+			printf '  never touched.\n'
+		fi
+		if [ "$add_after" -eq 0 ] && [ "$del_after" -eq 0 ]; then
+			printf '  The contribution is EMPTY against the new base: nothing this branch\n'
+			printf '  did to that path survives. Two zeroes are not a small drift.\n'
 		fi
 		printf '\n  Read the BOUNDARY SHAPE on the file before trusting any repair — an\n'
 		printf '  identical numstat proves nothing if the pre-rebase state was already\n'
