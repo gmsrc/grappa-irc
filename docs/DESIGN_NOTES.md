@@ -14821,3 +14821,103 @@ server side is untouched — the 50MiB cap, the upload controller and the wire
 are all as they were, so no protocol bump is in scope. Whether the Settings
 blurb should now announce that the switch ships off was **not** decided; the
 checkbox renders its own state and the issue did not ask.
+<!-- entry #2179 -->
+
+---
+
+## 2026-09-15 — issue 2179: `/msg @#chan` — the recipient that decides the window
+
+`/notice @#chan` was cured in #1301 and the inbound badge in #1247; the
+PRIVMSG twin was never done. `/msg @#chan hi` opened a query window literally
+named `@#chan` and the send 400ed. Both halves were correct code doing their
+own job: the plain arm's `validate_post_target_name/1` refuses a sigil because
+**there the target IS the persist key**, and keying scrollback to `@#chan`
+would build the outbound twin of the phantom `+#chan` window #1303 removed on
+the inbound side. That refusal is untouched — the cure is a NEW arm, never a
+loosening of the old one.
+
+### Why this arm is NOT shaped like the notice/CTCP arms
+
+The two existing relay arms key the echo to the SOURCE window and carry the
+recipient as payload (`meta.notice_target`, `meta.ctcp_target`). Copying that
+shape here would have been one less concept and it would have been wrong: an
+INBOUND `PRIVMSG @#chan` is routed to `#chan` by
+`EventRouter.strip_statusmsg_target/2`, so every other member reads this line
+there. An echo keyed to wherever the operator happened to type it puts one half
+of a conversation in a different window from the other half.
+
+So the recipient DECIDES the window. `Session.send_statusmsg/4` hands the raw
+wire target to `Session.Server`, which peels it with `session_statusmsg/1` —
+the same `Identifier.peel_statusmsg/2` and the same 005 set the ingress uses —
+and keys the echo to what comes out. One derivation, both directions.
+
+Three consequences, each of which had to be written down rather than assumed:
+
+- **`meta.statusmsg` on the echo**, the whole peeled run (#1303), same key and
+  same value shape the ingress writes. Without it the operator's own ops-only
+  line is the only one in the window rendering as a plain channel message.
+- **`dm_with` must be nil, and is nil by construction.**
+  `Scrollback.target_kind/1` classifies by the FIRST byte, so the raw `@#chan`
+  reads as *nick-shaped* and `dm_peer/4` would have returned it as the DM peer
+  — the phantom coming back as a thread instead of a window. `outbound_dm_peer/4`
+  makes the peeled run the discriminant: a level exists ⇒ there is no peer.
+- **One fragment loop, not a third copy.** `persist_and_send_fragments/6` took
+  a `statusmsg` parameter instead. The plain and ops-only sends agree on kind
+  classification, key, sender, grade snapshot, CTCP echo meta, wire verb and
+  recursion, and disagree on exactly the two things the run itself decides.
+  That is the inverse of `handle_notice_send/4`, which forks on four attributes
+  and is rightly its own loop.
+
+### The URL is verified, not ignored
+
+Because the recipient decides the key, the URL `channel_id` would otherwise be
+a parameter nobody reads — and a client POSTing `@#chan` to `#other` would get
+a row filed where its own request denies it. `validate_statusmsg_recipient/4`
+compares the peeled channel against the URL under the network's CASEMAPPING
+(the #537 ingress fold, so `#CHAN` still names the channel `@#chan` addresses)
+and 400s the mismatch. It is deliberately NARROWER than
+`validate_wire_recipient_name/2` on both other axes too: a BARE target is
+refused (that send is the plain arm's) and so is a sigil over a nick — the
+latter for free, since `peel_statusmsg/2` already declines to peel unless a
+channel starts behind the run.
+
+**A sigil the network does not advertise stays REFUSED, never stripped.** On
+bahamut's `STATUSMSG=@+`, `%#chan` is a 400. Stripping it would send to the
+whole channel a line the operator addressed to half of it — that is the
+difference between a cure and a hole, and it is asserted at both doors.
+
+The Session.Server refuses an unpeelable target as well, and that guard is
+unreachable from HTTP by design: the validator catches it first. It is there
+because the only key available to a target with no level is the RAW target,
+so without it the arm's own claim ("this cannot build a phantom window key")
+would be a property of one caller rather than of the arm.
+
+### cic
+
+`peelStatusmsg` (`lib/statusmsg.ts`) is the client twin, backtracking included
+— `+` is both the voice sigil and an RFC channel sigil, so a greedy peel of
+`@+chan` eats both bytes and finds no channel. `case "msg"` routes a peeled
+target to the channel with `{kind: "statusmsg"}` and never reaches
+`openQueryWindowState` / `setSelectedChannel`. No focus switch: the row lands
+where the operator's channel-mates read it, and no IRC client moves your eyes
+for a channel message. Single await, no #666 pacing — the #1225 precedent.
+
+Two pins worth naming. The remainder test uses `DEFAULT_CHANTYPES`, NOT the
+network's advertised `CHANTYPES=`, because the server's own peel asks the
+RFC-hardcoded `Identifier.channel_sigil?/1`: predicting the door with a
+different class routes targets the door then refuses. And the sigil set is
+`PREFIX=`, the only membership fact the wire publishes today, which is a
+SUPERSET of `STATUSMSG=` — so `%#chan` peels on the client and is refused by
+the server. That is the acceptance working, not a gap: the refusal belongs to
+the party holding the 005, and what cic owes is the absence of the phantom
+window.
+
+### Known gap, decided not to cure
+
+**`/msg +#chan` stays refused by the parser.** `+` is also a chantype, so the
+target hits the #12/#343 channel guard in `slashCommands.ts` before compose
+sees it. Curing it means teaching the PURE parser a per-network membership
+fact it does not have — `parseSlash`'s arity at every call site — for a target
+genuinely ambiguous with a legal channel name (`+#chan` IS a valid RFC channel
+spelling). `@#chan` and `%#chan` both reach the new path. Not a regression:
+`+#chan` was refused before this issue and is refused after it.
