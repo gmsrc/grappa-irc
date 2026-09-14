@@ -14208,3 +14208,140 @@ un-wired (1 red each).
 The issue's other direction — the channel identity no longer being the
 leading element pinned to the top-left — is a product decision and was not
 taken here.
+<!-- entry #2164 -->
+
+---
+
+## 2026-09-14 — issue 2164: the closed set became a number, and the guard became a clamp
+
+The text-size picker gained an XS rung and an advanced numeric field, and the
+second half is what changed the shape of the module. vjt's ruling (IRC
+#grappa, relayed into the issue): **XS = 11px** — not the 10px the +2 ladder
+would give, because 10px monospace is unreadable and that is precisely why
+the number needed deciding — and **an advanced field clamped 9–28px**, where
+a value outside the range is *clamped, not silently refused*. Unchanged: one
+`--font-size` custom property on `<html>`, no new CSS surface.
+
+### Why the storage is a number now
+
+`FontSizeKey` was a five-string union and `isFontSizeKey` was a five-string
+match. A free numeric field ends that: the persisted value is a **number**,
+the presets are six rungs that WRITE their number, and the guard is a
+**finiteness check plus a clamp**. The presets did not become decorative —
+they remain the tested path, six sizes somebody has looked at, and the free
+field is the escape hatch.
+
+The load-bearing decision is in `writeCssVar`: the value goes into
+`style.setProperty("--font-size", …)`, i.e. it is a string the app puts
+inside CSS, so it is parsed to a number and **re-serialised as `${n}px`**,
+never concatenated from the raw input. That one line is why a stored
+`"20px; --evil: 1"` is inert rather than a second declaration, and it is
+pinned by a table of hostile inputs asserting the written value always
+matches `/^\d+(\.\d+)?px$/` and always lands inside the clamp.
+
+### Two dispositions, and why they differ
+
+The issue's own comment says the guard must reject `NaN`, `Infinity`,
+`"14px; …"` **and negatives**; the ruling says an out-of-range value is
+clamped. Those are reconciled, not traded off:
+
+* **Not a finite number** (`NaN`, `Infinity`, `"14px; …"`, an unknown legacy
+  key) — there is nothing to clamp, so it falls back to `M`.
+* **A finite number outside the range** (`400`, `-5`) — clamped. A negative
+  is a number, it is just not a legal one, so it lands on the floor. Nothing
+  negative ever reaches the DOM either way; the two sentences disagree only
+  about *which* legal value replaces it, and the ruling is the later word.
+
+`""` is called out separately in both places because `Number("")` is `0`,
+which the clamp would turn into the 9px floor — a blank that silently shrinks
+the whole app. It is handled **twice and differently**, deliberately: at the
+storage door a blank row falls to `M` (at boot there is no "in effect" to
+restore), and at the input box it re-states what is in effect and writes
+nothing, on the same reasoning `onAutoAwayCustomSave` already refuses a blank
+— an emptied box is not an instruction.
+
+### The migration is READ-SIDE, and that is not an oversight
+
+Shipped browsers hold the KEYS (`"S"`, `"M"`, …). `readStoredPx` maps them
+and **does not write the number back**. Two reasons, the second measured:
+boot stays a pure read, and an operator who never touches the control keeps a
+row an *older* bundle still understands. Two e2e specs seed exactly those
+strings (`issue962` writes `"XXL"`, `issue1228` writes `"S"`), so the
+read-side map is what keeps them working — a write-back would have converted
+those rows on the first load. The row becomes a number the first time
+something is actually picked.
+
+### `setFontSizePx` returns what it APPLIED
+
+Not `void`. The advanced box has to show the size in effect, and a reactive
+`value={fontPx()}` alone cannot do it: when the typed number clamps **onto
+the size already in effect** the signal does not change, nothing re-renders,
+and the box keeps displaying a number that never took. The handler writes the
+applied value back to the element. That is the case the `50 → 28` test covers
+and the `400 → 28` one does not.
+
+The rungs stay `<input type="radio">` with their `font-size-<KEY>` testids
+verbatim — four e2e specs address them, two by tapping and two by seeding the
+legacy key — and no rung is checked while a custom size is in effect, which
+is the honest render of that state.
+
+### Open question 3, measured: does anything assume a 12px floor?
+
+Static measurement over `cicchetto/src/themes/default.css`; no rendered
+geometry (see below).
+
+**Holds at 9px** — `--tap-min: 44px` and `--chrome-tap-min: 48px` are
+absolute px on purpose and back 74 `min-*` declarations. **The compose box is
+among them**: its textarea has no floor of its own and inherits the global
+form-control `textarea { min-height: var(--tap-min) }`, so it does not shrink.
+The desktop shell rails are absolute px since issue 1827.
+
+**The premise fails for one of the three the issue names**: there is no nick
+column. `.nick`, `.nick-prefix` and `.nick-text` are all `display: inline` —
+nicks flow inline in the scrollback and there is no fixed track to starve.
+
+**Degrades** — 23 `min-width`/`min-height` declarations are in `rem`/`em` and
+therefore track the root. The tap targets among them, in px:
+
+| selector | decl | @14 (M) | @12 (S, today's floor) | @11 (XS) | @9 (clamp floor) |
+| --- | --- | --- | --- | --- | --- |
+| `.bottom-bar` | 3rem | 42.0 | 36.0 | 33.0 | 27.0 |
+| `.next-active-btn-mobile` | 3rem | 42.0 | 36.0 | 33.0 | 27.0 |
+| `.audio-mini-player*` | 2.5rem | 35.0 | 30.0 | 27.5 | 22.5 |
+| `.confirm-modal-attachment-remove` | 2.25rem | 31.5 | 27.0 | 24.8 | 20.2 |
+| `.scroll-to-bottom-badge` (mobile) | 1.4rem | 19.6 | 16.8 | 15.4 | 12.6 |
+
+The finding that matters is the `@12` column: **every one of these is already
+under the 44px HIG at the current bottom rung**, and three of them are under
+it at the DEFAULT. So the answer to "does anything assume a floor of 12px" is
+no — 12px was not buying these the floor either. The clamp makes a
+pre-existing class worse in degree, not in kind, and it is a class with its
+own cure (the two absolute tokens) that these selectors simply do not use.
+Layout caps that track the root, for the record: the landscape-compact rails
+(`8rem`/`7rem` → 72/63px at 9px), the server-card `fit-content(14rem)` → 126px,
+and the settings drawer `width: 22rem` → 198px.
+
+**The clamp was not narrowed.** 9 is vjt's number; nothing above is a reason
+to move it without one.
+
+### What was not established
+
+No rendered-browser measurement of any kind. Real-browser geometry on this
+host needs the e2e runner, which needs a lane this cic-only slice does not
+hold, so every number above is arithmetic over declarations rather than a
+laid-out box. In particular: whether the new numeric input overflows the
+22rem drawer on a narrow phone — issue 1228's exact hazard — is unmeasured.
+No CSS was added for the field, matching its sibling: the auto-away custom
+number input has no width rule either.
+
+One stale comment was left alone: `issue1445-directory-pull-refresh.spec.ts`
+calls `["12px", "14px", "20px"]` "the three root font sizes that bracket cic's
+range", which stopped being true here. It writes the CSS var directly rather
+than reading the module, so nothing is broken; editing an e2e file this slice
+cannot run was the worse trade.
+
+Thirteen mutants, each sha-verified as applied before its run and as reverted
+after, and every one died: the XS value, both clamp bounds, the finiteness
+check, the clamp, the legacy migration, the re-serialisation, both blank
+guards, the applied-value return, the box write-back, the rung carrying its
+number, and the advanced field existing at all.
