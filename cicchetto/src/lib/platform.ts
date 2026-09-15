@@ -65,6 +65,107 @@ export function isStandalonePwa(): boolean {
   return (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// issue 2190 — the iOS/iPadOS 27 compositor band. A PORKAROUND, and it is
+// meant to die. Everything between this banner and the closing one below is
+// one removable piece; its only other limbs are the `is-ios27-band` rules in
+// `themes/default.css` and the `applyIos27BandClass()` call in `main.tsx`.
+//
+// WHAT IT WORKS AROUND. On iOS 27 and iPadOS 27 Beta an INSTALLED PWA gets a
+// system-painted gradient/blur band along the TOP edge of the web view. It
+// washes out whatever cicchetto paints there. The blur is not ours —
+// cicchetto declares no `backdrop-filter` on any surface — and it is not
+// expressed through the safe-area insets either: morph, #grappa 2026-09-15
+// 16:14, «il blur su iOS 27 è applicato dal compositor indipendentemente
+// dagli inset, succede su qualunque PWA e non solo su cicchetto». So `env()`
+// is not the lever (which is also what the `8fc439f5e` iPadOS-pill precedent
+// predicted) and the clearance has to be taken by layout, gated.
+//
+// WHO REPORTED IT: morph, #grappa, 2026-09-14 23:50 (iOS 27, iPhone) and
+// 23:52 (iPadOS 27 Beta, iPad). vjt ordered the workaround on 2026-09-15
+// 16:16 and named it for what it is at 16:18: «porkaround per ora, magari da
+// rimuovere in seguito». The day Apple changes the behaviour, or ships the
+// inset the `8fc439f5e` precedent expected, this is a clean revert.
+// ─────────────────────────────────────────────────────────────────────────
+
+// The `OS <major>[_<minor>…] like Mac OS X` shape — UNDERSCORES, not dots:
+//   "(iPhone; CPU iPhone OS 27_0 like Mac OS X)"
+//   "(iPad;   CPU OS 27_0 like Mac OS X)"   ← the iPad spelling drops the word
+// The ` like Mac OS X` tail is load-bearing, not decoration: without it the
+// pattern also matches the `Intel Mac OS X 10_15_7` of the desktop-mode UA
+// below and would read iPadOS 27 as macOS 10.
+const IOS_UA_MAJOR = /\bOS (\d+)(?:_\d+)* like Mac OS X\b/;
+
+// iPadOS 13+ in desktop mode — the DEFAULT for iPad Safari — reports
+//   "(Macintosh; Intel Mac OS X 10_15_7) … Version/27.0 Safari/605.1.15"
+// with NO `iPad` token anywhere. That is precisely why `isIos()` above needs
+// its `Mac` + `maxTouchPoints > 0` clause, and on that shape `Version/` is
+// the only version signal there is. It is the SAFARI major, not the OS one —
+// a PROXY, accepted knowingly: the two have shipped in lockstep (Safari 26
+// with iOS 26, Safari 27 with iOS 27), and the alternative is a regex that
+// only knows `iPhone OS (\d+)`, which covers the phone, leaves EVERY iPad
+// uncovered, and is never noticed because the phone works.
+const SAFARI_UA_MAJOR = /\bVersion\/(\d+)/;
+
+/**
+ * The major iOS/iPadOS version a user agent claims, or `null` when it does
+ * not say. Both UA shapes; the OS-shaped one wins when both are present.
+ *
+ * PURE — takes the string rather than reading `navigator`, so the whole
+ * device table is one table-driven test (`__tests__/ios27Band.test.ts`).
+ *
+ * It answers the VERSION question only and says nothing about whether the UA
+ * is an Apple mobile one: a macOS Safari 27 UA reads 27 here, byte-identical
+ * to an iPad in desktop mode, and `isIos()` is what tells the two apart.
+ * Compose, do not conflate — `hasIos27Band()` below is the composition.
+ */
+export function iosMajorVersion(ua: string): number | null {
+  const match = IOS_UA_MAJOR.exec(ua) ?? SAFARI_UA_MAJOR.exec(ua);
+  const captured = match?.[1];
+  if (captured === undefined) return null;
+  const major = Number.parseInt(captured, 10);
+  return Number.isNaN(major) ? null : major;
+}
+
+/** The first major that paints the band. morph measured 27; 26 is clean. */
+const IOS27_BAND_FIRST_MAJOR = 27;
+
+/** The `<html>` class the gated CSS keys on. One spelling, two readers. */
+export const IOS27_BAND_CLASS = "is-ios27-band";
+
+/**
+ * Does this browsing context get the iOS 27 compositor band?
+ *
+ * `isIos()` AND `isStandalonePwa()` AND major >= 27. The standalone half is
+ * load-bearing, not belt-and-braces: the band is PWA chrome, so Safari in a
+ * browser tab must not pay the clearance.
+ */
+export function hasIos27Band(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (!isIos() || !isStandalonePwa()) return false;
+  const major = iosMajorVersion(navigator.userAgent);
+  // `major !== null` is spelled out rather than left to the comparison. JS
+  // would answer this correctly by coercion — `null >= 27` is false — but so
+  // is `undefined >= 27`, and a reader cannot tell a deliberate guard from a
+  // lucky one. The guard is deliberate.
+  return major !== null && major >= IOS27_BAND_FIRST_MAJOR;
+}
+
+/**
+ * Apply the gating class to `<html>`, pre-paint, from `main.tsx` — same shape
+ * as `applyIosClass()` above and for the same reason: the clearance is then a
+ * CSS rule that costs no runtime probe per render, and the first frame
+ * already has it (no reflow once the class lands).
+ */
+export function applyIos27BandClass(): void {
+  if (typeof document === "undefined") return;
+  if (hasIos27Band()) {
+    document.documentElement.classList.add(IOS27_BAND_CLASS);
+  }
+}
+
+// ──────────────────────── end of the issue-2190 porkaround ───────────────
+
 // #2014 — is the PRIMARY pointing device a finger? The context-menu anchor
 // asks, because a menu that opens down-and-right of a finger is covered by the
 // hand that opened it, while down-and-right is the native convention under a
