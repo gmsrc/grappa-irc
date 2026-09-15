@@ -279,6 +279,168 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
     end
   end
 
+  describe "GET /admin/settings — dcc subtree (issue 2185)" do
+    setup do
+      {_, session} = user_and_session(is_admin: true)
+      %{session: session}
+    end
+
+    # Admin-only, like `addressing` and for the same reason: these are NOT
+    # in `public_view/0`, so the view has to read the accessors directly.
+    # Without this subtree the operator cannot read back what they wrote.
+    test "returns the two DCC ceilings at their defaults", %{conn: conn, session: session} do
+      conn = conn |> put_bearer(session.id) |> get("/admin/settings")
+      assert %{"settings" => %{"dcc" => dcc}} = json_response(conn, 200)
+      assert dcc["max_transfer_bytes"] == 100 * 1024 * 1024
+      assert dcc["global_cap_bytes"] == 10 * 1024 * 1024 * 1024
+    end
+
+    test "reflects configured values", %{conn: conn, session: session} do
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(256 * 1024 * 1024)
+      :ok = ServerSettings.put_dcc_global_cap_bytes(64 * 1024 * 1024 * 1024)
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/settings")
+      assert %{"settings" => %{"dcc" => dcc}} = json_response(conn, 200)
+      assert dcc["max_transfer_bytes"] == 256 * 1024 * 1024
+      assert dcc["global_cap_bytes"] == 64 * 1024 * 1024 * 1024
+    end
+  end
+
+  describe "PUT /admin/settings — dcc subtree (issue 2185)" do
+    setup do
+      {_, session} = user_and_session(is_admin: true)
+      %{session: session}
+    end
+
+    test "updates dcc.max_transfer_bytes", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"dcc" => %{"max_transfer_bytes" => 178 * 1024 * 1024}})
+
+      assert %{"settings" => %{"dcc" => %{"max_transfer_bytes" => value}}} =
+               json_response(conn, 200)
+
+      assert value == 178 * 1024 * 1024
+    end
+
+    test "updates dcc.global_cap_bytes", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"dcc" => %{"global_cap_bytes" => 20 * 1024 * 1024 * 1024}})
+
+      assert %{"settings" => %{"dcc" => %{"global_cap_bytes" => value}}} =
+               json_response(conn, 200)
+
+      assert value == 20 * 1024 * 1024 * 1024
+    end
+
+    test "422 invalid_setting names an unknown dcc key — nothing is persisted", %{
+      conn: conn,
+      session: session
+    } do
+      before = ServerSettings.get_dcc_max_transfer_bytes()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "dcc" => %{"max_transfer_bytes" => before + 4096, "max_transfer" => 1}
+        })
+
+      assert %{"error" => "invalid_setting", "field" => "dcc.max_transfer"} =
+               json_response(conn, 422)
+
+      assert ServerSettings.get_dcc_max_transfer_bytes() == before
+    end
+
+    test "422 invalid_setting for a non-positive dcc.max_transfer_bytes", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"dcc" => %{"max_transfer_bytes" => 0}})
+
+      assert %{"error" => "invalid_setting", "field" => "dcc.max_transfer_bytes"} =
+               json_response(conn, 422)
+    end
+
+    test "422 invalid_setting for a string dcc.global_cap_bytes", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"dcc" => %{"global_cap_bytes" => "10GB"}})
+
+      assert %{"error" => "invalid_setting", "field" => "dcc.global_cap_bytes"} =
+               json_response(conn, 422)
+    end
+
+    test "400 for a malformed (non-map) dcc subtree — no silent swallow", %{
+      conn: conn,
+      session: session
+    } do
+      conn = conn |> put_bearer(session.id) |> put("/admin/settings", %{"dcc" => "100MB"})
+
+      assert json_response(conn, 400)
+    end
+
+    # Paletto 4 (vjt, issue 2185) at the HTTP door: a per-transfer ceiling
+    # above the spool budget is a LEGAL end state. Rejecting it would make
+    # the order of the two writes significant, and `AdminSettingsTab` saves
+    # one field at a time.
+    test "accepts a per-transfer ceiling ABOVE the spool budget — no cross-validation", %{
+      conn: conn,
+      session: session
+    } do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "dcc" => %{"max_transfer_bytes" => 8 * 1024 * 1024 * 1024, "global_cap_bytes" => 1024 * 1024}
+        })
+
+      assert %{"settings" => %{"dcc" => dcc}} = json_response(conn, 200)
+      assert dcc["max_transfer_bytes"] > dcc["global_cap_bytes"]
+    end
+
+    test "applies the dcc subtree alongside upload in one request", %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "upload" => %{"global_cap_bytes" => 777_777},
+          "dcc" => %{"max_transfer_bytes" => 42 * 1024 * 1024}
+        })
+
+      assert %{"settings" => %{"upload" => upload, "dcc" => dcc}} = json_response(conn, 200)
+      assert upload["global_cap_bytes"] == 777_777
+      assert dcc["max_transfer_bytes"] == 42 * 1024 * 1024
+    end
+
+    # The DCC keys live in their OWN closed set. A DCC key posted under
+    # `upload` must be refused as a typo, not quietly applied to the wrong
+    # family — that is the whole point of the sets being closed.
+    test "a dcc key posted under the upload subtree is refused as unknown", %{
+      conn: conn,
+      session: session
+    } do
+      before = ServerSettings.get_dcc_max_transfer_bytes()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{"upload" => %{"max_transfer_bytes" => 1024 * 1024}})
+
+      assert %{"error" => "invalid_setting", "field" => "upload.max_transfer_bytes"} =
+               json_response(conn, 422)
+
+      assert ServerSettings.get_dcc_max_transfer_bytes() == before
+    end
+  end
+
   describe "GET /admin/settings — addressing subtree (#543)" do
     setup do
       {_, session} = user_and_session(is_admin: true)

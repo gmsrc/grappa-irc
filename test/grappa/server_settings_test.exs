@@ -167,6 +167,92 @@ defmodule Grappa.ServerSettingsTest do
     end
   end
 
+  describe "dcc.max_transfer_bytes + dcc.global_cap_bytes (issue 2185)" do
+    test "the defaults are 100 MiB per transfer and a 10 GiB spool" do
+      assert ServerSettings.get_dcc_max_transfer_bytes() == 100 * 1024 * 1024
+      assert ServerSettings.get_dcc_global_cap_bytes() == 10 * 1024 * 1024 * 1024
+    end
+
+    test "the spool default holds AT LEAST 100 transfers at the per-transfer default" do
+      # vjt's ruling picked WHICH of the old comment's two invariants
+      # survives: this one. Asserted rather than left to arithmetic,
+      # because a future move of either default silently breaks it.
+      max = ServerSettings.get_dcc_max_transfer_bytes()
+      spool = ServerSettings.get_dcc_global_cap_bytes()
+
+      assert div(spool, max) >= 100
+
+      # 🔴 A FLOOR, never an equality — and the ruling's own parenthesis
+      # ("100 × 100 MiB = 10 GiB exactly") is arithmetically false:
+      # 100 × 100 MiB is 10_000 MiB, i.e. 9.765625 GiB. The real ratio is
+      # 102.4, which is EXACTLY the ratio the 10 MiB / 1 GiB pair this
+      # replaces had (1024 / 10) — so the property is conserved and the
+      # 10 GiB value is right; only the equality never existed. This
+      # assertion is the positive control against restoring it.
+      assert 100 * max < spool
+      assert spool == 10 * 1024 * 1024 * 1024
+    end
+
+    test "the DCC ceilings are NOT the upload family — moving upload policy leaves them still" do
+      # The ruling the dedicated keys exist for: a `DCC SEND` carries no
+      # MIME, so there is no upload category to read a cap off.
+      before_max = ServerSettings.get_dcc_max_transfer_bytes()
+      before_global = ServerSettings.get_dcc_global_cap_bytes()
+
+      :ok = ServerSettings.put_upload_per_file_cap_bytes(:document, 7 * 1024 * 1024)
+      :ok = ServerSettings.put_upload_global_cap_bytes(3 * 1024 * 1024 * 1024)
+
+      assert ServerSettings.get_dcc_max_transfer_bytes() == before_max
+      assert ServerSettings.get_dcc_global_cap_bytes() == before_global
+    end
+
+    test "each round-trips a positive integer" do
+      assert :ok = ServerSettings.put_dcc_max_transfer_bytes(250 * 1024 * 1024)
+      assert ServerSettings.get_dcc_max_transfer_bytes() == 250 * 1024 * 1024
+
+      assert :ok = ServerSettings.put_dcc_global_cap_bytes(40 * 1024 * 1024 * 1024)
+      assert ServerSettings.get_dcc_global_cap_bytes() == 40 * 1024 * 1024 * 1024
+    end
+
+    test "each rejects a non-positive or non-integer value" do
+      assert {:error, :invalid_value} = ServerSettings.put_dcc_max_transfer_bytes(0)
+      assert {:error, :invalid_value} = ServerSettings.put_dcc_max_transfer_bytes(-1)
+      assert {:error, :invalid_value} = ServerSettings.put_dcc_max_transfer_bytes("100")
+
+      assert {:error, :invalid_value} = ServerSettings.put_dcc_global_cap_bytes(0)
+      assert {:error, :invalid_value} = ServerSettings.put_dcc_global_cap_bytes(-1)
+      assert {:error, :invalid_value} = ServerSettings.put_dcc_global_cap_bytes("100")
+    end
+
+    test "a per-transfer ceiling ABOVE the spool budget is accepted — no cross-validation" do
+      # Deliberate (vjt, issue 2185): rejecting it would make the ORDER of
+      # the two writes significant, and an admin UI saving one field at a
+      # time would fail on a legal end state. It only means nothing fits
+      # until the budget is raised.
+      assert :ok = ServerSettings.put_dcc_global_cap_bytes(1024 * 1024)
+      assert :ok = ServerSettings.put_dcc_max_transfer_bytes(500 * 1024 * 1024)
+
+      assert ServerSettings.get_dcc_max_transfer_bytes() >
+               ServerSettings.get_dcc_global_cap_bytes()
+    end
+
+    test "a stored non-positive value falls back to the default" do
+      Repo.insert!(%Setting{key: "dcc.max_transfer_bytes", value: "0"})
+      Repo.insert!(%Setting{key: "dcc.global_cap_bytes", value: "-5"})
+
+      assert ServerSettings.get_dcc_max_transfer_bytes() == 100 * 1024 * 1024
+      assert ServerSettings.get_dcc_global_cap_bytes() == 10 * 1024 * 1024 * 1024
+    end
+
+    test "they stay OUT of public_view/0 — admin-only, like addressing" do
+      # Deliberately scoped out of this slice: `public_view/0` is WIRE, so
+      # publishing them costs a protocol bump. The consequence is stated
+      # rather than hidden — cic cannot show the ceiling before an
+      # oversized offer is declined.
+      refute Map.has_key?(ServerSettings.public_view(), :dcc)
+    end
+  end
+
   describe "PubSub broadcast on change" do
     setup do
       Phoenix.PubSub.subscribe(Grappa.PubSub, ServerSettings.topic())

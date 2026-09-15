@@ -1,7 +1,6 @@
 defmodule Grappa.Dcc.ReportTest do
   use ExUnit.Case, async: true
 
-  alias Grappa.Dcc
   alias Grappa.Dcc.{Policy, Report}
   alias Grappa.IRC.Message
 
@@ -187,12 +186,40 @@ defmodule Grappa.Dcc.ReportTest do
       assert report.body =~ "not one this bouncer will dial"
     end
 
-    test "an oversized offer quotes the actual ceiling, not a restated number" do
-      report = Report.render({:refused, :too_large}, @peer)
+    test "an oversized offer quotes the ceiling the REFUSAL carried" do
+      # issue 2185 — the ceiling is an operator setting, and the term
+      # carries the value that actually refused the offer. This module does
+      # not re-read it, which is why this test still needs no Repo.
+      report = Report.render({:refused, {:too_large, 100 * 1024 * 1024}}, @peer)
 
-      # Read off production, so a change to the cap moves the sentence and
-      # a hardcoded expectation here cannot rot into a lie.
-      assert report.body =~ "#{div(Dcc.max_transfer_bytes(), 1024 * 1024)} MB"
+      assert report.body =~ "100 MB"
+    end
+
+    test "a ceiling that is not a whole number of MiB is not silently rounded down to a lie" do
+      # `div/2` was safe while the cap was a compile-time power-of-two
+      # multiple of a MiB. An operator typing the natural 100_000_000 makes
+      # a 95.367 MiB ceiling, which `div/2` printed as "95" — understating
+      # the limit by a third of a MB.
+      report = Report.render({:refused, {:too_large, 100_000_000}}, @peer)
+
+      assert report.body =~ "95.3 MB"
+    end
+
+    test "the printed ceiling is never ABOVE the real one — truncated, never rounded up" do
+      # A user who resends at exactly the figure they read must not be
+      # refused a second time, so the rounding direction is load-bearing.
+      report = Report.render({:refused, {:too_large, 99_614_720}}, @peer)
+
+      # 99_614_720 bytes is 95.0 MiB exactly — no decimal to print.
+      assert report.body =~ "95 MB"
+      refute report.body =~ "95.0"
+    end
+
+    test "a sub-MiB ceiling no longer prints as the '0 MB' that div/2 produced" do
+      # One byte under a MiB used to render "larger than the 0 MB limit".
+      report = Report.render({:refused, {:too_large, 1_048_575}}, @peer)
+
+      assert report.body =~ "0.9 MB"
     end
 
     test "a spent daily allowance quotes the actual allowance" do
@@ -218,10 +245,16 @@ defmodule Grappa.Dcc.ReportTest do
       # The attribution split holds across the whole vocabulary: none of
       # these sentences was uttered by the sender, so none of them may
       # carry their nick.
-      for reason <- [:ssrf_blocked, :too_large, :rate_limited, :insufficient_storage, :too_many_offers] do
+      for reason <- [
+            :ssrf_blocked,
+            {:too_large, 100 * 1024 * 1024},
+            :rate_limited,
+            :insufficient_storage,
+            :too_many_offers
+          ] do
         report = Report.render({:refused, reason}, @peer)
 
-        assert report.kind == :server_event, "#{reason} was attributed to the peer"
+        assert report.kind == :server_event, "#{inspect(reason)} was attributed to the peer"
         assert report.sender == Message.anonymous_sender()
       end
     end
@@ -234,7 +267,7 @@ defmodule Grappa.Dcc.ReportTest do
         {:unsupported_subcommand, "CHAT"},
         :malformed,
         :ssrf_blocked,
-        :too_large,
+        {:too_large, 100 * 1024 * 1024},
         :rate_limited,
         :insufficient_storage,
         :too_many_offers

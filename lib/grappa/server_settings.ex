@@ -22,10 +22,12 @@ defmodule Grappa.ServerSettings do
   | `"upload.video_max_duration_seconds"`   | `pos_integer()`            | 120              | #201 |
   | `"addressing.mode"`                     | `:pool_with_reservations \\| :static_mapping_with_reservations` | `:pool_with_reservations` | #543 |
   | `"addressing.static_mapping_prefix"`    | `String.t()` (v6 CIDR) \\| `nil` | `nil`       | #543 |
+  | `"dcc.max_transfer_bytes"`              | `pos_integer()`            | 104_857_600 (100MiB) | 2185 |
+  | `"dcc.global_cap_bytes"`                | `pos_integer()`            | 10_737_418_240 (10GiB) | 2185 |
 
-  `addressing.*` are **admin-only** — deliberately NOT in `public_view/0`
-  (that broadcasts to every cic client); the admin settings surface reads
-  the accessors directly.
+  `addressing.*` and `dcc.*` are **admin-only** — deliberately NOT in
+  `public_view/0` (that broadcasts to every cic client); the admin
+  settings surface reads the accessors directly.
 
   ## Public-subset shape (`public_view/0`)
 
@@ -116,6 +118,48 @@ defmodule Grappa.ServerSettings do
   # Reject any other length so an operator never configures a prefix a
   # network cannot ban on. (#543 vjt ruling 2026-07-30.)
   @allowed_prefix_lengths [64, 80, 96, 112, 128]
+
+  # issue 2185 — the DCC spool's two byte ceilings, admin-only (NOT in
+  # public_view/0). DEDICATED keys, never read off the `upload.*` family:
+  # the ruling `Grappa.Dcc.max_transfer_bytes/0` carries rests on a `DCC
+  # SEND` carrying no MIME at all, so there is no upload CATEGORY whose cap
+  # could stand in for these.
+  @key_dcc_max_transfer_bytes "dcc.max_transfer_bytes"
+  @key_dcc_global_cap_bytes "dcc.global_cap_bytes"
+
+  # 🔴 These two DEFAULTS are where the old constants' rationale now lives —
+  # the only place that records WHY the numbers are what they are.
+  #
+  # **100 MiB per transfer.** Ten times the constant it replaces. That 10
+  # MiB was the `:document` upload default borrowed as "a file we cannot
+  # otherwise classify", and it declined ordinary things people send over
+  # DCC — the 178 MB offer that produced the issue. The coincidence with
+  # `@default_upload_document_per_file_cap_bytes` is now gone, which is the
+  # dedicated key's argument made visible.
+  #
+  # **10 GiB spool — at least 100 transfers at that ceiling.** The old
+  # comment asserted TWO invariants — 100 max-size transfers, and a tenth
+  # of the upload budget — and the two cannot both survive a 100 MiB
+  # per-file default. vjt ruled (2026-09-14, superseding a 1 GiB ruling
+  # minutes earlier) that the transfer-COUNT one is kept: the spool now
+  # sits at PARITY with `@default_upload_global_cap_bytes` above, and the
+  # "a tenth of uploads" property is deliberately dropped, not overlooked.
+  #
+  # 🔴 The count is a FLOOR and always was. The ruling's parenthesis
+  # ("100 × 100 MiB = 10 GiB exactly") does not hold: 100 × 100 MiB is
+  # 10_000 MiB = 9.765625 GiB. The true ratio is **102.4**, which is
+  # precisely the ratio the 1 GiB / 10 MiB pair being replaced had
+  # (1024 / 10) — so the property is CONSERVED and 10 GiB is the right
+  # number; it is the equality that never existed, here or in the old
+  # comment. Stated because this block is the only record of why the
+  # value is what it is, and a tidy-looking false equality is exactly
+  # what a later reader would "simplify" the pair to satisfy.
+  #
+  # Restated here rather than computed from each other on purpose: a
+  # default that derives from its sibling turns a deliberate ruling into an
+  # arithmetic accident nobody can later disagree with.
+  @default_dcc_max_transfer_bytes 100 * 1024 * 1024
+  @default_dcc_global_cap_bytes 10 * 1024 * 1024 * 1024
 
   @type upload_host :: :embedded | :litterbox
 
@@ -331,6 +375,52 @@ defmodule Grappa.ServerSettings do
   end
 
   def put_static_mapping_prefix(_), do: {:error, :invalid_prefix}
+
+  # ---- dcc.max_transfer_bytes + dcc.global_cap_bytes (issue 2185) ---
+  #
+  # 🔴 **No cross-validation between the two, and that is a ruling** (vjt,
+  # issue 2185). An operator setting the per-transfer ceiling ABOVE the
+  # spool budget must be allowed to: it only means nothing fits until the
+  # budget is raised. Rejecting it would make the ORDER of the two writes
+  # significant, and an admin UI that saves one field at a time would fail
+  # on a legal end state. Each key validates ITSELF and nothing else.
+
+  @doc """
+  Returns the per-transfer DCC ceiling in bytes (default 100 MiB).
+
+  Read through `Grappa.Dcc.max_transfer_bytes/0`, which is the DCC
+  context's one door onto it.
+  """
+  @spec get_dcc_max_transfer_bytes() :: pos_integer()
+  def get_dcc_max_transfer_bytes,
+    do: read_cap(@key_dcc_max_transfer_bytes, @default_dcc_max_transfer_bytes)
+
+  @doc "Pins the per-transfer DCC ceiling. Positive integer only."
+  @spec put_dcc_max_transfer_bytes(pos_integer()) ::
+          :ok | {:error, :invalid_value | :db_unavailable}
+  def put_dcc_max_transfer_bytes(n) when is_integer(n) and n > 0 do
+    put_raw(@key_dcc_max_transfer_bytes, Integer.to_string(n))
+  end
+
+  def put_dcc_max_transfer_bytes(_), do: {:error, :invalid_value}
+
+  @doc """
+  Returns the whole DCC spool's disk budget in bytes (default 10 GiB).
+
+  Read through `Grappa.Dcc.global_cap_bytes/0`.
+  """
+  @spec get_dcc_global_cap_bytes() :: pos_integer()
+  def get_dcc_global_cap_bytes,
+    do: read_cap(@key_dcc_global_cap_bytes, @default_dcc_global_cap_bytes)
+
+  @doc "Pins the DCC spool's disk budget. Positive integer only."
+  @spec put_dcc_global_cap_bytes(pos_integer()) ::
+          :ok | {:error, :invalid_value | :db_unavailable}
+  def put_dcc_global_cap_bytes(n) when is_integer(n) and n > 0 do
+    put_raw(@key_dcc_global_cap_bytes, Integer.to_string(n))
+  end
+
+  def put_dcc_global_cap_bytes(_), do: {:error, :invalid_value}
 
   # ---- Public projection -------------------------------------------
 

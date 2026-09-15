@@ -14,15 +14,25 @@ defmodule Grappa.Dcc do
   the same VERBS, separate NOUNS, which is design-discipline (6) applied
   rather than restated.
 
-  ## The three ceilings, and the one that is a ruling
+  ## The three ceilings: two are now operator settings, one is a ruling
 
-  All three are module attributes rather than operator settings — the
-  `Grappa.Avatars` form, chosen deliberately over a `Grappa.ServerSettings`
-  knob and argued in the PR body. The short version is that moduledoc's own
-  sentence, which describes this spool exactly: *"this cache grows from
-  OTHER people's claimed URLs, so it needs its own tight ceiling"*. A knob
-  on a stranger-fed ceiling is a knob whose only use is to widen the
-  exposure, and promoting a constant to a setting later is additive.
+  🔴 **The two BYTE ceilings are `Grappa.ServerSettings` keys since issue
+  2185** — `dcc.max_transfer_bytes` and `dcc.global_cap_bytes`, whose
+  DEFAULTS and the reasoning behind their values live beside them there.
+  They were module attributes, on this paragraph's own former argument:
+  *a knob on a stranger-fed ceiling is a knob whose only use is to widen
+  the exposure*. vjt overruled that, and the measurement is what decided
+  it: a 10 MiB ceiling declines ordinary files, and an operator cannot
+  raise it without a rebuild. What a wider ceiling buys an attacker is
+  still bounded by the spool budget, by `Grappa.Dcc.Policy`'s daily accept
+  quota, and by the fact that every accept costs a human a deliberate
+  click on a stranger's file. The promotion is exactly the move the old
+  paragraph closed by calling additive.
+
+  **`@max_retention_seconds` stays an attribute**, and not by omission: it
+  is vjt's retention ruling rather than a capacity number, and the only
+  thing a knob on it could express is "let a stranger's bytes outlive our
+  own users' uploads" — which is the thing the ruling exists to forbid.
 
   🔴 **`@max_retention_seconds` is vjt's retention ruling and is not
   optional.** He first said to reuse the per-subject upload TTL of #2094.
@@ -55,13 +65,18 @@ defmodule Grappa.Dcc do
     # Endpoint child is up). A second base-url seam here would be a copy
     # of that boot ordering, not reuse of it. No cycle: `Grappa.Uploads`
     # deps are `[Repo, Subject, Sys.HardenedCmd]`.
-    deps: [Grappa.Repo, Grappa.Subject, Grappa.Uploads],
+    #
+    # issue 2185 — `Grappa.ServerSettings` because the two byte ceilings
+    # are operator settings now. No cycle: its own deps are `[Repo, PubSub,
+    # ServerSettings.Wire, HttpHosts, Net.IpLiteral]` and it never names
+    # this context.
+    deps: [Grappa.Repo, Grappa.ServerSettings, Grappa.Subject, Grappa.Uploads],
     exports: [SpoolFile]
 
   import Ecto.Query
 
   alias Grappa.Dcc.SpoolFile
-  alias Grappa.{Repo, Subject, Uploads}
+  alias Grappa.{Repo, ServerSettings, Subject, Uploads}
 
   @slug_byte_size 16
   @slug_regex ~r/\A[a-z2-7]{26}\z/
@@ -90,32 +105,14 @@ defmodule Grappa.Dcc do
   @storage_root_key {__MODULE__, :storage_root}
 
   # ------------------------------------------------------------------
-  # The numbers. OURS, not ruled — vjt gave the FORM twice and the value
-  # neither time, and said so. Each one is derived from something already
-  # in the tree rather than invented, and each is a constant precisely so
-  # it can be moved in review without an architecture argument.
+  # The numbers that are still OURS. The two byte ceilings left for
+  # `Grappa.ServerSettings` in issue 2185 — their defaults and their
+  # rationale moved WITH them, so there is exactly one place that records
+  # why each number is what it is. What remains here is derived from
+  # something already in the tree rather than invented, and stays a
+  # constant so it can be moved in review without an architecture
+  # argument.
   # ------------------------------------------------------------------
-
-  # Ruling 3: a DEDICATED per-transfer ceiling. Explicitly NOT
-  # `ServerSettings.get_upload_per_file_cap_bytes/1`, which is keyed by
-  # MIME category (`:image | :video | :document | :audio`) — and a `DCC
-  # SEND` carries no MIME at all, which is the measurement the ruling
-  # rests on.
-  #
-  # The VALUE is the document-category default (10 MiB), because
-  # `:document` is this deployment's existing answer to "a file we cannot
-  # otherwise classify", which is what every DCC offer is. Reading the
-  # value off that category is not reading the FUNCTION: the source is
-  # this constant, so a change to upload policy cannot silently move DCC
-  # policy.
-  @max_transfer_bytes 10 * 1024 * 1024
-
-  # The whole spool's disk budget: 100 max-size transfers, and a tenth of
-  # the `upload.global_cap_bytes` default (10 GiB). Smaller than the
-  # uploads budget on purpose and for the Avatars reason — a user's own
-  # uploads are bounded by what THEY choose to upload, and this grows from
-  # what other people choose to push.
-  @global_cap_bytes 1024 * 1024 * 1024
 
   # Ruling 1: the hard retention ceiling, which wins over the subject's
   # upload TTL in BOTH directions — it supplies the value when that
@@ -174,18 +171,37 @@ defmodule Grappa.Dcc do
   def storage_root, do: :persistent_term.get(@storage_root_key)
 
   @doc """
-  The per-transfer ceiling in bytes. Public so the policy gate, the report
-  and a test read the number instead of restating it.
-  """
-  # `unquote/1` pins the spec to the compile-time singleton — the codebase
-  # idiom for a constant-returning function (`Grappa.Notify.max_entries/0`),
-  # and `pos_integer()` is a `:underspecs` supertype that fails the gate.
-  @spec max_transfer_bytes() :: unquote(@max_transfer_bytes)
-  def max_transfer_bytes, do: @max_transfer_bytes
+  The per-transfer ceiling in bytes — the `dcc.max_transfer_bytes`
+  operator setting since issue 2185. This context's ONE door onto it, so
+  the policy gate, the report and a test read the number here instead of
+  reaching for `Grappa.ServerSettings` themselves or restating it.
 
-  @doc "The whole spool's disk budget in bytes."
-  @spec global_cap_bytes() :: unquote(@global_cap_bytes)
-  def global_cap_bytes, do: @global_cap_bytes
+  One sqlite point-read per call, which is the cost
+  `Grappa.ServerSettings`'s own moduledoc already accepts for every knob
+  and the reason it holds no cache. `Grappa.Dcc.Policy` reads it ONCE per
+  offer and carries the value in the refusal — see `check_size/1` there.
+  """
+  # 🔴 Ruling 3 survives the promotion, and this is where it now lives.
+  # Explicitly NOT `ServerSettings.get_upload_per_file_cap_bytes/1`: that
+  # is keyed by MIME category (`:image | :video | :document | :audio`) and
+  # a `DCC SEND` carries no MIME at all, which is the measurement the
+  # ruling rests on. The old constant's value happened to EQUAL the
+  # `:document` default; the new default (100 MiB) does not, so the
+  # coincidence that made the derivation look reasonable is gone and an
+  # operator moving upload policy still cannot move DCC policy.
+  #
+  # The `unquote/1` spec pinning the sibling constants use had to go with
+  # the constant: there is no compile-time singleton left to name, and
+  # `pos_integer()` is the honest type of a value read at runtime.
+  @spec max_transfer_bytes() :: pos_integer()
+  def max_transfer_bytes, do: ServerSettings.get_dcc_max_transfer_bytes()
+
+  @doc """
+  The whole spool's disk budget in bytes — the `dcc.global_cap_bytes`
+  operator setting since issue 2185.
+  """
+  @spec global_cap_bytes() :: pos_integer()
+  def global_cap_bytes, do: ServerSettings.get_dcc_global_cap_bytes()
 
   @doc """
   The `Grappa.Dcc.Transfer.run/3` opts for a production transfer.
@@ -273,13 +289,19 @@ defmodule Grappa.Dcc do
   and deliberately: the claim is the peer's, and a sender who declares low
   to slip under the budget is exactly the sender this check exists for.
   The transfer truncates at the claim, so the estimate can only
-  over-reserve.
+  over-reserve. That stays true now both numbers are runtime — and it
+  means LOWERING the per-transfer ceiling immediately frees reservation
+  for queued offers, so there is no migration and no backfill.
+
+  🔴 Reads BOTH settings, never one against a constant. With only one of
+  the two runtime this would be half a lever: an operator raising the
+  per-transfer ceiling could not raise the budget to fit it.
   """
   @spec budget_available?() :: boolean()
   def budget_available? do
     query = from(f in SpoolFile, select: coalesce(sum(f.bytes), 0))
 
-    Repo.one(query) + @max_transfer_bytes <= @global_cap_bytes
+    Repo.one(query) + max_transfer_bytes() <= global_cap_bytes()
   end
 
   @doc """

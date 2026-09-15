@@ -3,7 +3,7 @@ defmodule Grappa.Dcc.PolicyTest do
 
   import Grappa.AuthFixtures, only: [network_fixture: 0, user_fixture: 0]
 
-  alias Grappa.Dcc
+  alias Grappa.{Dcc, ServerSettings}
   alias Grappa.Dcc.Policy
   alias Grappa.IRC.DCC.Offer
 
@@ -45,8 +45,37 @@ defmodule Grappa.Dcc.PolicyTest do
     end
 
     test "a claim over the per-transfer ceiling is refused before any socket exists" do
-      over = Dcc.max_transfer_bytes() + 1
-      assert {:error, :too_large} = Policy.admit_offer(offer(size: over))
+      cap = Dcc.max_transfer_bytes()
+      assert {:error, {:too_large, ^cap}} = Policy.admit_offer(offer(size: cap + 1))
+    end
+
+    # issue 2185 — the ceiling is an operator setting, so the refusal
+    # CARRIES the value that produced it. `Grappa.Dcc.Report` renders the
+    # decline line from this term and never re-reads the setting: a second
+    # read straddling an admin change would name a ceiling that did not
+    # refuse this offer.
+    test "the refusal carries the ceiling that refused it, not whatever it becomes later" do
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(4 * 1024 * 1024)
+
+      assert {:error, {:too_large, refusing_cap}} =
+               Policy.admit_offer(offer(size: 5 * 1024 * 1024))
+
+      assert refusing_cap == 4 * 1024 * 1024
+
+      # The admin moves the ceiling AFTER the gate ran. The already-issued
+      # refusal must still name the number that actually said no.
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(900 * 1024 * 1024)
+      assert refusing_cap == 4 * 1024 * 1024
+    end
+
+    test "the ceiling is read at call time — the operator's value, not a compile-time one" do
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(200 * 1024 * 1024)
+
+      assert :ok = Policy.admit_offer(offer(size: 150 * 1024 * 1024))
+
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(100 * 1024 * 1024)
+
+      assert {:error, {:too_large, _}} = Policy.admit_offer(offer(size: 150 * 1024 * 1024))
     end
 
     test "a claim exactly AT the ceiling is admitted — the bound is inclusive" do

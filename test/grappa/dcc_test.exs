@@ -3,7 +3,7 @@ defmodule Grappa.DccTest do
 
   import Grappa.AuthFixtures, only: [network_fixture: 0, user_fixture: 0, visitor_fixture: 0]
 
-  alias Grappa.{Dcc, Repo, Uploads, UserSettings}
+  alias Grappa.{Dcc, Repo, ServerSettings, Uploads, UserSettings}
   alias Grappa.Dcc.{Report, SpoolFile}
 
   setup do
@@ -195,8 +195,41 @@ defmodule Grappa.DccTest do
       # A ceiling at or above the budget would make the budget check
       # unsatisfiable from the first byte.
       assert Dcc.max_transfer_bytes() < Dcc.global_cap_bytes()
-      assert Dcc.max_transfer_bytes() == 10 * 1024 * 1024
-      assert Dcc.global_cap_bytes() == 1024 * 1024 * 1024
+      assert Dcc.max_transfer_bytes() == 100 * 1024 * 1024
+      assert Dcc.global_cap_bytes() == 10 * 1024 * 1024 * 1024
+    end
+
+    # issue 2185 — both ceilings are operator settings now. The accessors
+    # are `Grappa.Dcc`'s one door onto them, so a caller that reads the
+    # context reads the operator's value and never a compile-time ghost.
+    test "both accessors follow the operator setting", _ctx do
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(7 * 1024 * 1024)
+      :ok = ServerSettings.put_dcc_global_cap_bytes(3 * 1024 * 1024 * 1024)
+
+      assert Dcc.max_transfer_bytes() == 7 * 1024 * 1024
+      assert Dcc.global_cap_bytes() == 3 * 1024 * 1024 * 1024
+    end
+
+    test "budget_available?/0 reads BOTH settings, never one against a constant", ctx do
+      # The half-lever this issue exists to close: with only one of the two
+      # runtime, an operator raising the per-transfer ceiling could not
+      # raise the budget to fit it, and vice versa. Each direction is
+      # exercised on its own so a regression that froze EITHER side is
+      # caught by the assertion for that side.
+      {:ok, _} =
+        Dcc.store(ctx.subject, ctx.network_id, Dcc.mint_slug(), meta(%{bytes: 500 * 1024 * 1024}))
+
+      # Budget moves: the same spool and the same ceiling, two answers.
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(100 * 1024 * 1024)
+      :ok = ServerSettings.put_dcc_global_cap_bytes(1024 * 1024 * 1024)
+      assert Dcc.budget_available?()
+
+      :ok = ServerSettings.put_dcc_global_cap_bytes(550 * 1024 * 1024)
+      refute Dcc.budget_available?()
+
+      # Ceiling moves: the same spool and the same budget, two answers.
+      :ok = ServerSettings.put_dcc_max_transfer_bytes(10 * 1024 * 1024)
+      assert Dcc.budget_available?()
     end
   end
 
