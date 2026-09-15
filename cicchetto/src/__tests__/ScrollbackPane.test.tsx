@@ -859,6 +859,69 @@ describe("ScrollbackPane", () => {
     expect(lines[1]?.textContent ?? "").not.toContain("\x01");
   });
 
+  // issue 2220 — an UNCORRELATED PING reply never prints its token. The token is
+  // the asker's clock in epoch milliseconds (or whatever `/ctcp … PING` put on
+  // the wire), and "← CTCP PING reply from peluche: 1789500570263" reads as the
+  // answer when no round trip was measured. The reported paste came from the
+  // `$server` window opened AFTER the ping: the live reply was consumed into
+  // the source window, so `$server` had no in-memory copy and its cold open
+  // refetched the raw DB row through this arm. Every REST-delivered copy of a
+  // PING reply (reload, second device, cold `$server`) takes this path, which
+  // is why the fix is here and not a subscribe-side synthesis.
+  it("issue 2220 — an uncorrelated CTCP PING reply drops the token and says there is no round trip", () => {
+    const rows: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "azzurra",
+        channel: "$server",
+        server_time: 1,
+        kind: "notice",
+        sender: "peluche-test-2220",
+        body: "\x01PING 1789506923831\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "1789506923831" },
+      },
+      // Same rule on a lower-cased verb: subscribe.ts folds the verb on both
+      // ends (#719), and a render that only knew `PING` would leak the token
+      // for a peer that answers `ping`.
+      {
+        id: 2,
+        network: "azzurra",
+        channel: "$server",
+        server_time: 2,
+        kind: "notice",
+        sender: "bob",
+        body: "\x01ping 42\x01",
+        meta: { ctcp_verb: "ping", ctcp_args: "42" },
+      },
+      // A token-LESS reply (a service's bare \x01PING\x01) says the same thing —
+      // there is nothing to drop, but the row must not read as a result either.
+      {
+        id: 3,
+        network: "azzurra",
+        channel: "$server",
+        server_time: 3,
+        kind: "notice",
+        sender: "NickServ",
+        body: "\x01PING\x01",
+        meta: { ctcp_verb: "PING", ctcp_args: "" },
+      },
+    ];
+    setScrollback({ "azzurra $server": rows });
+    render(() => <ScrollbackPane networkSlug="azzurra" channelName="$server" kind="channel" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toHaveTextContent(
+      "← CTCP PING reply from peluche-test-2220 (no round trip to report)",
+    );
+    expect(lines[0]?.textContent ?? "").not.toContain("1789506923831");
+    expect(lines[1]).toHaveTextContent("← CTCP ping reply from bob (no round trip to report)");
+    expect(lines[1]?.textContent ?? "").not.toContain("42");
+    expect(lines[2]).toHaveTextContent(
+      "← CTCP PING reply from NickServ (no round trip to report)",
+    );
+    // The non-PING arm is untouched: its args ARE the answer (#641 above).
+  });
+
   it("scrubs an INTERIOR \\x01 the server's one-trailing-strip left in typed CTCP meta — #641", () => {
     // The server's SSOT classifier (Grappa.IRC.CTCP.verb_args/1) strips only the
     // ONE optional TRAILING \x01, so a malformed or concatenated frame

@@ -968,10 +968,34 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
         const args = stripCtcpDelim(
           typeof msg.meta.ctcp_args === "string" ? msg.meta.ctcp_args : "",
         );
+        // issue 2220 — a PING reply that reaches this arm is one the
+        // correlation gate did NOT claim, and its args are the echoed token:
+        // opaque by contract (`/ping` mints a client clock, `/ctcp … PING`
+        // puts whatever was typed on the wire, a peer may send anything).
+        // Printing it read as the answer — "reply from peluche: 1789500570263"
+        // — when there is no round trip to report. Say that instead. This is
+        // the render arm rather than a subscribe-side synthesis because the
+        // uncorrelated case is not only "a reply nobody asked for": it is
+        // EVERY copy of the row that arrives by REST — the `$server` window
+        // opened after the ping, a reload, a second device — since the pending
+        // entry lives in one tab's memory (pingCorrelation) while the row
+        // lives in the DB. The live-consumed row never lands in `$server`
+        // in memory, so the first cold open of `$server` refetches it raw:
+        // measured as exactly the reported paste. Deliberately NOT
+        // subtracting the token from the clock to guess an RTT — right for
+        // our own /ping, wrong for everything else, and a plausible number
+        // that silently invents a measurement is worse than a row that says
+        // it has none.
+        const tail =
+          verb.toUpperCase() === "PING"
+            ? " (no round trip to report)"
+            : args === ""
+              ? ""
+              : `: ${args}`;
         return (
           <span class="scrollback-body">
             ← CTCP {verb} reply from {msg.sender}
-            {args === "" ? "" : `: ${args}`}
+            {tail}
           </span>
         );
       }
