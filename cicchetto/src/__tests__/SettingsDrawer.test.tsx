@@ -2815,8 +2815,17 @@ describe("SettingsDrawer — leave reasons (issue 2150, issue 2181)", () => {
   // layout. On the CLASS and not the instance, which is the whole point —
   // the leave-message row carries no visible text, so the column is inert
   // there and the two rows keep answering identically.
+  //
+  // 🔴 issue 2209 — READ WHAT THIS TEST CAN AND CANNOT SAY. It asserted
+  // `align-items: stretch` and stayed green for the two months the rows
+  // rendered centred, because a DECLARATION in the source and an APPLIED
+  // value are different facts and jsdom can only show the first. The
+  // selector pinned below is the cure's shape, not proof that it wins; the
+  // cascade itself is measured in a real engine by
+  // `e2e/tests/issue2209-leave-reason-row-stretch.spec.ts`, which is the
+  // only artefact here that can go red on a specificity loss.
   it("stacks the leave-reason rows on the class, not on one instance", () => {
-    const body = ruleBody(".leave-reason-row");
+    const body = ruleBody(".settings-drawer label.leave-reason-row");
 
     expect(body).toMatch(/flex-direction:\s*column/);
     expect(body).toMatch(/align-items:\s*stretch/);
@@ -2826,10 +2835,14 @@ describe("SettingsDrawer — leave reasons (issue 2150, issue 2181)", () => {
     // nothing keyed to one of the two. Read off the parsed selector lists
     // rather than a regex over the raw text, because a rule sitting inside an
     // at-rule block is exactly the kind a text scan reads as absent.
+    //
+    // issue 2209 — the EXACT string, not a substring: reverting to the bare
+    // `.leave-reason-row` reinstates the specificity loss, and `includes`
+    // would go green on it.
     const mentioning = allRules()
       .flatMap((rule) => selectorList(rule.selectors))
       .filter((one) => one.includes(".leave-reason-row"));
-    expect(mentioning).toEqual([".leave-reason-row"]);
+    expect(mentioning).toEqual([".settings-drawer label.leave-reason-row"]);
   });
 });
 
