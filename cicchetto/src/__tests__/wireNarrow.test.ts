@@ -3,6 +3,7 @@ import {
   narrowAdminEvent,
   narrowAdminSnapshot,
   narrowChannelEvent,
+  narrowMeResponse,
   narrowMessageResponse,
   narrowThemeResponse,
   narrowWindowStateEvent,
@@ -1327,5 +1328,70 @@ describe("REST narrowers (#1400)", () => {
     // this asserts that if it ever did, the boundary would say so loudly
     // rather than hand back a row-shaped object with no id.
     expect(() => narrowMessageResponse({ ok: true })).toThrow(WireShapeError);
+  });
+});
+
+// issue 2200 — the login-path narrower, and the only one whose refusal
+// takes the WHOLE app down instead of one pane: `GET /me` is what seeds
+// `user()`, so a throw here leaves the Shell with no subject at all.
+//
+// `GET /me` was emitting a `null` inside `read_cursors`. The column is
+// nullable by design (the cursor FK is `ON DELETE SET NULL`, so purging a
+// message NULLs every cursor parked on it), and one reader of four —
+// `ReadCursor.bulk_for_subject/1` — passed that NULL into the envelope
+// while the schema types the map `Record<string, Record<string, number>>`.
+// 1.5.8 did not create the malformed payload; it added the check that
+// refuses it, and six subjects on prod could not log in.
+//
+// The SERVER is the side that was wrong and the side that was fixed. This
+// block pins the client half so the next recurrence is not "resolved" by
+// widening the schema to `integer | null` and pushing a null into every
+// renderer that reads a cursor.
+describe("narrowMeResponse — read_cursors nullability (issue 2200)", () => {
+  const me = {
+    kind: "user",
+    id: "0198e3a4-7c21-7b6e-9f04-2c5d81aa3311",
+    name: "vjt",
+    is_admin: true,
+    inserted_at: "2026-09-15T05:00:00Z",
+    read_cursors: { azzurra: { "#italia": 4321 } },
+    unread_counts: {},
+    badge_count: 0,
+    home_data: { networks: [], available_networks: [] },
+  };
+
+  it("accepts a well-formed profile", () => {
+    // Positive control for the two throws below: without it, a fixture
+    // missing any of the eight required keys would throw for a reason
+    // that has nothing to do with a null cursor.
+    expect(narrowMeResponse(me)).toEqual(me);
+  });
+
+  it("THROWS on a null cursor value rather than handing one to a renderer", () => {
+    const withNull = { ...me, read_cursors: { azzurra: { "#italia": null } } };
+    expect(() => narrowMeResponse(withNull)).toThrow(WireShapeError);
+  });
+
+  it("throws when only ONE cursor among many is null — the prod shape", () => {
+    // Prod was 30 nulls in 870 rows: a handful beside good integers, never
+    // an all-null map. A check that only caught the degenerate case would
+    // have passed the payload that actually locked six subjects out.
+    const mixed = {
+      ...me,
+      read_cursors: {
+        azzurra: { "#italia": 4321, "#purged": null },
+        oftc: { "#debian-offtopic": 77 },
+      },
+    };
+    expect(() => narrowMeResponse(mixed)).toThrow(WireShapeError);
+  });
+
+  it("ACCEPTS the channel being absent instead — what the cured server emits", () => {
+    // The other half of the fix, asserted from the client side: dropping
+    // the row is a shape this narrower already accepts, so the server did
+    // not need the schema widened. An emptied per-network record is legal
+    // too — that is a subject whose every cursor was purged.
+    const cured = { ...me, read_cursors: { azzurra: { "#italia": 4321 }, oftc: {} } };
+    expect(() => narrowMeResponse(cured)).not.toThrow();
   });
 });

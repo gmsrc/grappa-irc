@@ -181,8 +181,12 @@ defmodule Grappa.Push.BadgeCount do
   # `{network_id, slug, channel, cursor, own_nick}` work items, dropping:
   #   * slugs absent from `windows` (stale cursor / deleted network /
   #     no credential on that network), and
-  #   * `nil` cursors (legacy explicit-no-cursor rows — same skip the
-  #     `/me` unread-count seed applies).
+  #   * `nil` cursors (same skip the `/me` unread-count seed applies).
+  #     issue 2200 — `bulk_for_subject/1` filters these at the SOURCE now,
+  #     so the `is_integer/1` below no longer drops anything in practice.
+  #     Kept as a boundary guard: the column is nullable by design (the
+  #     cursor FK is `ON DELETE SET NULL`) and a nil reaching `cursor`
+  #     would be counted as a window boundary rather than skipped.
   #
   # #1038 — the SLUG now rides in the work item. It was already the outer key
   # of the envelope and was being discarded here; `should_notify?/5` needs it

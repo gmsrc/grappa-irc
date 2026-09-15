@@ -499,6 +499,47 @@ defmodule Grappa.ReadCursorTest do
 
       assert %{} == ReadCursor.bulk_for_subject({:user, bob.id})
     end
+
+    # issue 2200 — the envelope's typespec says `integer()`, and the /me
+    # wire schema agrees, but the column is nullable by DESIGN: the FK is
+    # `ON DELETE SET NULL`, so purging a message NULLs every cursor parked
+    # on it. This query used to pass that NULL through verbatim, and 1.5.8's
+    # `narrowMeResponse` turned it into a login-path refusal.
+    #
+    # The contract is the one the sibling readers already keep: a nil cursor
+    # IS "no cursor", so the channel is ABSENT. Mirror of the `unread_counts`
+    # test "channels without a cursor are absent from unread_counts".
+    test "omits a channel whose cursor was NULL'd by a message purge" do
+      user = user_fixture()
+      net = network_fixture()
+      purged = insert_message(%{user_id: user.id}, net.id, "#purged", 1)
+      kept = insert_message(%{user_id: user.id}, net.id, "#kept", 1)
+
+      {:ok, _} = ReadCursor.set({:user, user.id}, net.id, "#purged", purged.id)
+      {:ok, _} = ReadCursor.set({:user, user.id}, net.id, "#kept", kept.id)
+
+      # The production mechanism, not a hand-written NULL — this is the
+      # `ON DELETE SET NULL` the migration chose over CASCADE on purpose.
+      Repo.delete!(purged)
+
+      # Positive control. Without it the test could go green because the
+      # ROW disappeared (a CASCADE, or the FK not enforced in this env)
+      # rather than because the query skipped a surviving NULL.
+      purged_cursor =
+        from(c in Cursor,
+          where: c.channel == "#purged" and c.user_id == ^user.id,
+          select: c.last_read_message_id
+        )
+
+      assert [nil] == Repo.all(purged_cursor)
+
+      envelope = ReadCursor.bulk_for_subject({:user, user.id})
+
+      # Negative control on the same assertion: the sibling cursor is still
+      # THERE, so this is a per-row skip and not an emptied envelope.
+      assert envelope[net.slug] == %{"#kept" => kept.id}
+      refute Map.has_key?(envelope[net.slug], "#purged")
+    end
   end
 
   # ---------------------------------------------------------------------------
