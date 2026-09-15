@@ -214,6 +214,18 @@ defmodule Grappa.ReadCursor do
   Used at `/me` envelope assembly time. Single LEFT JOIN to `networks`
   for slug resolution; one row per cursor; bounded by ~600 rows in the
   worst case (~20 networks * ~30 channels).
+
+  A row whose `last_read_message_id` was NULL'd by an `ON DELETE SET NULL`
+  message purge is SKIPPED: a nil cursor IS "no cursor", and a channel
+  without one is simply absent from the envelope (cic falls back to the
+  per-channel join-reply seed). Same guard, same wording, as the two
+  queries below it.
+
+  issue 2200 — this was the LAST reader of the column that passed the nil
+  through, and the only one whose output reaches the wire unfiltered.
+  `MeJSON`'s `unread_counts` builder and `Push.BadgeCount.flatten_entries/2`
+  had each already grown a skip of their own, one production incident at a
+  time; a guard here serves both and the `read_cursors` passthrough too.
   """
   @spec bulk_for_subject(subject()) :: bulk_envelope()
   def bulk_for_subject(subject) do
@@ -221,6 +233,7 @@ defmodule Grappa.ReadCursor do
       from(c in Cursor,
         join: n in Network,
         on: n.id == c.network_id,
+        where: not is_nil(c.last_read_message_id),
         select: {n.slug, c.channel, c.last_read_message_id}
       )
 

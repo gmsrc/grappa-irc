@@ -15446,3 +15446,105 @@ follow-up.
 
 ⚠️ The rulings behind this entry were RELAYED through the orchestrator, not
 read from vjt directly (`author.login` does not discriminate a relay).
+<!-- entry #2200 -->
+
+---
+
+## 2026-09-15 — issue 2200: the fourth reader of a contract three incidents taught
+
+`GET /me` emitted `null` values inside `read_cursors`. The generated schema
+types that map `Record<string, Record<string, number>>`, so 1.5.8's
+`narrowMeResponse` threw `WireShapeError` on the login-path fetch and six
+subjects on prod — one user, five visitors — could not open the app at all.
+Not a degraded pane: `GET /me` is what seeds `user()`.
+
+**1.5.8 did not introduce the malformed payload. It introduced the check that
+refuses it.** The typespec had claimed `%{String.t() => %{String.t() =>
+integer()}}` since the function was written; nothing validated, so nobody saw
+the wire disagree with it.
+
+### Tolerate, not prevent — and the rows are not a bug
+
+vjt's ruling (relayed): *"che prevenga la creazione di queste righe o che le
+tolleri"*. Tolerate, because the NULL rows are the DESIGNED behaviour of a
+deliberate choice. The cursor FK is `REFERENCES messages(id) ON DELETE SET
+NULL`, picked over `CASCADE` in the creating migration, so a message purge
+NULLs every cursor parked on that message; `ReadCursor`'s own moduledoc
+documents the resulting row as expected and self-healing (the monotonic clamp
+skips a NULL, so the next `set/4` recovers it). Preventing the rows means
+flipping the FK to `CASCADE` or adding `NOT NULL` — changing purge semantics
+to accommodate a reader that could not cope.
+
+### The defect is not a missing guard, it is WHERE the guards accumulated
+
+The interesting finding is not that `bulk_for_subject/1` lacked a filter. It is
+that the envelope has three consumers and **two of them had independently grown
+their own nil filter downstream**, each one after a production incident, while
+the source kept emitting nils:
+
+- `MeJSON.build_unread_counts/2` filters, with a comment stating the contract in
+  full and the line `PROD HOTFIX 2026-06-01: vjt's #bofh cursor row had nil id`;
+- `Push.BadgeCount.flatten_entries/2` filters with `is_integer(cursor)`, its
+  comment pointing at the `/me` seed as precedent;
+- the `read_cursors` field itself filters nothing, because it is not a consumer
+  at all — it is a passthrough straight onto the wire.
+
+So this is the THIRD time the family has bitten, and the first two cures were
+both applied one hop downstream of the cause. A guard at the source serves all
+three consumers; two guards downstream serve two and leave the passthrough
+uncovered. That asymmetry is the whole bug.
+
+The issue's own census undercounts, and the correction sharpens rather than
+weakens its argument: it reads *"three of the four readers already skip NULL
+cursors"*, naming `read_cursor.ex:354`, `:415` and the `unread_counts` builder.
+`Push.BadgeCount.flatten_entries/2` is a fourth, filtering with
+`is_integer(cursor)` and a comment citing the `/me` seed as its precedent — so
+it is FOUR of five, and the fourth is itself evidence for the thesis, being one
+more reader that learned the contract by copying a neighbour instead of getting
+it from the source.
+
+The fix is one `where: not is_nil(c.last_read_message_id)` in
+`bulk_for_subject/1` — the same clause, the same wording, as the two queries
+below it in the same module.
+
+### The two downstream guards STAY, and that is not sloppiness
+
+Both are now unreachable through this envelope, and `bulk_for_subject/1` is
+their only feed. They are kept deliberately: they are boundary guards on the
+login path and the push path, not filtering logic a refactor rendered dead. The
+column remains nullable by design, and the cost of the pair is two predicates
+against re-arming a 500 on `GET /me`. Their comments are corrected in the same
+commit — one of them asserted "`bulk_for_subject/1` selects
+`c.last_read_message_id` as-is", which this change makes false.
+
+Worth recording as a measured curiosity: `build_unread_counts/2`'s own spec
+already declared its input `%{String.t() => %{String.t() => integer() | nil}}`,
+contradicting `bulk_envelope()`'s `integer()` one call away. Two specs in one
+call chain disagreed about the same value, and the honest one was the
+defensive reader downstream. `bulk_envelope()` is true for the first time now.
+
+### Cover
+
+A `bulk_for_subject/1` test that drives the REAL mechanism rather than writing a
+NULL by hand: set two cursors, `Repo.delete!` the message one of them points at,
+and let the FK NULL it. It carries a positive control (assert the surviving row
+really reads `nil`, so the test cannot pass because the row CASCADEd away or
+because FKs were off in the env) and a negative control (the sibling channel is
+still present, so the skip is per-row and not an emptied envelope). Measured
+before the cure: `%{"#kept" => 2, "#purged" => nil}`.
+
+Client side, `narrowMeResponse` is pinned over a full `MeJSON` fixture: a null
+cursor throws, one null among good integers throws (prod was 30 nulls in 870
+rows — a check that only caught an all-null map would have passed the real
+payload), and the CURED shape — the channel simply absent, including an emptied
+per-network record — does not. That last case is what says the server did not
+need the schema widened. Verified to bite: widening `S_MeJSONReadCursors` to
+`integer | null`, the tempting fix, reddens two of them by assertion.
+
+### Out of scope, deliberately
+
+Whether a NULL `last_read_message_id` should be writable at all, and whether the
+column wants `NOT NULL` once the rows are cleaned, is parked as a separate
+question by the issue itself. The prod rows were deleted ahead of the code fix
+(30 of 870, backed up off-server), so this change is about the next message
+purge rather than the outage, which is already closed.

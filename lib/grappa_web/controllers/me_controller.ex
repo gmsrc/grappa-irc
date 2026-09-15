@@ -201,11 +201,8 @@ defmodule GrappaWeb.MeController do
   # the cursor envelope; missing slugs (stale cursor referencing a
   # network that's since been deleted) are dropped.
   #
-  # Nil-cursor entries are dropped too: `ReadCursor.bulk_for_subject/1`
-  # selects `c.last_read_message_id` as-is, and the column is nullable
-  # (a cursor row may exist with `nil` id from a legacy POST or an
-  # explicit-no-cursor state). The bucket C contract — documented in
-  # the `Unread-counts envelope` moduledoc and asserted in
+  # Nil-cursor entries are dropped too. The bucket C contract —
+  # documented in the `Unread-counts envelope` moduledoc and asserted in
   # `me_controller_test.exs:"channels without a cursor are absent
   # from unread_counts"` — is "channels without a cursor are absent;
   # cic falls back to the per-channel join_reply seed (bucket B1)".
@@ -215,6 +212,14 @@ defmodule GrappaWeb.MeController do
   # 500s — cic then has no `user()` value and the Shell renders the
   # cold "select a channel below" placeholder with no admin console.
   # PROD HOTFIX 2026-06-01: vjt's `#bofh` cursor row had nil id.
+  #
+  # issue 2200 — `bulk_for_subject/1` now filters the nils at the SOURCE,
+  # so this arm is no longer reachable through that envelope. It stays as
+  # a boundary guard, not as live filtering: the `| nil` in the spec below
+  # is what the DB column can hold (the cursor FK is `ON DELETE SET NULL`),
+  # and re-arming a 500 on the login path is not worth the two lines. The
+  # sentence that used to stand here — "`bulk_for_subject/1` selects
+  # `c.last_read_message_id` as-is" — was true until then and is not now.
   @spec build_unread_counts(
           Grappa.Scrollback.subject(),
           %{String.t() => %{String.t() => integer() | nil}}
