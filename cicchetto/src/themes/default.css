@@ -7523,6 +7523,19 @@ button.topic-bar-windows-opener {
     gap: var(--adm-space-3);
   }
 
+  /* issue 2202 — follows the scroller down a step, or the gap BETWEEN the
+     Settings cards would read wider than the one above and below them.
+
+     🔴 `.adm-scroll > .admin-settings-form`, not the bare class, and for
+     the reason the `.adm-card` rule right below spells out: a media query
+     buys NO specificity and the base rule sits ~600 lines FURTHER DOWN
+     this file, so a bare `.admin-settings-form` here loses on source order
+     and does nothing. (0,2,0) wins wherever it sits. The form IS a direct
+     child of `.adm-scroll` — read off the rendered DOM, not assumed. */
+  .adm-scroll > .admin-settings-form {
+    gap: var(--adm-space-3);
+  }
+
   /* The side borders drew the frame that just went; the top stripe (the
      section's group colour) and the bottom edge are what remain, and they
      are the two that carry meaning.
@@ -8143,6 +8156,20 @@ button.topic-bar-windows-opener {
   letter-spacing: 0;
   font-size: 0.8rem;
   color: var(--adm-text);
+}
+
+/* issue 2202 — the Settings form holds TWO cards now (Uploads, DCC) plus
+   its own footer, and it is the form, not the cards, that is the flex item
+   of `.adm-scroll`. So the scroller's column gap falls between the error
+   banner and the form and never between the cards: without this the two
+   sections touch edge to edge. Same axis, same token as the scroller, so
+   the rhythm reads as one column. Every other multi-card tab hangs its
+   cards straight off `.adm-scroll` and needs no equivalent; this tab
+   cannot, because one submit has to enclose both. */
+.admin-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--adm-space-4);
 }
 
 /* Actions sit below the last field row, inside the card's own padding. */

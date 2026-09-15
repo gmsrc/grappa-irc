@@ -1,4 +1,13 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import {
+  type Accessor,
+  type Component,
+  createSignal,
+  For,
+  type JSX,
+  onMount,
+  type Setter,
+  Show,
+} from "solid-js";
 import AdminCard from "./admin/AdminCard";
 import AdminField from "./admin/AdminField";
 import { AdminLoading } from "./admin/AdminStatus";
@@ -26,6 +35,15 @@ import { token } from "./lib/auth";
 //     (#201). Unlike the byte caps this one is enforced CLIENT-side:
 //     duration is probed from the file in the browser, so an over-long
 //     clip is refused before a single byte is POSTed.
+//   * `dcc.max_transfer_bytes` / `dcc.global_cap_bytes` — the two DCC
+//     ceilings (issue 2185, form in issue 2202): the per-transfer size
+//     limit and the whole spool's disk budget.
+//
+// ⚠️ The two DCC keys are NOT cross-validated against each other, on
+// vjt's ruling (`settings_controller.ex` @dcc_keys / `ServerSettings`):
+// a per-transfer ceiling above the spool budget is a legal end state.
+// This form therefore does NOT check one against the other — a
+// client-side rule the server does not enforce is a lie in the UI.
 //
 // State model: same shape as `AdminVisitorsTab` (fetch on mount,
 // explicit refresh, splice-on-save). UI units differ from wire:
@@ -37,11 +55,14 @@ import { token } from "./lib/auth";
 // boundary; non-admin + visitor can't get here.
 //
 // Validation surface: `Admin.SettingsController.update/2` returns
-// 422 `{error: "invalid_setting", field: "upload.<key>"}` for any
+// 422 `{error: "invalid_setting", field: "<subtree>.<key>"}` for any
 // per-key validation failure. The form reads `err.info.field` to
 // flag the offending input inline; an unmapped failure falls back
 // to the wire token. NOT routed through `friendlyApiError` because
 // the per-field highlight is more useful than a generic toast.
+// The highlight keys on the DOTTED path, never the bare key:
+// `global_cap_bytes` names a different budget under `upload` than
+// under `dcc`, and matching on the key alone would light both rows.
 //
 // Reactive fan-out: server fans out `server_settings_changed` on
 // every live `Topic.user(name)` after a successful PUT (parity with
@@ -52,6 +73,19 @@ import { token } from "./lib/auth";
 
 const MIB = 1024 * 1024;
 const GIB = 1024 * 1024 * 1024;
+
+// One numeric setting: identical markup, identical field-error binding,
+// identical "must be positive" copy — only the label, the signal pair and
+// the dotted wire key differ. The unit conversion is NOT here: a row
+// renders whatever number its signal holds, and `applyView`/`onSave` own
+// the MiB/GiB↔bytes translation at the one boundary that crosses it.
+type NumberRow = {
+  testid: string;
+  label: string;
+  field: string;
+  value: Accessor<number>;
+  set: Setter<number>;
+};
 
 const AdminSettingsTab: Component = () => {
   const [settings, setSettings] = createSignal<AdminSettingsView | null>(null);
@@ -72,6 +106,10 @@ const AdminSettingsTab: Component = () => {
   // #201 — seconds on the wire AND in the form: a duration cap has no
   // unit conversion to hide, unlike the MB/GB byte fields above.
   const [videoMaxDurationS, setVideoMaxDurationS] = createSignal<number>(120);
+  // issue 2202 — the DCC pair. Seeded from the `dcc` subtree of the admin
+  // view, which is admin-only (not in `public_view/0`).
+  const [dccMaxTransferMiB, setDccMaxTransferMiB] = createSignal<number>(100);
+  const [dccGlobalCapGiB, setDccGlobalCapGiB] = createSignal<number>(10);
 
   const applyView = (view: AdminSettingsView): void => {
     setSettings(view);
@@ -82,12 +120,16 @@ const AdminSettingsTab: Component = () => {
     setAudioCapMB(view.upload.audio_per_file_cap_bytes / MIB);
     setGlobalCapGB(view.upload.global_cap_bytes / GIB);
     setVideoMaxDurationS(view.upload.video_max_duration_seconds);
+    setDccMaxTransferMiB(view.dcc.max_transfer_bytes / MIB);
+    setDccGlobalCapGiB(view.dcc.global_cap_bytes / GIB);
   };
 
-  // One row per per-type cap (uploads cluster Task 7) — same markup,
-  // same MB↔bytes conversion, same field-error binding; only the
-  // category differs. Static array, so a plain .map render is fine.
-  const capFields = [
+  // Every numeric row of the upload card, in render order. The four
+  // per-type caps (uploads cluster Task 7) were already a list; the global
+  // cap and the #201 duration ceiling were hand-written copies of the same
+  // markup, which is what would have made a second family of caps (issue
+  // 2202) the third and fourth copy. One list, one renderer.
+  const uploadRows: NumberRow[] = [
     {
       testid: "admin-settings-image-cap",
       label: "Image per-file cap (MB)",
@@ -116,7 +158,62 @@ const AdminSettingsTab: Component = () => {
       value: audioCapMB,
       set: setAudioCapMB,
     },
-  ] as const;
+    {
+      testid: "admin-settings-global-cap",
+      label: "Global cap (GB)",
+      field: "upload.global_cap_bytes",
+      value: globalCapGB,
+      set: setGlobalCapGB,
+    },
+    {
+      testid: "admin-settings-video-max-duration",
+      label: "Video max duration (s)",
+      field: "upload.video_max_duration_seconds",
+      value: videoMaxDurationS,
+      set: setVideoMaxDurationS,
+    },
+  ];
+
+  // issue 2202 — the DCC card's rows. Labelled MiB/GiB because that is
+  // what the ×1024² / ×1024³ round-trip below actually is; the upload
+  // labels above say MB/GB over the same arithmetic, which is a
+  // pre-existing inaccuracy this slice does not widen and does not copy.
+  const dccRows: NumberRow[] = [
+    {
+      testid: "admin-settings-dcc-max-transfer",
+      label: "Per-transfer cap (MiB)",
+      field: "dcc.max_transfer_bytes",
+      value: dccMaxTransferMiB,
+      set: setDccMaxTransferMiB,
+    },
+    {
+      testid: "admin-settings-dcc-global-cap",
+      label: "Spool budget (GiB)",
+      field: "dcc.global_cap_bytes",
+      value: dccGlobalCapGiB,
+      set: setDccGlobalCapGiB,
+    },
+  ];
+
+  const numberRow = (row: NumberRow): JSX.Element => (
+    <AdminField
+      label={row.label}
+      for={row.testid}
+      error={fieldError() === row.field ? "must be positive" : undefined}
+    >
+      <input
+        id={row.testid}
+        data-testid={row.testid}
+        type="number"
+        min="1"
+        step="1"
+        value={row.value()}
+        onInput={(e) => row.set(Number(e.currentTarget.value))}
+        disabled={saving()}
+        classList={{ "admin-settings-field-error": fieldError() === row.field }}
+      />
+    </AdminField>
+  );
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -152,6 +249,10 @@ const AdminSettingsTab: Component = () => {
           audio_per_file_cap_bytes: Math.round(audioCapMB() * MIB),
           global_cap_bytes: Math.round(globalCapGB() * GIB),
           video_max_duration_seconds: Math.round(videoMaxDurationS()),
+        },
+        dcc: {
+          max_transfer_bytes: Math.round(dccMaxTransferMiB() * MIB),
+          global_cap_bytes: Math.round(dccGlobalCapGiB() * GIB),
         },
       });
       applyView(view);
@@ -196,7 +297,7 @@ const AdminSettingsTab: Component = () => {
       {/* The toolbar stays: unlike the tabs whose band was title-plus-refresh
           and nothing else, its subtitle names the scope of everything below
           (server-wide, not per-network), which the nav above does not say. */}
-      <AdminToolbar title="Settings" subtitle="Server-wide upload limits" />
+      <AdminToolbar title="Settings" subtitle="Server-wide upload and DCC limits" />
 
       <div class="adm-scroll">
         <Show when={error()}>
@@ -240,98 +341,42 @@ const AdminSettingsTab: Component = () => {
                   </select>
                 </AdminField>
 
-                <For each={capFields}>
-                  {(cap) => (
-                    <AdminField
-                      label={cap.label}
-                      for={cap.testid}
-                      error={fieldError() === cap.field ? "must be positive" : undefined}
-                    >
-                      <input
-                        id={cap.testid}
-                        data-testid={cap.testid}
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={cap.value()}
-                        onInput={(e) => cap.set(Number(e.currentTarget.value))}
-                        disabled={saving()}
-                        classList={{
-                          "admin-settings-field-error": fieldError() === cap.field,
-                        }}
-                      />
-                    </AdminField>
-                  )}
-                </For>
-
-                <AdminField
-                  label="Global cap (GB)"
-                  for="admin-settings-global-cap"
-                  error={
-                    fieldError() === "upload.global_cap_bytes" ? "must be positive" : undefined
-                  }
-                >
-                  <input
-                    id="admin-settings-global-cap"
-                    data-testid="admin-settings-global-cap"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={globalCapGB()}
-                    onInput={(e) => setGlobalCapGB(Number(e.currentTarget.value))}
-                    disabled={saving()}
-                    classList={{
-                      "admin-settings-field-error": fieldError() === "upload.global_cap_bytes",
-                    }}
-                  />
-                </AdminField>
-
-                <AdminField
-                  label="Video max duration (s)"
-                  for="admin-settings-video-max-duration"
-                  error={
-                    fieldError() === "upload.video_max_duration_seconds"
-                      ? "must be positive"
-                      : undefined
-                  }
-                >
-                  <input
-                    id="admin-settings-video-max-duration"
-                    data-testid="admin-settings-video-max-duration"
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={videoMaxDurationS()}
-                    onInput={(e) => setVideoMaxDurationS(Number(e.currentTarget.value))}
-                    disabled={saving()}
-                    classList={{
-                      "admin-settings-field-error":
-                        fieldError() === "upload.video_max_duration_seconds",
-                    }}
-                  />
-                </AdminField>
-              </div>
-
-              <div class="adm-toolbar-actions adm-card-footer">
-                <button
-                  type="submit"
-                  class="adm-btn"
-                  disabled={saving()}
-                  data-testid="admin-settings-save"
-                >
-                  {saving() ? "saving…" : "save"}
-                </button>
-                <Show
-                  when={
-                    savedAt() !== null && !saving() && error() === null && fieldError() === null
-                  }
-                >
-                  <span class="adm-field-hint" data-testid="admin-settings-saved">
-                    saved
-                  </span>
-                </Show>
+                <For each={uploadRows}>{numberRow}</For>
               </div>
             </AdminCard>
+
+            {/* issue 2202 — its own card, not more rows in the upload one:
+                the two families are separate closed key sets on the server
+                and `global_cap_bytes` means a different budget in each, so
+                a shared card would put two rows with the same meaning-word
+                side by side under one heading. */}
+            <AdminCard title="DCC" subtitle="Transfer ceilings for the DCC spool">
+              <div class="adm-field-rows">
+                <For each={dccRows}>{numberRow}</For>
+              </div>
+            </AdminCard>
+
+            {/* One save for the whole form — the PUT carries both subtrees
+                and the controller applies each independently. The footer
+                sits OUTSIDE the cards for that reason: inside the upload
+                one it would read as saving uploads alone. */}
+            <div class="adm-toolbar-actions adm-card-footer">
+              <button
+                type="submit"
+                class="adm-btn"
+                disabled={saving()}
+                data-testid="admin-settings-save"
+              >
+                {saving() ? "saving…" : "save"}
+              </button>
+              <Show
+                when={savedAt() !== null && !saving() && error() === null && fieldError() === null}
+              >
+                <span class="adm-field-hint" data-testid="admin-settings-saved">
+                  saved
+                </span>
+              </Show>
+            </div>
           </form>
         </Show>
       </div>

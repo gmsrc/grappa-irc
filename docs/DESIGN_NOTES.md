@@ -15829,3 +15829,183 @@ because no test in the repo was capable of contradicting it. Before trusting
 one, check the mechanism it names against the code — particularly when it
 names inheritance for a non-inherited property, or an "override" without
 saying what it outranks.
+<!-- entry #2202 -->
+
+---
+
+## 2026-09-15 — issue 2202: the DCC ceilings get the form the API already had
+
+The two DCC caps landed in 1.5.8 (issue 2185) with a complete admin API and no
+form. The only way to move them was a hand-rolled `PUT /admin/settings`, which
+is literally how prod's per-transfer cap went 100 → 200 MiB on the morning of
+2026-09-15 — an RPC on the live node. `grep -n "max_transfer_bytes\|maxTransferBytes"`
+over `cicchetto/src` returned zero hits before this change.
+
+### One form, one save, two subtrees
+
+The DCC pair gets its OWN `AdminCard` rather than two more rows in the upload
+one, because the two families are separate closed key sets on the server and
+`global_cap_bytes` is a member of BOTH, meaning a different budget in each. Two
+rows spelled the same word under one heading would be the UI restating the
+confusion that made the server carry the family on the SUBTREE and not the key
+name.
+
+They share ONE submit. The PUT carries both subtrees and the controller applies
+each independently, so the alternative — a save button per card — would buy an
+extra request and a second `saved` indicator for nothing. The consequence is
+that the footer had to move OUT of the upload card: left where it was, a single
+save button inside a card titled "Uploads" reads as saving uploads alone.
+
+### The field-error highlight keys on the DOTTED path, and that is load-bearing
+
+`fieldError()` is compared against `"dcc.max_transfer_bytes"`, never against
+the bare key. Matching on the key alone would light the upload global cap on a
+`dcc.global_cap_bytes` 422 and vice versa. Both directions are pinned, because
+one test proves only the direction it was written in: a 422 on the DCC key must
+leave the upload row clean AND a 422 on the upload key must leave the DCC row
+clean.
+
+### What this form deliberately does NOT do
+
+No client-side "per-transfer must be ≤ spool budget" check. The controller does
+not cross-validate the two against each other and that is vjt's ruling (issue
+2185): the ordering of two writes would otherwise become significant for a UI
+that saves one field at a time. A client rule the server does not enforce is a
+lie in the UI, so the ruling is restated in the component's moduledoc — the
+next reader arrives at this form, not at the controller, and "the UI forgot a
+check" is exactly the shape of a well-meant regression.
+
+### Two things named and not widened
+
+The DCC labels read **MiB** / **GiB** because the round-trip is ×1024² / ×1024³.
+The upload labels above them say **MB** / **GB** over identical arithmetic. That
+is a pre-existing inaccuracy: copying it into the new rows would have doubled
+it, and fixing it is a separate edit to fields this issue does not touch. Named
+here so it is a known debt rather than a rediscovery.
+
+`addressing.*` (#543) has the same zero-hits gap on `cicchetto/src` and keeps
+it. `AdminSettingsView` in `lib/api.ts` is therefore KNOWINGLY partial: it types
+`upload` and `dcc` and omits the `addressing` subtree the server view also
+returns, because typing a subtree nothing reads or writes would claim a form
+that does not exist. Both halves are additive when someone builds it.
+
+### Refactor that came with it
+
+The upload card had six numeric rows: four generated from a `capFields` array
+and two — the global cap and the #201 duration ceiling — hand-written copies of
+the same markup. That duplication is what would have made a second family of
+caps a third and fourth copy. All eight rows (six upload, two DCC) now come
+from one `NumberRow` list and one `numberRow` renderer; the unit conversion
+stays at the `applyView`/`onSave` boundary, so a row renders whatever number its
+signal holds and knows nothing about MiB.
+
+### The second card needed a gap, and the gap needed a child combinator
+
+Every other multi-card tab hangs its cards straight off `.adm-scroll`, whose
+`display: flex; flex-direction: column; gap` supplies the rhythm. Settings
+cannot: one submit has to enclose both cards, so the FORM is the flex item and
+the scroller's gap falls between the error banner and the form, never between
+the sections inside it. `.adm-card` carries no margin of its own, so the two
+would have touched edge to edge. Hence a `.admin-settings-form` flex column on
+the same token.
+
+The mobile step-down walked straight into the trap this file already documents
+one rule below it: **a media query buys no specificity**. The base
+`.admin-settings-form` rule sits ~600 lines further down `default.css`, so a
+bare `.admin-settings-form` inside the `@media` block loses on SOURCE ORDER and
+does nothing at all — the identical shape that bit `.adm-card` twice (#1223).
+`.adm-scroll > .admin-settings-form` is (0,2,0) and wins wherever it sits. That
+the form really is a direct child of `.adm-scroll` was read off the rendered DOM
+in the jsdom dump, not assumed from the JSX (`<Show>` emits no element).
+
+### Measured
+
+Red before the cure: 6 of 16 in `AdminSettingsTab.test.tsx`, each failing on the
+absent testid or on the payload missing its `dcc` key — the other 10 green, so
+the file had no pre-existing red to attribute around. Green after: 16/16, then
+the whole cic suite at 366 files / 7415 tests, and `bun run check` with all five
+stages ok (biome, tsc over `src` AND `e2e`, lock drift, test location).
+
+Full `scripts/integration.sh` twice: 992 passed / 1 failed before the e2e tests
+were restructured, 991 passed / 2 failed after. All seven
+`ux-6-b-admin-settings` tests green in both, the two new ones included.
+
+### e2e, and why it is not optional here
+
+Two tests joined `ux-6-b-admin-settings.spec.ts` rather than a new spec, on the
+model of the `#201` pair already there: a form → PUT → read-back round trip and
+a field-level 422. jsdom cannot stand in for either. "The wire carries bytes,
+not MiB" is a claim a unit test asserts against its own mock and a browser
+asserts against the server, and until these landed the DCC keys had never been
+driven by anything but a hand-rolled PUT.
+
+Coverage before this, measured by diffing the testids the tab STAMPS against
+the ones the spec DRIVES: 14 stamped, 6 driven. So "DCC was the only uncovered
+sector" is not true at field level — `video-cap`, `document-cap`, `audio-cap`
+and the upload `global-cap` are undriven too. What IS true, and is the reason
+these two were worth the lane, is that `upload` had three representatives
+covering both shapes (round trip and 422) while `dcc` had **zero**.
+
+### The 422 test the obvious way does not discriminate, and a mutant proved it
+
+The natural 422 case is `dcc.max_transfer_bytes`. It is worthless as a test of
+the dotted-path match: that key has **no upload twin**, so a component matching
+only the last path segment lights exactly the same row and passes. The one key
+that separates the two implementations is `global_cap_bytes`, the single member
+of BOTH closed sets.
+
+Measured rather than argued, with two mutants run through the real browser:
+
+| mutant | what it breaks | measured |
+| --- | --- | --- |
+| `dcc` payload ships raw MiB/GiB | bytes-on-the-wire | round-trip test RED (`Expected: 209715200 / Received: 200`); 422 test green |
+| field-error compares `field.split(".").pop()` | dotted-path match | 422 test RED — and it dies on the `global_cap_bytes` phase, with the UPLOAD global cap carrying `admin-settings-field-error`; the `max_transfer_bytes` phase stays GREEN |
+
+So the shipped 422 test runs TWO save cycles: phase 1 pins field-level
+rendering at all (the `#201` shape), phase 2 pins the discrimination. Phase 2
+keeps the per-transfer cap VALID so the spool budget is the only bad key in the
+body — with one bad key the 422 names it whatever order the controller folds
+the subtree in, so the assertion does not rest on Elixir small-map iteration
+order.
+
+The second mutant is the more useful finding: the test as first written would
+have shipped green over a real defect, and only a mutant says so. A green test
+is evidence of nothing until something has made it red.
+
+The round trip reads back from **`GET /admin/settings`**, not from
+`/api/server-settings` where the `#201` test reads its duration cap, and that
+is a design fact rather than a shortcut: `public_view/0` carries the `upload`
+subtree plus `http_host_aliases` and nothing else, because it is broadcast to
+every cic client, so an admin-only setting has no client-facing door to be read
+back from. Same intent, the door the setting actually has.
+
+The seed assertion compares the input against what the server holds AT THAT
+MOMENT (`before.max_transfer_bytes / MIB`), not against the 100 MiB default:
+the contract is "the field shows the stored bytes in MiB", and pinning the
+default would make an unrelated spec moving the value look like this one
+breaking. The `afterEach` reset grew the two DCC keys for the reason the
+`#201` duration cap is in it — `Dcc.Policy.admit_offer/1` reads the
+per-transfer cap, and a lowered value left behind would refuse the ~24 KB offer
+`issue2089-dcc-consent-banner.spec.ts` builds its whole banner on.
+
+Neither red belongs to this branch, and neither attribution rests on the
+branch's innocence being obvious. `issue1964-upload-confirm-preview` is a
+registered local-vs-CI red (green in CI at 1.8 s, red on this host at
+6.0–6.6 s; measured 6.2 s and 6.0 s here), already reproduced on a detached
+worktree at naked `origin/main`. `cp15-b6-part-archive-rejoin` is a flake, and
+this run moved what is known about it: it was green at position 54 of the first
+full run and red at the SAME position 54 of the second, with the production
+tree byte-identical across both (sha256-pinned), and an iso-rerun at
+`--repeat-each 5` came back **4 green / 1 red** — so it reproduces STANDALONE at
+~20 %, where it was previously recorded as passing in isolation. Both reds'
+artifacts are on disk, verified by content. The disjointness is measured too:
+that spec contains zero occurrences of `admin`, the `api.ts` addition is
+type-only (every added non-comment line sits inside a `type` declaration, so no
+JS is emitted), and the two new CSS rules need a class stamped in exactly one
+place, `AdminSettingsTab.tsx`.
+
+**Not asserted:** the layout is CSS-cascade reasoning plus the jsdom parentage,
+**not** a rendered measurement. jsdom applies no stylesheet, so no vitest
+assertion can see a gap; the e2e drives the two fields but asserts nothing
+about the spacing between the cards, so nothing has measured that a real
+browser puts a gap there.

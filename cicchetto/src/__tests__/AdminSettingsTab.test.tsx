@@ -24,6 +24,8 @@ import { refreshSlot } from "../admin/refreshSlot";
 //   * Save → PUT /admin/settings with full upload subtree
 //   * 422 invalid_setting surfaces the offending field highlight
 //   * generic ApiError surfaces in the top-of-tab error banner
+//   * issue 2202 — the `dcc` subtree: both ceilings seed from the view,
+//     leave in BYTES, and own their own 422 highlight.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
 // AdminPane's mount gate is the reachability boundary; per-class
@@ -38,6 +40,11 @@ const DEFAULTS: AdminSettingsView = {
     audio_per_file_cap_bytes: 25 * 1024 * 1024,
     global_cap_bytes: 10 * 1024 * 1024 * 1024,
     video_max_duration_seconds: 90,
+  },
+  // issue 2185 server defaults — 100 MiB per transfer, 10 GiB spool.
+  dcc: {
+    max_transfer_bytes: 100 * 1024 * 1024,
+    global_cap_bytes: 10 * 1024 * 1024 * 1024,
   },
 };
 
@@ -69,6 +76,7 @@ describe("AdminSettingsTab — initial render", () => {
         global_cap_bytes: 20 * 1024 * 1024 * 1024,
         video_max_duration_seconds: 90,
       },
+      dcc: DEFAULTS.dcc,
     });
 
     render(() => <AdminSettingsTab />);
@@ -98,6 +106,49 @@ describe("AdminSettingsTab — initial render", () => {
       "admin-settings-video-max-duration",
     ) as HTMLInputElement;
     expect(videoDuration.value).toBe("90");
+  });
+
+  // issue 2202 — the two DCC ceilings landed in 1.5.8 with a working admin
+  // API and no form at all, so the only way to move them was a hand-rolled
+  // PUT (which is how prod's per-transfer cap went 100 → 200 MiB). Same
+  // MiB/GiB-in-the-UI, bytes-on-the-wire contract as the upload caps.
+  it("pre-populates the two DCC fields from the GET response (issue 2202)", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue({
+      upload: DEFAULTS.upload,
+      dcc: {
+        max_transfer_bytes: 200 * 1024 * 1024,
+        global_cap_bytes: 25 * 1024 * 1024 * 1024,
+      },
+    });
+
+    render(() => <AdminSettingsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-dcc-max-transfer")).toBeInTheDocument();
+    });
+
+    const maxTransfer = screen.getByTestId("admin-settings-dcc-max-transfer") as HTMLInputElement;
+    expect(maxTransfer.value).toBe("200");
+
+    const spoolCap = screen.getByTestId("admin-settings-dcc-global-cap") as HTMLInputElement;
+    expect(spoolCap.value).toBe("25");
+  });
+
+  // Scope item 3. The subtitle names the scope of everything below the
+  // toolbar, and "upload limits" stopped being true the moment a second
+  // family of caps got a form. Asserted on the rendered subtitle rather
+  // than on a literal, so it survives a rewording that keeps DCC named.
+  it("the toolbar subtitle names DCC, not uploads alone (issue 2202)", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue(DEFAULTS);
+
+    const { container } = render(() => <AdminSettingsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector(".adm-toolbar-sub")).not.toBeNull();
+    });
+    expect(container.querySelector(".adm-toolbar-sub")?.textContent).toMatch(/DCC/);
   });
 
   it("renders an error banner when the initial fetch fails", async () => {
@@ -149,6 +200,18 @@ describe("AdminSettingsTab — save", () => {
     ) as HTMLInputElement;
     fireEvent.input(videoDuration, { target: { value: "45" } });
 
+    // issue 2202 — MiB/GiB in, bytes out. The numbers differ from every
+    // upload field above so a subtree crossed with another is a red, and
+    // they differ from their own byte value so shipping the raw MiB is one
+    // too.
+    const dccMaxTransfer = screen.getByTestId(
+      "admin-settings-dcc-max-transfer",
+    ) as HTMLInputElement;
+    fireEvent.input(dccMaxTransfer, { target: { value: "200" } });
+
+    const dccGlobalCap = screen.getByTestId("admin-settings-dcc-global-cap") as HTMLInputElement;
+    fireEvent.input(dccGlobalCap, { target: { value: "8" } });
+
     fireEvent.click(screen.getByTestId("admin-settings-save"));
 
     await waitFor(() => {
@@ -161,6 +224,10 @@ describe("AdminSettingsTab — save", () => {
           audio_per_file_cap_bytes: 20 * 1024 * 1024,
           global_cap_bytes: 50 * 1024 * 1024 * 1024,
           video_max_duration_seconds: 45,
+        },
+        dcc: {
+          max_transfer_bytes: 200 * 1024 * 1024,
+          global_cap_bytes: 8 * 1024 * 1024 * 1024,
         },
       });
     });
@@ -235,6 +302,103 @@ describe("AdminSettingsTab — save", () => {
       "admin-settings-field-error",
     );
     expect(screen.getByTestId("admin-settings-document-cap")).not.toHaveClass(
+      "admin-settings-field-error",
+    );
+  });
+
+  // issue 2202 — `global_cap_bytes` is a member of BOTH closed key sets and
+  // means a different budget in each, which is why the controller carries
+  // the family on the SUBTREE and not the key name. A highlight keyed on
+  // the bare key would light the upload global cap here; keying it on the
+  // dotted `dcc.` path is what keeps the two apart.
+  it("422 on dcc.max_transfer_bytes marks that field and no upload one", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue(DEFAULTS);
+    vi.mocked(api.adminPutSettings).mockRejectedValue(
+      new api.ApiError(422, "invalid_setting", {
+        error: "invalid_setting",
+        field: "dcc.max_transfer_bytes",
+      }),
+    );
+
+    render(() => <AdminSettingsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-save")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("admin-settings-save"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-dcc-max-transfer")).toHaveClass(
+        "admin-settings-field-error",
+      );
+    });
+    expect(screen.getByTestId("admin-settings-dcc-global-cap")).not.toHaveClass(
+      "admin-settings-field-error",
+    );
+    expect(screen.getByTestId("admin-settings-image-cap")).not.toHaveClass(
+      "admin-settings-field-error",
+    );
+    expect(screen.getByTestId("admin-settings-global-cap")).not.toHaveClass(
+      "admin-settings-field-error",
+    );
+  });
+
+  it("422 on dcc.global_cap_bytes marks it and NOT the upload global cap", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue(DEFAULTS);
+    vi.mocked(api.adminPutSettings).mockRejectedValue(
+      new api.ApiError(422, "invalid_setting", {
+        error: "invalid_setting",
+        field: "dcc.global_cap_bytes",
+      }),
+    );
+
+    render(() => <AdminSettingsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-save")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("admin-settings-save"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-dcc-global-cap")).toHaveClass(
+        "admin-settings-field-error",
+      );
+    });
+    expect(screen.getByTestId("admin-settings-global-cap")).not.toHaveClass(
+      "admin-settings-field-error",
+    );
+  });
+
+  // The mirror of the pair above: an UPLOAD 422 on the shared key name must
+  // not light the DCC row either.
+  it("422 on upload.global_cap_bytes marks it and NOT the DCC spool cap", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue(DEFAULTS);
+    vi.mocked(api.adminPutSettings).mockRejectedValue(
+      new api.ApiError(422, "invalid_setting", {
+        error: "invalid_setting",
+        field: "upload.global_cap_bytes",
+      }),
+    );
+
+    render(() => <AdminSettingsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-save")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("admin-settings-save"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("admin-settings-global-cap")).toHaveClass(
+        "admin-settings-field-error",
+      );
+    });
+    expect(screen.getByTestId("admin-settings-dcc-global-cap")).not.toHaveClass(
       "admin-settings-field-error",
     );
   });
