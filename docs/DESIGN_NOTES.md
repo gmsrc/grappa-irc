@@ -15645,12 +15645,86 @@ the file had no pre-existing red to attribute around. Green after: 16/16, then
 the whole cic suite at 366 files / 7415 tests, and `bun run check` with all five
 stages ok (biome, tsc over `src` AND `e2e`, lock drift, test location).
 
-**Not asserted:** no e2e ran for this slice — it needs a lane and the change is
-pure cic. The existing `ux-6-b-admin-settings.spec.ts` selects everything by
-testid and every testid it uses survives, and its `afterEach` reset is
-unaffected because the DCC values a save now carries are the ones the GET just
-seeded (a round-trip to the same numbers), but that is READ off the spec, not
-observed in a browser. The layout above is likewise CSS-cascade reasoning plus
-the jsdom parentage, **not** a rendered measurement: jsdom applies no
-stylesheet, so no vitest assertion can see a gap, and nothing here has been in
-front of a real browser.
+Full `scripts/integration.sh` twice: 992 passed / 1 failed before the e2e tests
+were restructured, 991 passed / 2 failed after. All seven
+`ux-6-b-admin-settings` tests green in both, the two new ones included.
+
+### e2e, and why it is not optional here
+
+Two tests joined `ux-6-b-admin-settings.spec.ts` rather than a new spec, on the
+model of the `#201` pair already there: a form → PUT → read-back round trip and
+a field-level 422. jsdom cannot stand in for either. "The wire carries bytes,
+not MiB" is a claim a unit test asserts against its own mock and a browser
+asserts against the server, and until these landed the DCC keys had never been
+driven by anything but a hand-rolled PUT.
+
+Coverage before this, measured by diffing the testids the tab STAMPS against
+the ones the spec DRIVES: 14 stamped, 6 driven. So "DCC was the only uncovered
+sector" is not true at field level — `video-cap`, `document-cap`, `audio-cap`
+and the upload `global-cap` are undriven too. What IS true, and is the reason
+these two were worth the lane, is that `upload` had three representatives
+covering both shapes (round trip and 422) while `dcc` had **zero**.
+
+### The 422 test the obvious way does not discriminate, and a mutant proved it
+
+The natural 422 case is `dcc.max_transfer_bytes`. It is worthless as a test of
+the dotted-path match: that key has **no upload twin**, so a component matching
+only the last path segment lights exactly the same row and passes. The one key
+that separates the two implementations is `global_cap_bytes`, the single member
+of BOTH closed sets.
+
+Measured rather than argued, with two mutants run through the real browser:
+
+| mutant | what it breaks | measured |
+| --- | --- | --- |
+| `dcc` payload ships raw MiB/GiB | bytes-on-the-wire | round-trip test RED (`Expected: 209715200 / Received: 200`); 422 test green |
+| field-error compares `field.split(".").pop()` | dotted-path match | 422 test RED — and it dies on the `global_cap_bytes` phase, with the UPLOAD global cap carrying `admin-settings-field-error`; the `max_transfer_bytes` phase stays GREEN |
+
+So the shipped 422 test runs TWO save cycles: phase 1 pins field-level
+rendering at all (the `#201` shape), phase 2 pins the discrimination. Phase 2
+keeps the per-transfer cap VALID so the spool budget is the only bad key in the
+body — with one bad key the 422 names it whatever order the controller folds
+the subtree in, so the assertion does not rest on Elixir small-map iteration
+order.
+
+The second mutant is the more useful finding: the test as first written would
+have shipped green over a real defect, and only a mutant says so. A green test
+is evidence of nothing until something has made it red.
+
+The round trip reads back from **`GET /admin/settings`**, not from
+`/api/server-settings` where the `#201` test reads its duration cap, and that
+is a design fact rather than a shortcut: `public_view/0` carries the `upload`
+subtree plus `http_host_aliases` and nothing else, because it is broadcast to
+every cic client, so an admin-only setting has no client-facing door to be read
+back from. Same intent, the door the setting actually has.
+
+The seed assertion compares the input against what the server holds AT THAT
+MOMENT (`before.max_transfer_bytes / MIB`), not against the 100 MiB default:
+the contract is "the field shows the stored bytes in MiB", and pinning the
+default would make an unrelated spec moving the value look like this one
+breaking. The `afterEach` reset grew the two DCC keys for the reason the
+`#201` duration cap is in it — `Dcc.Policy.admit_offer/1` reads the
+per-transfer cap, and a lowered value left behind would refuse the ~24 KB offer
+`issue2089-dcc-consent-banner.spec.ts` builds its whole banner on.
+
+Neither red belongs to this branch, and neither attribution rests on the
+branch's innocence being obvious. `issue1964-upload-confirm-preview` is a
+registered local-vs-CI red (green in CI at 1.8 s, red on this host at
+6.0–6.6 s; measured 6.2 s and 6.0 s here), already reproduced on a detached
+worktree at naked `origin/main`. `cp15-b6-part-archive-rejoin` is a flake, and
+this run moved what is known about it: it was green at position 54 of the first
+full run and red at the SAME position 54 of the second, with the production
+tree byte-identical across both (sha256-pinned), and an iso-rerun at
+`--repeat-each 5` came back **4 green / 1 red** — so it reproduces STANDALONE at
+~20 %, where it was previously recorded as passing in isolation. Both reds'
+artifacts are on disk, verified by content. The disjointness is measured too:
+that spec contains zero occurrences of `admin`, the `api.ts` addition is
+type-only (every added non-comment line sits inside a `type` declaration, so no
+JS is emitted), and the two new CSS rules need a class stamped in exactly one
+place, `AdminSettingsTab.tsx`.
+
+**Not asserted:** the layout is CSS-cascade reasoning plus the jsdom parentage,
+**not** a rendered measurement. jsdom applies no stylesheet, so no vitest
+assertion can see a gap; the e2e drives the two fields but asserts nothing
+about the spacing between the cards, so nothing has measured that a real
+browser puts a gap there.
