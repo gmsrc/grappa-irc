@@ -15548,3 +15548,109 @@ column wants `NOT NULL` once the rows are cleaned, is parked as a separate
 question by the issue itself. The prod rows were deleted ahead of the code fix
 (30 of 870, backed up off-server), so this change is about the next message
 purge rather than the outage, which is already closed.
+<!-- entry #2202 -->
+
+---
+
+## 2026-09-15 — issue 2202: the DCC ceilings get the form the API already had
+
+The two DCC caps landed in 1.5.8 (issue 2185) with a complete admin API and no
+form. The only way to move them was a hand-rolled `PUT /admin/settings`, which
+is literally how prod's per-transfer cap went 100 → 200 MiB on the morning of
+2026-09-15 — an RPC on the live node. `grep -n "max_transfer_bytes\|maxTransferBytes"`
+over `cicchetto/src` returned zero hits before this change.
+
+### One form, one save, two subtrees
+
+The DCC pair gets its OWN `AdminCard` rather than two more rows in the upload
+one, because the two families are separate closed key sets on the server and
+`global_cap_bytes` is a member of BOTH, meaning a different budget in each. Two
+rows spelled the same word under one heading would be the UI restating the
+confusion that made the server carry the family on the SUBTREE and not the key
+name.
+
+They share ONE submit. The PUT carries both subtrees and the controller applies
+each independently, so the alternative — a save button per card — would buy an
+extra request and a second `saved` indicator for nothing. The consequence is
+that the footer had to move OUT of the upload card: left where it was, a single
+save button inside a card titled "Uploads" reads as saving uploads alone.
+
+### The field-error highlight keys on the DOTTED path, and that is load-bearing
+
+`fieldError()` is compared against `"dcc.max_transfer_bytes"`, never against
+the bare key. Matching on the key alone would light the upload global cap on a
+`dcc.global_cap_bytes` 422 and vice versa. Both directions are pinned, because
+one test proves only the direction it was written in: a 422 on the DCC key must
+leave the upload row clean AND a 422 on the upload key must leave the DCC row
+clean.
+
+### What this form deliberately does NOT do
+
+No client-side "per-transfer must be ≤ spool budget" check. The controller does
+not cross-validate the two against each other and that is vjt's ruling (issue
+2185): the ordering of two writes would otherwise become significant for a UI
+that saves one field at a time. A client rule the server does not enforce is a
+lie in the UI, so the ruling is restated in the component's moduledoc — the
+next reader arrives at this form, not at the controller, and "the UI forgot a
+check" is exactly the shape of a well-meant regression.
+
+### Two things named and not widened
+
+The DCC labels read **MiB** / **GiB** because the round-trip is ×1024² / ×1024³.
+The upload labels above them say **MB** / **GB** over identical arithmetic. That
+is a pre-existing inaccuracy: copying it into the new rows would have doubled
+it, and fixing it is a separate edit to fields this issue does not touch. Named
+here so it is a known debt rather than a rediscovery.
+
+`addressing.*` (#543) has the same zero-hits gap on `cicchetto/src` and keeps
+it. `AdminSettingsView` in `lib/api.ts` is therefore KNOWINGLY partial: it types
+`upload` and `dcc` and omits the `addressing` subtree the server view also
+returns, because typing a subtree nothing reads or writes would claim a form
+that does not exist. Both halves are additive when someone builds it.
+
+### Refactor that came with it
+
+The upload card had six numeric rows: four generated from a `capFields` array
+and two — the global cap and the #201 duration ceiling — hand-written copies of
+the same markup. That duplication is what would have made a second family of
+caps a third and fourth copy. All eight rows (six upload, two DCC) now come
+from one `NumberRow` list and one `numberRow` renderer; the unit conversion
+stays at the `applyView`/`onSave` boundary, so a row renders whatever number its
+signal holds and knows nothing about MiB.
+
+### The second card needed a gap, and the gap needed a child combinator
+
+Every other multi-card tab hangs its cards straight off `.adm-scroll`, whose
+`display: flex; flex-direction: column; gap` supplies the rhythm. Settings
+cannot: one submit has to enclose both cards, so the FORM is the flex item and
+the scroller's gap falls between the error banner and the form, never between
+the sections inside it. `.adm-card` carries no margin of its own, so the two
+would have touched edge to edge. Hence a `.admin-settings-form` flex column on
+the same token.
+
+The mobile step-down walked straight into the trap this file already documents
+one rule below it: **a media query buys no specificity**. The base
+`.admin-settings-form` rule sits ~600 lines further down `default.css`, so a
+bare `.admin-settings-form` inside the `@media` block loses on SOURCE ORDER and
+does nothing at all — the identical shape that bit `.adm-card` twice (#1223).
+`.adm-scroll > .admin-settings-form` is (0,2,0) and wins wherever it sits. That
+the form really is a direct child of `.adm-scroll` was read off the rendered DOM
+in the jsdom dump, not assumed from the JSX (`<Show>` emits no element).
+
+### Measured
+
+Red before the cure: 6 of 16 in `AdminSettingsTab.test.tsx`, each failing on the
+absent testid or on the payload missing its `dcc` key — the other 10 green, so
+the file had no pre-existing red to attribute around. Green after: 16/16, then
+the whole cic suite at 366 files / 7415 tests, and `bun run check` with all five
+stages ok (biome, tsc over `src` AND `e2e`, lock drift, test location).
+
+**Not asserted:** no e2e ran for this slice — it needs a lane and the change is
+pure cic. The existing `ux-6-b-admin-settings.spec.ts` selects everything by
+testid and every testid it uses survives, and its `afterEach` reset is
+unaffected because the DCC values a save now carries are the ones the GET just
+seeded (a round-trip to the same numbers), but that is READ off the spec, not
+observed in a browser. The layout above is likewise CSS-cascade reasoning plus
+the jsdom parentage, **not** a rendered measurement: jsdom applies no
+stylesheet, so no vitest assertion can see a gap, and nothing here has been in
+front of a real browser.

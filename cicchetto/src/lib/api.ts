@@ -2313,11 +2313,31 @@ export async function adminResetCircuit(
 // `/admin/settings`. Wire shape is the `Grappa.ServerSettings.
 // public_view/0` re-shaped (atoms-out — active_host is the string
 // `"embedded" | "litterbox"`).
+//
+// PARTIAL, knowingly: the server view also carries an `addressing`
+// subtree (#543) that nothing in cic reads or writes. Typing it would
+// claim a form that does not exist — issue 2202 names the gap and
+// leaves it. Adding it later is additive on both sides.
+// issue 2185 — the DCC ceilings. Hand-written rather than generated: the
+// subtree is admin-only and deliberately NOT part of `public_view/0`, so
+// it has no twin in `wireTypes.ts` (which mirrors the
+// `server_settings_changed` push that goes to every client). Mirrors
+// `SettingsController.render_view/1`'s `dcc:` map.
+//
+// `global_cap_bytes` is a member of BOTH this shape and the upload one and
+// means a different budget in each — the SUBTREE carries the family, never
+// the key name (see `@dcc_keys`' why-comment).
+export type AdminSettingsDccView = {
+  max_transfer_bytes: number;
+  global_cap_bytes: number;
+};
+
 export type AdminSettingsView = {
   // S15 — same generated upload shape as the WS `server_settings_changed`
   // event; the REST GET/PUT `/admin/settings` view and the push share
   // one drift-gated definition.
   upload: ServerSettingsWireUploadView;
+  dcc: AdminSettingsDccView;
 };
 
 export type AdminSettingsResponse = { settings: AdminSettingsView };
@@ -2331,6 +2351,7 @@ export type AdminSettingsUpdate = {
   // S15 — the PUT body is a per-key-optional projection of the same
   // generated upload shape; `active_host?` inherits the closed set.
   upload?: Partial<ServerSettingsWireUploadView>;
+  dcc?: Partial<AdminSettingsDccView>;
 };
 
 export async function adminGetSettings(token: string): Promise<AdminSettingsView> {
