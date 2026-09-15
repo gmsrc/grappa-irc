@@ -31,7 +31,7 @@ import { HIDDEN_TICK_MS, installHiddenProbe } from "./lib/hiddenProbe";
 import { installKeyboardPreserve } from "./lib/keepKeyboard";
 import { refetchChannels, refetchNetworks } from "./lib/networks";
 import { installNotificationDismiss } from "./lib/notificationDismiss";
-import { applyIosClass, isStandalonePwa } from "./lib/platform";
+import { applyIos27BandClass, applyIosClass, isStandalonePwa } from "./lib/platform";
 import { installPushResubscribe } from "./lib/pushResubscribe";
 import { applyDeepLinkFromUrl, installPushTargetListener } from "./lib/pushTarget";
 import { browserProbePerformance, installResumeProbe } from "./lib/resumeProbe";
@@ -86,6 +86,15 @@ applySidebarWidthsFromStorage();
 // the pre-paint, iOS shell briefly renders in non-fixed layout
 // then reflows.
 applyIosClass();
+
+// issue 2190 — and, on iOS/iPadOS 27 installed PWAs ONLY, `html.is-ios27-band`
+// as well, which buys 16px of clearance under the band the 27 compositor
+// paints over the top edge of the web view. Separate call rather than a second
+// branch inside `applyIosClass()`: this is a PORKAROUND (vjt, 2026-09-15)
+// expected to die the day Apple changes the behaviour, and it has to come out
+// in one piece — see the banner comment in `lib/platform.ts`. Pre-paint for
+// the same reason as the line above.
+applyIos27BandClass();
 
 // PWA icon badge (2026-06-21) — wire the `badge` signal to the OS icon
 // badge (`navigator.setAppBadge`) + the `document.title` mirror. Own

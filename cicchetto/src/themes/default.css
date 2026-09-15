@@ -3906,6 +3906,61 @@ button.topic-bar-windows-opener {
   touch-action: pan-y;
 }
 
+/* issue 2190 — THE iOS/iPadOS 27 COMPOSITOR BAND. A PORKAROUND, and it is
+   meant to die: vjt, #grappa 2026-09-15 16:18, «porkaround per ora, magari da
+   rimuovere in seguito». These three rules, the block of the same name in
+   `lib/platform.ts`, and the `applyIos27BandClass()` call in `main.tsx` are
+   the whole limb — deleting it is a revert, not an excavation.
+
+   WHAT IT WORKS AROUND. On iOS 27 and iPadOS 27 Beta an installed PWA gets a
+   system-painted gradient/blur band along the TOP edge of the web view, which
+   washes out whatever we paint there. Reported by morph on #grappa,
+   2026-09-14 23:50 (iPhone, iOS 27) and 23:52 (iPad, iPadOS 27 Beta). The
+   blur is not ours — this sheet declares no `backdrop-filter` anywhere — and
+   it is NOT expressed through the safe-area insets: morph, 16:14, «il blur su
+   iOS 27 è applicato dal compositor indipendentemente dagli inset, succede su
+   qualunque PWA». So the four `--safe-area-inset-*` tokens on `:root` are not
+   the lever here, and the clearance is taken by layout instead.
+
+   16px IS A REPORTED CONSTANT, NOT A MEASUREMENT OF OURS. vjt's value, from
+   morph's field report — «molti hanno semplicemente messo 16px di top padding
+   se rilevano iOS 27». Nobody on this side has an iOS 27 device; do not read
+   the number as derived from anything, and do not reason from it.
+
+   GATED IN JS, NOT BY A MEDIA QUERY, and that is deliberate (ruling point 5):
+   the gate is `isIos() AND isStandalonePwa() AND major >= 27`, which no media
+   query can state — `.shell-chrome` is `height: 0` with nothing above it to
+   donate clearance, so a plain `max-width` query would charge every narrow
+   viewport on earth for an Apple compositor. `lib/platform.ts` puts
+   `html.is-ios27-band` on the document pre-paint; every rule below is
+   unreachable without it, by census, in `__tests__/ios27Band.test.ts`.
+
+   WHERE THE 16px SITS IS STILL OPEN (ruling point 4). This is the clearance
+   the issue's own "shape of the cure" describes: top padding on the scrollback
+   CONTENT plus the matching `scroll-padding-top`. It buys back the first
+   scrollback row. It does NOT move cic's own chrome — the window tab strip and
+   the topic bar, which the report also describes as washed out — because
+   nothing here touches them; if a picture of 27 shows the band covering the
+   chrome, the 16px belongs on `.shell` instead (one rule, same token) and this
+   pair comes out. That decision wants a screenshot, not a guess. */
+html.is-ios27-band {
+  --ios27-band-clearance: 16px;
+}
+
+/* `calc(0.5rem + …)`, and the `0.5rem` is `.scrollback`'s own block padding
+   restated. The coupling is pinned in `__tests__/ios27Band.test.ts`, which
+   reads that shorthand off this sheet and fails if the two drift — the value
+   is duplicated here because a padding cannot be expressed as "whatever it
+   was, plus". */
+html.is-ios27-band .scrollback {
+  padding-top: calc(0.5rem + var(--ios27-band-clearance));
+  /* Load-bearing, not symmetry: the padding above scrolls AWAY with the
+     content, so anchoring and jump-to-message would still park their target
+     at the container's top edge, i.e. under the band. `scroll-padding-top`
+     is what moves that landing line down with it. */
+  scroll-padding-top: var(--ios27-band-clearance);
+}
+
 .scrollback.scrollback-locked {
   touch-action: none;
 }

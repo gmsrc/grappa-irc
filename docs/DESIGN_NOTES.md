@@ -16097,3 +16097,73 @@ discriminator in place the second mutant reds.
 instruction to state the allocation claim as structure rather than as a
 measured magnitude) were RELAYED through the orchestrator, not read from vjt
 directly.
+<!-- entry #2190 -->
+
+---
+
+## 2026-09-15 — issue 2190: a workaround for a band nobody here can see
+
+iOS 27 and iPadOS 27 Beta paint a gradient/blur band along the top edge of an
+installed PWA's web view. morph reported it on #grappa (2026-09-14 23:50,
+iPhone; 23:52, iPad) and settled the open measurement the next day at 16:14:
+the compositor applies it *"indipendentemente dagli inset, succede su qualunque
+PWA"*. That kills the one-line cure the issue was waiting for — `env(safe-area-
+inset-top)` reads 0 with the band up, exactly as the `8fc439f5e` iPadOS-pill
+precedent predicted — so the clearance is taken by layout. vjt ordered it at
+16:16 and named it at 16:18: *"porkaround per ora, magari da rimuovere in
+seguito"*.
+
+**16px is a REPORTED constant.** vjt's value, off morph's field report that
+*"molti hanno semplicemente messo 16px di top padding se rilevano iOS 27"*.
+Nobody on this side owns an iOS 27 device. It is written next to the constant,
+because a magic 16 with no story attached is the thing nobody dares remove
+three years from now.
+
+**The gate is JS, not a media query, and that is forced rather than preferred.**
+`isIos() AND isStandalonePwa() AND major >= 27` states a condition no media
+query can express, and the alternative a query WOULD express — a `max-width`
+band — charges every narrow viewport on earth for an Apple compositor.
+`.shell-chrome` is `height: 0`, so there is nothing above the pane holding
+clearance it could donate instead. `applyIos27BandClass()` writes
+`html.is-ios27-band` pre-paint from `main.tsx`, beside `applyIosClass()`, and
+the clearance is then pure CSS costing no probe per render.
+
+**The version half had to be written: there is no iOS version parser in this
+tree.** `detectOs` and `isIos()` both answer with the OS *name*. Two UA shapes,
+and the second is why it is not a one-liner: iPhone/iPad in mobile mode say
+`OS 27_0 like Mac OS X` (underscores, and the iPad spelling drops the device
+word), while **iPadOS 13+ in desktop mode — the default — says `Macintosh` with
+no `iPad` token at all**, which is precisely why `isIos()` carries its `Mac` +
+`maxTouchPoints` clause. A regex that only knows `iPhone OS (\d+)` covers the
+phone and leaves every iPad uncovered, and nobody notices, because the phone
+works.
+
+**Found while writing the table, not briefed, and it cuts the other way:** the
+iOS home-screen web-app UA **drops `Version/` and `Safari/`** — and a
+home-screen web app is the only configuration this gate targets. So on the
+phone the `OS …` clause is the one that fires, and the ruling's *"on that shape
+the only version signal is `Version/27.x`"* is true of iPad-desktop-mode Safari
+in a TAB. Whether it survives installation on iPadOS is **unmeasured**: if
+iPadOS strips the token the way iOS does, the desktop-mode shape is left with
+no version signal whatsoever and the iPad half never fires. There is no
+recorded iPadOS standalone UA in this tree or anywhere reachable from here, so
+the gap is asserted as a row of the device table (`does not fire`) rather than
+guessed at, and the reading of `navigator.userAgent` inside the installed PWA
+on the iPad is the second thing to ask the reporter for.
+
+**Where the 16px sits is deliberately still open.** The issue reports the band
+washing out the window tab strip and the topic bar as well as the first
+scrollback row. Padding on the scrollback content buys back the row and leaves
+the chrome where it is; if the band covers the chrome, the 16px belongs at the
+top of `.shell` so everything shifts. That is a decision about a picture, and
+the picture has not been seen from here — shipped is the clearance the issue's
+own "shape of the cure" describes, with the alternative named at the rule.
+
+**Discrimination, measured rather than asserted.** A device table that passes
+on any UA measures nothing, so each clause of the parser owns rows no other
+clause can cover: dropping the `Version/` alternative fails 5 of 40 assertions
+and exactly the three `Version/`-only rows; dropping the `OS … like Mac OS X`
+one fails 3 of 40 and exactly the installed-PWA row. The e2e half is an A/B
+across two browser contexts differing in one byte range of one string (`27_0`
+against `26_0`), which is what makes "every platform without the gate renders
+identically" a pixel comparison instead of a claim.
