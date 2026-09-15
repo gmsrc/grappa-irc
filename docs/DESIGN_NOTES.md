@@ -15548,3 +15548,180 @@ column wants `NOT NULL` once the rows are cleaned, is parked as a separate
 question by the issue itself. The prod rows were deleted ahead of the code fix
 (30 of 870, backed up off-server), so this change is about the next message
 purge rather than the outage, which is already closed.
+<!-- entry #2208 -->
+
+---
+
+## 2026-09-15 — issue 2208: the gesture surface WAS the picture, and a wide-and-short picture has almost none
+
+vjt, #grappa: «se mandi un immagine larga e bassa non devo andare a fare pinch
+sui 4 pixel di altezza, e posso vederla ingrandita in tutta la preview window».
+
+### What was wrong, measured
+
+The touch listeners were already on the right element —
+`.media-viewer-zoom-scroller`, bound by `ZoomableImage`'s `bindScroller`. The
+defect was that element's SIZE. The rule declared no width and no height, so as
+a flex item of `.media-viewer-body` (`align-items: center; justify-content:
+center`) it shrink-to-fit its content, and the scroller's box WAS the fitted
+picture's box.
+
+`.media-viewer-body` meanwhile carries the only FLOOR in the chain, `min-height:
+max(6rem, 50% of --viewport-height)` since #2188. The two together are the bug.
+Measured in the e2e, desktop chromium, on a 1200x40 upload: body content box
+992x346, picture 992x33.06 — so the SURFACE a gesture could start from was
+992x33, and 313 of the body's 346 vertical pixels reached no listener at all.
+163.5px of dead band above the picture and the same below. That is vjt's "4
+pixel", and it is 9.6% of the frame he is looking at.
+
+The second half of his sentence is the same box from the other side: a CSS
+transform paints outside its element's bounds and the scroller's `overflow`
+clips it, so ZOOMING a wide-and-short picture displayed it through a 33px slot.
+One cause, two symptoms, one fix.
+
+### The fix, and what it deliberately is not
+
+The scroller gains `flex-grow: 1` (main axis) and `align-self: stretch` (cross
+axis) so it fills the body's content box, and becomes a flex container itself
+(`display: flex; align-items: center; justify-content: center`) so it centres
+the picture INSIDE itself. The body used to centre the scroller; the scroller
+centres the picture now.
+
+🔴 NOT AN UPSCALE. vjt ruled that out in the same report — «non voglio fare
+upscale delle immagini» — and #2188 had ruled it out before, on this very
+viewer, with the same distinction: the floor is on the BODY, never on the MEDIA.
+The `<img>` keeps its own `max-width: 100%` / `max-height` / `object-fit:
+contain` untouched, so the PICTURE renders at exactly the size it rendered at
+before and only the box around it grew. Measured on the same run: 992 x (40/1200)
+= 33.07 against a painted 33.06, i.e. the contain-fit of the uploaded bytes to
+the pixel.
+
+`align-items: center` is part of that ruling and not a style preference. The
+flex default is `stretch`, which would pull the `<img>` to the full height of a
+box that is now half the viewport — precisely the upscale that was refused. It
+is asserted as a negative in `mediaViewerTouchAction.test.ts` for that reason.
+
+`max-width: 100%` stays and acquires a SECOND job nobody would guess from its
+old comment: a flex item's automatic minimum size is its content's min-content
+width, and a definite `max-width` is what caps it. Without that declaration a
+1200px-wide upload can no longer shrink to the modal and overflows it instead.
+
+### The offset between the two boxes is arithmetic, not a detail
+
+`transform-origin: 0 0` scales the `<img>` about ITS OWN top-left, which is no
+longer the scroller's. Three things had to learn the offset:
+
+* `ZoomableImage` measures `origin` from `image.offsetLeft`/`offsetTop`, beside
+  the fit it already measured from `clientWidth`/`clientHeight`. The LAYOUT
+  position, which a transform does not move — the same reason the fit is not
+  read off `getBoundingClientRect`. And it reads the IMAGE, not the scroller:
+  with the two boxes no longer identical, measuring the container would hand the
+  sizer its own output.
+* the sizer is `origin + fit x scale`, not `fit x scale`. Scrollable overflow is
+  measured from the scroller's content origin and the picture's painted far edge
+  is `origin` further out, so nothing past the picture is reachable and nothing
+  on it is not. Still exactly ZERO at fit — that is the #1438 contract below.
+* `rescaleScroll` takes the origin: the image point under the fingers is
+  `(scroll + focus - origin) / from`, and putting it back at the new scale is
+  `imagePoint x to + origin - focus`. At origin (0,0) the term cancels and the
+  function is byte-for-byte the pre-2208 one, which every existing unit case now
+  pins by passing an explicit `FLUSH`.
+
+One consequence that is easy to miss: the origin is a function of the SCROLLER's
+size as well as the picture's, so a window that only gets WIDER re-centres the
+very same picture. The component's single `ResizeObserver` therefore watches
+BOTH boxes — the one it had, on the `<img>` alone, would never fire for that.
+
+### The focus point outside the picture: no clamp, and why
+
+Widening the surface means a gesture can start where there is no picture, so the
+focus lands outside the image box. The issue names clamping to the image box as
+the obvious answer. It was NOT taken.
+
+At fit — the only state with a large dead margin, and the state the issue is
+about — the clamp is provably a no-op. With `scroll = 0` and `f = focus -
+origin`, the anchor computes `f x (to - 1)`. For `f < 0` (before the near edge)
+that is negative and the DOM's assignment clamp pins it at 0, which is exactly
+what a clamped focus computes. For `f > fit` (past the far edge) it exceeds the
+maximum scroll `origin + fit x to - viewport` whenever `viewport >= origin +
+fit` — true BY CONSTRUCTION for a centred picture that fits its scroller — so
+both answers are clamped to the same bound.
+
+Where the two genuinely differ (zoomed, already scrolled, with a margin still
+visible) the unclamped answer is the honest continuation of "hold the point
+under the fingers" across a surface the reader can now touch, while a clamp
+would snap the picture's edge under a finger that is not on it. It is also the
+rule `lib/pinchZoom.ts` already states: the container's assignment clamp is the
+one authority that knows the bounds, and re-deriving them is the duplicated
+geometry #1805 deleted.
+
+⚠️ What is DERIVED and what is MEASURED, because they are not the same here. The
+no-op is an algebraic derivation; what was measured is its consequence at fit in
+a real browser — after a dead-margin double-tap `scrollTop` is 0 and
+`scrollHeight === clientHeight`, with the HORIZONTAL axis as the control, where
+the focus IS on the picture, the zoom overflows and the anchoring does scroll.
+The zoomed-and-scrolled case where the two designs differ is NOT measured. It is
+a design call, recorded here so the next reader can reverse it on evidence
+rather than rediscover the question.
+
+### The #1438 contract, re-proven rather than assumed
+
+At fit the swipe-to-dismiss owns the single-finger drag, and it keeps it only
+while the browser has no pan to start. That was nearly definitional on a
+shrink-wrapped scroller; on a scroller sized to the body it is a claim about two
+numbers. It is asserted as two, on the shape that made the box big:
+`scrollHeight === clientHeight` AND `scrollWidth === clientWidth` at fit, and
+then the drag itself, which still takes the viewer away.
+
+### The e2e, and why it uploads its own picture
+
+The discriminating input is the image SHAPE, and nothing here works without it.
+On a square-ish picture the scroller and the picture very nearly coincide
+already: there is no dead margin to tap in, and every assertion is answered
+identically before and after. #213's 400x300 could never have caught this.
+1200x40 is the shape where the two boxes come apart.
+
+The gesture is driven as a REAL hit-tested tap through each engine's own tap
+verb, never as a dispatched `TouchEvent`: dispatching one at a named element
+would answer the question by assuming it. Both mobile projects run it — the
+report is about a phone.
+
+The harness those specs share moved to `e2e/fixtures/mediaViewerTouch.ts` (the
+#1441 lift one floor down) rather than being copied with tweaks, which is how
+the viewer's opening door came to have thirteen call sites.
+
+### Evidence, both arms
+
+GREEN — the cure, `scripts/integration.sh --grep "#2208"`: rc=0, 5 passed
+(3 chromium, 1 chromium-pixel-touch/Pixel 7, 1 webkit-iphone-15).
+
+RED — the MUTANT, one file and TWO lines: `flex-grow: 1` and `align-self:
+stretch` taken back off the scroller, leaving everything else (the centring, the
+origin arithmetic, the sizer) in place, so what is under test is the FILL and
+nothing around it. rc=1, 4 failed / 1 passed, and the four die exactly where the
+cure lives:
+
+* `#2208 — a double-tap in the dead margin beside the picture zooms it
+  (chromium)` — `expect(zoomed.scale).toBeGreaterThan(1.5)`, **Received: 1**. The
+  tap reached no listener, which is the defect itself.
+* the same test on **Pixel 7** and on **iPhone 15** — same assertion, **Received:
+  1** on both. The reported platform reproduces.
+* `#2208 — the surface grew to the body and the picture did not grow at all` —
+  dies on the HEIGHT comparison, **Received: 312.9375**, which is the dead band
+  to the pixel (346 - 33.06). The WIDTH comparison survives, correctly: the
+  picture already spanned the width, and the margin was only ever vertical.
+
+`#2208 — at fit nothing overflows, so the swipe-to-dismiss keeps the drag`
+SURVIVES the mutant, and that is the right answer rather than a gap. It is the
+#1438 contract, which holds on a shrink-wrapped scroller too — it is not what
+the fill buys, and a test that died here would be measuring the wrong thing.
+
+All five outcomes, including which assertion and which AXIS, were predicted in
+writing before the run.
+
+A third fact worth recording because it cost a run: the first draft of the
+surface test compared the scroller against the body's bare `clientWidth` and
+went red by exactly 14px. `clientWidth` INCLUDES padding, and 14px is
+`.media-viewer-body`'s `padding: 0.5rem` twice over at cic's 14px root. The
+product was right and the ruler was wrong; the spec now computes the content box
+and says so.
