@@ -15548,3 +15548,91 @@ column wants `NOT NULL` once the rows are cleaned, is parked as a separate
 question by the issue itself. The prod rows were deleted ahead of the code fix
 (30 of 870, backed up off-server), so this change is about the next message
 purge rather than the outage, which is already closed.
+<!-- entry #2199 -->
+
+---
+
+## 2026-09-15 — issue 2199: the walk knew which field, and threw it away one frame later
+
+`WireShapeError` named the SHAPE and never the field, so a REST mismatch was
+unactionable for whoever hit it. A self-hoster met it on 1.5.8 — the first
+release where `narrowMeResponse` validates `GET /me` at all, with
+`me_json.ex` byte-identical between `v1.5.7` and `v1.5.8` — read "the server
+sent a subject profile this version of the app cannot read", and rolled the
+package back. The rollback restores a working client by NOT checking, which
+is why the diagnosability was the defect and the payload was not in scope.
+
+### Two doors, because there are two questions
+
+`validate/2` keeps its `T | null` shape and its 36 WS call sites untouched;
+`validateDetailed/2` is the sibling that also hands back a `WireMismatch`.
+That is not two patterns for one question. The WS boundary asks "does it
+match" and drops the event either way (unknown-is-never-fatal); the REST
+boundary THROWS and therefore owes the caller a field name. One walk serves
+both, so the reason costs nothing until a payload is actually bad.
+
+The path is built on the way OUT — the rejecting leaf records `expected`/`got`
+and each frame prepends its own segment as REJECT unwinds — rather than
+threaded down. The difference is structural: nothing is allocated per field on
+the path that SUCCEEDS, which is the one `validate` runs on every WS event.
+**Not measured; the claim is the structure, not a number.**
+
+Stale records cannot shadow a real one, and that is a property rather than a
+convention: EVERY rejection originates at the `reject()` helper, which clears
+the segments, so a union arm that failed before a later arm succeeded is
+overwritten wholesale by the next genuine rejection anywhere.
+
+### The union heuristic is load-bearing, not a nicety
+
+`S_MeJSONMeJson` is `{u: [user, visitor]}` — a union AT THE ROOT. Reporting
+the union itself would have answered `(root): expected one of 2 variants` for
+every unreadable `/me` in the field: true, useless, and the very defect the
+issue is about. So when every arm fails, the arm that got FURTHEST is
+reported.
+
+"Furthest" is **fields consumed first, path depth second**, and the order was
+forced by a failing test, not chosen up front. Both arms of `/me` die one
+field deep at their `kind` discriminator, so depth alone hands a broken
+VISITOR profile the USER arm's discriminator and names the wrong field with a
+straight face. Fields consumed separates them: the arm whose `kind` matched
+walks on and dies at the real fault. First arm wins a genuine tie; when the
+winner never got past its own root the union describes itself, which is then
+the whole truth rather than a guess.
+
+### What is printed, and what is deliberately not
+
+`got` is the JSON TYPE that arrived, never the value — the text lands in the
+boot-failure modal, which a self-hoster screenshots into a public issue, and
+in `console.error`. **The SCHEMA is ours and is printed** (a declared literal
+or closed set is spelled out); **the PAYLOAD is not ours and is not.** The
+cost is accepted and named: an enum mismatch reads `got string` and the
+reader opens the network tab. The likeliest field case — an older server
+omitting a key — is fully diagnosed by `got: "absent"` reported AT the key.
+
+### The console assertion was a FALSE PIN, and only a mutant found it
+
+The e2e deletes one nested required key from the REAL `GET /me` on the wire
+(`home_data.networks[0].recoverable`: root union → object → object → array
+index → absent required key) and asserts both channels. Two mutants were run
+to prove it measures anything:
+
+* message stripped of the detail → **RED**, and the string the modal showed
+  was verbatim the one quoted in the issue;
+* `console.error` deleted → **GREEN**. The obvious assertion "some console
+  error mentions the path" holds anyway, because `moduleRoot.ts` echoes the
+  uncaught throw five times and that echo carries the message, which now
+  carries the path. The channel under test was gone and the spec did not
+  notice.
+
+The discriminator is that the modal's copy travels with the MESSAGE and not
+with the deliberate line, so a console error naming the field WITHOUT that
+copy can only be the one `narrowRest` writes. Expressed as that property
+rather than as a hand-copied log prefix: the e2e runner mounts `e2e/` alone
+and cannot import the real string from `src/`, so a literal copied into the
+spec would drift silently the day production reworded it. With the
+discriminator in place the second mutant reds.
+
+⚠️ The rulings behind this entry (the types-not-values boundary, and the
+instruction to state the allocation claim as structure rather than as a
+measured magnitude) were RELAYED through the orchestrator, not read from vjt
+directly.
