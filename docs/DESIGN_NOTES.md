@@ -15253,3 +15253,81 @@ which is inert today — `SettingsDrawer.tsx` contains no `<form>` at all. It
 is kept for consistency with the file's own Enter idiom on the device-rename
 input, in a drawer whose sibling panes (`TotpSettings`, `IgnoresSettings`,
 `PerformSettings`) are forms.
+<!-- entry #2188 -->
+
+---
+
+## 2026-09-15 — issue 2188: a viewer with caps everywhere and a floor written for the spinner
+
+Every size declaration in the media viewer's chain was a CAP.
+`.media-viewer-modal` is `width: max-content` under `max-width: min(92vw,
+72rem)` and `max-height: calc(var(--viewport-height, 100dvh) - 2rem)`;
+`.media-viewer-media` is `max-width: 100%`, `max-height: calc(var(
+--viewport-height, 100dvh) - 8rem)`, `object-fit: contain`. So the box was
+exactly as big as its content, and a 40×30 upload painted 40×30 inside a modal
+that shrank to fit it. On a phone that is unreadable, which is the report.
+
+The one lower bound in the chain was `.media-viewer-body`'s `min-width: 12rem;
+min-height: 6rem` — 168×84px at `--font-size: 14px`, and written for the
+spinner and failure states so the box would not jump to full size when the
+media arrived. A floor for a spinner is not a floor for reading a picture.
+
+vjt ruled both axes in #grappa on 2026-09-14: 23:38 «possiamo tranquillamente
+usare come min-height il 50% dell'altezza della shell o pure di più», 23:39 «si
+floor anche in width». Both relayed through the ircbot rather than seen
+first-hand. The floor is therefore
+
+```css
+min-width:  max(12rem, min(50vw, 24rem));
+min-height: max(6rem, calc(var(--viewport-height, 100dvh) * 0.5));
+```
+
+Three decisions are worth the ink.
+
+### It reads the cap's own variable, and the width is capped in absolute units
+
+The height is tied to `--viewport-height`, the keyboard-reactive shell height
+`.media-viewer-modal`'s max-height already reads. Two different height sources
+— one `100dvh`, one written by `main.tsx` off `visualViewport` — would make the
+no-conflict arithmetic false exactly when the software keyboard is up and the
+viewer is shortest. With one source the cap is `viewport - 2rem`, the header is
+~2.5rem and the floor is `viewport * 0.5`, so the floor can only reach the cap
+below a 144px viewport.
+
+Width does NOT get the same treatment: a bare `50vw` floors a thumbnail into a
+~960px box on a desktop, and the report is about a phone. `min(50vw, 24rem)`
+keeps the phone behaviour and caps the desktop one. Both axes keep the old
+value as the `max()` fallback, so the change adds a floor and moves nothing
+where 12rem/6rem was already binding.
+
+### The floor is on the frame, not on the picture
+
+Deliberately no floor on `.media-viewer-media`: the image keeps its intrinsic
+size and is centred in a box that is now readable — and that gives the #213
+pinch something to work on. Making small images BIGGER is a different change:
+it needs a decision about interpolation on pixel art, and it should be its own
+issue. A large image is untouched by this entirely, which is what the negative
+control in `mediaViewerSizeFloor.test.ts` pins.
+
+### One arm opts out, one arm inherits something nobody asked for
+
+`.media-viewer-body--text` re-declares `min-height: 0` (#1764, so the pane can
+shrink below its content and scroll). Both selectors are a single class, so the
+cascade decides on SOURCE ORDER alone — the text opt-out wins only because its
+rule sits below. That is now pinned as an order assertion; reordering the two
+rules re-floors the text pane and nothing else would report it.
+
+The AUDIO arm does not opt out, and inherits a half-viewport box around a
+controls strip. Accepted rather than special-cased: excluding it means a
+per-kind modifier written in the component and a second shape to keep in step,
+and the ruling is about the viewer. Declared here so the next reader finds a
+decision and not an oversight.
+
+### What is not covered
+
+The RENDERED layout, and it never has been. jsdom applies no stylesheet, so a
+`getComputedStyle` oracle in a vitest would read `min-height` back as empty
+whether or not the declaration exists — it would pass for the wrong reason.
+The guard is therefore SOURCE-level, the `mediaViewerTouchAction` /
+`ipadSafeArea` precedent: it asserts that the sheet declares the floor, not
+that a phone honours it. No e2e was written and none was run for this.

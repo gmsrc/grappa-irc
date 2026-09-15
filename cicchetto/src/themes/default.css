@@ -14128,13 +14128,45 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   align-items: center;
   justify-content: center;
   padding: 0.5rem;
-  /* Floor so the spinner/failure states don't render a postage-stamp
-     modal that jumps to full size when the media arrives; relative so
-     the spinner can overlay-center on top of a still-loading media
-     element (a pre-metadata <video> is a 300×150 black box). */
+  /* relative so the spinner can overlay-center on top of a still-loading
+     media element (a pre-metadata <video> is a 300×150 black box). */
   position: relative;
-  min-width: 12rem;
-  min-height: 6rem;
+  /* The ONLY floor in the chain, and issue 2188 is what it grew for.
+     Everything else here is a CAP — `.media-viewer-modal` is `width:
+     max-content` under a max-width/max-height, `.media-viewer-media` is
+     max-width/max-height + `object-fit: contain` — so the box was exactly
+     as big as its content and a 40×30 upload opened as a postage stamp on
+     a phone. The old 12rem/6rem was written for the spinner and failure
+     states (don't render a stamp that jumps to full size when the media
+     arrives); at `--font-size: 14px` that is 168×84px, which is a floor
+     for a spinner and not for reading a picture.
+
+     Tied to `--viewport-height` — the keyboard-reactive shell height that
+     `.media-viewer-modal`'s max-height already reads — so the floor and
+     the cap speak about one number instead of two that can disagree. The
+     cap is `viewport - 2rem` and the header is ~2.5rem, so a 50% floor
+     cannot fight it below a 144px viewport. Width is floored in ABSOLUTE
+     units instead: a bare 50vw would blow that same 40px image into a
+     ~960px box on a desktop, which is not what the mobile report asks
+     for. Both keep the old value as the `max()` fallback, so nothing
+     moves where 12rem/6rem was already the binding one.
+
+     The MEDIA is not upscaled — deliberately no floor on
+     `.media-viewer-media`: the picture keeps its intrinsic size, centred
+     in a box that is now readable and that gives the #213 pinch something
+     to work on. Making small images BIGGER is a different change (it
+     needs a decision about interpolation on pixel art) and its own issue.
+
+     Two arms inherit this and one opts out. `.media-viewer-body--text`
+     re-declares `min-height: 0` BELOW this rule — same specificity, later
+     wins — which is what lets the text pane shrink and scroll; moving
+     either rule past the other silently re-floors it (pinned in
+     mediaViewerSizeFloor.test.ts). The AUDIO arm does not opt out and so
+     gets a half-viewport box around a controls strip: accepted rather
+     than special-cased, because a per-kind exception is a second shape to
+     keep in step and the ruling is about the viewer. */
+  min-width: max(12rem, min(50vw, 24rem));
+  min-height: max(6rem, calc(var(--viewport-height, 100dvh) * 0.5));
   /* hidden (was auto) so a pinch-zoomed image's scaled paint is CLIPPED to
      the viewer body — the #213 confinement. The media already fits via
      .media-viewer-media max-width/height, so `auto` never actually scrolled;
