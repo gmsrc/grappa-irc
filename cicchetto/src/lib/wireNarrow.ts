@@ -76,8 +76,8 @@ import {
   SCROLLBACK_MESSAGE_KIND,
   WINDOW_COUNTS_SEVERITY,
 } from "./wireTypes";
-import type { Infer, WireNode } from "./wireValidate";
-import { validate } from "./wireValidate";
+import type { Infer, WireMismatch, WireNode } from "./wireValidate";
+import { describeMismatch, validate, validateDetailed } from "./wireValidate";
 
 // #267 — narrow the window_counts severity to the closed union, defaulting
 // to "none" for an unknown value (defensive: a stale server mid hot-reload
@@ -758,14 +758,31 @@ export function narrowSessionLogEntry(raw: unknown): SessionLogWireT | null {
  * the hand-rolled `"Unauthorized"`. This is a client-side boundary rejection,
  * so it is its own class and `errorMessage` renders its `message` through the
  * plain-`Error` arm.
+ *
+ * ## It names the FIELD, not only the shape (issue 2199)
+ *
+ * It used to carry `shape` alone, so the modal read "the server sent a subject
+ * profile this version of the app cannot read" and stopped there. A
+ * self-hoster hit that on 1.5.8 — the release where `narrowMeResponse` made
+ * `GET /me` validated at all — and the only move available was rolling the
+ * package back to 1.5.7, which works because the old bundle does not check,
+ * not because the payload was right. `mismatch` is the missing half.
+ *
+ * The prior sentence is KEPT and the detail APPENDED. It is the part that
+ * tells a non-developer that the app and the server disagree, which is the
+ * actionable fact for them; the path is for whoever reads the report.
  */
 export class WireShapeError extends Error {
   readonly shape: string;
+  readonly mismatch: WireMismatch;
 
-  constructor(shape: string) {
-    super(`the server sent a ${shape} this version of the app cannot read`);
+  constructor(shape: string, mismatch: WireMismatch) {
+    super(
+      `the server sent a ${shape} this version of the app cannot read — ${describeMismatch(mismatch)}`,
+    );
     this.name = "WireShapeError";
     this.shape = shape;
+    this.mismatch = mismatch;
   }
 }
 
@@ -780,9 +797,15 @@ export class WireShapeError extends Error {
  * could.
  */
 function narrowRest<const N extends WireNode>(node: N, raw: unknown, shape: string): Infer<N> {
-  const out = validate(node, raw);
-  if (out === null) throw new WireShapeError(shape);
-  return out;
+  const out = validateDetailed(node, raw);
+  if (out.ok) return out.value;
+  // Logged AS WELL AS thrown, and the duplication is the point (issue 2199).
+  // The boot chain renders this error's message, but every other door hands
+  // the throw to a catch that shows its own copy, or to none at all — and a
+  // mismatch nobody can name is the defect, not the modal. The console line
+  // is the one channel present on every path.
+  console.error(`[grappa] wire: unreadable ${shape} — ${describeMismatch(out.mismatch)}`);
+  throw new WireShapeError(shape, out.mismatch);
 }
 
 /** `GET /themes/:id`, `POST /themes`, `PATCH /themes/:id`, publish/unpublish/copy. */
