@@ -1413,6 +1413,25 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   🧾 Prior instance, same family: it auto-closed #540 while prod lacked the code.
   ⇒ **`board-check.sh` after EVERY merge, and read the issue's STATE, not your intention for it.**
 - **No CI polling by the worker — the ORCHESTRATOR watches CI.**
+- 🔴🔴 **UNA SONDA DI SCHEDULING OS-LEVEL NON COPRE I CRON DI SESSIONE DELL'HARNESS, E LO ZERO CHE
+  PRODUCE SI LEGGE COME «NIENTE SPARERA' DA SOLO» (orch, 2026-09-15, corretta da un pari).** Per
+  stabilire se un cold deploy fosse armato ho probato **`crontab -l -u root` su entrambi gli host,
+  `/etc/crontab`, `/etc/cron.d`, la crontab del jail, `atq`, i systemd timer** — tutto vuoto, **con
+  `sudo -n` e pos ctrl vivo** (`sudo -n id` → `uid=0`; senza quello, su m42 `see_other_uids=0` rende
+  ogni sonda un falso negativo garantito). Le misure erano **giuste**. La conclusione — *"non c'e'
+  nessun cold armato, il grilletto e' mio"* — era **falsa**: il trigger era un **cron one-shot della
+  sessione Claude Code di un pari** (`CronCreate`/`CronList`), che **non vive in nessuno di quei
+  posti** e che `sudo`, `atq` e `systemctl` non possono vedere **per costruzione**.
+  🥇 **La domanda giusta non e' «c'e' un cron?» ma «QUALI SCHEDULER ESISTONO su questo sistema, e
+  li ho guardati tutti?»** — e la fleet ne ha uno **dentro l'harness**, invisibile all'OS.
+  ⇒ **Prima di dichiarare che nulla e' schedulato, CHIEDI AI PARI cosa hanno armato**: e' l'unico
+  canale che copre quella classe. *Ennesima faccia dello zero falso e plausibile: non lo strumento
+  rotto, non l'artefatto sbagliato, non il privilegio — ma un SUBSTRATO INTERO fuori dall'inquadratura.*
+  🥇 **E la meta' che vale per chi decide: fra due trigger concorrenti vince quello a EVENTO, non
+  quello a ORA FISSA.** Un cron a orologio taglia il tag anche se la CI e' slittata e main non ha il
+  bump; un trigger a evento spara dopo aver verificato. **Dallo come RAGIONE al pari che si sfila,
+  cosi' puo' contestarla — e fatti confermare la cancellazione con l'ARTEFATTO** (l'output di
+  `CronList`), non con un "fatto".
 - 🥇🥇 **DOPO UN REBASE SU UN FILE CON `merge=union`, CHIEDI ANCHE L'ASSE CHE LA RICETTA
   `DESIGN_NOTES` NON GUARDA: «il rebase poteva toccare il CODICE» (w2, 2026-09-14 — un check che
   NON avevo chiesto).** I quattro controlli della ricetta rispondono **solo per il file conteso**;
