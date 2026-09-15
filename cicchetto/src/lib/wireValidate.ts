@@ -115,22 +115,170 @@ type InferObject<O, Q extends string, D extends Depth> = {
 const REJECT = Symbol("wireValidate.reject");
 
 /**
+ * Where a payload diverged from its schema, in terms a reader can act on.
+ *
+ * Issue 2199: a REST mismatch used to reach the user as "the server sent a
+ * subject profile this version of the app cannot read" and nothing else. The
+ * walk knew the field and threw it away one frame later.
+ *
+ * ## The payload is not printed, on purpose
+ *
+ * `got` is the JSON TYPE that arrived, never the value. This text is rendered
+ * in the boot-failure modal, which a self-hoster screenshots into a public
+ * issue, and it is `console.error`-ed; a wire shape may carry a token or a
+ * signed URL. The rule: the SCHEMA is ours and is printed (`expected` spells
+ * out a declared literal or closed set), the PAYLOAD is not ours and is not.
+ * The cost is that an enum mismatch reads `got string` and the reader opens
+ * the network tab for the value — accepted, because the likeliest field case
+ * is an absent key, which `got: "absent"` diagnoses completely.
+ */
+export type WireMismatch = {
+  /** Dotted path from the root of the shape, `""` for the root node itself. */
+  readonly path: string;
+  /** What the schema declares there. */
+  readonly expected: string;
+  /** The JSON type that arrived, or `"absent"` for an omitted required key. */
+  readonly got: string;
+};
+
+/** The outcome of a validation that is asked WHY, not just whether. */
+export type WireValidation<N> =
+  | { readonly ok: true; readonly value: Infer<N> }
+  | { readonly ok: false; readonly mismatch: WireMismatch };
+
+/** One line naming the field, what was declared, and what arrived. */
+export function describeMismatch(mismatch: WireMismatch): string {
+  const where = mismatch.path === "" ? "(root)" : mismatch.path;
+  return `${where}: expected ${mismatch.expected}, got ${mismatch.got}`;
+}
+
+// The walk records its rejection on the way OUT: the leaf that rejects writes
+// `expected`/`got` into these slots, and every frame it unwinds through pushes
+// its own segment. Segments therefore arrive leaf-first and are reversed at
+// the door.
+//
+// Module-level and mutable BECAUSE the walk is synchronous and single-
+// threaded: there is nothing to interleave with. The alternative — threading a
+// path array down through every frame — does its bookkeeping on the path that
+// SUCCEEDS, which is the one `validate` runs on every WS event; this way no
+// allocation happens per field on the success path. Not measured; it is the
+// structure that differs, not a benchmarked number.
+//
+// Stale records cannot shadow a real one: EVERY rejection originates at a
+// `reject()` call, and `reject()` clears the segments. A union arm that failed
+// before a later arm succeeded leaves a record behind, and the next genuine
+// rejection anywhere overwrites it wholesale.
+let rejectionSegments: string[] = [];
+let rejectionExpected = "";
+let rejectionGot = "";
+// How many fields of the OUTERMOST object frame were consumed before it gave
+// up. Only `walkUnion` reads it, to tell an arm the payload never meant to be
+// (dead at field 0, its `kind` discriminator) from the arm it was trying to be
+// (dead further in). Every object frame writes it as REJECT unwinds and the
+// outermost writes last, which is the frame whose field order describes the
+// arm. Failure path only.
+let rejectionProgress = 0;
+
+function reject(expected: string, got: string): typeof REJECT {
+  rejectionSegments = [];
+  rejectionExpected = expected;
+  rejectionGot = got;
+  rejectionProgress = 0;
+  return REJECT;
+}
+
+/**
  * Validate `raw` against a generated schema node.
  *
  * Returns the value typed as the schema describes, or `null` when the payload
  * does not match. Top-level wire shapes are objects (or unions of objects),
  * so `null` is unambiguous there; a nested nullable field is handled inside
  * the walk, where the sentinel keeps the two apart.
+ *
+ * This is the door for the WS narrowers, which drop an unreadable event and
+ * carry on (unknown-is-never-fatal). A caller that must THROW wants
+ * `validateDetailed` — same walk, but it hands back the reason.
  */
 export function validate<const N extends WireNode>(node: N, raw: unknown): Infer<N> | null {
   const out = walk(node, raw);
   return out === REJECT ? null : (out as Infer<N>);
 }
 
+/**
+ * `validate`, plus the reason it said no.
+ *
+ * Two doors for two questions, not two answers to one: the WS boundary asks
+ * "does it match" and drops the event either way, while the REST boundary
+ * THROWS and therefore owes whoever hits it the name of the field. One walk
+ * serves both — the reason costs nothing until a payload is actually bad.
+ */
+export function validateDetailed<const N extends WireNode>(
+  node: N,
+  raw: unknown,
+): WireValidation<N> {
+  const out = walk(node, raw);
+  if (out !== REJECT) return { ok: true, value: out as Infer<N> };
+  return {
+    ok: false,
+    mismatch: { path: joinPath(rejectionSegments), expected: rejectionExpected, got: rejectionGot },
+  };
+}
+
+// Segments carry their own separator so an index does not get a stray dot in
+// front of it. Record keys on this wire are channel names and nicks, so the
+// non-identifier case is routine rather than exotic: `messages["#grappa"].body`
+// reads, `messages.#grappa.body` does not.
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function keySegment(key: string): string {
+  return IDENTIFIER.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
+}
+
+function joinPath(segments: readonly string[]): string {
+  let out = "";
+  for (let i = segments.length - 1; i >= 0; i--) out += segments[i];
+  return out.startsWith(".") ? out.slice(1) : out;
+}
+
+function describeGot(raw: unknown): string {
+  if (raw === null) return "null";
+  if (Array.isArray(raw)) return "array";
+  return typeof raw;
+}
+
+/** What the schema declares at a node, spelled for a human. */
+function describeNode(node: WireNode): string {
+  if (typeof node === "string") {
+    switch (node) {
+      case "s":
+        return "string";
+      case "i":
+        return "number";
+      case "b":
+        return "boolean";
+      case "z":
+        return "null";
+      case "x":
+        return "anything";
+    }
+  }
+  if ("l" in node) return `the literal ${JSON.stringify(node.l)}`;
+  if ("e" in node) return `one of ${node.e.map((v) => JSON.stringify(v)).join(" | ")}`;
+  if ("a" in node) return "array";
+  if ("r" in node) return "object";
+  if ("p" in node) return `tuple of ${node.p.length}`;
+  if ("u" in node) return `one of ${node.u.length} variants`;
+  return "object";
+}
+
 function walk(node: WireNode, raw: unknown): unknown | typeof REJECT {
   if (typeof node === "string") return walkScalar(node, raw);
-  if ("l" in node) return raw === node.l ? raw : REJECT;
-  if ("e" in node) return typeof raw === "string" && node.e.includes(raw) ? raw : REJECT;
+  if ("l" in node) return raw === node.l ? raw : reject(describeNode(node), describeGot(raw));
+  if ("e" in node) {
+    return typeof raw === "string" && node.e.includes(raw)
+      ? raw
+      : reject(describeNode(node), describeGot(raw));
+  }
   if ("a" in node) return walkArray(node.a, raw);
   if ("r" in node) return walkRecord(node.r, raw);
   if ("p" in node) return walkTuple(node.p, raw);
@@ -141,13 +289,13 @@ function walk(node: WireNode, raw: unknown): unknown | typeof REJECT {
 function walkScalar(node: "s" | "i" | "b" | "x" | "z", raw: unknown): unknown | typeof REJECT {
   switch (node) {
     case "s":
-      return typeof raw === "string" ? raw : REJECT;
+      return typeof raw === "string" ? raw : reject("string", describeGot(raw));
     case "i":
-      return typeof raw === "number" ? raw : REJECT;
+      return typeof raw === "number" ? raw : reject("number", describeGot(raw));
     case "b":
-      return typeof raw === "boolean" ? raw : REJECT;
+      return typeof raw === "boolean" ? raw : reject("boolean", describeGot(raw));
     case "z":
-      return raw === null ? null : REJECT;
+      return raw === null ? null : reject("null", describeGot(raw));
     // `term()` on the server — the field is carried through unvalidated
     // BECAUSE the typespec declines to describe it, not as a shortcut.
     case "x":
@@ -156,33 +304,45 @@ function walkScalar(node: "s" | "i" | "b" | "x" | "z", raw: unknown): unknown | 
 }
 
 function walkArray(inner: WireNode, raw: unknown): unknown | typeof REJECT {
-  if (!Array.isArray(raw)) return REJECT;
+  if (!Array.isArray(raw)) return reject("array", describeGot(raw));
   const out: unknown[] = [];
-  for (const el of raw) {
-    const v = walk(inner, el);
-    if (v === REJECT) return REJECT;
+  for (let i = 0; i < raw.length; i++) {
+    const v = walk(inner, raw[i]);
+    if (v === REJECT) {
+      rejectionSegments.push(`[${i}]`);
+      return REJECT;
+    }
     out.push(v);
   }
   return out;
 }
 
 function walkRecord(inner: WireNode, raw: unknown): unknown | typeof REJECT {
-  if (!isPlainObject(raw)) return REJECT;
+  if (!isPlainObject(raw)) return reject("object", describeGot(raw));
   const out: Record<string, unknown> = {};
   for (const [k, el] of Object.entries(raw)) {
     const v = walk(inner, el);
-    if (v === REJECT) return REJECT;
+    if (v === REJECT) {
+      rejectionSegments.push(keySegment(k));
+      return REJECT;
+    }
     out[k] = v;
   }
   return out;
 }
 
 function walkTuple(members: readonly WireNode[], raw: unknown): unknown | typeof REJECT {
-  if (!Array.isArray(raw) || raw.length !== members.length) return REJECT;
+  if (!Array.isArray(raw)) return reject(`tuple of ${members.length}`, describeGot(raw));
+  if (raw.length !== members.length) {
+    return reject(`tuple of ${members.length}`, `tuple of ${raw.length}`);
+  }
   const out: unknown[] = [];
   for (let i = 0; i < members.length; i++) {
     const v = walk(members[i] as WireNode, raw[i]);
-    if (v === REJECT) return REJECT;
+    if (v === REJECT) {
+      rejectionSegments.push(`[${i}]`);
+      return REJECT;
+    }
     out.push(v);
   }
   return out;
@@ -192,11 +352,53 @@ function walkTuple(members: readonly WireNode[], raw: unknown): unknown | typeof
 // each arm with its `kind` literal, so a mismatched arm fails on its first
 // field and the scan is cheap; an ambiguous union would be a server-side
 // modelling bug, not something to resolve by scoring arms here.
+//
+// When EVERY arm fails, the arm that got FURTHEST is the one reported. Issue
+// 2199, and it is not a nicety: `S_MeJSONMeJson` is a union at the root, so
+// reporting the union itself would answer "(root): expected one of 2 variants"
+// for every unreadable `/me` in the field — true, useless, and the exact
+// defect the issue is about.
+//
+// "Furthest" is fields consumed FIRST, path depth second, and the order
+// matters: both arms of `/me` are one field deep at their `kind`, so depth
+// alone hands a broken visitor profile the user arm's discriminator and names
+// the wrong field with a straight face. Fields consumed separates them —
+// the arm whose `kind` matched walks on and dies at the real fault. First arm
+// wins a genuine tie (nothing distinguishes them), and when the winner never
+// got past its own root the union describes itself, which is then the whole
+// truth rather than a guess.
 function walkUnion(arms: readonly WireNode[], raw: unknown): unknown | typeof REJECT {
+  let best: {
+    segments: string[];
+    expected: string;
+    got: string;
+    progress: number;
+  } | null = null;
   for (const arm of arms) {
     const v = walk(arm, raw);
     if (v !== REJECT) return v;
+    const further =
+      best === null ||
+      rejectionProgress > best.progress ||
+      (rejectionProgress === best.progress && rejectionSegments.length > best.segments.length);
+    if (further) {
+      best = {
+        segments: rejectionSegments.slice(),
+        expected: rejectionExpected,
+        got: rejectionGot,
+        progress: rejectionProgress,
+      };
+    }
   }
+  if (best === null || best.segments.length === 0) {
+    return reject(describeNode({ u: arms }), describeGot(raw));
+  }
+  // Re-seat the winner whole — segments included, so an enclosing frame keeps
+  // prepending to a path of the true depth.
+  rejectionSegments = best.segments;
+  rejectionExpected = best.expected;
+  rejectionGot = best.got;
+  rejectionProgress = best.progress;
   return REJECT;
 }
 
@@ -205,20 +407,33 @@ function walkObject(
   optional: readonly string[] | undefined,
   raw: unknown,
 ): unknown | typeof REJECT {
-  if (!isPlainObject(raw)) return REJECT;
+  if (!isPlainObject(raw)) return reject("object", describeGot(raw));
   const out: Record<string, unknown> = {};
+  let consumed = 0;
   for (const [key, fieldNode] of Object.entries(fields)) {
     const present = raw[key];
     if (present === undefined) {
       // An `optional(:k)` key the server may omit. A REQUIRED key that is
       // absent is a shape mismatch, not a tolerance: the typespec is where
-      // the server says which is which.
-      if (optional?.includes(key)) continue;
+      // the server says which is which. Reported AT the key rather than at
+      // this object, because "which key" is the whole question.
+      if (optional?.includes(key)) {
+        consumed++;
+        continue;
+      }
+      reject(describeNode(fieldNode), "absent");
+      rejectionSegments.push(keySegment(key));
+      rejectionProgress = consumed;
       return REJECT;
     }
     const v = walk(fieldNode, present);
-    if (v === REJECT) return REJECT;
+    if (v === REJECT) {
+      rejectionSegments.push(keySegment(key));
+      rejectionProgress = consumed;
+      return REJECT;
+    }
     out[key] = v;
+    consumed++;
   }
   // Undeclared keys are dropped, never rejected — additive-only (GH #447).
   return out;

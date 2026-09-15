@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { type Infer, validate, type WireNode } from "../lib/wireValidate";
+import {
+  describeMismatch,
+  type Infer,
+  validate,
+  validateDetailed,
+  type WireNode,
+} from "../lib/wireValidate";
+
+// Every `validateDetailed` case below reads the mismatch off a REJECTED walk,
+// so a helper that fails loudly on an accepted one keeps a broken schema from
+// reading as a passing assertion on `undefined`.
+function mismatchOf<const N extends WireNode>(node: N, raw: unknown) {
+  const out = validateDetailed(node, raw);
+  if (out.ok) throw new Error(`expected a mismatch, but the payload validated: ${raw}`);
+  return out.mismatch;
+}
 
 // #429 — the interpreter for the generated wire schemas. These pin the
 // grammar itself; the shapes it is pointed at live in `wireSchema.ts` and are
@@ -155,6 +170,180 @@ describe("Infer", () => {
       expect(parsed.s).toBe("x");
     }
     expect(validate(node, { kind: "a", n: "1" })).toBeNull();
+  });
+});
+
+// Issue 2199 — the second door. `validate` answers "does it match"; this one
+// answers "why not", because the REST boundary THROWS and a throw that cannot
+// name the field is unactionable for whoever hits it in the field.
+describe("validateDetailed — the matching half", () => {
+  it("hands back the same value `validate` does, under an ok flag", () => {
+    const node = { o: { a: "s" } } as const;
+    const out = validateDetailed(node, { a: "x" });
+    expect(out).toEqual({ ok: true, value: { a: "x" } });
+    expect(out.ok ? out.value : null).toEqual(validate(node, { a: "x" }));
+  });
+
+  it("drops an undeclared key exactly as `validate` does (additive-only, #447)", () => {
+    const node = { o: { a: "s" } } as const;
+    const out = validateDetailed(node, { a: "x", tomorrows_field: 1 });
+    expect(out).toEqual({ ok: true, value: { a: "x" } });
+  });
+});
+
+describe("validateDetailed — where the payload diverged", () => {
+  it("names the empty path for a root that is the wrong type at all", () => {
+    expect(mismatchOf({ o: { a: "s" } }, "nope")).toEqual({
+      path: "",
+      expected: "object",
+      got: "string",
+    });
+  });
+
+  it("names a top-level key", () => {
+    expect(mismatchOf({ o: { a: "s" } }, { a: 1 })).toEqual({
+      path: "a",
+      expected: "string",
+      got: "number",
+    });
+  });
+
+  it("names a nested key with a dotted path", () => {
+    const node = { o: { outer: { o: { inner: "i" } } } } as const;
+    expect(mismatchOf(node, { outer: { inner: "1" } })).toEqual({
+      path: "outer.inner",
+      expected: "number",
+      got: "string",
+    });
+  });
+
+  it("names the INDEX of the offending array element", () => {
+    const node = { o: { rows: { a: { o: { n: "i" } } } } } as const;
+    expect(mismatchOf(node, { rows: [{ n: 1 }, { n: 2 }, { n: "3" }] })).toEqual({
+      path: "rows[2].n",
+      expected: "number",
+      got: "string",
+    });
+  });
+
+  it("names a record key, bracket-quoting one that is not an identifier", () => {
+    const node = { r: "i" } as const;
+    expect(mismatchOf(node, { plain_key: "x" }).path).toBe("plain_key");
+    // Record keys are channel names and nicks on this wire, so the common
+    // case is exactly the one a bare dot would render ambiguously.
+    expect(mismatchOf(node, { "#grappa": "x" }).path).toBe('["#grappa"]');
+  });
+
+  it("names the tuple position", () => {
+    const node = { p: ["s", "i"] } as const;
+    expect(mismatchOf(node, ["a", "b"])).toEqual({
+      path: "[1]",
+      expected: "number",
+      got: "string",
+    });
+  });
+
+  it("reports an ABSENT required key at the key, not at its parent", () => {
+    const node = { o: { outer: { o: { inner: "b" } } } } as const;
+    expect(mismatchOf(node, { outer: {} })).toEqual({
+      path: "outer.inner",
+      expected: "boolean",
+      got: "absent",
+    });
+  });
+
+  it("says nothing about an OPTIONAL key that is absent", () => {
+    const node = { o: { a: "s", note: "s" }, q: ["note"] } as const;
+    expect(validateDetailed(node, { a: "x" })).toEqual({ ok: true, value: { a: "x" } });
+  });
+
+  it("prints the declared members of a closed set, never the received value", () => {
+    const m = mismatchOf({ e: ["parked", "connected"] }, "hunter2");
+    expect(m.expected).toBe('one of "parked" | "connected"');
+    expect(m.got).toBe("string");
+    // The SCHEMA is ours and is printed; the PAYLOAD is not ours and is not.
+    expect(JSON.stringify(m)).not.toContain("hunter2");
+  });
+
+  it("prints the declared literal, never the received value", () => {
+    const m = mismatchOf({ l: "user" }, "s3cret");
+    expect(m.expected).toBe('the literal "user"');
+    expect(JSON.stringify(m)).not.toContain("s3cret");
+  });
+
+  it("distinguishes null, an array and a plain object in `got`", () => {
+    expect(mismatchOf("s", null).got).toBe("null");
+    expect(mismatchOf("s", []).got).toBe("array");
+    expect(mismatchOf("s", {}).got).toBe("object");
+    expect(mismatchOf("s", undefined).got).toBe("undefined");
+  });
+});
+
+describe("validateDetailed — unions report the arm that got furthest", () => {
+  // The generated unions lead each arm with its `kind` literal (`S_MeJSONMeJson`
+  // is exactly this shape), so the arms the payload never meant to be die at
+  // depth 1 while the intended one dies at the real fault. Reporting the
+  // union itself would answer "one of 2 variants" for every `/me` in the
+  // field — true, and useless, which is the defect issue 2199 is about.
+  const node = {
+    u: [
+      { o: { kind: { l: "user" }, home: { o: { rows: { a: "s" } } } } },
+      { o: { kind: { l: "visitor" }, incognito: "b" } },
+    ],
+  } as const;
+
+  it("reports the DEEPEST failure, not the last arm tried", () => {
+    expect(mismatchOf(node, { kind: "user", home: { rows: ["a", 2] } })).toEqual({
+      path: "home.rows[1]",
+      expected: "string",
+      got: "number",
+    });
+  });
+
+  it("still reports the deepest arm when the deep one is not the last", () => {
+    expect(mismatchOf(node, { kind: "visitor", incognito: "yes" })).toEqual({
+      path: "incognito",
+      expected: "boolean",
+      got: "string",
+    });
+  });
+
+  it("falls back to the union itself when no arm gets past the root", () => {
+    expect(mismatchOf(node, 42)).toEqual({
+      path: "",
+      expected: "one of 2 variants",
+      got: "number",
+    });
+  });
+
+  it("does not let a failed arm shadow a later sibling's real failure", () => {
+    // `a` succeeds through its SECOND arm, having already recorded a rejection
+    // for the first. If that record survived, `b`'s genuine failure would be
+    // reported at `a`'s path — green machinery pointing at the wrong field.
+    const sibling = { o: { a: { u: ["i", "s"] }, b: "b" } } as const;
+    expect(mismatchOf(sibling, { a: "x", b: 1 })).toEqual({
+      path: "b",
+      expected: "boolean",
+      got: "number",
+    });
+  });
+});
+
+describe("describeMismatch", () => {
+  it("renders a path, what was declared, and what arrived", () => {
+    expect(
+      describeMismatch({
+        path: "home_data.networks[0].recoverable",
+        expected: "boolean",
+        got: "absent",
+      }),
+    ).toBe("home_data.networks[0].recoverable: expected boolean, got absent");
+  });
+
+  it("names the root explicitly rather than rendering an empty path", () => {
+    expect(describeMismatch({ path: "", expected: "object", got: "string" })).toBe(
+      "(root): expected object, got string",
+    );
   });
 });
 
