@@ -1688,6 +1688,25 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   🥇 *Key off a structured field, never off a column position.*
 - 🔴 **`gh` needs a git repo to resolve the base repo** — from a scratchpad dir it dies with "failed to determine
   base repo". Run from the repo, or pass `-R vjt/grappa-irc`.
+- 🔴🔴 **`gh issue close` PRENDE UN ARGOMENTO SOLO, E IL SUO FALLIMENTO SI TRAVESTE DA BOARD PULITA
+  (orch, 2026-09-15, misurato).** `gh issue close 2185 2188` muore
+  `accepts 1 arg(s), received 2` — **nessuna delle due si chiude**. Il travestimento: nello stesso
+  turno avevo già strippato le `status:*`, e **`board-check.sh` non guarda le issue OPEN senza
+  label** (per costruzione: quello è il backlog) ⇒ ha stampato **`✓ BOARD OK`** su due issue che
+  dovevano essere chiuse e non lo erano. ⇒ **la chiusura si verifica leggendo lo `state`, una per
+  una**, mai dall'assenza di drift sulla board.
+  🥇 **E la regola generale, che è l'errore vero: NON ANNUNCIARE L'ESITO DI UN'AZIONE DAL BLOCCO CHE
+  LA ESEGUE.** Avevo infilato il `grappa-post.py` *"issues 2185 and 2188 closed"* nello stesso Bash
+  block del `close`: il close è morto, il post è partito, e la riga è uscita su `#grappa-live`
+  **prima che il fatto esistesse** — dove l'ha beccata un pari. *Stessa famiglia del
+  `<verificatore> || echo "PULITO"`: un verdetto che si stampa senza aver letto la risposta.*
+  ⇒ **prima l'azione, poi la LETTURA dello stato, e solo allora l'annuncio.**
+  ⚠️ **Compagno misurato lo stesso minuto, e restringe la cura invece di allargarla:
+  `gh issue view N --json state` può leggere STANTIO.** Un pari ha letto `OPEN` **due volte fra
+  00:46 e 00:47Z** su una issue con `closedAt=00:45:38Z`. **Non è universale** — la mia verifica a
+  00:45:5x aveva già letto `CLOSED` — e **il meccanismo (cache API) è INFERITO, non misurato**.
+  ⇒ il campo che decide è **`closedAt`**, non `state`: un timestamp non può essere stantio in modo
+  plausibile, un booleano sì.
 - 🥇 **A background gate SURVIVES `/clear`. DIAGNOSE-THEN-CLEAR-THEN-FIX** when a worker hits 40% mid-debug on a
   red — a bare clear strands the next session on a red it must re-derive. **The cheapest clear is the one taken
   while the worker is already blocked**, at a boundary where its output is durable (pushed, or posted to the issue).
