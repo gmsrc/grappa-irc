@@ -15253,3 +15253,118 @@ which is inert today — `SettingsDrawer.tsx` contains no `<form>` at all. It
 is kept for consistency with the file's own Enter idiom on the device-rename
 input, in a drawer whose sibling panes (`TotpSettings`, `IgnoresSettings`,
 `PerformSettings`) are forms.
+<!-- entry #2185 -->
+
+---
+
+## 2026-09-15 — issue 2185: two DCC ceilings become operator settings
+
+`Grappa.Dcc`'s two byte ceilings are now `Grappa.ServerSettings` keys —
+`dcc.max_transfer_bytes` (default 100 MiB) and `dcc.global_cap_bytes`
+(default 10 GiB). `budget_available?/0` reads BOTH. The retention ceiling
+stays a module attribute: it is vjt's ruling rather than a capacity number,
+and the only thing a knob on it could express is "let a stranger's bytes
+outlive our own users' uploads", which is what the ruling forbids.
+
+**The moduledoc argued the opposite and had to be rewritten, not amended.**
+It said all three were attributes *"chosen deliberately over a
+`Grappa.ServerSettings` knob"*, on the ground that *a knob on a
+stranger-fed ceiling is a knob whose only use is to widen the exposure*.
+vjt overruled it: a 10 MiB ceiling declines ordinary files and an operator
+cannot raise it without a rebuild. What a wider ceiling buys an attacker
+stays bounded by the spool budget, by `Policy`'s daily accept quota, and by
+a human click per file. The old paragraph had already called the promotion
+additive — this is that move.
+
+### The ruling's arithmetic does not hold, and the value is still right
+
+vjt's final ruling (superseding a 1 GiB one 37 seconds earlier) keeps the
+"100 max-size transfers" invariant and drops "a tenth of the upload
+budget", with the parenthesis *"100 × 100 MiB = 10 GiB exactly"*.
+
+**That equality is false.** 100 × 100 MiB is 10 000 MiB = 9.765625 GiB, not
+10 GiB. The property was always a FLOOR, in the old pair too: 1 GiB / 10 MiB
+held 102.4 transfers, not 100. The new pair holds **102.4** as well — the
+ratio is conserved exactly — so 10 GiB is the right number and only the
+equality never existed. Recorded because a later reader looking at two
+defaults and a false equality "fixes" the defaults. `server_settings_test`
+asserts `100 * max < spool` as the positive control against restoring it.
+
+### The refusal carries the ceiling: `{:too_large, cap}`
+
+Going past the letter of the issue, which said the decline line follows the
+setting "for free". It did while the ceiling was a constant. Once settable,
+the gate read in `Policy.check_size/1` and the render read in `Report` are
+two reads straddling a possible admin change, and the sentence can name a
+ceiling that refused nothing. `Transfer` truncates at the DECLARED size and
+never consults the ceiling, so `check_size/1` is the whole ceiling and the
+gate→report pair is the only observable straddle there is.
+
+Blast radius was measured before the change, not after: `Session.Server`
+treats the refusal as an opaque term at all three sites and needed no edit.
+The type was already an atoms-and-tuples union, so the shape is the file's
+own idiom.
+
+**Unplanned dividend:** `Grappa.Dcc.Report` is PURE again. It no longer
+reaches for `Dcc.max_transfer_bytes/0`, so its Boundary dep on `Grappa.Dcc`
+is gone and `report_test` stays a plain `ExUnit.Case` with no sandbox — the
+cure that avoided the second read also avoided dragging a Repo behind every
+sentence the module renders.
+
+### `megabytes/1`: fix the rendering, not the key
+
+`div/2` was justified by a premise this change removes — *"the cap is a
+power-of-two multiple of a MiB today"*. An operator typing the natural
+`100_000_000` gets a 95.367 MiB ceiling that printed **95**; anything under
+a MiB printed **0**. Now one decimal place, TRUNCATED never rounded up, so
+the printed figure never sits above the real limit and a user resending at
+the number they read is not refused twice.
+
+Validating the key to whole MiB was the alternative and was rejected: every
+`upload.*_cap_bytes` sibling takes any positive integer, so it would fork
+the validation shape across two families and refuse a legal byte count to
+protect a rendering. **Known limit, declared not cured:** a ceiling below
+0.1 MiB still prints "0" — closing it needs a second unit, which is more
+machinery than a configuration nobody sane writes deserves.
+
+### No cross-validation between the two keys
+
+vjt's guard, kept at both doors (context and controller). A per-transfer
+ceiling above the spool budget is a legal end state — it only means nothing
+fits until the budget is raised. Rejecting it would make the ORDER of the
+two writes significant, and `AdminSettingsTab` saves one field at a time.
+`budget_available?/0` still pre-reserves at the ceiling, so LOWERING the
+per-transfer cap immediately frees reservation for queued offers: no
+migration, no backfill.
+
+### The per-key gate is as strong as the test, and no stronger
+
+`admin/settings_controller.ex` promises a key added to a closed set but not
+to its applier is *"caught by that key's own per-key test, loudly"*.
+Measured with three mutants:
+
+* clause removed, key left in `@dcc_keys` → **4 tests red** (`FunctionClauseError`);
+* key removed from `@dcc_keys`, clauses left → **3 tests red** (422);
+* a NEW key (`spool_retention_seconds`) in the set with no clause and no
+  test → **46/46 green**.
+
+So the gate watches the keys a TEST names, never the set. Nothing structural
+pairs an entry with its clause: `reject_unknown_keys/3` compares strings at
+runtime, so the compiler cannot see the pair, and no test enumerates the
+sets. The promise is about the suite. Adding a key without its per-key test
+in the same pass ships a latent 500. Left unclosed here deliberately —
+`@upload_keys` has had the identical hole since #1407, so the remedy belongs
+to the gate, not to this slice.
+
+### What this slice does NOT cover
+
+`ServerSettings.public_view/0` is untouched, by the orchestrator's decision:
+it is WIRE, so publishing the ceilings costs a protocol bump plus a
+`wire_pin --update` while #2191 is already taking the next number. The
+consequence is real and is stated rather than hidden — **cic still cannot
+tell a user the ceiling BEFORE a 178 MB offer is declined**, which is
+exactly the confusion that produced the issue. Filed as a deliberate
+follow-up.
+
+⚠️ The rulings behind this entry were RELAYED through the orchestrator, not
+read from vjt directly (`author.login` does not discriminate a relay).
