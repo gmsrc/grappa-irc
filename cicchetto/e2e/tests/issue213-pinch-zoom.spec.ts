@@ -41,9 +41,17 @@
 // harness, not the product. Momentum, rubber-band, and whether iOS starts a
 // rubber-band before the dismiss binder's claim lands are all on a real phone.
 
-import type { CDPSession, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { openMediaViewerInPlace, uploadSizedImageAndGetLink } from "../fixtures/mediaViewer";
+import {
+  cdpDragUp,
+  DOUBLE_TAP_MS,
+  paintedOffset,
+  touchPipeline,
+  zoomByDoubleTap,
+  zoomState,
+} from "../fixtures/mediaViewerTouch";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -55,11 +63,6 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // assertion about displacement is answered by one pixel whether or not the
 // feature works (see uploadSizedImageAndGetLink).
 const IMAGE_SIZE = { width: 400, height: 300 };
-
-// Must match DOUBLE_TAP_MS in MediaViewerModal.tsx. Used only to SEPARATE two
-// attempts so they cannot pair into a spurious double-tap — it is the
-// protocol's own window, not a guess at how slow the machine is.
-const DOUBLE_TAP_MS = 300;
 
 // Upload an image and open it in the media viewer, then narrow to the ZOOMABLE
 // <img> and the scroller that now wraps it.
@@ -84,103 +87,6 @@ async function openImageViewer(page: Page) {
   const scroller = viewer.locator(".media-viewer-zoom-scroller");
   await expect(scroller).toBeVisible({ timeout: 5_000 });
   return { viewer, img, scroller };
-}
-
-// Chromium's real input pipeline. `Emulation.setTouchEmulationEnabled` rather
-// than a `test.use({ hasTouch: true })` on the project: the context options
-// stay exactly what every other chromium spec boots with, so nothing about the
-// app's own startup changes to serve this one file.
-async function touchPipeline(page: Page): Promise<CDPSession> {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 2 });
-  return cdp;
-}
-
-async function cdpTap(cdp: CDPSession, x: number, y: number): Promise<void> {
-  const point = [{ x, y, radiusX: 8, radiusY: 8, force: 1, id: 1 }];
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point });
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-}
-
-// Double-tap to the 2× toggle, retried up to four times.
-//
-// A bounded retry rather than one attempt, and it is not a timeout in disguise:
-// the pairing window is 300ms of WALL CLOCK, and a loaded CI box can miss it
-// between two round trips. A missed attempt leaves the scale AT 1 — the toggle
-// only fires when the pair lands — so the loop cannot overshoot into a zoom-out,
-// and the wait between attempts is the window itself, which is what makes two
-// attempts unable to pair with each other. The caller asserts the scale
-// afterwards, so a loop that never lands is a red and not a silent skip.
-//
-// `tap` is the engine's own tap verb in both projects: CDP on chromium,
-// `page.touchscreen.tap` (`Input.dispatchTapEvent`) on webkit, which is the ONE
-// touch verb Playwright's WebKit backend exposes.
-async function zoomByDoubleTap(
-  page: Page,
-  cdp: CDPSession | null,
-  x: number,
-  y: number,
-): Promise<void> {
-  const tap = async (): Promise<void> => {
-    if (cdp === null) await page.touchscreen.tap(x, y);
-    else await cdpTap(cdp, x, y);
-  };
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if ((await zoomState(page)).scale > 1) return;
-    await tap();
-    await tap();
-    await page.waitForTimeout(DOUBLE_TAP_MS + 100);
-  }
-}
-
-// Drag one finger from (x, y) upward by `dy`, in steps, through the browser's
-// own gesture recogniser.
-async function cdpDragUp(
-  cdp: CDPSession,
-  page: Page,
-  x: number,
-  y: number,
-  dy: number,
-): Promise<void> {
-  const point = (at: number) => [{ x, y: at, radiusX: 8, radiusY: 8, force: 1, id: 1 }];
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: point(y) });
-  for (let moved = 10; moved <= dy; moved += 10) {
-    await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: point(y - moved),
-    });
-    await page.waitForTimeout(16);
-  }
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-}
-
-// Where the picture is PAINTED, relative to the scroller's own frame. This is
-// the geometric oracle: with `transform-origin: 0 0` the painted top sits at
-// exactly minus the scroll offset, so it moves if and only if the scroller
-// really panned. Reading `scrollTop` alone would pass on a scroller that
-// scrolls nothing visible.
-async function paintedOffset(page: Page): Promise<{ dx: number; dy: number; scrollTop: number }> {
-  return page.evaluate(() => {
-    const scroller = document.querySelector(".media-viewer-zoom-scroller");
-    const img = document.querySelector(".media-viewer-media--zoomable");
-    if (scroller === null || img === null) throw new Error("zoomable image gone");
-    const s = scroller.getBoundingClientRect();
-    const i = img.getBoundingClientRect();
-    return { dx: i.left - s.left, dy: i.top - s.top, scrollTop: scroller.scrollTop };
-  });
-}
-
-async function zoomState(page: Page) {
-  return page.evaluate(() => {
-    const scroller = document.querySelector(".media-viewer-zoom-scroller");
-    const img = document.querySelector(".media-viewer-media--zoomable");
-    if (scroller === null || img === null) throw new Error("zoomable image gone");
-    return {
-      scale: new DOMMatrixReadOnly(getComputedStyle(img).transform).a,
-      scrollHeight: scroller.scrollHeight,
-      clientHeight: scroller.clientHeight,
-    };
-  });
 }
 
 test("#213 — a synthesized two-finger pinch scales the modal image (chromium)", async ({

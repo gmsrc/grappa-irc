@@ -40,6 +40,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { openMediaViewerInPlace, uploadImageAndGetLink } from "../fixtures/mediaViewer";
+import { dragOnModal } from "../fixtures/mediaViewerTouch";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -61,52 +62,11 @@ async function openImageViewer(page: Page): Promise<{ viewer: Locator }> {
   return { viewer: await openMediaViewerInPlace(page, link) };
 }
 
-// One vertical drag on the modal, plus the browser's own reading of where the
-// modal sat before and during it. Body inlined in the page rather than passed
-// as a stringified function: `new Function` in page context is eval, and cic
-// serves a CSP with no `unsafe-eval` — the drag would throw where it matters
-// and nowhere else.
-//
-// `dy` is applied in TWO moves because the binder claims LATE: it decides on a
-// touchmove, never on the touchstart. `lift` is optional so a caller can read
-// the paint with the finger still down, which is the only moment it exists.
-async function dragOnModal(
-  viewer: Locator,
-  dy: number,
-  lift: boolean,
-): Promise<{ before: number; after: number }> {
-  return viewer.evaluate(
-    (el, opts) => {
-      // The vertical component of the computed matrix — what the browser
-      // actually resolved, not the inline string we wrote.
-      const verticalOffset = (): number => new DOMMatrixReadOnly(getComputedStyle(el).transform).f;
-      const at = (y: number): Touch =>
-        new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
-      const fire = (type: string, touch: Touch): void => {
-        const list = type === "touchend" ? [] : [touch];
-        el.dispatchEvent(
-          new TouchEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            touches: list,
-            targetTouches: list,
-            changedTouches: [touch],
-          }),
-        );
-      };
-      const y0 = 200;
-      const before = verticalOffset();
-      fire("touchstart", at(y0));
-      fire("touchmove", at(y0 + Math.sign(opts.dy) * 40));
-      fire("touchmove", at(y0 + opts.dy));
-      const after = verticalOffset();
-      if (opts.lift) fire("touchend", at(y0 + opts.dy));
-      return { before, after };
-    },
-    { dy, lift },
-  );
-}
-
+// The drag itself is fixtures/mediaViewerTouch.ts since issue 2208 gave it a
+// second consumer — the wide-and-short picture has to keep dismissing on a
+// scroller that now fills the whole viewer body, and that re-proof drives the
+// SAME gesture. What stays here is the login + channel preamble these three
+// tests share, exactly as #1441 left it.
 test("#1438 — a downward drag on the viewer dismisses it (chromium)", async ({ page }) => {
   test.slow();
   const { viewer } = await openImageViewer(page);
