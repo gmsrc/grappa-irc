@@ -10649,29 +10649,53 @@ button.topic-bar-windows-opener {
   width: 100%;
 }
 
-/* issue 2150 / issue 2181 — the two leave-reason rows. They used to be flex
- * ROWS with the input told to grow (`flex: 1; min-width: 0`) beside a save
- * button; both buttons are gone, and vjt asked for the label on a line of its
- * own so the field is not pushed in by a word ("altrimenti mangia spazio nel
- * rail").
+/* issue 2150 / issue 2181 / issue 2209 — the two leave-reason rows. They used
+ * to be flex ROWS with the input told to grow (`flex: 1; min-width: 0`)
+ * beside a save button; both buttons are gone, and vjt asked for the label on
+ * a line of its own so the field is not pushed in by a word ("altrimenti
+ * mangia spazio nel rail").
  *
  * A COLUMN is what says that, and it replaces the grow rule rather than
- * joining it: `align-items: stretch` overrides the `center` inherited from
- * `.settings-drawer label` and sizes the input to the row on the CROSS axis,
- * where there is no automatic minimum to fight, so neither `flex: 1` nor
- * `min-width: 0` has anything left to do.
+ * joining it: `align-items: stretch` sizes the input to the row on the CROSS
+ * axis, where there is no automatic minimum to fight, so neither `flex: 1`
+ * nor `min-width: 0` has anything left to do.
  *
- * On the CLASS, same posture as the select rule above. The leave-message row
- * carries no visible text, so the column is inert there and the two rows keep
- * answering identically — which is the point: one rule, two rows, no instance
- * ever singled out. */
-.leave-reason-row {
+ * 🔴 issue 2209 — this rule shipped as a bare `.leave-reason-row`, and the
+ * comment here asserted that `align-items: stretch` "overrides the `center`
+ * INHERITED from `.settings-drawer label`". It never did, and the word
+ * "inherited" is what hid it: `align-items` is not an inherited property.
+ * `.settings-drawer label` declares it on this very element, so the two rules
+ * COMPETE — and (0,1,1) beats (0,1,0) whatever the source order. The only
+ * declaration that applied was `flex-direction: column`, because nothing
+ * contends it, so the rows rendered as CENTRED columns with shrink-to-fit
+ * inputs. The `gap` below was the second silent casualty: 0.5rem from the
+ * base won, never 0.35rem.
+ *
+ * The cure is the selector and not a second rule sizing the control. There is
+ * one defect — a live cascade conflict — and `width: 100%` on the input would
+ * buy back the field while leaving the `reason:` span centred, which is half
+ * of what was asked for and leaves the conflict in place for the next
+ * property. `.settings-drawer label.leave-reason-row` is (0,2,1): it outranks
+ * the base on CLASS COUNT rather than tying it at (0,1,1) and relying on
+ * source order, and it is the shape `.settings-drawer label.prefs-list`
+ * already uses for the identical "a drawer label that stacks" job.
+ * `:where(.upload-ttl-fieldset, .auto-away-fieldset) > label > select` above
+ * is NOT the model, measured: `:where()` contributes nothing, so that rule is
+ * (0,0,2) and wins only because no other rule declares `width` on that
+ * select. A contested property needs specificity; an uncontested one does
+ * not.
+ *
+ * Still on the CLASS, still both rows, no instance ever singled out. The
+ * leave-message row carries no visible text, so the column is inert there and
+ * the two rows keep answering identically — which is the point. */
+.settings-drawer label.leave-reason-row {
   flex-direction: column;
   align-items: stretch;
-  /* Tighter than the 0.5rem this label inherits, which was the horizontal gap
-   * between a field and its button. Stacked, the pair wants the rhythm the
-   * drawer's other label-above-input column already uses
-   * (`.settings-identity`), not the block rhythm between controls. */
+  /* Tighter than the 0.5rem this label would otherwise take from
+   * `.settings-drawer label`, which was the horizontal gap between a field
+   * and its button. Stacked, the pair wants the rhythm the drawer's other
+   * label-above-input column already uses (`.settings-identity`), not the
+   * block rhythm between controls. */
   gap: 0.35rem;
 }
 

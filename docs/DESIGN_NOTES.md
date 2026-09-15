@@ -15548,3 +15548,107 @@ column wants `NOT NULL` once the rows are cleaned, is parked as a separate
 question by the issue itself. The prod rows were deleted ahead of the code fix
 (30 of 870, backed up off-server), so this change is about the next message
 purge rather than the outage, which is already closed.
+<!-- entry #2209 -->
+
+---
+
+## 2026-09-15 — issue 2209: a guard comment that named the wrong mechanism, and the test that could not contradict it
+
+The two leave-reason rows in the settings drawer rendered as centred columns
+with shrink-to-fit inputs. `.leave-reason-row` asked for
+`flex-direction: column; align-items: stretch; gap: 0.35rem` and got exactly
+one of the three.
+
+### The loss, and the word that hid it
+
+`.settings-drawer label` is `(0,1,1)`; `.leave-reason-row` is `(0,1,0)`. The
+base rule wins `align-items` whatever the source order, so the rows kept
+`center`. Only `flex-direction: column` applied, because nothing contends it —
+a column laid out with `align-items: center` is precisely the reported
+screenshot.
+
+`gap` was the second casualty and nobody had noticed it: the base declares
+`0.5rem` and won the same way, so the 0.35rem rhythm the rule asks for had
+never been on screen either. One specificity loss, two properties, and the
+surviving property is the one that made the result look deliberate.
+
+The comment above the rule asserted that `align-items: stretch` "overrides the
+`center` INHERITED from `.settings-drawer label`". **`align-items` is not an
+inherited property.** `.settings-drawer label` sets it on the very same
+element; the two rules compete, and competition is decided by specificity,
+which the word "inherited" invites nobody to check. A reader who believed the
+comment had no reason to compute anything. The comment is corrected in place
+rather than deleted — a wrong explanation of a real mechanism is worth keeping
+as a corrected one, because the next author will reach for the same shortcut.
+
+### Why the selector and not the control
+
+`width: 100%` on the input was the cheaper edit and is refused. It buys back
+the field and leaves the `reason:` span centred, which is half of what was
+asked for, and it leaves a live cascade conflict in place for whatever
+property the rule declares next. The defect is one specificity loss; the fix
+is to stop losing.
+
+`.settings-drawer label.leave-reason-row` is `(0,2,1)`. It outranks the base on
+CLASS COUNT rather than tying it at `(0,1,1)` — `label.leave-reason-row` would
+have tied and won only on source order, which is the kind of dependency that
+breaks silently when a sheet is reordered. The shape is not invented: the
+drawer's other stacking label, `.settings-drawer label.prefs-list`, has used
+it for the identical job since #963.
+
+The issue and the brief both offered
+`:where(.upload-ttl-fieldset, .auto-away-fieldset) > label > select` three
+blocks up as the model. **Measured, it is not one.** `:where()` contributes
+nothing, so that rule is `(0,0,2)` and wins only because no other rule in the
+sheet declares `width` on that select. It is a model for an UNCONTESTED
+property. A contested one needs specificity, and reading the working
+neighbour as "the posture that works here" is how the bare class got written
+in the first place.
+
+Still one rule for both rows: the leave-message row carries no visible text,
+so the column is inert there, and no instance is singled out.
+
+### The test, and what the old one could not say
+
+`SettingsDrawer.test.tsx` already asserted `align-items: stretch` on this
+rule. It was green for the two months the defect shipped, and it could not
+have been anything else: jsdom loads no stylesheet, so the assertion reads a
+DECLARATION off the source text. Declaring a property and applying it are
+different facts, and only an engine that runs the cascade separates them. The
+test was not weak — it was answering a different question than the one anyone
+reading it thought it answered.
+
+"A regression test is not practical here" was therefore checked rather than
+accepted. It is not true. `e2e/tests/issue2209-leave-reason-row-stretch.spec.ts`
+reads `getComputedStyle` on both rows in a real browser and asserts the used
+`align-items`, the used `row-gap`, the input's width against the row's content
+box, and the label's left edge against the content left edge. It carries an
+anti-hollow-green probe: an identical `<input>` with `align-self: flex-start`
+opts out of the container's `align-items`, so appending one measures the
+shrink-to-fit width in the real engine, and the spec fails loudly if the rail
+is too narrow for stretch to be observable instead of passing vacuously.
+
+The mutant is the defect itself — reverting the selector to the bare
+`.leave-reason-row` — and it is planted at the INTERSECTION the cure covers:
+one shared rule must break BOTH rows, so both are asserted through the same
+loop. A spec watching one row could not distinguish "one rule" from "two twin
+patches".
+
+Chromium only, declared rather than assumed: the broken fact is selector
+specificity, arithmetic defined by CSS Cascade Level 5 with no engine-specific
+behaviour, unlike #962's flex `min-height: auto` interaction whose iPhone
+provenance earned it a `@webkit` leg. A second engine would re-measure the same
+arithmetic at twice the cost.
+
+The source-level test survives, with its ceiling written into it: it pins the
+cure's SHAPE (the exact selector string, not a substring — `includes` would go
+green on a revert) and says in its own comment that the cascade is measured
+elsewhere.
+
+### The general rule
+
+A guard comment can be factually false, and this one held for two months
+because no test in the repo was capable of contradicting it. Before trusting
+one, check the mechanism it names against the code — particularly when it
+names inheritance for a non-inherited property, or an "override" without
+saying what it outranks.
