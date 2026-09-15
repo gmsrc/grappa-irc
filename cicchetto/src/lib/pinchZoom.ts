@@ -28,6 +28,13 @@
 // coordinates the same coordinate system times `s`, which is the whole of
 // `rescaleScroll`'s arithmetic. `Size` is the image's fit-to-viewer box, which
 // the component reads off the CSS rather than recomputing.
+//
+// Issue 2208 shifts that shared system by a constant and does not replace it:
+// the scroller now fills the viewer body and centres the picture, so the two
+// corners no longer coincide and `rescaleScroll` takes the picture's `origin`
+// inside the container. At origin (0,0) — every state before 2208, and any
+// picture that still fills its scroller — the term cancels and the arithmetic
+// is byte-for-byte the one above.
 
 export type Point = { x: number; y: number };
 export type Size = { width: number; height: number };
@@ -79,21 +86,39 @@ export const toggleZoom = (scale: number): number =>
 
 // Keep the point under `focus` under `focus` across a scale change.
 //
-// `focus` is in the scroll container's own viewport coordinates (0,0 = the
-// container's top-left corner, NOT the page's). With `transform-origin: 0 0`
-// the image point currently under it is `(scroll + focus) / from`, and putting
-// that same image point back under `focus` at the new scale is
-// `imagePoint * to - focus`. That is the whole derivation.
+// `focus` and `origin` are both in the scroll container's own coordinates (0,0
+// = the container's top-left content corner, NOT the page's): `focus` is where
+// the fingers are, `origin` is where the image's unscaled box starts inside the
+// container. With `transform-origin: 0 0` the <img> scales about ITS OWN
+// top-left, so the image point currently under the focus is
+// `(scroll + focus - origin) / from`, and putting that same image point back
+// under `focus` at the new scale is `imagePoint * to + origin - focus`. That is
+// the whole derivation.
 //
-// Deliberately NOT clamped here: assigning `scrollLeft`/`scrollTop` clamps to
-// the container's real bounds, which is the one authority that knows them — and
-// re-deriving those bounds in here is exactly the duplicated geometry #1805
-// deleted. A negative or over-large result is therefore correct input, not a
-// bug to guard.
-export const rescaleScroll = (scroll: Scroll, focus: Point, from: number, to: number): Scroll => {
+// `origin` was structurally zero until issue 2208 — the scroller shrink-wrapped
+// the picture, so the two frames had the same corner and the term cancelled. It
+// fills the body and centres the picture now, so the offset is real and a
+// wide-and-short picture carries ~160px of it. Passing it in rather than
+// folding it into `focus` at the call site keeps the mapping between the two
+// frames in ONE place: the caller measures, this function maps.
+//
+// Deliberately NOT clamped here, and issue 2208 makes that the answer to a
+// SECOND question as well: a gesture starting in the margin beside the picture
+// now lands a focus point OUTSIDE the image box, which is legal input and not
+// an error. Assigning `scrollLeft`/`scrollTop` clamps to the container's real
+// bounds, which is the one authority that knows them — and re-deriving those
+// bounds in here is exactly the duplicated geometry #1805 deleted. A negative
+// or over-large result is therefore correct output, not a bug to guard.
+export const rescaleScroll = (
+  scroll: Scroll,
+  focus: Point,
+  origin: Point,
+  from: number,
+  to: number,
+): Scroll => {
   if (from <= 0) return scroll;
   return {
-    left: ((scroll.left + focus.x) / from) * to - focus.x,
-    top: ((scroll.top + focus.y) / from) * to - focus.y,
+    left: ((scroll.left + focus.x - origin.x) / from) * to + origin.x - focus.x,
+    top: ((scroll.top + focus.y - origin.y) / from) * to + origin.y - focus.y,
   };
 };

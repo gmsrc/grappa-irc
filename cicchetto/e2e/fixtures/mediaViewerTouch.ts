@@ -145,27 +145,56 @@ export async function dragOnModal(
   );
 }
 
-// Where the picture is PAINTED, relative to the scroller's own frame. This is
-// the geometric oracle: with `transform-origin: 0 0` the painted top sits at
-// exactly minus the scroll offset, so it moves if and only if the scroller
-// really panned. Reading `scrollTop` alone would pass on a scroller that
-// scrolls nothing visible.
-export async function paintedOffset(
-  page: Page,
-): Promise<{ dx: number; dy: number; scrollTop: number }> {
+// Where the picture is PAINTED, relative to the scroller's own frame, beside
+// the two numbers that explain it. This is the geometric oracle: with
+// `transform-origin: 0 0` the painted top sits at the picture's layout origin
+// minus the scroll offset, so it moves if and only if the scroller really
+// panned. Reading `scrollTop` alone would pass on a scroller that scrolls
+// nothing visible.
+//
+// `originX`/`originY` are the issue-2208 half. The scroller used to shrink-wrap
+// the picture, so the origin was structurally zero and the invariant could be
+// written `dy === -scrollTop`; the scroller fills the viewer body now and
+// centres the picture inside it, so the honest form is
+// `dy === originY - scrollTop`, which collapses to the old one wherever the
+// picture still fills its box.
+export async function paintedOffset(page: Page): Promise<{
+  dx: number;
+  dy: number;
+  originX: number;
+  originY: number;
+  scrollLeft: number;
+  scrollTop: number;
+}> {
   return page.evaluate(() => {
     const scroller = document.querySelector(".media-viewer-zoom-scroller");
     const img = document.querySelector(".media-viewer-media--zoomable");
     if (scroller === null || img === null) throw new Error("zoomable image gone");
     const s = scroller.getBoundingClientRect();
     const i = img.getBoundingClientRect();
-    return { dx: i.left - s.left, dy: i.top - s.top, scrollTop: scroller.scrollTop };
+    return {
+      dx: i.left - s.left,
+      dy: i.top - s.top,
+      // The LAYOUT position a transform does not move — the same quantity
+      // ZoomableImage's `origin` mirrors, read the same way.
+      originX: (img as HTMLElement).offsetLeft,
+      originY: (img as HTMLElement).offsetTop,
+      scrollLeft: scroller.scrollLeft,
+      scrollTop: scroller.scrollTop,
+    };
   });
 }
 
-export async function zoomState(
-  page: Page,
-): Promise<{ scale: number; scrollHeight: number; clientHeight: number }> {
+// The zoom level the browser resolved, and whether there is anything to scroll.
+// Both axes: issue 2208 made the scroller wider than the picture as well as
+// taller, so "nothing overflows at fit" is now a claim about two numbers.
+export async function zoomState(page: Page): Promise<{
+  scale: number;
+  scrollHeight: number;
+  clientHeight: number;
+  scrollWidth: number;
+  clientWidth: number;
+}> {
   return page.evaluate(() => {
     const scroller = document.querySelector(".media-viewer-zoom-scroller");
     const img = document.querySelector(".media-viewer-media--zoomable");
@@ -174,6 +203,8 @@ export async function zoomState(
       scale: new DOMMatrixReadOnly(getComputedStyle(img).transform).a,
       scrollHeight: scroller.scrollHeight,
       clientHeight: scroller.clientHeight,
+      scrollWidth: scroller.scrollWidth,
+      clientWidth: scroller.clientWidth,
     };
   });
 }

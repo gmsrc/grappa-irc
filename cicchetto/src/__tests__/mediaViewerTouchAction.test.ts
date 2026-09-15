@@ -143,3 +143,60 @@ describe("media viewer — native pan stylesheet contract (#1805)", () => {
     expect(sizer).toMatch(/pointer-events:\s*none/);
   });
 });
+
+// issue 2208 — the gesture SURFACE. Same standing as the blocks above: jsdom
+// applies no stylesheet, so these are SOURCE-level assertions. The RENDERED
+// consequence — that a double-tap in the margin beside a wide-and-short picture
+// zooms, and that the picture itself does not move or grow — is measured in a
+// real browser by e2e/tests/issue2208-viewer-gesture-surface.spec.ts, which is
+// where the proof lives. These pin the declarations that spec depends on, so a
+// revert names itself here instead of surfacing as a mystery timeout there.
+describe("media viewer — gesture surface stylesheet contract (issue 2208)", () => {
+  it("makes the scroller FILL the body, which is what gives the gesture a surface", () => {
+    // The listeners are on the scroller, so its box is the only place a pinch
+    // or a double-tap can start. Shrink-wrapped around a 1200x40 upload it was
+    // ~38px tall inside a ~360px body, and the remaining ~160px above and below
+    // reached no listener at all. Both declarations are load-bearing and on
+    // different axes: `flex-grow` is the main axis (the body is a row),
+    // `align-self: stretch` is the cross one, and dropping either leaves half
+    // the dead margin in place.
+    const scroller = ruleBody(".media-viewer-zoom-scroller");
+    expect(scroller).toMatch(/flex-grow:\s*1/);
+    expect(scroller).toMatch(/align-self:\s*stretch/);
+  });
+
+  it("centres the picture INSIDE the scroller, without stretching it", () => {
+    // The body used to centre the scroller; the scroller centres the picture
+    // now, or filling the body would move the picture to its top-left corner
+    // and the rendered result would not be the one #2188 settled on.
+    //
+    // `align-items: center` is also the no-upscale guard on this rule: the flex
+    // default is `stretch`, which would pull the <img> to the full height of a
+    // box that is now half the viewport — exactly the upscale vjt ruled out.
+    const scroller = ruleBody(".media-viewer-zoom-scroller");
+    expect(scroller).toMatch(/display:\s*flex/);
+    expect(scroller).toMatch(/align-items:\s*center/);
+    expect(scroller).toMatch(/justify-content:\s*center/);
+    expect(scroller).not.toMatch(/align-items:\s*stretch/);
+  });
+
+  it("leaves the picture's own size declarations alone — the box grew, the picture did not", () => {
+    // The NEGATIVE control for the ruling, and the twin of #2188's own: a
+    // surface change that reached the <img> would be the upscale. Sizing the
+    // media is still the job of these three caps and nothing else.
+    const media = ruleBody(".media-viewer-media");
+    expect(media).toMatch(/max-width:\s*100%/);
+    expect(media).toMatch(/object-fit:\s*contain/);
+    expect(media).not.toMatch(/min-width/);
+    expect(media).not.toMatch(/min-height/);
+    expect(ruleBody(".media-viewer-media--zoomable")).not.toMatch(/width:/);
+  });
+
+  it("keeps the max-width cap, which is now also what lets the scroller shrink", () => {
+    // It used to only stop a zoomed picture from widening the modal. As a flex
+    // ITEM the scroller also has an automatic minimum size of its content's
+    // min-content width, and `max-width` is what caps that — without it a
+    // 1200px-wide upload cannot shrink to the modal and overflows instead.
+    expect(ruleBody(".media-viewer-zoom-scroller")).toMatch(/max-width:\s*100%/);
+  });
+});

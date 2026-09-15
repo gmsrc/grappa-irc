@@ -231,9 +231,16 @@ test("#1805 — a real one-finger drag moves the visible portion of the zoomed i
   // displacement and scroll offset are the same number seen twice, and
   // asserting both is what separates "the scroller moved" from "the reader saw
   // a different part of the picture".
+  //
+  // `originY` is issue 2208's term. The scroller used to shrink-wrap the
+  // picture, so the invariant read `dy === -scrollTop`; it fills the viewer body
+  // and centres the picture now, so the painted top is the picture's layout
+  // origin minus the scroll. Same equation, one constant no longer zero — and
+  // still zero for any picture that fills its scroller, so this is a
+  // generalisation and not a weakening.
   expect(after.scrollTop).toBeGreaterThan(before.scrollTop);
   expect(after.dy).toBeLessThan(before.dy - 20);
-  expect(Math.abs(after.dy + after.scrollTop)).toBeLessThan(2);
+  expect(Math.abs(after.dy + after.scrollTop - after.originY)).toBeLessThan(2);
 });
 
 test("@webkit @touch #1805 — the zoomable modal image and its scroller declare the pan (iPhone 15)", async ({
@@ -282,16 +289,20 @@ test("@webkit @touch #1805 — zooming creates a real scrollable area, and scrol
   // alone leaves scrollHeight === clientHeight and there is nothing to pan.
   expect(zoomed.scrollHeight).toBeGreaterThan(zoomed.clientHeight + 50);
 
-  // PRE-STATE, asserted rather than assumed: `dy === -scrollTop` is the whole
-  // geometric invariant (a 0 0 transform-origin puts the painted top at minus
-  // the scroll offset), and the double-tap has ALREADY scrolled — it anchors to
-  // the tapped point, which was the centre. The first draft of this spec
-  // assumed the pre-state was zero and asserted a 60px displacement against it;
-  // it went red by 128px, which is exactly the half-box the anchoring had
-  // correctly applied. The spec was wrong and the anchoring was right, so the
-  // fix is to measure the DELTA and to pin the invariant at both ends.
+  // PRE-STATE, asserted rather than assumed: `dy === originY - scrollTop` is
+  // the whole geometric invariant (a 0 0 transform-origin puts the painted top
+  // at the picture's layout origin minus the scroll offset), and the double-tap
+  // has ALREADY scrolled — it anchors to the tapped point, which was the
+  // centre. The first draft of this spec assumed the pre-state was zero and
+  // asserted a 60px displacement against it; it went red by 128px, which is
+  // exactly the half-box the anchoring had correctly applied. The spec was
+  // wrong and the anchoring was right, so the fix is to measure the DELTA and
+  // to pin the invariant at both ends.
+  //
+  // `originY` was structurally zero until issue 2208 gave the scroller the whole
+  // body to fill; the equation is the same one with that constant spelled out.
   const before = await paintedOffset(page);
-  expect(Math.abs(before.dy + before.scrollTop)).toBeLessThan(2);
+  expect(Math.abs(before.dy + before.scrollTop - before.originY)).toBeLessThan(2);
 
   // The DRAG cannot be driven here (see the header), so what is asserted is the
   // consequence a drag would produce: the scroller is real, and moving it moves
@@ -304,6 +315,6 @@ test("@webkit @touch #1805 — zooming creates a real scrollable area, and scrol
 
   const after = await paintedOffset(page);
   expect(after.scrollTop).toBe(target);
-  expect(Math.abs(after.dy + after.scrollTop)).toBeLessThan(2);
+  expect(Math.abs(after.dy + after.scrollTop - after.originY)).toBeLessThan(2);
   expect(after.dy).toBeLessThan(before.dy - 50);
 });

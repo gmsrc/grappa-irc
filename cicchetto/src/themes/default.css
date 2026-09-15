@@ -14258,25 +14258,58 @@ button.home-pane-network-title:hover .home-pane-network-slug {
    keeps a drag past either end off the page behind the modal, the same posture
    .media-viewer-text takes. position: relative makes it the containing block
    for the sizer below. max-width so a zoomed image never widens the modal
-   instead of scrolling inside it. */
+   instead of scrolling inside it — and, since issue 2208 made this a flex
+   ITEM, it is also what caps the automatic minimum size, which is what still
+   lets a 1200px-wide picture shrink to the modal instead of overflowing it.
+
+   issue 2208 — this box FILLS the body and centres the picture inside itself,
+   where it used to shrink-wrap the picture and be centred by the body. The
+   touch listeners are on THIS element (ZoomableImage's bindScroller), so its
+   box IS the surface a pinch or a double-tap can start from: wrapped tight
+   around a 1200x40 upload fitted to ~1134x38, every one of the ~160px above
+   and below it was body, not scroller, and a touch there reached no listener
+   at all. vjt, #grappa: «se mandi un immagine larga e bassa non devo andare a
+   fare pinch sui 4 pixel di altezza, e posso vederla ingrandita in tutta la
+   preview window». The second half is the same box seen from the other side: a
+   transform paints outside the scroller's bounds and `overflow` clips it, so a
+   zoomed wide-and-short picture used to be shown through a 38px slot.
+
+   NOT an upscale — vjt's ruling on that same report, and #2188's before it. The
+   <img> keeps its own max-width/max-height/object-fit: contain, so the PICTURE
+   renders at exactly the size it rendered at before; only the box around it
+   grew. `align-items: center` rather than the flex default `stretch` is part of
+   that: stretch would do precisely the stretching that was ruled out.
+
+   The offset this opens between the scroller's origin and the picture's is real
+   arithmetic and not a detail. `transform-origin: 0 0` scales the <img> about
+   ITS top-left, which is no longer the scroller's, so both the sizer's extent
+   and rescaleScroll's anchor are told where the picture starts (ZoomableImage's
+   `origin`, measured off `offsetLeft`/`offsetTop`). */
 .media-viewer-zoom-scroller {
   position: relative;
   overflow: auto;
   overscroll-behavior: contain;
   touch-action: pan-x pan-y;
   max-width: 100%;
+  flex-grow: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* A CSS transform does not change layout, so a scaled <img> produces no
    overflow and there would be nothing to scroll. This box is the scrollable
-   area: the component sizes it to fit x scale, and to ZERO at fit, so that at
-   fit the swipe-to-dismiss keeps the single-finger drag.
+   area: the component sizes it to the picture's painted far edge (issue 2208:
+   `origin + fit x scale`, because the picture no longer starts at the
+   scroller's own corner), and to ZERO at fit, so that at fit the
+   swipe-to-dismiss keeps the single-finger drag.
 
    Absolutely positioned on purpose — an out-of-flow child contributes to its
    container's scrollable overflow but NOT to its intrinsic size, so the <img>
-   goes on sizing the scroller at fit and its own max-width: 100% goes on
-   resolving against a box that does not move. In flow it would be a feedback
-   loop. pointer-events: none so the invisible box never eats a tap. */
+   goes on sizing the modal through the scroller and its own max-width: 100%
+   goes on resolving against a box that does not move. In flow it would be a
+   feedback loop. pointer-events: none so the invisible box never eats a tap. */
 .media-viewer-zoom-sizer {
   position: absolute;
   top: 0;

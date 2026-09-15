@@ -102,11 +102,21 @@ const touchPoint = (t: Touch): Point => ({ x: t.clientX, y: t.clientY });
 //
 // A transform does not change layout, so a scaled image creates no overflow and
 // there would be nothing to scroll. `.media-viewer-zoom-sizer` is what grows —
-// an absolutely-positioned box at `fit × scale`. Absolute so it stays out of
-// the scroller's intrinsic size: the <img> keeps sizing the container at fit,
-// its `max-width: 100%` keeps resolving against a box that does not move, and
-// the CSS remains the owner of the fit — this component only MIRRORS the fit it
-// measures, it never recomputes `object-fit: contain` in JS.
+// an absolutely-positioned box reaching the picture's painted far edge. Absolute
+// so it stays out of the scroller's intrinsic size: the <img> goes on sizing the
+// MODAL through the scroller's flex base size, its `max-width: 100%` keeps
+// resolving against a box that does not move, and the CSS remains the owner of
+// the fit — this component only MIRRORS the fit it measures, it never recomputes
+// `object-fit: contain` in JS.
+//
+// issue 2208 — the scroller FILLS the body now and centres the picture inside
+// itself, instead of shrink-wrapping it. The listeners are on the scroller, so
+// that box is the surface a gesture can start from, and a wide-and-short upload
+// used to leave ~160px of body above and below it where a touch reached nothing
+// at all. Two consequences travel with it, both here: the picture has an
+// `origin` inside the scroller that the sizer and `rescaleScroll` must know
+// about, and NOTHING about the picture's own size changes — no upscale, vjt's
+// ruling on the report, the <img>'s own caps and `object-fit: contain` untouched.
 //
 // Touch listeners are bound element-level via a ref + addEventListener with
 // touchmove `{ passive: false }` (bindSwipe precedent, ComposeBox): Solid
@@ -139,6 +149,14 @@ const ZoomableImage: Component<{
   // `paint` in MediaViewerDialog below.
   let scale = MIN_SCALE;
   let fit: Size = { width: 0, height: 0 }; // the CSS-computed fit box, mirrored
+  // issue 2208 — WHERE that fit box sits inside the scroller. Structurally zero
+  // until the scroller stopped shrink-wrapping the picture and started filling
+  // the body around it; a wide-and-short upload now carries ~160px of it on the
+  // vertical axis. Measured off the layout position rather than derived as
+  // `(scroller - fit) / 2`, because the stylesheet owns the centring and this
+  // component only ever MIRRORS what the CSS resolved — the same posture it
+  // already takes towards the fit itself.
+  let origin: Point = { x: 0, y: 0 };
 
   // Non-reactive gesture state, mutated across the touchstart→move→end span.
   let gestureStartScale = MIN_SCALE; // scale when the current pinch began
@@ -151,9 +169,15 @@ const ZoomableImage: Component<{
   // rounded to an integer, so `fit × 1` can exceed the real box by a sub-pixel
   // — enough overflow for the browser to claim the drag and take the dismiss
   // away. Zero is the only value that cannot do that.
+  //
+  // Above fit the box has to reach the picture's FAR edge, and issue 2208 moved
+  // that edge: scrollable overflow is measured from the scroller's content
+  // origin, which the picture no longer starts at. `origin + fit × scale` is
+  // exactly the painted bottom-right, so nothing past the picture is reachable
+  // and nothing on it is not.
   const sizerSize = (): Size =>
     scale > MIN_SCALE
-      ? { width: fit.width * scale, height: fit.height * scale }
+      ? { width: origin.x + fit.width * scale, height: origin.y + fit.height * scale }
       : { width: 0, height: 0 };
 
   const paint = (): void => {
@@ -185,6 +209,7 @@ const ZoomableImage: Component<{
     const to = rescaleScroll(
       { left: scroller.scrollLeft, top: scroller.scrollTop },
       focus,
+      origin,
       previous,
       scale,
     );
@@ -198,13 +223,40 @@ const ZoomableImage: Component<{
   // handler catches one. `clientWidth` and not `getBoundingClientRect`: the
   // rect is the TRANSFORMED box, so it would report `fit × scale` and feed the
   // sizer its own output.
+  //
+  // issue 2208 reads the picture's POSITION here too, and it still reads the
+  // IMAGE — with the two boxes no longer identical, measuring the scroller
+  // would hand the sizer its own container. `offsetLeft`/`offsetTop` for the
+  // same reason `clientWidth` beat the rect: they are the LAYOUT position, which
+  // a transform does not move, and the scroller is the offsetParent because it
+  // is the nearest `position: relative` ancestor.
   const measureFit = (): void => {
     if (image === undefined) return;
     const next: Size = { width: image.clientWidth, height: image.clientHeight };
-    if (next.width === fit.width && next.height === fit.height) return;
+    const nextOrigin: Point = { x: image.offsetLeft, y: image.offsetTop };
+    const unchanged =
+      next.width === fit.width &&
+      next.height === fit.height &&
+      nextOrigin.x === origin.x &&
+      nextOrigin.y === origin.y;
+    if (unchanged) return;
     fit = next;
+    origin = nextOrigin;
     paint();
   };
+
+  // ONE observer for BOTH boxes, and the second one is not decoration: since
+  // issue 2208 the picture's origin is a function of the SCROLLER's size as
+  // well as its own, so a window that only gets WIDER re-centres the very same
+  // picture — an observer on the <img> alone would never fire for it. Built at
+  // component scope rather than inside a ref so both binders can hand it their
+  // element whatever order Solid runs them in. Guarded for jsdom, which ships
+  // no ResizeObserver (the #285 precedent in ScrollbackPane): the load handler
+  // still measures once there.
+  const boxes = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measureFit);
+  onCleanup(() => {
+    boxes?.disconnect();
+  });
 
   const onTouchStart = (e: TouchEvent): void => {
     gestureStartScale = scale;
@@ -256,6 +308,7 @@ const ZoomableImage: Component<{
 
   const bindScroller = (el: HTMLDivElement): void => {
     scroller = el;
+    boxes?.observe(el);
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -269,13 +322,8 @@ const ZoomableImage: Component<{
 
   const bindImage = (el: HTMLImageElement): void => {
     image = el;
-    // Guarded for jsdom, which ships no ResizeObserver (the #285 precedent in
-    // ScrollbackPane): the load handler still measures once there.
-    const observer =
-      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measureFit);
-    observer?.observe(el);
+    boxes?.observe(el);
     onCleanup(() => {
-      observer?.disconnect();
       image = undefined;
     });
   };
