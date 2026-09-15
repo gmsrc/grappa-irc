@@ -916,9 +916,7 @@ describe("ScrollbackPane", () => {
     expect(lines[0]?.textContent ?? "").not.toContain("1789506923831");
     expect(lines[1]).toHaveTextContent("← CTCP ping reply from bob (no round trip to report)");
     expect(lines[1]?.textContent ?? "").not.toContain("42");
-    expect(lines[2]).toHaveTextContent(
-      "← CTCP PING reply from NickServ (no round trip to report)",
-    );
+    expect(lines[2]).toHaveTextContent("← CTCP PING reply from NickServ (no round trip to report)");
     // The non-PING arm is untouched: its args ARE the answer (#641 above).
   });
 
