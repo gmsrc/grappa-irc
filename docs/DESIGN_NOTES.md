@@ -16167,3 +16167,74 @@ one fails 3 of 40 and exactly the installed-PWA row. The e2e half is an A/B
 across two browser contexts differing in one byte range of one string (`27_0`
 against `26_0`), which is what makes "every platform without the gate renders
 identically" a pixel comparison instead of a claim.
+<!-- entry #2220 -->
+
+---
+
+## 2026-09-15 — issue 2220: the raw PING token was a REST refetch, not a failed correlation
+
+The issue named two defects behind one paste (`← CTCP PING reply from
+peluche: 1789500570263` in `$server`) and said which of three cic surfaces
+the row travelled would pick the patch. That was measured on the dev stack
+with `peluche-test-2220` self-pinging on Azzurra, main bundle `DshPHrM7`,
+one tab, WS + DB both read.
+
+**What the round trip persists (three rows, all `sender = own nick`):**
+
+| id | channel | kind | body | meta |
+|---|---|---|---|---|
+| 4320 | `#sbiffo` | privmsg | `\x01PING 1789506923831\x01` | `ctcp_verb`, `ctcp_args`, `ctcp_target` |
+| 4321 | `$server` | notice | `CTCP PING query → answered` | sender_* only |
+| 4322 | `$server` | notice | `\x01PING 1789506923831\x01` | `ctcp_verb`, `ctcp_args`, sender_* |
+
+**The self-ping DID correlate, live.** The source window (`#sbiffo`) rendered
+`-peluche-test-2220- CTCP PING reply from peluche-test-2220: 660 ms` — the
+synthesized row from `subscribe.ts`'s gate. The reply travelled the `$server`
+channel handler, never the own-nick DM arm: `route_non_channel_notice/3`
+sends every CTCP-framed NOTICE to `$server` unconditionally, and cic's
+`$server` handler runs `routeMessage` → `maybeConsumeCtcpReply` with
+`ownNick = null`, so the `sender !== ownNick` guard at the DM arm (the issue's
+proposed edit for defect B) is never in the path. **Defect B does not
+exist; no cic gate was widened.** Sythos' peer screenshot and this self-ping
+are the same code path with a different sender.
+
+**Where the paste came from.** Clicking `azzurra` in the sidebar AFTER the
+ping opened `$server` cold and it showed exactly the reported two rows: the
+`query → answered` visibility row and `← CTCP PING reply from
+peluche-test-2220: 1789506923831`. The consumed reply was appended to the
+SOURCE window's in-memory scrollback and to nothing else; `$server` had no
+in-memory copy, so its first open refetched row 4322 raw from the DB through
+`ScrollbackPane`'s notice CTCP arm, which drew verb, sender and the token
+verbatim. That is defect A, and it is not the "reply nobody asked for" edge:
+it is EVERY REST-delivered copy of a PING reply — the cold `$server` open, a
+reload, a second device — because the pending entry lives in one tab's
+memory (`pingCorrelation`, identity-scoped, 60 s TTL) while the row lives in
+the DB.
+
+**Fix: the render arm, not a subscribe-side synthesis.** The issue's design
+for A proposed a cic-owned display row minted where the correlated one is
+(`subscribe.ts`, `meta: {}`). That covers only the live WS path; the paste
+came through REST, where no gate runs. `ScrollbackPane`'s notice CTCP arm is
+the ONE place both paths render, so it now draws a PING reply as
+`← CTCP PING reply from <sender> (no round trip to report)` and never prints
+`ctcp_args` for that verb. Non-PING replies keep their args: those ARE the
+answer (#641). Deliberately rejected, as the issue did: reading the token as
+epoch milliseconds and subtracting — right for our own `/ping`, wrong for a
+`/ctcp … PING <anything>` and for any peer, and a plausible number that
+silently invents a measurement is worse than a row that says it has none.
+The row stays visible (losing it would hide that somebody answered a
+question nobody asked) and stays raw in the store — the wire and the DB are
+untouched, only the render changed.
+
+**Open question 2 (where a self-ping's RTT lands): answered by the
+measurement** — the source window, like every other peer, because the
+correlated path never cared who the sender was. Question 3 (a local fast
+path for self-ping) stays as the issue assumed: the full round trip through
+the bouncer and the upstream is the thing being measured, and 660 ms on a
+Tuesday evening is a number worth having.
+
+**Known and left alone:** after a reload the source window's `660 ms` row is
+gone for good (it was never persisted) and the `$server` copy reads "no round
+trip to report". Persisting the RTT server-side would fix that and the
+second-device case at once, but the server has no clock to subtract against
+— the token is the client's — and #591 chose client-side synthesis on purpose.
