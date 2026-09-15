@@ -60,7 +60,12 @@ const BootFailure: Component<{ error: unknown; onRetry: () => void }> = (props) 
       <p class="boot-failure-title" role="alert">
         Could not load Grappa.
       </p>
-      <p class="boot-failure-detail">{failureText(props.error)}</p>
+      {/* The testid is on the DETAIL, not the container: issue 2199 is about
+            what this paragraph says, and asserting the box cannot tell the
+            fixed title apart from the failure text inside it. */}
+      <p class="boot-failure-detail" data-testid="boot-failure-detail">
+        {failureText(props.error)}
+      </p>
       {/* #1877 — THE LABEL NAMES WHAT IT RESTARTS. "Retry" and "Reload" both
             read as "try again" to anyone who has not read this file, and a
             self-hoster who hit this screen on iOS reported not knowing which to

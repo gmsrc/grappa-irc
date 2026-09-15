@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   narrowAdminEvent,
   narrowAdminSnapshot,
@@ -1298,6 +1298,66 @@ describe("REST narrowers (#1400)", () => {
 
   it("tolerates an EXTRA field — the contract is additive (#447)", () => {
     expect(() => narrowThemeResponse({ ...theme, a_field_from_the_future: 1 })).not.toThrow();
+  });
+
+  // Issue 2199 — naming the shape is not enough to act on. A self-hoster on
+  // 1.5.8 hit an unreadable `/me`, read "the server sent a subject profile
+  // this version of the app cannot read", and had no way to learn which key
+  // was wrong; the only move left was rolling the package back.
+  describe("the thrown error names the FIELD", () => {
+    function thrownBy(fn: () => unknown): WireShapeError {
+      try {
+        fn();
+      } catch (err) {
+        if (err instanceof WireShapeError) return err;
+        throw err;
+      }
+      throw new Error("expected a WireShapeError, but nothing was thrown");
+    }
+
+    it("carries the mismatch as data, not only inside the message", () => {
+      const err = thrownBy(() => narrowThemeResponse({ ...theme, apply_count: "12" }));
+      expect(err.mismatch).toEqual({ path: "apply_count", expected: "number", got: "string" });
+    });
+
+    it("reports an omitted required key as absent, at that key", () => {
+      const { in_use: _dropped, ...older } = theme;
+      // `in_use` is `"i"` in `S_ThemesWireT`, read off the generated schema
+      // rather than guessed from the name.
+      expect(thrownBy(() => narrowThemeResponse(older)).mismatch).toEqual({
+        path: "in_use",
+        expected: "number",
+        got: "absent",
+      });
+    });
+
+    it("puts the field in the message, which is what the modal renders", () => {
+      const { in_use: _dropped, ...older } = theme;
+      const err = thrownBy(() => narrowThemeResponse(older));
+      expect(err.message).toContain("in_use");
+      expect(err.message).toContain("theme");
+      // The pre-2199 copy is kept — it is what tells a non-developer the app
+      // and the server disagree; the field is appended, not substituted.
+      expect(err.message).toContain("this version of the app cannot read");
+    });
+
+    it("still names the shape (#1400's contract is unchanged)", () => {
+      expect(thrownBy(() => narrowThemeResponse({})).shape).toBe("theme");
+    });
+
+    it("logs the same line, so a swallowed throw is still diagnosable", () => {
+      const seen: string[] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        seen.push(args.map(String).join(" "));
+      });
+      try {
+        const { in_use: _dropped, ...older } = theme;
+        expect(() => narrowThemeResponse(older)).toThrow(WireShapeError);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(seen.some((line) => line.includes("in_use") && line.includes("absent"))).toBe(true);
+    });
   });
 
   it("RECONSTRUCTS the object from declared fields, dropping the undeclared", () => {
