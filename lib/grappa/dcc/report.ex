@@ -81,12 +81,15 @@ defmodule Grappa.Dcc.Report do
   bump. Adding one later is additive, at the cost of that bump.
   """
 
-  use Boundary, top_level?: true, deps: [Grappa.Dcc, Grappa.Dcc.Policy, Grappa.IRC]
+  # issue 2185 dropped `Grappa.Dcc`: the decline line used to re-read
+  # `Dcc.max_transfer_bytes/0`, and now the ceiling arrives inside the
+  # refusal term. The module is PURE again — no Repo behind any sentence
+  # it renders, which is what lets its test stay a plain `ExUnit.Case`.
+  use Boundary, top_level?: true, deps: [Grappa.Dcc.Policy, Grappa.IRC]
 
   # `Transfer` is named only in a typespec, which is metadata rather
   # than an xref edge — hence no `Grappa.Dcc.Transfer` in `deps:` above,
   # and the forced compile agrees.
-  alias Grappa.Dcc
   alias Grappa.Dcc.{Policy, Transfer}
   alias Grappa.IRC.{DCC, Message}
 
@@ -193,8 +196,13 @@ defmodule Grappa.Dcc.Report do
   defp refusal_reason(:ssrf_blocked),
     do: "the offered address is not one this bouncer will dial"
 
-  defp refusal_reason(:too_large),
-    do: "it is larger than the #{megabytes(Dcc.max_transfer_bytes())} MB limit for a DCC transfer"
+  # The cap comes off the REFUSAL, never off a fresh read: it is an
+  # operator setting since issue 2185, and `Grappa.Dcc.Policy.check_size/1`
+  # already read the value that said no. A second read here could name a
+  # ceiling that refused nothing. It also keeps this module PURE — no
+  # Repo, which is why its test still needs no sandbox.
+  defp refusal_reason({:too_large, cap}),
+    do: "it is larger than the #{megabytes(cap)} MB limit for a DCC transfer"
 
   defp refusal_reason(:rate_limited),
     do: "you have already accepted #{Policy.daily_accepts()} DCC transfers today"
@@ -205,11 +213,36 @@ defmodule Grappa.Dcc.Report do
   defp refusal_reason(:too_many_offers),
     do: "too many DCC offers are already waiting for an answer"
 
-  # Whole MB, because a byte count in a sentence a human reads is noise.
-  # `div/2`, not a float: the cap is a power-of-two multiple of a MiB
-  # today, and a rounded decimal would invite someone to "fix" the
-  # rounding rather than the cap.
-  defp megabytes(bytes), do: div(bytes, 1024 * 1024)
+  # Whole MB, because a byte count in a sentence a human reads is noise —
+  # and ONE decimal place when the ceiling is not a whole number of MiB.
+  #
+  # 🔴 This was `div/2`, and the comment justifying it rested on a premise
+  # issue 2185 removed: *"the cap is a power-of-two multiple of a MiB
+  # today"*. It is an operator setting now, and the natural thing for an
+  # operator to type is a decimal byte count — 100_000_000 is a 95.367 MiB
+  # ceiling that `div/2` printed as **95**, and anything under a MiB it
+  # printed as **0**. The decline line is the one sentence that tells the
+  # user what to do next; a number it understates by a third of a MB, or
+  # collapses to zero, is the paletto this fixes.
+  #
+  # Truncated (`Float.floor/2`), never rounded up: the printed figure must
+  # never sit ABOVE the real limit, or a user resending at exactly the
+  # number they read is refused a second time.
+  #
+  # ⚠️ **Known limit, declared rather than cured:** a ceiling below 0.1 MiB
+  # still prints "0". Closing it needs a SECOND unit, and a second unit is
+  # more machinery than a configuration nobody sane writes deserves.
+  #
+  # The alternative — validating the setting to whole MiB — was rejected:
+  # every sibling in the `upload.*_cap_bytes` family takes any positive
+  # integer, so it would fork the validation shape across two families and
+  # refuse a legal byte count to protect a rendering. Fix the rendering.
+  defp megabytes(bytes) do
+    case Float.floor(bytes / (1024 * 1024), 1) do
+      mb when mb == trunc(mb) -> Integer.to_string(trunc(mb))
+      mb -> Float.to_string(mb)
+    end
+  end
 
   @doc """
   The peer's filename made safe to RENDER — control bytes stripped, length

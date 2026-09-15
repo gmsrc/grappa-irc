@@ -64,10 +64,18 @@ defmodule Grappa.Dcc.Policy do
   @daily_accepts 10
 
   @typedoc """
-  Why an offer was not admitted. Distinct atoms, one per axis, because
-  each earns its own sentence — see the moduledoc.
+  Why an offer was not admitted. One distinct term per axis, because each
+  earns its own sentence — see the moduledoc.
+
+  `{:too_large, cap}` carries the ceiling that refused the offer. It is an
+  operator setting since issue 2185, so the value has to travel with the
+  refusal: a `Grappa.Dcc.Report` that re-read the setting would name
+  whatever the ceiling had become by the time the row was rendered, rather
+  than the one that actually said no. The three siblings stay bare atoms —
+  nothing about them is settable, so there is nothing to carry.
   """
-  @type refusal :: :ssrf_blocked | :too_large | :rate_limited | :insufficient_storage
+  @type refusal ::
+          :ssrf_blocked | {:too_large, pos_integer()} | :rate_limited | :insufficient_storage
 
   @doc """
   Whether an arriving offer may be HELD and shown to the operator.
@@ -76,7 +84,7 @@ defmodule Grappa.Dcc.Policy do
   ceiling. Says nothing about quota or disk — those belong to the accept,
   see the moduledoc.
   """
-  @spec admit_offer(Offer.t()) :: :ok | {:error, :ssrf_blocked | :too_large}
+  @spec admit_offer(Offer.t()) :: :ok | {:error, :ssrf_blocked | {:too_large, pos_integer()}}
   def admit_offer(%Offer{} = offer) do
     with :ok <- check_address(offer.ip) do
       check_size(offer.size)
@@ -138,8 +146,17 @@ defmodule Grappa.Dcc.Policy do
   # trusted afterwards either; `Transfer` truncates the drained stream at
   # exactly this many bytes, so declaring low to slip under the ceiling
   # buys the sender a truncated file rather than a bypass.
+  #
+  # 🔴 ONE read of the ceiling per offer, and the value travels in the
+  # refusal (issue 2185). `Transfer` truncates at the DECLARED size and
+  # never consults the ceiling, so this gate IS the whole ceiling — the
+  # only other place the number is spoken is the decline line, and a
+  # second read there could straddle an admin change and name a ceiling
+  # that refused nothing. Small window; the sentence exists to be TRUE.
   defp check_size(size) do
-    if size <= Dcc.max_transfer_bytes(), do: :ok, else: {:error, :too_large}
+    cap = Dcc.max_transfer_bytes()
+
+    if size <= cap, do: :ok, else: {:error, {:too_large, cap}}
   end
 
   defp check_budget do

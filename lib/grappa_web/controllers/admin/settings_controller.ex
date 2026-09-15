@@ -6,12 +6,12 @@ defmodule GrappaWeb.Admin.SettingsController do
   ## GET /admin/settings
 
   Returns the admin settings view — the `upload` subtree of
-  `public_view/0` plus the admin-only `addressing` subtree (#543, read
-  straight from the `Grappa.ServerSettings` accessors, NOT part of
-  `public_view/0`). It deliberately OMITS the #324 `http_host_aliases`
-  that the authenticated `/api/server-settings` carries: those are
-  deployment config (env-derived), not an admin-editable DB setting.
-  Wire shape:
+  `public_view/0` plus the admin-only `addressing` (#543) and `dcc` (issue
+  2185) subtrees, both read straight from the `Grappa.ServerSettings`
+  accessors because neither is part of `public_view/0`. It deliberately
+  OMITS the #324 `http_host_aliases` that the authenticated
+  `/api/server-settings` carries: those are deployment config
+  (env-derived), not an admin-editable DB setting. Wire shape:
 
       %{
         settings: %{
@@ -23,6 +23,10 @@ defmodule GrappaWeb.Admin.SettingsController do
             audio_per_file_cap_bytes: pos_integer(),
             global_cap_bytes: pos_integer(),
             video_max_duration_seconds: pos_integer()
+          },
+          dcc: %{
+            max_transfer_bytes: pos_integer(),
+            global_cap_bytes: pos_integer()
           },
           addressing: %{
             mode: "pool_with_reservations" | "static_mapping_with_reservations",
@@ -45,20 +49,29 @@ defmodule GrappaWeb.Admin.SettingsController do
           "global_cap_bytes" => pos_integer(),
           "video_max_duration_seconds" => pos_integer()
         },
+        "dcc" => %{
+          "max_transfer_bytes" => pos_integer(),
+          "global_cap_bytes" => pos_integer()
+        },
         "addressing" => %{
           "mode" => "pool_with_reservations" | "static_mapping_with_reservations",
           "static_mapping_prefix" => String.t()
         }
       }
 
-  Both `upload` and `addressing` are independently optional subtrees, and
-  every key within each is optional — the controller upserts only the keys
-  present in the body. Any invalid value (out-of-set host/mode string,
-  non-positive integer cap, non-16-bit-group prefix length) collapses to
-  422 `invalid_setting` with the offending dotted key in `field`, and so
-  does any key outside the two closed sets above (#1407 W-S3) — a typo is
-  named, never absorbed, and it refuses the WHOLE body rather than
-  applying the keys it did recognise.
+  All three of `upload`, `dcc` and `addressing` are independently optional
+  subtrees, and every key within each is optional — the controller upserts
+  only the keys present in the body. Any invalid value (out-of-set
+  host/mode string, non-positive integer cap, non-16-bit-group prefix
+  length) collapses to 422 `invalid_setting` with the offending dotted key
+  in `field`, and so does any key outside the three closed sets above
+  (#1407 W-S3) — a typo is named, never absorbed, and it refuses the WHOLE
+  body rather than applying the keys it did recognise.
+
+  ⚠️ The two `dcc` keys are NOT cross-validated against each other (vjt,
+  issue 2185): a per-transfer ceiling above the spool budget is a legal
+  end state, and refusing it would make the ORDER of two writes
+  significant for a UI that saves one field at a time.
 
   On success: 200 with the new full settings view AND fan-out of a
   `server_settings_changed` push on every live `Topic.user(name)`
@@ -80,13 +93,31 @@ defmodule GrappaWeb.Admin.SettingsController do
   alias Grappa.PubSub.Topic
   alias Grappa.ServerSettings.Wire, as: SettingsWire
 
-  # The two closed key sets. Every entry here MUST have a matching
-  # `apply_upload_key/2` clause (resp. a `resolve_addressing_*` one) —
-  # adding a key to one and not the other is caught by that key's own
-  # per-key test, loudly, never silently.
+  # The three closed key sets. Every entry here MUST have a matching
+  # `apply_upload_key/2` / `apply_dcc_key/2` clause (resp. a
+  # `resolve_addressing_*` one) — adding a key to one and not the other is
+  # caught by that key's own per-key test, loudly, never silently.
+  #
+  # ⚠️ **"Loudly" is exactly as strong as the per-key test and no stronger,
+  # and that was MEASURED rather than assumed (issue 2185, three
+  # mutants).** A key WITH a per-key test is caught in both directions:
+  # dropping its `apply_dcc_key/2` clauses killed 4 tests, and dropping it
+  # from this set while keeping the clauses killed 3. But adding a key
+  # that NO test names — `spool_retention_seconds`, no clause, no test —
+  # left the suite at **46/46 green**. Nothing structural pairs a set
+  # entry with its clause: `reject_unknown_keys/3` compares strings at
+  # runtime, so the compiler cannot see the pair, and no test enumerates
+  # these sets. A key added here without its per-key test in the SAME pass
+  # ships a latent 500 on the first request that uses it.
   @upload_keys ~w(active_host image_per_file_cap_bytes video_per_file_cap_bytes
                   document_per_file_cap_bytes audio_per_file_cap_bytes
                   global_cap_bytes video_max_duration_seconds)
+
+  # issue 2185 — DCC's own closed set, disjoint from `@upload_keys` on
+  # purpose: `global_cap_bytes` is a member of BOTH and means a different
+  # budget in each, which is why the subtree and not the key name carries
+  # the family.
+  @dcc_keys ~w(max_transfer_bytes global_cap_bytes)
 
   @addressing_keys ~w(mode static_mapping_prefix)
 
@@ -142,7 +173,8 @@ defmodule GrappaWeb.Admin.SettingsController do
   # ---- Internal ----------------------------------------------------
 
   defp apply_updates(params) when is_map(params) do
-    with :ok <- apply_subtree(params, "upload", @upload_keys, &apply_upload_key/2) do
+    with :ok <- apply_subtree(params, "upload", @upload_keys, &apply_upload_key/2),
+         :ok <- apply_subtree(params, "dcc", @dcc_keys, &apply_dcc_key/2) do
       apply_addressing(Map.get(params, "addressing"))
     end
   end
@@ -245,6 +277,27 @@ defmodule GrappaWeb.Admin.SettingsController do
   # No unknown-key clause: `reject_unknown_keys/3` has already refused
   # every key outside `@upload_keys` before this fold begins.
 
+  # ---- dcc.* (issue 2185) — key by key, like `upload` ----------------
+  #
+  # Per-key rather than addressing's unit apply, because there is no probe
+  # and no ordering constraint to preserve: neither key's validity depends
+  # on the other's value. That independence is the RULING, not an
+  # accident — an operator may set the per-transfer ceiling above the
+  # spool budget, which only means nothing fits until they raise the
+  # budget. Cross-validating would make the order of two writes
+  # significant and break a UI that saves one field at a time.
+  defp apply_dcc_key("max_transfer_bytes", n) when is_integer(n) and n > 0,
+    do: ServerSettings.put_dcc_max_transfer_bytes(n)
+
+  defp apply_dcc_key("max_transfer_bytes", _),
+    do: {:error, {:invalid_setting, "dcc.max_transfer_bytes"}}
+
+  defp apply_dcc_key("global_cap_bytes", n) when is_integer(n) and n > 0,
+    do: ServerSettings.put_dcc_global_cap_bytes(n)
+
+  defp apply_dcc_key("global_cap_bytes", _),
+    do: {:error, {:invalid_setting, "dcc.global_cap_bytes"}}
+
   # ---- addressing.* — probe-gated unit apply (#543 / #609) ----------
   #
   # Unlike `upload`, the addressing subtree is applied as a UNIT, not key by
@@ -341,12 +394,18 @@ defmodule GrappaWeb.Admin.SettingsController do
   defp halt_or_cont({:error, _} = err), do: {:halt, err}
 
   # Admin settings view. The `upload` subtree comes from public_view/0 via
-  # the shared Wire projection; the `addressing` subtree (#543) is admin-only
-  # so it is read straight from the accessors — deliberately NOT part of
-  # public_view/0, which broadcasts to every cic client.
+  # the shared Wire projection; the `dcc` (issue 2185) and `addressing`
+  # (#543) subtrees are admin-only so they are read straight from the
+  # accessors — deliberately NOT part of public_view/0, which broadcasts to
+  # every cic client. Without `dcc:` here an operator could write the two
+  # ceilings and never read back what they wrote.
   defp render_view(%{upload: upload}) do
     %{
       upload: SettingsWire.upload_view(upload),
+      dcc: %{
+        max_transfer_bytes: ServerSettings.get_dcc_max_transfer_bytes(),
+        global_cap_bytes: ServerSettings.get_dcc_global_cap_bytes()
+      },
       addressing: %{
         mode: ServerSettings.addressing_mode(),
         static_mapping_prefix: ServerSettings.static_mapping_prefix()
