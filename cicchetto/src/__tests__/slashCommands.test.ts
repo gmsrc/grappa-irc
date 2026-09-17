@@ -1455,6 +1455,47 @@ describe("parseSlash — /quote", () => {
   });
 });
 
+// issue 2230 — /raw is an alias of /quote. compose.ts's server-window
+// refusal has always advertised "Try /raw <line>" while only /quote
+// existed, so the advertised escape hatch answered `unknown command`.
+// The pin is BEHAVIOURAL: /raw must produce the same SlashCommand /quote
+// does, not merely be present in DISPATCH.
+describe("parseSlash — /raw (alias of /quote, issue 2230)", () => {
+  it("/raw <line> → {kind: 'quote', line} — the /quote shape, not a new kind", () => {
+    expect(parseSlash("/raw PING :foo.bar")).toEqual({
+      kind: "quote",
+      line: "PING :foo.bar",
+    });
+  });
+
+  it("/raw with multi-token line preserves the whole tail", () => {
+    expect(parseSlash("/raw PRIVMSG #x :hello world")).toEqual({
+      kind: "quote",
+      line: "PRIVMSG #x :hello world",
+    });
+  });
+
+  it("/raw and /quote parse the same tail to the same command", () => {
+    expect(parseSlash("/raw PRIVMSG #x :hello world")).toEqual(
+      parseSlash("/quote PRIVMSG #x :hello world"),
+    );
+  });
+
+  // The alias inherits /quote's emptiness rejection — MESSAGE included.
+  // Pinning only {kind: "error", verb: "raw"} would be a mirror: an
+  // unaliased /raw already errors with `unknown command: /raw` and
+  // satisfies that shape. The message is what separates "routed into the
+  // /quote handler" from "fell off the dispatcher", and it is read off
+  // /quote itself rather than retyped. `verb` stays the verb AS TYPED
+  // (the dispatcher passes `expanded.verb` through), so it differs.
+  it("/raw bare → /quote's own rejection, not `unknown command`", () => {
+    const quoteBare = parseSlash("/quote");
+    expect(quoteBare.kind).toBe("error");
+    if (quoteBare.kind !== "error") return;
+    expect(parseSlash("/raw")).toEqual({ ...quoteBare, verb: "raw" });
+  });
+});
+
 describe("parseSlash — /oper", () => {
   it("/oper <name> <password> → {name, password}", () => {
     expect(parseSlash("/oper vjt s3cret")).toEqual({
