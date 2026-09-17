@@ -1264,6 +1264,17 @@ const kbHandler = DISPATCH.kb;
 if (kbHandler) {
   (DISPATCH as Record<string, Handler>).kickban = kbHandler;
 }
+// issue 2230 — /raw → /quote (both produce {kind: "quote"}). compose.ts's
+// server-window refusal already advertises "Try /raw <line>", so the
+// advertised escape hatch answered `unknown command: /raw`. Aliasing is the
+// fix rather than rewriting that string: /raw is the spelling irssi, WeeChat
+// and mIRC all take, so the message was right and the dispatcher was short a
+// verb. The error text /raw inherits still names /quote — that is what an
+// alias is, and the alternative (a bespoke message) would fork the handler.
+const quoteHandler = DISPATCH.quote;
+if (quoteHandler) {
+  (DISPATCH as Record<string, Handler>).raw = quoteHandler;
+}
 
 // `aliases` (#385) is the user's `%{name => expansion}` map, passed in by
 // compose.ts from the aliasList store. It defaults to `{}` (no aliases → no

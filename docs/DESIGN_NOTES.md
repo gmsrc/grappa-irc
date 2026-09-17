@@ -16703,3 +16703,79 @@ stayed quiet. Both doors are covered, the loop and `status`, because `status` is
 the surface the defect was observed on. Mutant: restoring `head -1` reddens
 exactly those two cases, each on the assertion it defends, and leaves the other
 twelve green.
+<!-- entry #2230 -->
+
+---
+
+## 2026-09-17 — issue 2230: the message was right and the dispatcher was a verb short
+
+cic's server window refuses a bare line with `Server window accepts only
+slash-commands. Try /raw <line>` (`cicchetto/src/lib/compose.ts:656`). Typing
+what it told you to type answered `unknown command: /raw`: `DISPATCH` carried
+`quote` and nothing else, so the advertised escape hatch did not exist.
+
+### The alias, not the wording
+
+The fix is `raw` → the `quote` handler, in the post-init alias block
+(`slashCommands.ts`), in the same three-line shape `/q`, `/j`, `/w`, `/n` and
+`/kickban` already use. The alternative — rewrite the string to say `/quote` —
+was rejected: `/raw` is the spelling irssi, WeeChat and mIRC all take, so the
+message named the verb a user would reach for and the dispatcher was the half
+that was wrong. Nothing in `compose.ts` changes.
+
+`/raw` inherits `/quote`'s emptiness rejection verbatim, message included:
+`/raw` bare answers `/quote requires a raw IRC line`. The `verb` field still
+reads the verb AS TYPED, because the dispatcher passes `expanded.verb` into the
+handler — so the error says `verb: "raw"` with a message naming `/quote`. That
+mismatch is what an alias IS; giving `/raw` a bespoke message would fork the
+handler to buy nothing. `/raw` is shadowable by a user alias like every builtin
+except `/alias` and `/unalias` (#427) — it enters after `expandAlias`, not
+before it.
+
+Out of scope, deliberately: the literal `//` escape (a separate call), and the
+two `/raw` mentions in `lib/grappa_web/channels/grappa_channel.ex` — those
+describe the wire verb the client already sends, and become accurate on their
+own the moment the client can reach them.
+
+### The assert that was a mirror, and how it showed
+
+The first draft of the test pinned `/raw` bare as
+`toMatchObject({kind: "error", verb: "raw"})` — read as "the alias inherits the
+rejection". It is satisfied without the alias: an unknown verb returns
+`err(expanded.verb, "unknown command: /raw")`, which is `kind: "error"` with
+`verb: "raw"`. Measured, and this is the point: on the pre-implementation run
+3 of the 4 new asserts went red and THAT one stayed green. An assert can name
+the right behaviour and still test nothing, and the only thing that surfaced it
+was running the test before the code rather than after.
+
+What separates "routed into the `/quote` handler" from "fell off the
+dispatcher" is the MESSAGE, so the assert now reads it off `/quote` itself
+(`{...parseSlash("/quote"), verb: "raw"}`) instead of retyping the string.
+All four then fail without the alias.
+
+### What the mutants established
+
+**M1** (delete the three alias lines): all four `/raw` asserts red, each in its
+own `it()`, so none is masked by an earlier failure in the same block. The
+received value is `{kind: "error", message: "unknown command: /raw"}` on the
+three shape asserts and `message: "unknown command: /raw"` against the expected
+`"/quote requires a raw IRC line"` on the fourth.
+
+**M2** (alias in place, `/quote`'s arm returns a different `kind`): four red —
+the two `/quote` shape asserts AND the two `/raw` shape asserts. That is the
+specificity control: a test that merely checked `"raw" in DISPATCH` would have
+stayed green here.
+
+One new assert deliberately survives M2: `/raw` and `/quote` parsing the same
+tail to the same command compares the two sides against each other, so a change
+that moves both moves it too. It is the anti-drift oracle, not the behaviour
+pin — the two literal-shape asserts are the pin, which is why both kinds are
+present.
+
+### What was not established
+
+No e2e. The slice is a pure parser function reachable through a `DISPATCH`
+lookup; the oracle that can falsify it is the vitest one, and a browser run
+would have bought lane time and no evidence the unit test does not already
+carry. The gates run were `bun.sh run check` (5 stages, 0 failed — lock drift
+included, so the stages under it are attributable) and the full vitest suite.
