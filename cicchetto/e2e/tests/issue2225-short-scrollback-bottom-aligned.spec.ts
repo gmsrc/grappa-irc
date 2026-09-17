@@ -233,17 +233,26 @@ test.describe("issue 2225 — crossing from short to over-full", () => {
       })
       .toBeLessThanOrEqual(1);
 
-    // The top is still reachable: at scrollTop 0 the OLDEST row's box starts
-    // at or below the pane's top edge — nothing is clipped above it.
-    await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement;
-      el.scrollTop = 0;
+    // The top is still reachable — measured as geometry, not by scrolling
+    // there: setting scrollTop to 0 fires CP14-B2's load-older, whose #1094
+    // prepend-preserve then moves scrollTop by the prepended height, so "the
+    // oldest row at scrollTop 0" is a moving target (measured: 1018px of new
+    // rows landed above it on the first attempt). What the boundary owes is
+    // narrower and static: in the over-full regime the OLDEST row starts at
+    // the content's top edge, within the pane's own padding. Below 0 means
+    // clipped above the top (what `justify-content: flex-end` does to an
+    // overflowing child, and what makes the top unreachable); well above the
+    // padding means the auto margin did NOT collapse and a phantom band of
+    // slack sits above the history.
+    const oldestOffset = await page.evaluate(() => {
+      const pane = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement;
+      const row = pane.querySelector('[data-testid="scrollback-line"]') as HTMLElement;
+      return row.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
     });
-    await expect.poll(async () => (await paneGeometry(page)).scrollTop, { timeout: 5_000 }).toBe(0);
-    const oldest = await rowClearance(scrollbackLines(page).first());
     expect(
-      oldest.overflowAbovePx,
-      `oldest row must not be clipped above the pane at scrollTop 0: ${JSON.stringify(oldest)}`,
-    ).toBeLessThanOrEqual(0);
+      oldestOffset,
+      "oldest row must start at the content's top edge, neither clipped above it nor floated below a slack band",
+    ).toBeGreaterThanOrEqual(0);
+    expect(oldestOffset).toBeLessThanOrEqual(BOTTOM_PADDING_MAX_PX);
   });
 });
