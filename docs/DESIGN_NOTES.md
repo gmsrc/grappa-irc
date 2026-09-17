@@ -16195,20 +16195,39 @@ and by the time it reaches cic it is a generic 400. The specific diagnosis is
 only available where the elements are still separate, which is the parser. This
 is a REPORTING fix; the wire contract is unchanged.
 
-### The old guard is deleted, not doubled — and that relaxes one input
+### The old guard is deleted, but its refusal is kept as its own clause
 
-Keeping both checks would have left two guards disagreeing about the same
-string, so the old one went in the same commit. It was strictly more aggressive
-on exactly one shape: a bare head with a sigilled tail, `/join a,#b`. The
-auto-prepend reaches the head and yields `#a,#b` — a fully sigilled, perfectly
-well-formed list — so the per-element check has no reason to refuse it, and the
-old refusal was a false positive. `/join a,#b` now joins. Named here rather than
-discovered later: it is a deliberate widening of what parses, not an oversight,
-and a test pins it.
+Keeping the old guard would have left two checks disagreeing about the same
+string, so it went. It was strictly more aggressive than the per-element check
+on exactly one shape — a bare head with a sigilled tail, `/join a,#b`, whose
+auto-prepend yields the fully sigilled, perfectly well-formed `#a,#b`. So
+deleting it did not remove a duplicate: it **relaxed one input**, and the
+relaxation shipped in the first draft of this work.
 
-The prepend itself is unchanged and still reaches only the head. Prepending to
-every element would make `/join a,b` join both, which is a different decision
-about the #30 bare-name posture and was not made here.
+It was then reversed on a ruling, and the reasoning is the durable part. Issue
+2229 is a **reporting** slice: the operator was getting a generic
+`The request was malformed.` where a parser error belonged. Widening what
+*parses* is a different decision, it was not the one asked for, and it would
+have been **silent** — two channels joined on a spelling nobody approved. The
+message is also making a promise it would then break: it says "spell each
+channel out", so it cannot accept a list that is not. A bare head in a
+comma-list is an error.
+
+What carries beyond this arm: **a cure and a widening that happen to share a
+line are still two decisions**, and the one nobody asked for does not get to
+ride along on the one that was. The refusal therefore lives as its own clause
+after the per-element check, not folded into it — the folded version is three
+lines shorter and was rejected on exactly that ground, because folding makes
+the widening un-revertible without a restructure. As written, deleting the
+clause and its test restores the relaxation and nothing else depends on it.
+That reversibility is measured, not asserted: the clause was added last, and
+the test now pinning the refusal was first observed failing against the
+accepting parser.
+
+The prepend itself is unchanged and still reaches only the head — a
+convenience for ONE bare name, per #30, not a comma-list feature. Prepending
+to every element would make `/join a,b` join both, which is again a different
+decision about that posture and again was not made here.
 
 ### Two smaller things the rewrite carried
 
