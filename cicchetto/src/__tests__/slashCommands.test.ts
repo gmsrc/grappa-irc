@@ -220,18 +220,24 @@ describe("parseSlash — /join", () => {
     expect(message).not.toContain("##");
   });
 
-  // 2229 RELAXATION, deliberate and named: the old guard refused any bare
-  // HEAD carrying a comma, including `/j a,#b` — whose auto-prepend yields
-  // `#a,#b`, a perfectly well-formed list. The per-element check has no
-  // reason to refuse it, and keeping the old guard beside it would mean two
-  // guards disagreeing about the same input. The refusal was a false
-  // positive; it is gone.
-  it("/j a,#b → head auto-prepend yields a fully sigilled list, so it joins (2229)", () => {
-    expect(parseSlash("/j a,#b")).toEqual({
-      kind: "join",
-      channels: ["#a", "#b"],
-      key: null,
-    });
+  // 2229, vjt's ruling. A bare HEAD inside a comma-list stays an error even
+  // though the auto-prepend would make the list well-formed (`a,#b` → `#a,#b`
+  // — every element sigilled, nothing the server would refuse). Issue 2229 is
+  // a REPORTING slice; widening what PARSES is a different one, and the
+  // widening would be SILENT: two channels joined on a spelling nobody
+  // approved. The refusal also keeps the message's own promise — it says
+  // "spell each channel out", so it cannot then accept a list that is not.
+  //
+  // Note this is NOT the old guard restored: that one produced `#a,##b` here,
+  // double-sigilling an element that already had one. The refusal is back; the
+  // broken suggestion is not.
+  it("/j a,#b → a bare head in a comma-list is refused, not auto-prepended (2229)", () => {
+    const r = parseSlash("/j a,#b");
+    expect(r).toMatchObject({ kind: "error", verb: "j" });
+    const { message } = r as { message: string };
+    expect(message).toContain('"a"');
+    expect(message).toContain("#a,#b");
+    expect(message).not.toContain("##");
   });
 
   // RFC 2812 3.2.1: a JOIN target of exactly `0` means "leave all channels".

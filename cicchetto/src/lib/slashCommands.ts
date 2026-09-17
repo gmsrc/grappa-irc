@@ -578,15 +578,28 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     // Refusing here names the element instead. It also keeps `JOIN 0` (RFC
     // 2812 3.2.1, "leave all channels") off the wire EXPLICITLY rather than by
     // the accident of that server-side refusal.
+    const spellOut = (offender: string) =>
+      `/${verb}: "${offender}" is not a channel — spell each channel out (e.g. /${verb} ${channels
+        .filter((name) => name !== "")
+        .map(sigilled)
+        .join(",")})`;
     const bare = channels.find((name) => !isChannelName(name, chantypes));
-    if (bare !== undefined)
-      return err(
-        verb,
-        `/${verb}: "${bare}" is not a channel — spell each channel out (e.g. /${verb} ${channels
-          .filter((name) => name !== "")
-          .map(sigilled)
-          .join(",")})`,
-      );
+    if (bare !== undefined) return err(verb, spellOut(bare));
+    // Second clause, and the ONLY input it adds is a bare HEAD whose every
+    // other element already carries a sigil (`/join a,#b`): the check above
+    // cannot see it, because the auto-prepend already turned the head into
+    // `#a` and the resulting list IS well-formed. Refused anyway, on vjt's
+    // ruling. Issue 2229 is a REPORTING slice — the operator was getting a
+    // generic "malformed" where a parser error belonged — and widening what
+    // PARSES is a different decision. It would also widen SILENTLY: two
+    // channels joined on a spelling nobody approved. And the message above
+    // promises "spell each channel out", which it cannot promise while
+    // accepting a list that is not. The prepend stays what it has been since
+    // #30 — a convenience for ONE bare name, not a comma-list feature.
+    // Reversible by construction: delete this clause and its test, and
+    // `/join a,#b` joins `#a` and `#b` again. Nothing else depends on it.
+    if (raw.includes(",") && !isChannelName(raw, chantypes))
+      return err(verb, spellOut(raw.slice(0, raw.indexOf(","))));
     const key = toks[1] ?? null;
     return { kind: "join", channels, key };
   },
