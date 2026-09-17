@@ -556,32 +556,37 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     // the prefix. A name that already carries one of the sigils THIS
     // network advertises (#1255 — 005 CHANTYPES, the RFC class when the
     // network says nothing) is left untouched.
-    //
-    // Comma-safety: IRC JOIN treats `,` as a multi-channel separator
-    // (`JOIN #a,#b` joins both). Auto-prepending `#` to `foo,bar` would
-    // yield `#foo,bar` — `#foo` joins, `bar` (unprefixed) yields an
-    // unspecified-channel server error. Reject the auto-prepend path
-    // when the bare name contains `,`; the user must spell out each
-    // channel with its sigil (`/join #foo,#bar`).
     const toks = tokens(rest);
     const raw = toks[0];
     if (!raw) return err(verb, `/${verb} requires a channel name`);
     if (toks.length > 2)
       return err(verb, `/${verb}: too many arguments (expected /${verb} <chan> [key])`);
-    if (!isChannelName(raw, chantypes) && raw.includes(","))
-      return err(
-        verb,
-        `/${verb}: bare names with commas are ambiguous — spell each channel out (e.g. /${verb} #${raw.split(",").join(",#")})`,
-      );
     // #516 — the parser owns the comma semantics: an RFC1459 JOIN target
     // may be a comma-list (`#a,#b`), so return `channels: string[]` rather
-    // than lie about a single `channel: string`. The bare-name comma path
-    // already errored above; here `target` is sigil-normalised, so splitting
-    // on `,` yields one explicitly-prefixed channel per element (`["#a"]`
-    // for the single-join case). compose.ts rejoins with `,` for the wire
-    // (server splits it per #382) and focuses `channels[0]`.
-    const target = isChannelName(raw, chantypes) ? raw : `#${raw}`;
-    const channels = target.split(",");
+    // than lie about a single `channel: string`. compose.ts rejoins with `,`
+    // for the wire (server splits it per #382) and focuses `channels[0]`.
+    const sigilled = (name: string) => (isChannelName(name, chantypes) ? name : `#${name}`);
+    const channels = sigilled(raw).split(",");
+    // Comma-safety, per ELEMENT (issue 2229). The bare-name auto-prepend can
+    // only reach the HEAD of the token, so every element past it must already
+    // carry a sigil of its own. This check used to be gated on the whole token
+    // (`!isChannelName(raw) && raw.includes(",")`), and `isChannelName` reads
+    // exactly one byte — so a sigilled head vouched for a bare tail and
+    // `/join #0,0` sailed through. It reached the server, which validates
+    // EVERY element and refuses the whole line (#382 — no partial JOIN), and
+    // the operator got a bare "The request was malformed." naming nothing.
+    // Refusing here names the element instead. It also keeps `JOIN 0` (RFC
+    // 2812 3.2.1, "leave all channels") off the wire EXPLICITLY rather than by
+    // the accident of that server-side refusal.
+    const bare = channels.find((name) => !isChannelName(name, chantypes));
+    if (bare !== undefined)
+      return err(
+        verb,
+        `/${verb}: "${bare}" is not a channel — spell each channel out (e.g. /${verb} ${channels
+          .filter((name) => name !== "")
+          .map(sigilled)
+          .join(",")})`,
+      );
     const key = toks[1] ?? null;
     return { kind: "join", channels, key };
   },

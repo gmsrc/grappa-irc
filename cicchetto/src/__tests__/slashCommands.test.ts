@@ -181,6 +181,89 @@ describe("parseSlash — /join", () => {
       key: null,
     });
   });
+
+  // issue 2229 — the comma guard above used to be gated on the WHOLE token
+  // (`!isChannelName(raw) && raw.includes(",")`), and `isChannelName` reads
+  // only the first byte. A sigil on the HEAD therefore vouched for the whole
+  // list: `/join #0,0` parsed clean, the POST left with `#0,0`, and the
+  // server refused the ENTIRE line (`validate_channel_list/1` validates every
+  // element and fails the row — #382, deliberate: no partial JOIN), so the
+  // operator got the generic "The request was malformed." with nothing
+  // naming the element at fault. The check is per element now.
+  it("/join #0,0 → error: a sigil on the head does not vouch for the tail (2229)", () => {
+    const r = parseSlash("/join #0,0");
+    expect(r).toMatchObject({ kind: "error", verb: "join" });
+    const { message } = r as { message: string };
+    // Names the offending element and hands back a paste-ready list.
+    expect(message).toContain('"0"');
+    expect(message).toContain("#0,#0");
+  });
+
+  // The all-bare form keeps the SAME message shape — one code path, not a
+  // second guard that says the same thing differently.
+  it("/j foo,bar → the per-element error names the first bare element (2229)", () => {
+    const r = parseSlash("/j foo,bar");
+    expect(r).toMatchObject({ kind: "error", verb: "j" });
+    const { message } = r as { message: string };
+    expect(message).toContain('"bar"');
+    expect(message).toContain("#foo,#bar");
+  });
+
+  // The suggestion must not re-prefix an element that already carries a
+  // sigil — the old whole-token message did (`/j a,#b` proposed `#a,##b`).
+  it("/j #a,b,#c → suggestion sigils only the bare element (2229)", () => {
+    const r = parseSlash("/j #a,b,#c");
+    expect(r).toMatchObject({ kind: "error", verb: "j" });
+    const { message } = r as { message: string };
+    expect(message).toContain('"b"');
+    expect(message).toContain("#a,#b,#c");
+    expect(message).not.toContain("##");
+  });
+
+  // 2229 RELAXATION, deliberate and named: the old guard refused any bare
+  // HEAD carrying a comma, including `/j a,#b` — whose auto-prepend yields
+  // `#a,#b`, a perfectly well-formed list. The per-element check has no
+  // reason to refuse it, and keeping the old guard beside it would mean two
+  // guards disagreeing about the same input. The refusal was a false
+  // positive; it is gone.
+  it("/j a,#b → head auto-prepend yields a fully sigilled list, so it joins (2229)", () => {
+    expect(parseSlash("/j a,#b")).toEqual({
+      kind: "join",
+      channels: ["#a", "#b"],
+      key: null,
+    });
+  });
+
+  // RFC 2812 3.2.1: a JOIN target of exactly `0` means "leave all channels".
+  // The bare-name prepend turns a solitary `0` into `#0`, so it never reaches
+  // the wire as the special form; the per-element check is what keeps it out
+  // of a LIST (`#0,0`) too. Pinned because the arm's comment claims it.
+  it("/join 0 → the bare-name prepend keeps the RFC 'leave all' form off the wire", () => {
+    expect(parseSlash("/join 0")).toEqual({ kind: "join", channels: ["#0"], key: null });
+  });
+
+  // A trailing comma leaves an EMPTY element. It has no sigil, so it is
+  // refused — and the suggestion drops it rather than proposing a lone `#`.
+  it("/join #a, → the empty element is refused and dropped from the suggestion (2229)", () => {
+    const r = parseSlash("/join #a,");
+    expect(r).toMatchObject({ kind: "error", verb: "join" });
+    const { message } = r as { message: string };
+    expect(message).toContain("/join #a)");
+  });
+
+  // The sigils are DATA (#1255): on a network advertising CHANTYPES=#, `&b`
+  // is a NICK, so the list is refused there and accepted on the RFC default.
+  it("/join #a,&b → refused when the network advertises CHANTYPES=# only (2229)", () => {
+    expect(parseSlash("/join #a,&b", {}, ["#"])).toMatchObject({
+      kind: "error",
+      verb: "join",
+    });
+    expect(parseSlash("/join #a,&b")).toEqual({
+      kind: "join",
+      channels: ["#a", "&b"],
+      key: null,
+    });
+  });
 });
 
 describe("parseSlash — /part", () => {
