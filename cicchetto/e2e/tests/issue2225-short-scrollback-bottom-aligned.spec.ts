@@ -243,15 +243,19 @@ test.describe("issue 2225 — crossing from short to over-full", () => {
     // clipped above the top (what `justify-content: flex-end` does to an
     // overflowing child, and what makes the top unreachable); well above the
     // padding means the auto margin did NOT collapse and a phantom band of
-    // slack sits above the history.
+    // slack sits above the history. The FIRST CHILD, not the first
+    // `scrollback-line`: the corpus opens on a day separator (measured:
+    // 29.7px to the first message row, 8px of it padding), and the `::before`
+    // that carries the auto margin is not an element, so the first element
+    // child is the topmost real row of whatever kind.
     const oldestOffset = await page.evaluate(() => {
       const pane = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement;
-      const row = pane.querySelector('[data-testid="scrollback-line"]') as HTMLElement;
-      return row.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+      const first = pane.firstElementChild as HTMLElement;
+      return first.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
     });
     expect(
       oldestOffset,
-      "oldest row must start at the content's top edge, neither clipped above it nor floated below a slack band",
+      "the topmost row must start at the content's top edge, neither clipped above it nor floated below a slack band",
     ).toBeGreaterThanOrEqual(0);
     expect(oldestOffset).toBeLessThanOrEqual(BOTTOM_PADDING_MAX_PX);
   });
