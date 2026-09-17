@@ -15,15 +15,18 @@
 // bottom edge and nowhere near its top; on a fresh, EMPTY query the
 // `no messages yet` fallback does the same (the ruling names that case too).
 // RED before the fix on both counts (row at y ≈ pane top), GREEN after.
+import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
   rowClearance,
   scrollbackLine,
+  scrollbackLines,
   selectChannel,
   sidebarWindow,
   waitForDmListenerReady,
 } from "../fixtures/cicchettoPage";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -129,4 +132,118 @@ test("issue 2225 — the `no messages yet` fallback of an empty query sits at th
   } finally {
     await peer.disconnect("2225 done");
   }
+});
+
+// The OTHER half of the cure, exercised rather than claimed (vjt's review of
+// f2292b08): the auto margin must collapse to 0 the moment the buffer
+// overflows, and the crossing itself must not move what the reader is looking
+// at. This spec starts on a SHORT pane (the ~50-row tail page of the seeded
+// corpus underfills a tall viewport, the #230 precondition), drives ONE
+// load-older with the wheel lever #230 established, and asserts two things
+// across the boundary: the newest row's box did not move (peluche's jump —
+// rows shoved down a viewport by a backlog landing above them — is exactly
+// this row moving), and the oldest row is still reachable at scrollTop 0
+// (the top-clipping `justify-content: flex-end` would have failed here).
+// Both regimes are asserted as PRECONDITIONS so a viewport or row-height
+// change fails loudly instead of green-washing a spec that never crossed.
+
+// REST default page size (Grappa.Web.MessagesController.@default_limit).
+const REST_PAGE_SIZE = 50;
+
+async function paneGeometry(
+  page: Page,
+): Promise<{ scrollTop: number; scrollHeight: number; clientHeight: number; top: number }> {
+  return await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
+    if (!el) throw new Error("scrollback container not found");
+    return {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      top: el.getBoundingClientRect().top,
+    };
+  });
+}
+
+test.describe("issue 2225 — crossing from short to over-full", () => {
+  // ~50 rows of the seeded corpus are ~1000px; 1300 tall leaves them
+  // underfilled, and the next 50 push the buffer past the pane. Both facts
+  // are asserted below, not assumed.
+  test.use({ viewport: { width: 800, height: 1300 } });
+
+  test("issue 2225 — a load-older that overflows the pane moves no visible row and keeps the top reachable", async ({
+    page,
+  }) => {
+    const vjt = specUser();
+    // Cursor at HEAD → no unread divider → the cold load is the tail-only
+    // page, deterministic regardless of what a prior spec left behind.
+    const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
+    expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
+    const headId = headPage[0]?.id;
+    if (!headId) throw new Error("seed page empty — cannot seed the read cursor to head");
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, headId);
+
+    await loginAs(page, vjt);
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
+    await expect
+      .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
+    const initialCount = await scrollbackLines(page).count();
+
+    // PRECONDITION 1 — short: the pane underfills, nothing to scroll.
+    await expect
+      .poll(async () => {
+        const g = await paneGeometry(page);
+        return g.scrollHeight - g.clientHeight;
+      })
+      .toBeLessThanOrEqual(0);
+
+    // Bottom-aligned while short: the newest row ends at the pane's bottom.
+    const newest = scrollbackLines(page).last();
+    const before = await rowClearance(newest);
+    expect(
+      before.paneBottomPx - before.rowBottomPx,
+      `newest row must sit at the bottom while short: ${JSON.stringify(before)}`,
+    ).toBeLessThanOrEqual(BOTTOM_PADDING_MAX_PX);
+
+    // The crossing: one wheel-up load-older (#230's lever on an underfilled
+    // pane — a real wheel event, no native scroll to piggy-back on).
+    await page.locator('[data-testid="scrollback"]').hover();
+    await page.mouse.wheel(0, -600);
+    await expect
+      .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
+      .toBeGreaterThan(initialCount);
+
+    // PRECONDITION 2 — over-full: the buffer now exceeds the pane, so the auto
+    // margin has collapsed to 0 and this is the regime the CSS comment claims.
+    await expect
+      .poll(async () => {
+        const g = await paneGeometry(page);
+        return g.scrollHeight - g.clientHeight;
+      })
+      .toBeGreaterThan(0);
+
+    // No visible row jumped: the newest row's box is where it was before the
+    // older page landed above it. Polled, because the prepend and the scroll
+    // restore commit on separate frames (#1094).
+    await expect
+      .poll(async () => Math.abs((await rowClearance(newest)).rowTopPx - before.rowTopPx), {
+        message: "the newest row must not move when older rows land above it",
+        timeout: 5_000,
+      })
+      .toBeLessThanOrEqual(1);
+
+    // The top is still reachable: at scrollTop 0 the OLDEST row's box starts
+    // at or below the pane's top edge — nothing is clipped above it.
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement;
+      el.scrollTop = 0;
+    });
+    await expect.poll(async () => (await paneGeometry(page)).scrollTop, { timeout: 5_000 }).toBe(0);
+    const oldest = await rowClearance(scrollbackLines(page).first());
+    expect(
+      oldest.overflowAbovePx,
+      `oldest row must not be clipped above the pane at scrollTop 0: ${JSON.stringify(oldest)}`,
+    ).toBeLessThanOrEqual(0);
+  });
 });
