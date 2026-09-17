@@ -16167,3 +16167,71 @@ one fails 3 of 40 and exactly the installed-PWA row. The e2e half is an A/B
 across two browser contexts differing in one byte range of one string (`27_0`
 against `26_0`), which is what makes "every platform without the gate renders
 identically" a pixel comparison instead of a claim.
+<!-- entry #2229 -->
+
+---
+
+## 2026-09-17 — issue 2229: a guard that read one byte and vouched for the whole list
+
+`/join #0,0` produced no parser error. The POST left with `#0,0`, the server
+refused it, and the operator read `The request was malformed.` — a sentence
+that names nothing. `/join dio,cane,mannaro`, the same defect class, produced a
+good error. The difference was one byte.
+
+The comma guard in `slashCommands.ts` was gated on
+`!isChannelName(raw, chantypes) && raw.includes(",")`, and `isChannelName`
+inspects `startsWith` — the FIRST byte of whatever it is handed. Handed the
+whole token, it answered a question about the head and was read as an answer
+about the list. A sigil on the head therefore vouched for every element behind
+it. The check now runs per element, after the split.
+
+### Why the client owes this error at all
+
+The server is not wrong and was not touched. `Validation.validate_channel_list/1`
+validates EVERY element and fails the whole row if one is bad (#382, deliberate:
+no partial JOIN). That is the right posture for a validator and the wrong one
+for a report — a whole-line refusal cannot say which element it tripped over,
+and by the time it reaches cic it is a generic 400. The specific diagnosis is
+only available where the elements are still separate, which is the parser. This
+is a REPORTING fix; the wire contract is unchanged.
+
+### The old guard is deleted, not doubled — and that relaxes one input
+
+Keeping both checks would have left two guards disagreeing about the same
+string, so the old one went in the same commit. It was strictly more aggressive
+on exactly one shape: a bare head with a sigilled tail, `/join a,#b`. The
+auto-prepend reaches the head and yields `#a,#b` — a fully sigilled, perfectly
+well-formed list — so the per-element check has no reason to refuse it, and the
+old refusal was a false positive. `/join a,#b` now joins. Named here rather than
+discovered later: it is a deliberate widening of what parses, not an oversight,
+and a test pins it.
+
+The prepend itself is unchanged and still reaches only the head. Prepending to
+every element would make `/join a,b` join both, which is a different decision
+about the #30 bare-name posture and was not made here.
+
+### Two smaller things the rewrite carried
+
+The suggestion in the message is now built from the split elements, so it
+sigils only what lacks a sigil. The old one re-prefixed blindly
+(`raw.split(",").join(",#")`) and proposed `#a,##b` for `/join a,#b` — a
+double sigil, in the text whose whole job was to show the correct spelling.
+An empty element (trailing comma) is refused like any other sigil-less
+element, and dropped from the suggestion rather than rendered as a lone `#`.
+
+`JOIN 0` — RFC 2812 3.2.1, "leave all channels" — was previously kept off the
+wire by accident: a solitary `0` becomes `#0` via the prepend, and the list
+form `#0,0` was stopped by the server's refusal rather than by anything cic
+knew. The per-element check keeps it out on purpose. Both halves are pinned by
+test, because a comment that claims a safety property and cannot be
+contradicted is the thing #2209 was about.
+
+### What was not established
+
+The slice is a pure function, and the gates run were the cic ones
+(`bun.sh run check`, 5 stages, and the full vitest suite). No e2e was run from
+here — the slice held no lane. The e2e that matters for it already exists and
+was not written by this change: `issue382-multichannel-join.spec.ts` drives
+`/join #a,#b` against the live ircd and asserts both windows resolve to
+`:joined`, which is precisely the regression a per-element check could cause.
+It is CI's to prove green, and it had better be, before this merges.
