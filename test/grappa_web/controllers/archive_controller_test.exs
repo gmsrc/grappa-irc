@@ -204,20 +204,29 @@ defmodule GrappaWeb.ArchiveControllerTest do
     # possible answers: the archive is a read-only view whose whole point is
     # to still be there when the live side is sick.
     #
-    # 200, not a body shape: what a timeout DEGRADES to is the open ruling on
-    # 2239. `[]` here means "nothing is active, so everything with rows is
-    # archived" — i.e. a stuck session would show the user their CURRENTLY
-    # OPEN windows as archived, which is exactly why the choice is not
-    # obvious and not this test's to make.
+    # Ruled (2239): PROPAGATE, do not degrade to `[]`. An empty active keyset
+    # asserts "nothing is active", so `list_archive/3` hands back everything
+    # with rows and the page shows the user the conversations they are sitting
+    # in RIGHT NOW as archived — on this page `[]` does not blur the answer, it
+    # inverts it. The 504 clause it lands on already existed in
+    # `FallbackController`; nothing was invented for this.
+    #
+    # The seeded rows are what makes the assertion bite: with an archive this
+    # request WOULD have had a 200 body to render, so a green here cannot come
+    # from there being nothing to say.
     @tag timeout: 30_000
-    test "a session that does not answer in time does not 500 the page",
+    test "a session that does not answer in time answers 504 session_timeout",
          %{conn: conn, vjt: vjt} do
       net = net_with_credential(vjt)
       :ok = seed_archive_rows(vjt, net)
 
       _ = MuteSession.register!({:user, vjt.id}, net.id)
 
-      assert %{"archive" => _} = json_response(get(conn, "/networks/#{net.slug}/archive"), 200)
+      conn = get(conn, "/networks/#{net.slug}/archive")
+
+      assert json_response(conn, 504) == %{"error" => "session_timeout"}
+      # The retry hint is the actionable half — a stuck mailbox drains.
+      assert Plug.Conn.get_resp_header(conn, "retry-after") == ["10"]
     end
 
     test "returns empty archive when network has no scrollback rows",
