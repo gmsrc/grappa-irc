@@ -1870,6 +1870,18 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
    per lasciarla ferma senza dirlo.**
 3. 🪞 **Ho mandato una worker a cercare una causa IMPOSSIBILE** ⇒ verifica che la causa sia almeno possibile
    prima di ordinare l'indagine. E **prima di ordinare un compito, verifica che esista ancora.**
+   🥇🥇 **E LA FORMA PIU' CARA DI QUESTO, MISURATA IL 2026-09-18 SULLA #2190: LA CURA ERA GIA' SU
+   MAIN, E NE' IO NE' IL PARI AVEVAMO GUARDATO.** La issue era OPEN, quindi si e' letta come *"non
+   e' stato spedito niente"*, e ho briefato una fetta greenfield: **PR #2218, merge `8f1e7cc1a`,
+   tre giorni prima, arto COMPLETO** (token, gate JS, chiamata pre-paint, test di censimento). Il
+   lavoro vero era la **RITARATURA DI UN TOKEN** — una riga, non una feature. Due brief spediti e
+   ritirati prima di accorgersene.
+   🥇 **Regola: PRIMA di scrivere un brief, CERCA LA CURA IN MAIN** — `git log --oneline -S '<token
+   della cura>'` o un grep sui simboli che la fetta introdurrebbe, **con pos ctrl**. **Lo stato
+   OPEN di una issue non e' evidenza che nulla sia atterrato:** e' la stessa famiglia dello zero
+   falso e plausibile — un campo che risponde a *"qualcuno l'ha chiusa?"* letto come risposta a
+   *"il codice c'e'?"*. ⚠️ E quando la cura c'e', **cambia anche la CLASSE del lavoro**: una
+   ritaratura non vuole il brief di una costruzione.
 4. 🪞 **Due volte il bug era nel MIO strumento di misura** (`grep -o` troncato, timestamp gonfiati, `cmp -n`
    su BSD) ⇒ **riga INTERA** + **`date -u` sempre**. ⚠️ Anche le worker gonfiano l'orario: **l'ora e' la mia.**
    🔴🔴 **TERZA VOLTA, 2026-09-14, E SU UN POLLER CI CHE MI AVREBBE LASCIATA CIECA: HO HARD-TYPATO
