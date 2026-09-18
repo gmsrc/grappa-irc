@@ -17507,3 +17507,109 @@ named here so the next reader does not have to rediscover it.
 No wire change and no `protocol_version` bump: `docs/CLIENT_PROTOCOL.md` never
 promised an order for `GET /messages`, and on real data the emitted sequence is
 byte-identical anyway.
+<!-- entry #2190b -->
+
+---
+
+## 2026-09-19 — issue 2190b: the band is a veil, the inset is real, and the clearance moved to the shell
+
+The 2026-09-15 entry above is **wrong on its central premise**, and this entry
+is the correction. It recorded that on iOS 27 `env(safe-area-inset-top)` reads
+0 with the band up, *"exactly as the `8fc439f5e` iPadOS-pill precedent
+predicted"*, and concluded the insets carry no signal. Five probe pages,
+published and photographed on the reporter's device, say otherwise: with
+`apple-mobile-web-app-status-bar-style: default` there is **no band and all
+four insets are 0**; with `black-translucent` — which is what cicchetto
+declares — the band is there and `safe-area-inset-top` is **62px**. WebKit does
+give the signal on 27. The iPadOS 26.7 pill and this are not the same shape,
+and the precedent does not carry.
+
+That correction cost a shipped release. The first cure (PR #2218) took 16px
+from a field report of what other PWA authors had used, went to prod hot, and
+the screenshot afterwards showed the header still washed out. A number nobody
+here had measured could not have been checked before it shipped, which is the
+general lesson and not a remark about this issue.
+
+### It is a veil, not a blur — which is why no layout trick exists
+
+A probe filling its top 200px with a **flat opaque tint** still reads a changed
+colour at the top edge, returning to the exact tint at 100 CSS px. Blurring a
+uniform colour field gives the same colour back, so whatever sits above the web
+view is a translucent material, not a blur: solving for alpha puts it at ~52-57
+percent white on the first pixel, decaying to zero at 100. It is composited
+above the page regardless of what is underneath. **No arrangement of content
+avoids it**, and the "the system blurs because it cannot sample a solid colour"
+explanation going around is falsified by that same flat-tint probe. `theme-color`
+is inert here too, tested under both status-bar styles with the dark-theme shot
+confirmed.
+
+### Why 38 and not 100, and why not the inset alone
+
+The veil dies 100 CSS px from the **screen** edge. The first 62 of those are
+the status bar and are ceded anyway — nothing readable goes under the clock —
+so the net cost owed below the inset is **38**. Trusting the inset alone parks
+the first line 38px inside the effect, which is the reported symptom exactly;
+stopping at 40px from the screen edge does not work either, the veil is still
+at 89 percent of its strength there. The contrast curve at the clearance's own
+edge runs 27 percent at +0, 71 at +18, 91 at +26, crisp at +34. vjt ruled 38
+with that curve in hand; **26 is the honest cheaper fallback** and needs no new
+measurement.
+
+### Ruling point 4: the clearance sits on `.shell`
+
+The shipped cure padded the scrollback CONTENT and left cic's own chrome under
+the veil. The chrome is not a near miss: `--chrome-tap-min` is 48px and
+absolute on purpose, and the hamburger drives the topic bar's height, so the
+chrome spans 62 to at least 110 CSS px **regardless of the root font size**
+while the veil ends at 100. The whole of that window is chrome. vjt ruled
+`.shell` (#grappa 2026-09-16 00:42), so the clearance now shifts the entire
+flow and the scrollback pair — `padding-top` plus `scroll-padding-top` — came
+out. **The accepted price is 38px of vertical screen, permanently**, and
+because `box-sizing` is `border-box` and `.shell` is `height: 100dvh`, that
+padding is consumed FROM the height: the shell does not grow, the usable area
+shrinks.
+
+### 🔴 The #913 trap, run in reverse
+
+`.shell` already declares `padding-top: var(--safe-area-inset-top)`, so the
+natural-looking gated rule — `padding-top: var(--ios27-band-clearance)` — does
+not add 38px, it **replaces** the inset at specificity 0,2,1 against 0,1,0, for
+a net loss of 24px that pulls content up under the Dynamic Island. #913 doubled
+the inset by re-adding it; this annihilates it by overwriting it. Same sheet,
+same token, opposite sign — and every note in the tree warns only about the
+doubling direction, which is precisely why the other one is easy to walk into.
+The rule is therefore additive and restates the inset, and it lives at top
+level rather than inside the mobile media query: there are **two** ungated
+declarations of that padding at equal specificity (`.shell`, and `.shell-mobile`
+inside `max-width: 768px`), the second winning on the phone and the first on the
+wide/iPad render. Summing the **token** rather than either declaration makes the
+rule indifferent to which one the cascade picked, and 0,2,1 at top level beats
+both on both renders. One rule, both platforms — and it must stay on `.shell`,
+not `.shell-mobile`, or the iPad is dropped silently.
+
+At inset 0 — which is what every engine we can drive reports — `calc(inset +
+38px)` and a bare `38px` compute the same number, so the regression above is
+**invisible to a test that does not stub the inset**. The e2e spec re-declares
+`--safe-area-inset-top` on a `:root:root` override and asserts the gated shell
+exceeds the ungated one; the unit test asserts the sum's shape and refuses an
+equality against `38px`, because that equality is the bug written down.
+
+### What this does not claim
+
+Playwright's webkit does not reproduce iOS Safari, so no gate here can show the
+veil is gone; only the phone can. **Scroll behaviour** — whether the veil is
+viewport-anchored or tracks the scroll edge — is still unmeasured; under this
+shape the scrollback's viewport no longer intersects the 0-100px window in any
+state, so it is resolved *by construction of the layout* rather than shown.
+**Landscape and iPad are unmeasured**: every number above comes from one
+phone-class device at 440 CSS px. And the **top-anchored fixed overlays** —
+`.error-banners`, `.diag-float`, `.credits-chrome` — sit outside the shell's
+flow and anchor themselves at the 62px inset, so after this change they are the
+only surfaces left under the veil. The connection-lost banner is the text that
+most needs to be readable. Tracked separately, deliberately not fixed here.
+
+🔁 The measurements in this entry are the work of the fleet agent that
+published the probe pages on issue 2190; the GitHub comment carrying them is
+authored under vjt's account because of how the fleet authenticates, and the
+readings are not his. The 38 and the `.shell` placement are vjt's rulings,
+relayed through the orchestrator, not read from IRC directly.
