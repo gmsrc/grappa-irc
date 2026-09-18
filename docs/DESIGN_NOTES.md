@@ -17415,3 +17415,95 @@ own-authored, 0.46 % of bodies carrying the nick, `server_time` UNIFORM over
   between them, and the corpus is uniform in `server_time` while real traffic
   is not, so the boundary is a function of history shape and not only of a
   row count.
+<!-- entry #2228a -->
+
+---
+
+## 2026-09-18 — #2228a: the cursored scrollback page sorts by `id`, because the sort key must BE the cursor key
+
+`Scrollback.fetch/7` filtered on `id` (`maybe_before/2`, the CP29 R-2 cursor)
+and sorted on `(server_time DESC, id DESC)`. Filter key and sort key were
+different columns, so no index could serve both: SQLite either seeks the
+cursor and then sorts, or walks the `server_time` index and discards every row
+until the cursor. Either way the page costs the channel's HISTORY, not the
+page. Leg A of issue 2228 is one line — the sort is now `id DESC`.
+
+### The ruling, and its condition
+
+vjt, on IRC, relayed by the orchestrator (not seen first-hand; the issue
+carries no comment, so the relay is the only channel): *"A direi id, se e'
+monotono."* The condition is the whole decision, and the alternative — moving
+the CURSOR to `(server_time, id)` — was explicitly declined, so it stays
+declined here.
+
+### Monotonicity: measured, then explained
+
+Measured twice, on two datasets, with the SAME probe (controls inside, so a
+zero is worth something):
+
+| dataset | rows | rank mismatches | pos ctrl | neg ctrl |
+|---|---|---|---|---|
+| Pi copy, 3 networks, ~53 days | 385,580 | **0** | 385,521 | 0 |
+| voyager copy, 1 network, Apr–May | 13,320 | **0** | 12,067 / 109 | 0 |
+
+"Rank mismatch" is the strong form: not a count of inversions but a
+position-by-position comparison of the two ORDER BYs inside every
+`(subject, network, channel)` partition. Zero means the two produce literally
+the same page. The DM/archive partition shape gives 0 as well, and
+`inserted_at` — an independent witness — agrees with `id` too. No
+import/backfill trace on either copy: `|server_time - inserted_at|` peaks at
+999 ms (Pi) / 1005 ms (voyager), with zero rows above 60 s.
+
+But a large sample is still a sample. What makes this an invariant of
+CONSTRUCTION is the write path: `server_time` is `System.system_time(:millisecond)`
+at **every** production write site; the IRCv3 `server-time` cap is never REQd
+(only `sasl` and `labeled-response` are), so no upstream clock reaches the
+column; the persist is synchronous inside a `handle_call` of the ONE
+`Session.Server` that owns `(subject, network)`, so within a partition the
+sampling order IS the insert order; and the migrations that rewrite `messages`
+copy `id` explicitly rather than renumbering.
+
+### Where they CAN part, and why `id` wins there
+
+A backward step of the local wall clock between two persists in one partition.
+`System.system_time/1` is wall clock and can step; this is not excluded by
+either measurement, and is stated rather than hidden. In that case `id` is the
+MORE faithful order — it is arrival, while `server_time` carries the clock's
+lie.
+
+More importantly the old sort did not merely reorder such a row: it **dropped**
+it. With the filter on `id` and the sort on `server_time`, a row the sort
+places outside the page the filter admitted is returned by no page at all.
+That is what the new pagination test asserts, and it is the only test in the
+file that can tell the two sorts apart — every other ordering assertion passes
+under both, precisely because the two agree on ordinary data.
+
+### Two corrections to the issue's own text
+
+1. **"makes the page covering" is false.** `fetch/7` selects the whole row and
+   preloads `:network`; `body` and `meta` are in no index, so the plan reads
+   `USING INDEX`, never `USING COVERING INDEX`. Measured: the same predicate
+   with an `id`-only select DOES report `USING COVERING INDEX
+   messages_user_id_network_id_channel_id_kind_index`, which is where the
+   issue's wording came from. What the change actually buys is that `id < ?`
+   moves INSIDE the index seek — `(user_id=? AND network_id=? AND channel=?
+   AND id<?)` instead of a post-filter — so the page is O(page) rather than
+   O(partition).
+2. **The `USE TEMP B-TREE FOR ORDER BY` the issue measured did not reproduce
+   on a 13k-row bench**: SQLite there preferred the `server_time` index, which
+   serves the ORDER BY and post-filters the cursor. Same defect, different
+   plan — the planner picks by statistics, so the bench cannot stand in for
+   the 385k dataset, and the before/after plan pair is reported from the
+   bench with that limit named.
+
+### Scope
+
+`fetch_around/7` carries the identical mismatch (`WHERE id <= ?` +
+`ORDER BY server_time DESC`) and is deliberately NOT touched here: legs A, B
+and C of issue 2228 are three PRs so that a rollback stays possible, and
+widening leg A into a fourth call site is the same mistake in miniature. It is
+named here so the next reader does not have to rediscover it.
+
+No wire change and no `protocol_version` bump: `docs/CLIENT_PROTOCOL.md` never
+promised an order for `GET /messages`, and on real data the emitted sequence is
+byte-identical anyway.
