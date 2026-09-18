@@ -15,6 +15,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
   """
   use GrappaWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog, only: [with_log: 1]
   import Grappa.AuthFixtures
 
   alias Grappa.{IRCServer, MuteSession}
@@ -868,11 +869,20 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # half of the answer, which is a pure DB read that never needed the
     # session at all.
     #
-    # Pinned as the autojoin list surviving, NOT as the full merge: what the
-    # live half degrades to is the open ruling on 2239 (`joined: false` reads
-    # as "not in that channel", a different claim from "we could not ask").
+    # Ruled (2239): AUTOJOIN-ONLY, not a 504. Measured on cic, which is the
+    # argument: this is a `#717 boot-critical` GET whose resource is assembled
+    # with `Promise.all` over every network and gates the splash, and
+    # `bootFetch` retries no HTTP response of any status — so a 504 here would
+    # leave one stuck session blocking cic's boot for EVERY network, i.e. the
+    # symptom that filed the issue, alive and merely retyped.
+    #
+    # ⚠️ The answer is byte-identical to the "no session at all" test above —
+    # `joined: false`, `source: "autojoin"`. That is the honest limit of a wire
+    # with no degraded marker, so the log assertion is not a nicety: it is the
+    # only evidence that the stuck session degraded rather than quietly looked
+    # parked.
     @tag timeout: 30_000
-    test "a session that does not answer in time does not 500 the listing",
+    test "a session that does not answer in time answers autojoin-only, and says so",
          %{conn: conn, vjt: vjt} do
       slug = "az-mute-#{u()}"
       {network, _} = network_with_server(port: 7003, slug: slug)
@@ -880,7 +890,13 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
       _ = MuteSession.register!({:user, vjt.id}, network.id)
 
-      assert [%{"name" => "#italia"} | _] = json_response(get(conn, "/networks/#{slug}/channels"), 200)
+      {body, log} =
+        with_log(fn -> json_response(get(conn, "/networks/#{slug}/channels"), 200) end)
+
+      assert body == [%{"name" => "#italia", "joined" => false, "source" => "autojoin"}]
+
+      assert log =~ "GET /channels: session did not answer in time"
+      assert log =~ slug
     end
 
     test "unknown network slug returns 404", %{conn: conn} do

@@ -855,15 +855,75 @@ defmodule Grappa.Networks do
     do: channels || []
 
   @doc """
-  The live session's channel list for `(subject, network_id)`, or `[]` when no
-  session is up — a parked network has an autojoin list and no live joins, and
-  that is a normal answer rather than an error.
+  The live session's channel list for `(subject, network_id)`.
+
+  `{:ok, []}` when NO session is up — a parked network has an autojoin list and
+  no live joins, and that is a normal answer rather than an error.
+
+  `{:error, :timeout}` when a session IS registered and did not answer inside
+  `Session.list_channels/2`'s 5s budget. Ruled (2239) to travel as a VALUE
+  rather than collapse to `[]` right here, and the one-line `_ -> []` was
+  considered and rejected: `[]` asserts "joined nothing", which is a different
+  statement from "could not ask", and this function's callers sit on surfaces
+  that do not want the same answer out of it. A wrapper that flattens the two
+  is deciding for all of them at the altitude with the least context, so it
+  does not decide at all.
+
+  Before 2239 the `{:error, :timeout}` arm was simply absent, so a stuck
+  session raised `CaseClauseError` here and 500'd every caller — the return was
+  reachable the whole time and `Session.list_channels/2`'s `@spec` denied it.
   """
-  @spec session_channels(Session.subject(), integer()) :: [String.t()]
+  @spec session_channels(Session.subject(), integer()) ::
+          {:ok, [String.t()]} | {:error, :timeout}
   def session_channels(subject, network_id) when is_integer(network_id) do
     case Session.list_channels(subject, network_id) do
-      {:ok, list} -> list
-      {:error, :no_session} -> []
+      {:ok, list} -> {:ok, list}
+      {:error, :no_session} -> {:ok, []}
+      {:error, :timeout} = err -> err
+    end
+  end
+
+  @doc """
+  `session_channels/2` for the two CHANNEL-TREE doors, which were both ruled
+  (2239) to degrade rather than fail: `GET /boot` (per network row) and
+  `GET /networks/:nid/channels`. A timeout yields `[]` here, so the caller
+  composes an AUTOJOIN-ONLY tree from the credential column — the half it holds
+  without asking anybody.
+
+  This is the POLICY; `session_channels/2` above is the FACT, and they are two
+  functions on purpose. `Grappa.Scrollback`'s archive door reads the fact and
+  propagates, because on that page an empty live set asserts "nothing is
+  active" and archives the windows the user is sitting in. One shared policy
+  function rather than the same `case` at both doors: they were ruled to answer
+  identically, so the thing that must not drift is exactly this.
+
+  `door` is the caller's own label (`"GET /boot"`) and only reaches the log,
+  which keeps the warning greppable per door.
+
+  **The degrade is never silent.** `[]` for a timeout is indistinguishable on
+  the wire from `[]` for a parked network — telling them apart needs a wire
+  marker and a `protocol_version` bump — so the operator-visible line is the
+  only thing separating "we could not ask" from "there was nothing to ask
+  about" until then.
+  """
+  @spec session_channels_degrading(Session.subject(), Network.t(), String.t()) :: [String.t()]
+  def session_channels_degrading(subject, %Network{} = network, door) when is_binary(door) do
+    case session_channels(subject, network.id) do
+      {:ok, list} ->
+        list
+
+      {:error, :timeout} ->
+        # `network:` is the one configured metadata key that fits; the subject
+        # rides in the message, as `NetworksController` already does, because
+        # `config/config.exs` configures no key for it.
+        Logger.warning(
+          "#{door}: session did not answer in time — degrading #{network.slug} " <>
+            "to autojoin only for #{inspect(subject)}",
+          network: network.slug,
+          reason: :timeout
+        )
+
+        []
     end
   end
 

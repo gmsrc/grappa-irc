@@ -10,6 +10,7 @@ defmodule GrappaWeb.BootControllerTest do
   """
   use GrappaWeb.ConnCase, async: true
 
+  import ExUnit.CaptureLog, only: [with_log: 1]
   import Grappa.AuthFixtures
 
   alias Grappa.{MuteSession, ScrollbackHelpers}
@@ -122,14 +123,21 @@ defmodule GrappaWeb.BootControllerTest do
   # `Grappa.LiveIntrospection` uses at 250 ms precisely because it needed the
   # honest signal this endpoint throws away).
   #
-  # Asserted as a 200, and NOT as a channel-tree shape, on purpose: what a
-  # timed-out session should DEGRADE to is an open ruling on issue 2239 — `[]`
-  # ("no channels joined") is a different claim from "the session did not
-  # answer". No candidate ruling makes a 500 the answer, so this is the part
-  # that can be pinned before the ruling lands.
+  # Ruled (2239): degrade PER NETWORK ROW, do not fail the envelope. The
+  # degraded row is the AUTOJOIN-ONLY tree — the half held without asking
+  # anybody. Propagating instead would keep the very blast radius this asserts
+  # against, merely retyped from 500 to 504.
+  #
+  # ⚠️ On the wire a degraded row is INDISTINGUISHABLE from a parked one, which
+  # is exactly why `healthy` (no session at all) and `stuck` (a session that
+  # will not answer) render the same shape below. The `Logger.warning` is the
+  # ONLY thing that separates them today, so the log assertion is not a nicety
+  # here — it is the only evidence the degrade happened at all rather than the
+  # stuck network quietly looking healthy. Telling them apart on the wire needs
+  # a per-network marker and therefore a `protocol_version` bump.
   describe "a session that does not answer within the call budget" do
     @tag timeout: 30_000
-    test "does not 500 the envelope, and does not take the sibling networks with it" do
+    test "degrades that network to autojoin-only and leaves its siblings whole" do
       user = user_fixture(name: "boot-mute-#{System.unique_integer([:positive])}")
       conn = put_bearer(build_conn(), session_fixture(user).id)
 
@@ -144,14 +152,25 @@ defmodule GrappaWeb.BootControllerTest do
 
       _ = MuteSession.register!({:user, user.id}, stuck.id)
 
-      body = json_response(get(conn, "/boot"), 200)
+      {body, log} =
+        with_log(fn -> json_response(get(conn, "/boot"), 200) end)
 
       assert Enum.sort(Enum.map(body["networks"], & &1["slug"])) ==
                Enum.sort([stuck.slug, healthy.slug])
 
-      # The healthy network's tree is intact — the blast radius of one stuck
-      # session must not be the whole account.
-      assert Enum.map(body["channels"][healthy.slug], & &1["name"]) == ["#healthy"]
+      # The stuck network still answers, from the credential column.
+      assert body["channels"][stuck.slug] ==
+               [%{"name" => "#stuck", "joined" => false, "source" => "autojoin"}]
+
+      # And the sibling is untouched — the blast radius of one stuck session
+      # must not be the whole account.
+      assert body["channels"][healthy.slug] ==
+               [%{"name" => "#healthy", "joined" => false, "source" => "autojoin"}]
+
+      # Operator-side honesty: the degrade names the network it degraded.
+      assert log =~ "GET /boot: session did not answer in time"
+      assert log =~ stuck.slug
+      refute log =~ healthy.slug
     end
   end
 
