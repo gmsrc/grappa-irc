@@ -17180,3 +17180,238 @@ alive and IDLE, the opposite axis — which is why a reachable return had gone
 years unobserved and two callers were written against a spec instead of
 against the code. A test costs the caller's own 5s: `list_channels/2` takes no
 budget argument, and that is `/3`.
+<!-- entry #2240 -->
+
+---
+
+## 2026-09-18 — #2240: `aggregate_mentions/6` is bounded by the ACCOUNT, not by the away window — measured
+
+The issue asked whoever picked between its two options to "measure the scan on
+a real archive rather than reason about it". This entry is that measurement.
+**No option is chosen here**; the numbers and the conditions they hold under
+are recorded, and the choice is vjt's because it touches visible behaviour.
+
+### The claim the issue makes, checked and upheld — on a stale inventory
+
+`Grappa.Mentions.aggregate_mentions/6` filters `user_id`, `network_id`, a
+`server_time` range and `kind` with no `channel` predicate, and no index on
+`messages` carries `server_time` at a position the range can seek. That holds.
+
+What does not hold is the inventory it is argued from. The issue lists four
+composite indexes and calls the proposal "a fifth index on a hot write table".
+`sqlite_master` says **nine** explicit indexes on `messages`, so the proposal
+is the tenth and eleventh. Two of the four it lists were dropped by #1372 P-S4
+(`20260816014915`); five it does not list exist, including the two partial
+`messages_archive_*_idx`. The set has been frozen since `20260816014915` —
+byte-identical across five independently produced DBs spanning migration
+levels 89 through 97, and the nine migrations after it touch `messages` only
+in prose.
+
+### What SQLite actually does, off the SQL the function EMITS
+
+Captured from `[:grappa, :repo, :query]`, never rebuilt (the #1372 rule):
+
+    SEARCH m0 USING INDEX messages_archive_user_idx (user_id=? AND network_id=?)
+    USE TEMP B-TREE FOR ORDER BY
+
+Two facts neither the issue nor the moduledoc contains. **The index chosen is
+`messages_archive_user_idx`** — the partial `20260522073826` index the issue
+never lists and that DESIGN_NOTES 2026-08-26 (#1626) measured as never
+entering `list_archive/3`'s plan and called "dead weight on the write path".
+That verdict was scoped to `list_archive/3` and remains true there; it is NOT
+true of this query, so the cleanup those notes leave on the shelf would
+deoptimise this one. **And the ORDER BY cannot be served from the index**, so
+every call builds a temp B-tree over the whole filtered set.
+
+The moduledoc claimed the opposite on three counts — that the
+`…channel_server_time_index` serves it, that the range predicate "still
+benefits from the index", and that the regex step runs "in sub-millisecond
+time". All three are corrected in the same commit as this entry.
+
+### The shape of the defect, in one row of the table
+
+Median of 3 through the app's own pool, outside the sandbox, prod's pragmas,
+no `sqlite_stat*`, on a 1,943,545-row partition (prod's 2026-08-16 anchor):
+
+| away window | rows the DB returns | db ms | total ms |
+|---|---:|---:|---:|
+| 1h | 206 | 95.4 | 96.2 |
+| 1d | 4,962 | 98.7 | 114.4 |
+| 7d | 34,737 | 166.9 | 256.8 |
+| 30d | 148,880 | 474.8 | 837.5 |
+| 365d | 1,811,386 | 4,957 | 10,278 |
+
+**A one-hour away that returns 206 rows costs 95 ms, and a one-day away that
+returns 24x as many costs 99 ms.** The floor is the partition, not the window.
+Across sizes that floor is linear at **~0.047 ms per 1,000 partition rows**
+(4.29 ms at 100k, 30.7 at 650k, 95.4 at 1.94M, 181.0 at 4M) — the same class
+#1626 measured for `list_archive/3` at ~0.16 ms/1,000.
+
+A second independent run on a quiet host an hour later reproduced that table
+as 86.6 / 93.1 / 167.1 / 457.0 / 4,798 ms — every cell within 9.2 %, four of
+the five lower, which is the direction a warmer page cache pushes. **Treat
+~9 % as this host's quiet run-to-run spread and read no ratio below it as a
+result.**
+
+It is not a background cost. `maybe_broadcast_mentions_bundle/1` is a plain
+call inside `unset_away_internal/2`, which runs in a `handle_call` arm, so the
+session is blocked for the whole of it. The trigger is `{:ws_visible, _}` — a
+tab FOREGROUNDING after the 10-minute auto-away debounce — once per network,
+not the rare deliberate `/away` the issue's framing suggests.
+
+### At 4M partition rows the full window does not complete at all
+
+Not "is slow". On a quiet host the 365-day arm failed on **five of five**
+attempts, in two distinct ways depending only on how much budget it is given.
+
+**Under prod's pinned 15,000 ms** (`config/runtime.exs:428`) the statement is
+interrupted and `Repo.all/1` raises inside a `handle_call` with no rescue, so
+**the session GenServer dies.** The exception TEXT is not stable — one run
+raised `** (Exqlite.Error) interrupted`, two later ones
+`** (Exqlite.Error) out of memory` from the same corpus and the same arm — so
+match on the failure, never on the string.
+
+**With the budget raised to 600 s so the query CAN finish, it never does: the
+container is SIGKILLed** (`rc=137`) partway through the 365-day step, taking
+the whole BEAM and every other session with it. The ladder below is what it
+managed first, and it is the honest replacement for a former **14,838 ms**
+figure in an earlier draft of this entry, which was measured while another
+gate shared the host and **cannot be re-measured at all**, because on a quiet
+machine the step dies of memory before it returns:
+
+| window | rows the DB returns | today | + opt1 index |
+|---|---:|---:|---:|
+| 30d | 306,411 | 1,315.7 | 1,009.3 |
+| 90d | 919,230 | 2,983.6 | 2,118.8 |
+| 180d | 1,838,468 | 6,223.1 | 4,491.7 |
+| 270d | 2,757,698 | 9,527.5 | 6,677.7 |
+| 365d | never reached | **SIGKILL** | **SIGKILL** |
+
+**The right-hand column is the point.** The option-1 index is present for it,
+it is 1.3–1.4x faster all the way up, and it dies in exactly the same place.
+The ceiling is not artificial: the container carries no memory limit
+(`HostConfig.Memory=0`, cgroup `memory.max=max`), so what was exhausted is the
+Docker VM's whole 7.75 GiB — this is the row-materialisation amplification of
+the next section arriving at its conclusion, not a tight sandbox.
+
+**The self-hoster's account in the issue — lock stalls, a starved pool, a
+>15s wait for a CONNECTION — is his measurement, not this one.** What is
+reproduced here is the same fatal outcome by a different proximate route: the
+query's own budget, not the pool's.
+
+### What each option buys, on the same axis
+
+`db_ms`, 1.94M partition. "loose" is option 2 written honestly — a recursive
+skip-scan that derives its target list from the table rather than taking a
+channel list from the session, so nothing can be missed:
+
+| window | today | +opt1 index | loose scan |
+|---|---:|---:|---:|
+| 1h | 86.6 | **0.54** (162x) | 1.04 (83x) |
+| 1d | 93.1 | **7.86** (11.8x) | 12.8 (7.3x) |
+| 7d | 167.1 | **51.6** (3.2x) | 84.0 (2.0x) |
+| 30d | 457.0 | 288.7 (1.6x) | 343.4 (1.3x) |
+| 365d | 4,798 | 3,371 (1.4x) | 5,981 (**0.8x**) |
+
+Option 1 wins everywhere and its plan loses the temp B-tree as well
+(`SEARCH … (user_id=? AND network_id=? AND server_time>? AND server_time<?)`).
+The loose scan is free of new indexes and needs no write budget, but it is
+SLOWER once the window returns most of the partition.
+
+**They do not compose, and the collapse is worse than "slower".** With
+`opt1_u` present the planner prefers it inside the CTE's own correlated
+subqueries and the skip-scan degrades by two orders: 1h 1.0 → 30.4 ms, 1d
+12.8 → 736 ms, 7d 84 → 5,083 ms, and at **30d and 365d it no longer returns
+inside the 15 s budget at all** — both raised, where the same shape without
+the index answers in 343 ms and 5,981 ms. Stacking the two options is
+strictly worse than either alone; pick one.
+
+Both converge on 1x at the long end because the cost there is row
+materialisation, which no index addresses.
+
+Taking option 1 costs one migration, and its build time is a property of the
+substrate rather than of the index: the pair (the composite plus a PARTIAL
+visitor twin) builds in **4.0 s** natively on the host and **10.5 s** in the
+container through a macOS bind mount, same clone, same DDL, same order.
+Neither number transfers to the jail — #393 recorded a 3-4.5x host factor for
+index builds on this very table.
+
+### The write cost, which the wall clock could not resolve
+
+Eight interleaved reps of an identical 50,000-row transaction could not
+separate the arms: paired medians +5.5 / +6.1 / +7.1 % with per-arm spreads of
+6-12 % and a sign test at p=0.07. A first, sequential run had reported +12.6 %
+and that number did not survive interleaving.
+
+Counting pages instead of milliseconds — #1372's own answer on this table —
+resolves it exactly, and repeats byte-for-byte:
+
+| arm | WAL pages for the same 50k-row txn | vs base |
+|---|---:|---:|
+| main's 9 indexes | 7,424 | — |
+| + `(user_id, network_id, server_time)` | 8,104 | +9.2 % |
+| + the same, plus a PARTIAL visitor twin | 8,104 | **+9.2 %** |
+| + the same, plus a FULL visitor twin | 8,349 | +12.5 % |
+| control: insert nothing | 0 | — |
+
+**A partial visitor twin costs exactly nothing**, and it is the shape the two
+`messages_archive_*_idx` on this very table already use. A full one buys 245
+pages of all-NULL keys on any instance where `visitor_enabled` is still its
+default false. Adjacent and NOT proposed here: three EXISTING visitor indexes
+on `messages` are non-partial and carry one all-NULL entry per row — 45.3 MB
+of a 228 MB file in a visitor-free corpus.
+
+### The third leg is not part of the cure — it is the severe one
+
+The query has no `LIMIT`, so `Repo.all/1` materialises every content row in
+the window before the regex runs. Peak heap of the calling process, 1.94M
+partition:
+
+| window | rows delivered | peak process heap | term returned |
+|---|---:|---:|---:|
+| 1d | 23 | 7.6 MB | 12 KB |
+| 30d | 735 | **173.8 MB** | 376 KB |
+| 365d | 8,961 | **2,266 MB** | 4.6 MB |
+
+2.27 GB of peak heap in one session process to deliver 4.6 MB — 493x. A
+thirty-day away, which is ordinary for a bouncer, peaks at 174 MB per network.
+**Neither option touches this**: both return the same set, so both leave the
+amplification exactly where it is. It is a third, independent defect, and it
+is the one that produces the failures above — the 4M SIGKILL is this table
+continued past the end of the machine.
+
+These three figures are the one measurement here that is exactly repeatable:
+a second run on a quiet host reproduced all three to the displayed precision.
+A peak heap is not a timing, and it does not drift with load.
+
+*Adjacent, and reassuring rather than alarming:* `base/deployment.yaml` sets
+`requests` and deliberately no memory `limit`, with the comment "a memory
+limit turns a burst into an OOMKill of the single writer". That comment
+anticipated this class; the table is its magnitude.
+
+### The corpus, and what is NOT established
+
+Synthetic, and the distribution is CHOSEN — it mirrors the shape #1626
+declared for this table so the two sets of numbers compare: 181 targets (30
+channels on a heavy tail plus 150 DM peers), 6.8 % presence events, 11.3 %
+own-authored, 0.46 % of bodies carrying the nick, `server_time` UNIFORM over
+365 days. Sizes are anchored to prod's two readings, 654k (2026-07-25) and
+1,943,545 (2026-08-16); neither is today's.
+
+- **Prod's current row count.** Unreadable from this lane. The two anchors
+  imply ~58k rows/day, which would put prod near 3.8M today — that is
+  arithmetic on two points, not a measured rate, and the interval may contain
+  a history import.
+- **The typical away window.** There is no cap on it anywhere and explicit
+  away is restored VERBATIM across reconnects by design (#417), so it is
+  unbounded above; how long it usually IS needs prod telemetry that does not
+  exist. The issue's "usually short" is neither confirmed nor refuted here.
+- **How often the trigger fires.** The trigger is read off the code; the rate
+  is not observed.
+- **Prod's per-call cost.** Every figure is a warm macOS host in Docker, and
+  every rep is warm — the cold first call after a boot is unmeasured.
+- **Where the failure threshold sits.** That 4M fails is reproduced five
+  times out of five; 1.94M never failed. Nothing here locates the boundary
+  between them, and the corpus is uniform in `server_time` while real traffic
+  is not, so the boundary is a function of history shape and not only of a
+  row count.
