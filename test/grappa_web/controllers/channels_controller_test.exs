@@ -17,7 +17,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.IRCServer
+  alias Grappa.{IRCServer, MuteSession}
   alias Grappa.Networks.Credentials
   alias Grappa.PubSub.Topic
   alias Grappa.Session.WindowState
@@ -857,6 +857,30 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
       conn = get(conn, "/networks/#{slug}/channels")
       assert json_response(conn, 200) == []
+    end
+
+    # issue 2239 — the third state of a session, next to "absent" (the test
+    # above) and "live" (the four before it): REGISTERED BUT NOT ANSWERING.
+    # `Networks.session_channels/2` matched only the two shapes
+    # `Session.list_channels/2`'s `@spec` declared and had no clause for the
+    # `{:error, :timeout}` `call_session/4` returns once its 5s budget runs
+    # out, so this listing 500'd on a `CaseClauseError` — hiding the AUTOJOIN
+    # half of the answer, which is a pure DB read that never needed the
+    # session at all.
+    #
+    # Pinned as the autojoin list surviving, NOT as the full merge: what the
+    # live half degrades to is the open ruling on 2239 (`joined: false` reads
+    # as "not in that channel", a different claim from "we could not ask").
+    @tag timeout: 30_000
+    test "a session that does not answer in time does not 500 the listing",
+         %{conn: conn, vjt: vjt} do
+      slug = "az-mute-#{u()}"
+      {network, _} = network_with_server(port: 7003, slug: slug)
+      _ = credential_fixture(vjt, network, %{autojoin_channels: ["#italia"]})
+
+      _ = MuteSession.register!({:user, vjt.id}, network.id)
+
+      assert [%{"name" => "#italia"} | _] = json_response(get(conn, "/networks/#{slug}/channels"), 200)
     end
 
     test "unknown network slug returns 404", %{conn: conn} do

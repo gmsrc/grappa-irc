@@ -26,9 +26,8 @@ defmodule GrappaWeb.ArchiveControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.IRCServer
+  alias Grappa.{IRCServer, MuteSession, QueryWindows, Scrollback}
   alias Grappa.PubSub.Topic
-  alias Grappa.{QueryWindows, Scrollback}
 
   # #1404 — read the SAME config keys `GrappaWeb.ArchiveController` reads,
   # rather than an accessor on the controller: an accessor returning a
@@ -194,6 +193,31 @@ defmodule GrappaWeb.ArchiveControllerTest do
       # exclusion above is the query window's doing and not a live channel's.
       assert "#a" in targets
       assert "#b" in targets
+    end
+
+    # issue 2239 — the sibling of the two tests above on the third axis:
+    # a session that is registered but does not ANSWER. `build_active_keyset/3`
+    # matched only `{:ok, _}` and `{:error, :no_session}` — the two shapes
+    # `Session.list_channels/2`'s `@spec` declared — while `call_session/4`
+    # also returns `{:error, :timeout}` once its 5s budget expires. The page
+    # then 500'd on a `CaseClauseError`, which is the worst of the three
+    # possible answers: the archive is a read-only view whose whole point is
+    # to still be there when the live side is sick.
+    #
+    # 200, not a body shape: what a timeout DEGRADES to is the open ruling on
+    # 2239. `[]` here means "nothing is active, so everything with rows is
+    # archived" — i.e. a stuck session would show the user their CURRENTLY
+    # OPEN windows as archived, which is exactly why the choice is not
+    # obvious and not this test's to make.
+    @tag timeout: 30_000
+    test "a session that does not answer in time does not 500 the page",
+         %{conn: conn, vjt: vjt} do
+      net = net_with_credential(vjt)
+      :ok = seed_archive_rows(vjt, net)
+
+      _ = MuteSession.register!({:user, vjt.id}, net.id)
+
+      assert %{"archive" => _} = json_response(get(conn, "/networks/#{net.slug}/archive"), 200)
     end
 
     test "returns empty archive when network has no scrollback rows",

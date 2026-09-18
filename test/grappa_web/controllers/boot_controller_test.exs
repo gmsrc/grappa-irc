@@ -12,7 +12,7 @@ defmodule GrappaWeb.BootControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.ScrollbackHelpers
+  alias Grappa.{MuteSession, ScrollbackHelpers}
 
   describe "authorization" do
     test "an unauthenticated caller is refused, and does NOT fall through to the SPA" do
@@ -106,6 +106,52 @@ defmodule GrappaWeb.BootControllerTest do
       assert row["kind"] == "visitor"
       assert row["slug"] == network.slug
       assert Enum.map(body["channels"][network.slug], & &1["name"]) == ["#vis"]
+    end
+  end
+
+  # issue 2239 — `GET /boot` reaches `Session.list_channels/2` once per
+  # network row, through `Networks.session_channels/2`. That wrapper matched
+  # the two shapes the (wrong) `@spec` declared and had no clause for the
+  # `{:error, :timeout}` the 5s `call_session/3` budget really can return, so
+  # ONE session too busy to answer raised a `CaseClauseError` out of the map
+  # comprehension — taking every OTHER network's tree down with it, since the
+  # envelope is assembled before anything is rendered.
+  #
+  # The 5s is the caller's own budget, not a knob this test can shrink:
+  # `list_channels/2` has no timeout parameter (that is `/3`, which
+  # `Grappa.LiveIntrospection` uses at 250 ms precisely because it needed the
+  # honest signal this endpoint throws away).
+  #
+  # Asserted as a 200, and NOT as a channel-tree shape, on purpose: what a
+  # timed-out session should DEGRADE to is an open ruling on issue 2239 — `[]`
+  # ("no channels joined") is a different claim from "the session did not
+  # answer". No candidate ruling makes a 500 the answer, so this is the part
+  # that can be pinned before the ruling lands.
+  describe "a session that does not answer within the call budget" do
+    @tag timeout: 30_000
+    test "does not 500 the envelope, and does not take the sibling networks with it" do
+      user = user_fixture(name: "boot-mute-#{System.unique_integer([:positive])}")
+      conn = put_bearer(build_conn(), session_fixture(user).id)
+
+      {stuck, _} =
+        network_with_server(port: 6667, slug: "stuck-#{System.unique_integer([:positive])}")
+
+      {healthy, _} =
+        network_with_server(port: 6667, slug: "ok-#{System.unique_integer([:positive])}")
+
+      credential_fixture(user, stuck, %{autojoin_channels: ["#stuck"]})
+      credential_fixture(user, healthy, %{autojoin_channels: ["#healthy"]})
+
+      _ = MuteSession.register!({:user, user.id}, stuck.id)
+
+      body = json_response(get(conn, "/boot"), 200)
+
+      assert Enum.sort(Enum.map(body["networks"], & &1["slug"])) ==
+               Enum.sort([stuck.slug, healthy.slug])
+
+      # The healthy network's tree is intact — the blast radius of one stuck
+      # session must not be the whole account.
+      assert Enum.map(body["channels"][healthy.slug], & &1["name"]) == ["#healthy"]
     end
   end
 
