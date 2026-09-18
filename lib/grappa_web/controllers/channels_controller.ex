@@ -61,8 +61,20 @@ defmodule GrappaWeb.ChannelsController do
     subject = conn.assigns.current_subject
 
     with {:ok, autojoin} <- subject_autojoin(subject, network) do
-      session_channels = Networks.session_channels(Subject.to_session(subject), network.id)
-      entries = Networks.merge_channel_sources(autojoin, session_channels)
+      # A SESSION THAT DOES NOT ANSWER STILL OWES THE AUTOJOIN HALF (issue
+      # 2239, vjt's ruling). `Networks.session_channels_degrading/3` yields `[]`
+      # on a timeout and logs it, so the tree below is autojoin-only rather
+      # than a 504 — and that is deliberately NOT what the archive door does.
+      #
+      # Measured on cic, which is why this door does not propagate: this is a
+      # `#717 boot-critical` GET, `lib/networks.ts` builds `channelsBySlug` with
+      # `Promise.all` over every network, and that resource gates the splash.
+      # One rejection rejects the whole thing, and `bootFetch` retries no HTTP
+      # response of any status — so a 504 here leaves one stuck session blocking
+      # cic's boot for EVERY network, which is the symptom that filed the issue.
+      live = Networks.session_channels_degrading(Subject.to_session(subject), network, "GET /channels")
+
+      entries = Networks.merge_channel_sources(autojoin, live)
       render(conn, :index, channels: entries)
     end
   end

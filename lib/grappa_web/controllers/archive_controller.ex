@@ -104,15 +104,15 @@ defmodule GrappaWeb.ArchiveController do
   `#{@archive_read_bucket}` bucket. An empty bucket answers 429
   `rate_limited` with a `retry-after` hint and runs no query.
   """
-  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, {:rate_limited, pos_integer()}}
+  @spec index(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, {:rate_limited, pos_integer()} | :timeout}
   def index(conn, _) do
     subject = conn.assigns.current_subject
     network = conn.assigns.network
     session_subject = Subject.to_session(subject)
 
-    with :ok <- take_archive_token(session_subject, network.id) do
-      active_keyset = build_active_keyset(subject, session_subject, network.id)
-
+    with :ok <- take_archive_token(session_subject, network.id),
+         {:ok, active_keyset} <- build_active_keyset(subject, session_subject, network.id) do
       entries = Scrollback.list_archive(session_subject, network.id, active_keyset)
       render(conn, :index, archive: entries)
     end
@@ -241,30 +241,51 @@ defmodule GrappaWeb.ArchiveController do
   # read, so the two cannot drift apart again: there is exactly one place here
   # that says what an absent session means.
   #
-  # The `case` yields the TARGET LIST and the MapSet is built once, after it.
-  # That is a dialyzer constraint, not a style choice, and reverting it to a
-  # `MapSet.new(...)` per arm reopens two errors — measured, both directions:
-  # `MapSet.t/1` is OPAQUE, and a MapSet built from a statically-empty list
-  # collapses to the concrete `%MapSet{map: %{}}` in the success typing (it is
-  # the empty LITERAL, not the arity — `MapSet.new()` and `MapSet.new([])` are
-  # red alike). Joined with the other arm the return is then no longer purely
-  # opaque, so the `@spec` below reads as `contract_with_opaque`, and handing
-  # the value to `Scrollback.list_archive/3` — which specs the opaque type —
-  # reads as `call_without_opaque`. One construction site from a list dialyzer
-  # cannot fold to a constant keeps the opacity intact.
+  # A SESSION THAT DOES NOT ANSWER IS NOT AN EMPTY KEYSET (issue 2239). The
+  # arm below used to be absent, so `{:error, :timeout}` — a real return of
+  # `Session.list_channels/2`, which its `@spec` denied until 2239 — raised a
+  # `CaseClauseError` and 500'd the page.
+  #
+  # It degrades to `{:error, :timeout}` rather than to `[]`, and the two are
+  # opposite claims HERE more than anywhere else on the surface: an empty
+  # keyset asserts "nothing is active", so `list_archive/3` returns everything
+  # with rows and the page shows the user the conversations they are sitting in
+  # RIGHT NOW as archived. `[]` does not blur this page, it inverts it. The
+  # error travels to `GrappaWeb.FallbackController`'s existing `{:error,
+  # :timeout}` clause — 504 + `retry-after: 10` + `session_timeout`, a token
+  # cic already renders — so nothing new was invented for it.
+  #
+  # Note this is NOT the same answer the sibling doors take: `GET /boot`
+  # degrades per network row rather than failing the envelope. The difference
+  # is that this page is on no boot path and has one network in scope.
+  #
+  # The `case` still yields the TARGET LIST and the MapSet is still built once,
+  # after it. That is a dialyzer constraint, not a style choice, and reverting
+  # it to a `MapSet.new(...)` per arm reopens two errors — measured, both
+  # directions: `MapSet.t/1` is OPAQUE, and a MapSet built from a
+  # statically-empty list collapses to the concrete `%MapSet{map: %{}}` in the
+  # success typing (it is the empty LITERAL, not the arity — `MapSet.new()` and
+  # `MapSet.new([])` are red alike). Joined with the other arm the return is
+  # then no longer purely opaque, so the `@spec` below reads as
+  # `contract_with_opaque`, and handing the value to `Scrollback.list_archive/3`
+  # — which specs the opaque type — reads as `call_without_opaque`. One
+  # construction site from a list dialyzer cannot fold to a constant keeps the
+  # opacity intact, which is why the error arm short-circuits the `with` below
+  # instead of adding a second `MapSet.new/1`.
   @spec build_active_keyset(
           {:user, User.t()} | {:visitor, Visitor.t()},
           Grappa.Scrollback.subject(),
           integer()
-        ) :: MapSet.t(String.t())
+        ) :: {:ok, MapSet.t(String.t())} | {:error, :timeout}
   defp build_active_keyset(subject, session_subject, network_id) do
     active_targets =
       case Session.list_channels(session_subject, network_id) do
-        {:ok, channels} -> channels ++ open_query_targets(subject, network_id)
-        {:error, :no_session} -> []
+        {:ok, channels} -> {:ok, channels ++ open_query_targets(subject, network_id)}
+        {:error, :no_session} -> {:ok, []}
+        {:error, :timeout} -> {:error, :timeout}
       end
 
-    MapSet.new(active_targets)
+    with {:ok, targets} <- active_targets, do: {:ok, MapSet.new(targets)}
   end
 
   @spec open_query_targets({:user, User.t()} | {:visitor, Visitor.t()}, integer()) ::

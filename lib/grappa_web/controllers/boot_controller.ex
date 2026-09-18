@@ -80,19 +80,40 @@ defmodule GrappaWeb.BootController do
     subject = Subject.to_session(conn.assigns.current_subject)
     {kind, rows} = Networks.subject_network_rows(subject)
 
-    channels =
-      Map.new(rows, fn {network, _, cred, _} ->
-        {network.slug,
-         Networks.merge_channel_sources(
-           Networks.autojoin_channels(kind, cred),
-           Networks.session_channels(subject, network.id)
-         )}
-      end)
+    channels = Map.new(rows, &{elem(&1, 0).slug, channel_tree(subject, kind, &1)})
 
     render(conn, :index,
       networks: {kind, rows},
       channels: channels,
       heads: heads(subject, rows, channels)
+    )
+  end
+
+  # ONE STUCK SESSION MUST NOT COST THE WHOLE ENVELOPE (issue 2239, vjt's
+  # ruling): this endpoint degrades PER NETWORK ROW, it does not fail the
+  # request.
+  #
+  # A session that is registered but too busy to reply inside the 5s budget
+  # answers `{:error, :timeout}`. Before 2239 nothing had an arm for it and
+  # `Networks.session_channels/2` raised, and because the comprehension above
+  # assembles every row BEFORE anything renders, the `CaseClauseError` took the
+  # healthy networks down with the sick one: a 500 for the whole account on
+  # account of one link. Propagating instead would keep exactly that blast
+  # radius and merely retype it — 504 for N networks because of 1 — which is the
+  # wrong altitude for the endpoint whose entire reason to exist (#1679) is
+  # batching those N.
+  #
+  # `Networks.session_channels_degrading/3` is the shared policy (its doc
+  # carries the full rationale, including why this is NOT what the archive door
+  # does). Here it means the AUTOJOIN-ONLY tree: the half held without asking
+  # anybody, from a credential column that was never in doubt — the same posture
+  # as `LiveIntrospection`'s degraded `joined_channels`, never a fabrication.
+  @spec channel_tree(Grappa.Session.subject(), :user | :visitor, Networks.network_row()) ::
+          [Networks.channel_entry()]
+  defp channel_tree(subject, kind, {network, _, cred, _}) do
+    Networks.merge_channel_sources(
+      Networks.autojoin_channels(kind, cred),
+      Networks.session_channels_degrading(subject, network, "GET /boot")
     )
   end
 
