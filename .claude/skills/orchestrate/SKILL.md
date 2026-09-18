@@ -1072,6 +1072,19 @@ clearing on unverified edits leaves the next session unable to tell whether they
   order read as complete and plausible. **Re-read your own order in the `❯` block after sending.** For
   anything with more than ~2 constraints, **write it to the worker's host `/tmp` and send a six-word
   "leggi <path> ed eseguilo"** — immune by construction, and it survives the worker's `/clear`.
+- 🔴🔴 **IL CAMPIONE DI COSTO SI PRENDE CON `tail -1` E UN PATTERN STRETTO, MAI `head -1` SUL PANE
+  INTERO (orch, 2026-09-18, misurato).** Uso da mesi
+  `capture-pane -p | grep -o '\$[0-9]*\.[0-9]*' | head -1` per campionare `💰` e provare una consegna.
+  Ha due difetti che si sommano: **`head -1` pesca il PRIMO `$x.y` del BUFFER**, che è testo della
+  worker e non la status line (la status line sta in FONDO ⇒ `tail -1`); e **`[0-9]*` accetta ZERO
+  cifre**, quindi matcha anche un `$.` qualsiasi. Misurato: `COST_AT_SEND=$.` — cioè un `OLD`
+  spazzatura, contro cui **ogni** confronto successivo è diverso ⇒ **il waiter avrebbe dichiarato
+  CONSEGNATO al primo giro qualunque cosa fosse successa**. La direzione è la peggiore: afferma la
+  consegna invece di negarla.
+  🥇 **Forma che regge: `grep -oE '\$[0-9]+\.[0-9]+' | tail -1`**, e **se il campione non matcha
+  il formato atteso il waiter NON si arma** — un `OLD` non validato è un righello storto, ed è la
+  stessa famiglia del `!=` contro un letterale che non riproduce gli spazi della status line.
+  *Le volte precedenti aveva funzionato per fortuna: nessun `$` nel testo sopra la status line.*
 - 🔴 **IRCBOT:** `cd /home/vjt/code/IRC/vjt-claude && ./bot.say '#grappa' <<'EOF' … EOF`.
   🔴 **FLAGS GO BEFORE THE TARGET** — `bot.say -f …/bot.send.libera '#grappa'`, NEVER `'#grappa' -f …`: the parse loop
   stops at the first non-flag arg, so a trailing `-f` is **silently ignored and the message goes to AZZURRA**.
