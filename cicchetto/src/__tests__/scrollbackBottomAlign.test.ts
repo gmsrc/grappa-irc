@@ -22,7 +22,7 @@ import { allRules, ruleBody, selectorList } from "./helpers/themeCss";
 
 // A selector whose LAST compound is `.scrollback` (optionally with a
 // pseudo-class/element), whatever precedes it: `.scrollback`,
-// `html.is-ios27-band .scrollback`, `.scrollback-pane > .scrollback`,
+// `.scrollback-pane > .scrollback`, `html.is-ios .scrollback`,
 // `.scrollback:focus`. Anchoring at `^` alone would let a descendant-prefixed
 // rule end-justify the pane past the guard.
 const TARGETS_SCROLLBACK = /(^|[\s>+~])\.scrollback(::?[\w-]+)*$/;
@@ -47,16 +47,6 @@ describe("issue 2225 — the scrollback bottom-aligns a short buffer", () => {
         /justify-content:\s*(flex-end|end)/.test(rule.body),
     );
     expect(offenders).toEqual([]);
-  });
-
-  it("the issue 2190 band clearance still pads the same container", () => {
-    // The padding scrolls away with the content, the auto margin does not;
-    // both live on `.scrollback` (and its ::before), so they compose. This
-    // overlaps ios27Band.test.ts on purpose (vjt, PR #2231 review): it is the
-    // one guard on that coupling that runs without the e2e lane, and it is
-    // pinned here because THIS file is the one that turned the container
-    // into a flex column.
-    expect(ruleBody("html.is-ios27-band .scrollback")).toMatch(/padding-top:\s*calc\(/);
   });
 
   it("no rule overrides a real child's top margin to do the flooring", () => {

@@ -244,27 +244,70 @@ describe("applyIos27BandClass — the <html> hook", () => {
 });
 
 // The CSS half. The clearance is a stylesheet rule, so what is pinnable here
-// is the SOURCE: that the value is the reported 16px, that it is declared
-// once, and — the property the ruling asks for in point 5 — that no rule
-// reading it is reachable without the class. jsdom cascades none of this;
-// the VISIBLE outcome is asserted in e2e (issue2190-ios27-band.spec.ts).
+// is the SOURCE: that the value is the measured 38px, that the rule ADDS it
+// to the inset rather than replacing it, and — the property the ruling asks
+// for in point 5 — that no rule reading it is reachable without the class.
+// jsdom cascades none of this and resolves no length; the RESOLVED px are
+// asserted in e2e (issue2190-ios27-compositor-band.spec.ts), which is also
+// where the "exceeds the inset" half becomes a number rather than a shape.
 describe("the clearance rules are gated — no platform without the class pays", () => {
-  it("declares the reported 16px exactly once, on the gating class", () => {
-    expect(ruleBody(`html.${IOS27_BAND_CLASS}`)).toMatch(/--ios27-band-clearance:\s*16px;/);
+  it("declares the measured 38px exactly once, on the gating class", () => {
+    // 38 REPLACED 16, and the two numbers have different provenance — which
+    // is the reason this assertion moved rather than being retuned quietly.
+    // 16 was a reported constant (what other PWA authors had used); it
+    // shipped, and the screenshot showed it did not cure the report. 38 is
+    // read off five probe pages photographed on the reporter's iOS 27 device:
+    // the veil dies 100 CSS px from the SCREEN edge, the first 62 of which
+    // are the status bar and are ceded anyway, leaving 38 as the net cost the
+    // layout has to buy. Ruled by vjt, informed by that curve.
+    expect(ruleBody(`html.${IOS27_BAND_CLASS}`)).toMatch(/--ios27-band-clearance:\s*38px;/);
   });
 
-  it("the gated top padding is `.scrollback`'s OWN block padding plus the clearance", () => {
-    // The `0.5rem` in the gated rule is a restatement — a padding cannot be
-    // written as "whatever it was, plus". This is the pin that turns a drift
-    // in the ungated shorthand into a red instead of a 16px that silently
-    // becomes 12 or 24.
-    const shorthand = /(?:^|;)\s*padding:\s*([^;]+);/.exec(ruleBody(".scrollback"))?.[1];
-    expect(shorthand).toBeDefined();
-    const block = (shorthand ?? "").trim().split(/\s+/)[0];
-    expect(block).toBeDefined();
-    const gated = ruleBody(`html.${IOS27_BAND_CLASS} .scrollback`);
-    expect(gated).toContain(`padding-top: calc(${block} + var(--ios27-band-clearance));`);
-    expect(gated).toContain("scroll-padding-top: var(--ios27-band-clearance);");
+  it("ADDS the clearance to the inset on `.shell` — never replaces it", () => {
+    // 🔴 THE REGRESSION THIS FILE EXISTS TO STOP, and it was one edit away.
+    // `.shell` already declares `padding-top: var(--safe-area-inset-top)`, so
+    // the natural-looking gated rule — `padding-top:
+    // var(--ios27-band-clearance)` — does not add 38px, it OVERRIDES the
+    // inset (specificity 0,2,1 against 0,1,0) for a net LOSS of 24px that
+    // pulls content up under the Dynamic Island. It is the #913 trap with the
+    // sign flipped: that one doubled the inset by re-adding it, this one
+    // annihilates it by overwriting it.
+    //
+    // So the assertion is on the SUM, and deliberately NOT an equality
+    // against `38px` — an equality against the bare clearance is precisely
+    // the bug, written down and blessed. Both terms, in a calc, or red.
+    const gated = ruleBody(`html.${IOS27_BAND_CLASS} .shell`);
+    expect(gated).toContain(
+      "padding-top: calc(var(--safe-area-inset-top) + var(--ios27-band-clearance));",
+    );
+  });
+
+  it("the ungated `.shell` still pays the inset ALONE — the negative control", () => {
+    // The other half of the pair above: the base rule is what the gated one
+    // restates, so a drift there (a floor added, the token renamed) makes the
+    // restatement a lie while the gated rule still reads fine on its own.
+    // This is also the control that gives the sum its meaning — without it,
+    // "the gated rule mentions the inset" says nothing about what any
+    // platform WITHOUT the class actually gets.
+    const base = ruleBody(".shell");
+    expect(base).toContain("padding-top: var(--safe-area-inset-top);");
+    expect(base).not.toContain("--ios27-band-clearance");
+  });
+
+  it("leaves `.scrollback` alone — the clearance moved to the shell", () => {
+    // Ruling point 4 (vjt, #grappa 2026-09-16 00:42): the clearance sits on
+    // `.shell`, so the scrollback pair that used to carry it — `padding-top:
+    // calc(0.5rem + …)` plus the matching `scroll-padding-top` — came out.
+    // Pinned as an ABSENCE rather than deleted quietly: a future edit that
+    // re-adds clearance on the scroll container while the shell already
+    // shifts the whole flow pays the 38px twice, and nothing else would say
+    // so. `scrollbackBottomAlign.test.ts` lost its coupling test for the
+    // same reason.
+    const readers = allRules().filter((rule) => rule.body.includes("--ios27-band-clearance"));
+    const onScrollback = readers.filter((rule) =>
+      selectorList(rule.selectors).some((one) => one.includes(".scrollback")),
+    );
+    expect(onScrollback).toEqual([]);
   });
 
   it("every rule that mentions the clearance token carries the class in EVERY selector", () => {

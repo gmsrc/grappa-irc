@@ -202,4 +202,13 @@ const CENSUS = [
   ":root | --safe-area-inset-left: env(safe-area-inset-left, 0px)",
   ":root | --safe-area-inset-right: env(safe-area-inset-right, 0px)",
   ":root | --safe-area-inset-top: env(safe-area-inset-top, 0px)",
+  // issue 2190 — the ONLY row here that is not a surface insetting itself:
+  // it is an OVERRIDE of the `.shell | padding-top` row above, gated on the
+  // iOS 27 compositor-band class, and it restates the inset precisely so it
+  // can add to it. Dropping the `var(--safe-area-inset-top)` term would not
+  // shrink this census by a row, it would REPLACE the inset with 38px and
+  // pull the content up under the Dynamic Island — the #913 trap run in
+  // reverse. `ios27Band.test.ts` owns that call; this row only records that
+  // a second consumer of the top inset now exists, deliberately.
+  "html.is-ios27-band .shell | padding-top: calc(var(--safe-area-inset-top) + var(--ios27-band-clearance))",
 ];

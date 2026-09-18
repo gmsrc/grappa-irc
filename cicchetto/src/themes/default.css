@@ -3946,24 +3946,59 @@ button.topic-bar-windows-opener {
 
 /* issue 2190 — THE iOS/iPadOS 27 COMPOSITOR BAND. A PORKAROUND, and it is
    meant to die: vjt, #grappa 2026-09-15 16:18, «porkaround per ora, magari da
-   rimuovere in seguito». These three rules, the block of the same name in
+   rimuovere in seguito». These two rules, the block of the same name in
    `lib/platform.ts`, and the `applyIos27BandClass()` call in `main.tsx` are
    the whole limb — deleting it is a revert, not an excavation.
 
    WHAT IT WORKS AROUND. On iOS 27 and iPadOS 27 Beta an installed PWA gets a
-   system-painted gradient/blur band along the TOP edge of the web view, which
-   washes out whatever we paint there. Reported by morph on #grappa,
-   2026-09-14 23:50 (iPhone, iOS 27) and 23:52 (iPad, iPadOS 27 Beta). The
-   blur is not ours — this sheet declares no `backdrop-filter` anywhere — and
-   it is NOT expressed through the safe-area insets: morph, 16:14, «il blur su
-   iOS 27 è applicato dal compositor indipendentemente dagli inset, succede su
-   qualunque PWA». So the four `--safe-area-inset-*` tokens on `:root` are not
-   the lever here, and the clearance is taken by layout instead.
+   system-painted band along the TOP edge of the web view, which washes out
+   whatever we paint there. Reported by morph on #grappa, 2026-09-14 23:50
+   (iPhone, iOS 27) and 23:52 (iPad, iPadOS 27 Beta). It is not ours — this
+   sheet declares no `backdrop-filter` anywhere.
 
-   16px IS A REPORTED CONSTANT, NOT A MEASUREMENT OF OURS. vjt's value, from
-   morph's field report — «molti hanno semplicemente messo 16px di top padding
-   se rilevano iOS 27». Nobody on this side has an iOS 27 device; do not read
-   the number as derived from anything, and do not reason from it.
+   IT IS A VEIL, NOT A BLUR, and that is measured rather than reasoned. A
+   probe page filling its top 200 px with a FLAT opaque tint still reads a
+   changed colour at the top edge, returning to the exact tint at 100 CSS px:
+   blurring a uniform colour field gives the same colour back, so what sits
+   above the web view is a translucent material — roughly 52-57 percent white
+   on the first pixel, decaying to zero at 100. It is composited above us
+   regardless of what is underneath, so NO ARRANGEMENT OF CONTENT AVOIDS IT
+   and there is no layout trick to look for. `theme-color` is a dead end on
+   the same evidence: tested under BOTH status-bar styles, with the dark-theme
+   shot confirmed, it tints nothing here.
+
+   🔴 THE INSETS ARE NOT THE LEVER, BUT NOT FOR THE REASON THIS COMMENT USED
+   TO GIVE. It used to cite morph — «il blur su iOS 27 è applicato dal
+   compositor indipendentemente dagli inset» — and conclude that WebKit
+   reports no signal. That is FALSIFIED on iOS 27: two probe pages differing
+   in one line of meta read `safe-area-inset-top` as 0px under
+   `apple-mobile-web-app-status-bar-style: default` with no band, and 62px
+   under `black-translucent` with the band. cicchetto declares
+   `black-translucent` (`index.html`), so the inset here is 62px and real.
+   What the inset CANNOT do is size this clearance on its own, and that is
+   the whole reason a constant is still needed: the veil reaches 100 CSS px
+   from the screen edge while the inset stops at 62, so a layout that trusts
+   `safe-area-inset-top` alone parks its first line 38 px INSIDE the effect
+   and gets it half dissolved — which is the symptom as reported. The inset
+   is spent where it always was, on `.shell`; the 38 is what is owed BELOW
+   it. See the ADDITIVE note at the rule for how the two combine, because
+   getting that wrong is a regression and not a rounding error.
+
+   38px IS OURS NOW, unlike the 16px it replaces. 16 was a reported constant
+   (what other PWA authors had used); it shipped, and the screenshot taken
+   afterwards showed it did not cure the report. 38 is read off the probe
+   photographs: a ruler of numbered 4px bands says the veil dies 100 CSS px
+   from the SCREEN edge — of which the first 62 are the status bar, ceded
+   anyway, since nothing readable goes under the clock. The remainder owed
+   BELOW that inset is the bare 38. Stopping short does not work: at 40 px
+   from the screen edge the veil is still at 89 percent of its strength, and
+   the contrast curve at the scrollback's own edge runs 27 percent at +0,
+   71 at +18, 91 at +26 and crisp only at +34. Ruled by vjt with that curve
+   in hand; 26 is the honest cheaper fallback if he ever wants it, and needs
+   no new measurement. The measurements are the work of the fleet agent that
+   published the probe pages on issue 2190 — the GitHub comment is authored
+   under vjt's account because of how the fleet authenticates, and the
+   readings are not his.
 
    GATED IN JS, NOT BY A MEDIA QUERY, and that is deliberate (ruling point 5):
    the gate is `isIos() AND isStandalonePwa() AND major >= 27`, which no media
@@ -3973,30 +4008,69 @@ button.topic-bar-windows-opener {
    `html.is-ios27-band` on the document pre-paint; every rule below is
    unreachable without it, by census, in `__tests__/ios27Band.test.ts`.
 
-   WHERE THE 16px SITS IS STILL OPEN (ruling point 4). This is the clearance
-   the issue's own "shape of the cure" describes: top padding on the scrollback
-   CONTENT plus the matching `scroll-padding-top`. It buys back the first
-   scrollback row. It does NOT move cic's own chrome — the window tab strip and
-   the topic bar, which the report also describes as washed out — because
-   nothing here touches them; if a picture of 27 shows the band covering the
-   chrome, the 16px belongs on `.shell` instead (one rule, same token) and this
-   pair comes out. That decision wants a screenshot, not a guess. */
+   IT SITS ON `.shell` — vjt's ruling on point 4, #grappa 2026-09-16 00:42,
+   one word, answering a two-option question that named `.scrollback` and
+   `.shell`. It used to be the pair on the scrollback CONTENT, which bought
+   back the first row and left cic's own chrome exactly where the veil lands.
+   The chrome is not a near miss: `--chrome-tap-min` is 48px and ABSOLUTE on
+   purpose, and the hamburger drives the topic bar's height, so the chrome
+   runs from 62 to at least 110 CSS px REGARDLESS of the root font size while
+   the veil dies at 100 — the whole of that window is chrome. Moving the
+   clearance to the shell shifts the entire flow instead, chrome included.
+   THE PRICE, accepted with the ruling: 38 px of vertical screen, permanently,
+   on every iOS 27 installed PWA.
+
+   🔴 ADDITIVE, AND THE OBVIOUS SPELLING IS A REGRESSION. `.shell` ALREADY
+   declares `padding-top: var(--safe-area-inset-top)`. A gated
+   `padding-top: var(--ios27-band-clearance)` does not ADD 38 px, it REPLACES
+   the inset — specificity 0,2,1 against 0,1,0 — for a NET LOSS of 24 px that
+   pulls the content up UNDER the Dynamic Island. That is the #913 trap run
+   backwards: #913 doubled the inset by re-adding it, this annihilates it by
+   overwriting it. Same sheet, same token, opposite sign, and the notes
+   elsewhere warn only about the doubling direction — which is exactly why
+   the other one is easy to walk into. So the inset is RESTATED here, the way
+   a padding always must be, since it cannot be written as "whatever it was,
+   plus". `__tests__/ios27Band.test.ts` asserts the sum EXCEEDS the inset
+   rather than equalling 38px: an equality against the bare clearance is the
+   regression, written down and blessed.
+
+   IT SUMS THE TOKEN, NOT WHICHEVER DECLARATION WON. There are TWO ungated
+   `padding-top: var(--safe-area-inset-top)` declarations on this element, at
+   equal specificity 0,1,0 — the base `.shell` rule, and `.shell-mobile`
+   inside the `max-width: 768px` block, which is the one that wins on the
+   phone while the base wins on the wide/iPad render. This rule adds to the
+   TOKEN, so it does not care which of the two the cascade picked.
+
+   ONE RULE, TOP LEVEL, ON `.shell`, AND NOT SCOPED TO `.shell-mobile`. Two
+   separate reasons, and each alone is sufficient. (1) They are the SAME
+   ELEMENT — the mobile branch renders `class="shell shell-mobile"`, the
+   desktop one `class="shell"` (both in `Shell.tsx`) — and the gate fires on
+   iOS standalone, which INCLUDES the iPad, so scoping to the mobile class
+   would drop the iPad silently, and the iPad is one of the two platforms the
+   issue was reported on. (2) Inside that media block this rule would only
+   compete in the phone's cascade; OUTSIDE it, at 0,2,1, it beats BOTH
+   declarations on BOTH renders. Keep it out of the media query.
+
+   THE 38px COMES OUT OF THE CONTENT BOX — the shell does NOT get taller.
+   `box-sizing: border-box` is global and `.shell` is `height: 100dvh`, so
+   padding is consumed FROM that height rather than added to it (the same
+   mechanism the mobile inset note describes). That IS the cost vjt accepted:
+   38 px less usable vertical area, not 38 px of new box. Do not "optimise"
+   this later believing the shell grew.
+
+   STILL VEILED AFTER THIS, and it is the only surface left: the overlays
+   anchored to the top that sit OUTSIDE the shell's flow and start at the
+   62px inset — `.error-banners` (`position: fixed; top: 0`), `.diag-float`
+   and `.credits-chrome`. The connection-lost banner is the text that most
+   needs to be readable, and it stays under the veil. Tracked separately;
+   deliberately not fixed here. */
 html.is-ios27-band {
-  --ios27-band-clearance: 16px;
+  --ios27-band-clearance: 38px;
 }
 
-/* `calc(0.5rem + …)`, and the `0.5rem` is `.scrollback`'s own block padding
-   restated. The coupling is pinned in `__tests__/ios27Band.test.ts`, which
-   reads that shorthand off this sheet and fails if the two drift — the value
-   is duplicated here because a padding cannot be expressed as "whatever it
-   was, plus". */
-html.is-ios27-band .scrollback {
-  padding-top: calc(0.5rem + var(--ios27-band-clearance));
-  /* Load-bearing, not symmetry: the padding above scrolls AWAY with the
-     content, so anchoring and jump-to-message would still park their target
-     at the container's top edge, i.e. under the band. `scroll-padding-top`
-     is what moves that landing line down with it. */
-  scroll-padding-top: var(--ios27-band-clearance);
+/* The one rule. See the ADDITIVE note above before touching the `calc`. */
+html.is-ios27-band .shell {
+  padding-top: calc(var(--safe-area-inset-top) + var(--ios27-band-clearance));
 }
 
 .scrollback.scrollback-locked {
