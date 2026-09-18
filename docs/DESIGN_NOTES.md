@@ -17049,3 +17049,134 @@ drives 380 x 650 and 393 x 659 in WebKit and Chromium, which reproduces the
 WIDTH and not Split View, not the divider, and not the swallowed gesture. The
 `100lvh` landmine from #2160 (834px reported inside a 650px window) is a
 separate matter and stays open — ruling direction 2 did not rule on it.
+<!-- entry #2239 -->
+
+---
+
+## 2026-09-18 — #2239: a session that does not ANSWER is not a session that is ABSENT
+
+`Grappa.Session.list_channels/2` delegates to `call_session/3`, which spends a
+5s budget and catches the exit — so `{:error, :timeout}` was always a reachable
+return. Its `@spec` declared only `{:ok, [String.t()]} | {:error, :no_session}`.
+Two of its three callers matched exactly those two shapes and raised
+`CaseClauseError`, which Phoenix rendered as a 500.
+
+### The census, because the issue's was wrong
+
+Three direct callers in `lib/`, not two: `Networks.session_channels/2` and
+`ArchiveController.build_active_keyset/3` crashed;
+`LiveIntrospection.fetch_joined_channels/2` already handled it via the 3-arity,
+at 250 ms, and earns `:joined_channels` in `introspection_degraded`.
+
+But `session_channels/2` is a WRAPPER, so the door count is not the caller
+count. Its production callers are `BootController.index/2` (`GET /boot`, once
+per network row) and `ChannelsController.index/2`
+(`GET /networks/:nid/channels`). **`NetworksController` never calls it** — the
+issue, the brief and the orchestrator all attributed it to the `/networks` page
+and none of them had grepped. Three doors, two crashing functions, one of which
+fans out over N networks.
+
+### 🔴 Widening a narrow `@spec` does NOT make Dialyzer flag the callers
+
+The issue's mechanism reads: the spec is narrower than the implementation,
+*"which is why both call sites look correct in review and neither is caught by
+dialyzer"*. The first clause is true; the inference is false, and it was
+measured false rather than argued:
+
+  * widened `@spec` → `mix dialyzer`: `Total errors: 0`
+  * `@spec` reverted to narrow → `mix dialyzer`: `Total errors: 0`
+
+Dialyzer never warns on a non-exhaustive `case`. It warns when a function's
+real returns exceed its spec, or when a clause cannot match. A caller that
+RAISES on the third shape contributes nothing to a success typing, so there is
+nothing to say about it. **Positive control, so the zero is not an empty
+green:** propagating `{:error, :timeout}` past `session_channels/2`'s then-bare
+`@spec :: [String.t()]` produces `missing_range — Missing from spec:
+{:error, :timeout}` at rc=2 immediately.
+
+Widen the spec anyway — a lying contract is what the next caller reads, and it
+is the precondition for returning rather than raising. Just never sell it as
+detection. The corollary is the useful half: `missing_range` fires the moment a
+caller propagates past a bare return type, so a signature change of this shape
+cannot be silently half-finished.
+
+Of the 62 `call_session/3` invocation sites in `Grappa.Session`, **56 omit
+`:timeout`** from the enclosing function's spec and 6 declare it. Given the
+above those are 56 false contracts, not 56 blinded checks.
+
+### Why `[]` is right for `:no_session` and wrong for `:timeout`
+
+This is the argument the whole ruling rests on, and nobody had written it down.
+An ABSENT session — or one that died DURING the call, which the #211 phase 6
+catch folds into `:no_session` — genuinely has no channels, so `[]` states a
+fact. A session that is REGISTERED and did not answer has an UNKNOWN channel
+set, so `[]` there states something nobody measured. The two errors are not
+degrees of the same thing.
+
+That is why the one-line `_ -> []` in the wrapper was rejected rather than
+merely disliked: it is the altitude with the least context deciding for every
+door at once. `session_channels/2` is now the FACT
+(`{:ok, list} | {:error, :timeout}`) and `session_channels_degrading/3` is the
+POLICY the two channel-tree doors were ruled to share.
+
+### Three doors, three answers, and they differ on purpose
+
+**`GET /boot` — degrade PER NETWORK ROW.** The envelope is assembled for every
+row before anything renders, so the crash took the healthy networks down with
+the sick one. Propagating keeps that exact blast radius and merely retypes it:
+504 for N networks on account of 1, at the endpoint whose reason to exist
+(#1679) is batching those N.
+
+**`GET /networks/:nid/channels` — AUTOJOIN-ONLY, measured, not preferred.** It
+is a `#717 boot-critical` GET; `cicchetto/src/lib/networks.ts` builds
+`channelsBySlug` with `Promise.all` over every network and that resource gates
+the CRT splash; `bootFetch` retries no HTTP response of any status, by design.
+So `504 ≡ 500` here: either way one stuck session blocks cic's boot for EVERY
+network — the reported symptom, alive under a new status code. The autojoin
+half is a pure DB read that never needed the session.
+
+**`GET /networks/:nid/archive` — PROPAGATE to the 504 that already existed.**
+The only door where the alternative inverts the page rather than blurring it:
+an empty active keyset asserts "nothing is active", so `Scrollback.list_archive/3`
+returns everything with rows and the user sees the conversations they are
+sitting in RIGHT NOW listed as archived. `FallbackController` has carried the
+`{:error, :timeout}` clause since REV-J M14 (504, `retry-after: 10`,
+`session_timeout`, a token cic already renders). **What was missing is that the
+action RAISED rather than RETURNED** — `action_fallback` intercepts returned
+errors, not exceptions — which is why a clause that has existed for months was
+unreachable from a door that needed it.
+
+### The honest limit, named rather than papered over
+
+On the wire a degraded row is INDISTINGUISHABLE from a parked one: `joined:
+false` on every autojoin entry and nothing else said. Separating them needs a
+per-network marker, which is a wire addition and therefore a
+`protocol_version` bump — deliberately not smuggled into this slice. Until
+then the `Logger.warning` naming door, network and subject is the only thing
+that tells an operator which happened, so both channel-tree tests assert the
+log. That is not belt-and-braces: it is the only available evidence, and a
+mutant that silences the warning kills exactly those two tests.
+
+### How a session gets wedged in the first place, and the 2240 relation
+
+vjt's open question — *"non capisco come sia possibile questa condizione to
+begin with"*. The point is that **the network is not what is missing**:
+`call_session/4` finds a LIVE pid via `whereis` and then does not get a reply.
+Documented causes, from the code itself (the REV-J M14 comment beside the
+`FallbackController` clause): a mailbox blocked on a slow upstream numeric, or
+the synchronous 1s `Client.send_quit` inside `terminate/2`. A third is issue
+2240 — a mention scan with no usable index starves the 5-connection SQLite
+pool, and a `Session.Server` waiting on a checkout does not answer. That third
+measurement is **the self-hoster's, reported in issue 2240, not ours**. So 2239
+and 2240 are relatives and not two unrelated bugs: 2240 produces the wedged
+session, 2239 is what the read paths did on top of it.
+
+### The test state that did not exist
+
+`Grappa.MuteSession` (`test/support/`) parks a process in a real
+`SessionRegistry` slot that takes every call and answers none. Nothing in the
+suite could produce it before — `Grappa.IRCServer` gives a session that is
+alive and IDLE, the opposite axis — which is why a reachable return had gone
+years unobserved and two callers were written against a spec instead of
+against the code. A test costs the caller's own 5s: `list_channels/2` takes no
+budget argument, and that is `/3`.
