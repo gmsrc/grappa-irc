@@ -297,6 +297,14 @@ vi.mock("../lib/theme", () => ({
   // #358 — customTheme's apply effect reads this; a constant is enough here
   // (these tests don't exercise day/night switching).
   prefersDark: () => false,
+  // issue 2161 — FALSE, and the constant is the point: every claim in the
+  // #1766 block below is about the PREFERENCE, and below the narrow-pane
+  // threshold the preference is overridden and the bar is in flow whatever it
+  // says. A `true` here would turn those tests into assertions about the
+  // override with #1766's names on them. The threshold itself is measured in
+  // `windowBarInFlow.test.ts`, which drives a real `matchMedia` rather than
+  // stubbing the signal away.
+  isNarrowPane: () => false,
 }));
 
 // Spread the real auth module (importOriginal — same pattern the

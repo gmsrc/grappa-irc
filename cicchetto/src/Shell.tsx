@@ -50,7 +50,7 @@ import {
   setSelectedChannel,
 } from "./lib/selection";
 import { settingsOpenTick } from "./lib/settingsNav";
-import { getShowBottomBar } from "./lib/showBottomBar";
+import { windowBarInFlow } from "./lib/showBottomBar";
 import { isMobile } from "./lib/theme";
 import { bindEdgeGesture } from "./lib/touchGesture";
 import { loadUploadConfirmEnabled, loadUploadTtlSeconds } from "./lib/uploadOrchestrator";
@@ -204,13 +204,19 @@ const Shell: Component = () => {
   // there is already a picker in flow, so no door renders — a second one
   // nobody asked for is just chrome.
   //
+  // issue 2161 — `windowBarInFlow()` and not `getShowBottomBar()`: in a
+  // narrow pane the bar is in flow whatever the preference says, so the same
+  // "there is already a picker" argument retires this door there too. The two
+  // gates read ONE function precisely so they cannot drift into rendering both
+  // doors, or neither.
+  //
   // Built ONCE and handed to both mobile hosts — the channel band's `leading`
   // slot and `.shell-chrome` — so the two surfaces cannot drift apart the way
   // #1073 found them drifted on the trailing side. It opens the SAME sidebar
   // the swipe opens (`openSidebar`, mount-on-demand + dispose-on-exit), not a
   // second panel: one door, two handles.
   const windowsRailOpener = (): JSX.Element => (
-    <Show when={!getShowBottomBar()}>
+    <Show when={!windowBarInFlow()}>
       <PaneTopBarWindowsOpener onOpenWindows={openSidebar} />
     </Show>
   );
@@ -1130,8 +1136,14 @@ const Shell: Component = () => {
             off is survivable because #1041's left-edge swipe exists — and
             because `windowsRailOpener()` above gives that swipe an
             affordance, which is what keeps this short of the drawer-only
-            navigation #71's second ruling refused. */}
-          <Show when={getShowBottomBar()}>
+            navigation #71's second ruling refused.
+
+            issue 2161 — and below `theme.ts`'s narrow-pane threshold the bar
+            is in flow REGARDLESS of that preference, because there the swipe
+            is not merely unlabelled, it never arms at all: iPadOS Split View
+            keeps both edge bands for the window divider. vjt's direction-2
+            ruling. The gesture stays lost; the door does not. */}
+          <Show when={windowBarInFlow()}>
             <BottomBar />
           </Show>
 
