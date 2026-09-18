@@ -5,10 +5,8 @@ defmodule Grappa.Mentions do
 
   ## Design — two-step: DB then in-memory regex
 
-  **Step 1 — DB (indexed)**: fetch all content-bearing messages in the
-  away interval for `(user_id, network_id)`. The existing composite index
-  `messages_user_id_network_id_channel_server_time_index` makes this an
-  O(index-range-scan) rather than a full-table scan. The kind filter
+  **Step 1 — DB**: fetch all content-bearing messages in the away
+  interval for `(user_id, network_id)`. The kind filter
   (`:privmsg | :notice | :action`) drops presence-event rows (`:join`,
   `:part`, etc.) that never carry a body.
 
@@ -16,16 +14,51 @@ defmodule Grappa.Mentions do
   matching against `watchlist_patterns` (union with `own_nick`) using
   Elixir's `Regex` engine. SQLite3 does NOT expose `REGEXP` by default
   (it requires a user-defined function registration that `ecto_sqlite3`
-  does not wire up). Pushing the regex gate to Elixir keeps the DB layer
-  pure SQL and means the result set (one away interval, typically small)
-  is filtered in sub-millisecond time.
+  does not wire up), so the regex gate has to live in Elixir.
 
-  **Index usage note**: `server_time` in the index is DESC; the range
-  predicate `away_start_ms <= server_time AND server_time <= away_end_ms`
-  still benefits from the index (range scans work in either direction on
-  the index btree). A LIKE-with-leading-wildcard in SQL would NOT use the
-  index — the two-step approach is therefore strictly better for this
-  use case: the DB step is index-backed; the regex step has no DB cost.
+  ## 🔴 Step 1 is NOT index-backed, and its cost is the ACCOUNT (issue 2240)
+
+  This moduledoc used to claim that
+  `messages_user_id_network_id_channel_server_time_index` made step 1 an
+  index range scan, that the `server_time` range "still benefits from the
+  index", and that step 2 runs "in sub-millisecond time". **All three were
+  measured false** (DESIGN_NOTES 2026-09-18).
+
+  With `channel` unconstrained, `server_time` sits behind a column the
+  query does not bind, so there is nothing for the range to seek. SQLite
+  picks a different index than the one named above and cannot even serve
+  the ORDER BY from it:
+
+      SEARCH m0 USING INDEX messages_archive_user_idx (user_id=? AND network_id=?)
+      USE TEMP B-TREE FOR ORDER BY
+
+  The consequence is that **the cost tracks the size of the account's
+  history, not the length of the away window**: on a 1.94M-row partition a
+  one-HOUR away returning 206 rows and a one-DAY away returning 24x as
+  many cost the SAME 87-99 ms (two independent runs). The floor is linear
+  at ~0.047 ms per 1,000 partition rows. Step 2 is not free either — at a
+  full-year window it is 5.3 s, comparable to step 1.
+
+  Two further properties, both load-bearing for anyone touching this:
+
+    * it runs SYNCHRONOUSLY in the session GenServer
+      (`Session.Server.unset_away_internal/2` is called from a
+      `handle_call` arm), fired by a tab FOREGROUNDING after the
+      auto-away debounce — not by the rare deliberate `/away`;
+    * there is NO `LIMIT`, so every content row in the window is
+      materialised before the regex runs. Measured peak heap of the
+      calling process at a full-year window on that partition:
+      **2.27 GB, to deliver 4.6 MB**. At twice that partition size the
+      call does not complete at all — under prod's pinned timeout it
+      raises out of the rescue-free `handle_call` and the session dies;
+      given more budget it exhausts the host instead. **That happens
+      with an index on `server_time` present as well**, which is why an
+      index is not a fix for it.
+
+  Options, their measured numbers, and what none of them fixes are in
+  DESIGN_NOTES 2026-09-18. Nothing is chosen yet; do not "optimise" this
+  by adding an index without reading that entry first, because the
+  memory leg survives every index.
 
   ## Watchlist matching rule
 
@@ -139,9 +172,9 @@ defmodule Grappa.Mentions do
   away bundle must agree with the badge that counted it. Both exclusions
   arrive through the shared `mention_row?/3`.
 
-  The DB query step uses the `messages_user_id_network_id_channel_server_time_index`
-  composite index. The in-memory regex step filters the (typically small)
-  result set returned by the DB.
+  ⚠️ The DB step is NOT index-backed and the result set is NOT typically
+  small — see the moduledoc's "Step 1 is NOT index-backed" section and
+  DESIGN_NOTES 2026-09-18 (issue 2240) before changing anything here.
   """
   @spec aggregate_mentions(
           Ecto.UUID.t(),
@@ -158,7 +191,8 @@ defmodule Grappa.Mentions do
              is_integer(away_end_ms) and
              is_list(watchlist_patterns) and
              is_binary(own_nick) do
-    # Step 1: DB — indexed time-window + kind filter.
+    # Step 1: DB — time-window + kind filter. NOT an index range scan, and
+    # unbounded: see the moduledoc (issue 2240).
     rows =
       Message
       |> where([m], m.user_id == ^user_id)
