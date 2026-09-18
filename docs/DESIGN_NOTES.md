@@ -16918,3 +16918,54 @@ dropping the fields silently broke.
 says nothing about `wireTypes.ts` consumers — after a `gen_wire_types` the cic
 gates have to be re-run, and on this branch they were not: 13 `tsc` errors and
 three red boundary-census snapshots survived a green `check.sh` into CI.
+<!-- entry #2235 -->
+
+---
+
+## 2026-09-18 — #2235: a `file:line` anchor in a doc is a claim that rots in silence
+
+`docs/CLIENT_PROTOCOL.md` carried six line anchors into the code. Measured
+against `origin/main` at `f25a7aa39`, **five of the six pointed at
+something else**, and the document had been untouched for 172 commits:
+
+| anchor as written | what is actually there | the real target |
+|---|---|---|
+| `config_controller.ex:43` | `def show(conn, _) do` | unchanged — survived by luck |
+| `router.ex:233` | a BLANK line | `get "/config"` at 290 |
+| `protocol.ex:64` | moduledoc prose | `def version` at 737 |
+| `protocol.ex:71` | moduledoc prose | `def min_version` at 744 |
+| `push.ex:141` | a code comment | `def content_encoding` at 144 |
+| `grappa_channel.ex:332` | a code comment | the `join_reply({:user, _}, _)` clause at 559 |
+
+The failure mode is what makes this worth a rule rather than a fix. A
+rotted line number does not error, does not conflict, and does not fail a
+gate — it reads exactly like a good one, and it sends a client author to
+prose that discusses the thing instead of to the thing. `push.ex:141` had
+drifted by **three** lines and was the most dangerous of the six: close
+enough to look right to anyone spot-checking.
+
+**So the anchors are now `module + function`, everywhere in that
+document, and the intro says why.** A function name is not immune to
+change, but it fails LOUDLY: grep it and you get zero hits, which is a
+question. A line number silently becomes a different answer to a question
+nobody asked again.
+
+Two second-order defects surfaced from the same review and are fixed in
+the same pass. The DCC section closed with *"20 is the floor for the
+surface as a whole"* while the paragraph directly above it documented the
+`GET /dcc_files/:slug` move that landed at **21** — the floor sentence was
+simply not revisited by the commit that added the move, so a client
+trusting it would render 📥 links at a v20 server and collect 401s. And
+the same per-network path segment was spelled three ways in one document
+(`{slug}`, `:slug`, `:network_id`); the router mounts
+`scope "/networks/:network_id"` and `Plugs.ResolveNetwork` resolves it with
+`get_network_by_slug/1`, so the parameter is named for an id, carries a
+slug, and is ONE axis. It is now spelled one way, with that stated.
+
+**A measurement note that is itself the lesson.** The first census of these
+anchors found five, not six, because the pattern used was
+`<file>.ex:<N>` — and the document writes the second protocol anchor in an
+ABBREVIATED form, a bare `` `:71` `` inheriting the filename from the
+anchor before it in the same sentence. That zero was not a measurement; it
+was a grep looking at the wrong shape. An inventory that cannot see every
+spelling of the thing it counts reports a clean number and is wrong.

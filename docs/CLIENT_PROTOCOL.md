@@ -4,9 +4,12 @@ A guide for authors of **third-party clients**. grappa is a REST + Phoenix
 Channels bouncer designed to be spoken by clients we don't write
 (`cicchetto` and `shottino` are ours; a third one is the point). This
 document describes the wire contract; **the source is authoritative** —
-every section points at `file:line` and, where they disagree, the code
-wins (line numbers drift; the module + function names are the stable
-anchors). Filed for GH #447.
+every section points at a **module + function**, and where they disagree,
+the code wins. Anchors are deliberately NOT `file:line`: line numbers
+drift the moment `main` moves, and five of the six this document used to
+carry had rotted into unrelated prose by the time anyone checked. A
+function name survives a refactor or fails loudly; a line number rots
+silently. Filed for GH #447.
 
 > **Credit.** The contract *shape* here is lifted, with attribution, from
 > [amiantos/lurker](https://github.com/amiantos/lurker) (MPL-2.0) —
@@ -74,11 +77,10 @@ GET /api/config
 > concern can front `/api/config` however they like; grappa treats it as
 > public.
 
-Source: `lib/grappa_web/controllers/config_controller.ex:43`
-(`show/2`), routed at `lib/grappa_web/router.ex:233`. The two numbers come
-from `Grappa.Protocol` (`lib/grappa/protocol.ex:64` `version/0`, `:71`
-`min_version/0`) and the push capability from
-`Grappa.Push.content_encoding/0` (`lib/grappa/push.ex:141`) — each the
+Source: `GrappaWeb.ConfigController.show/2`, routed as `get "/config"`
+in the `scope "/api"` block of `GrappaWeb.Router`. The two numbers come
+from `Grappa.Protocol.version/0` and `Grappa.Protocol.min_version/0`, and
+the push capability from `Grappa.Push.content_encoding/0` — each the
 single source of truth for its own value.
 
 ---
@@ -148,7 +150,7 @@ moving number is stale the moment it is typed, and it has been, twice.)
 ### 2b. One field has been REMOVED, and what that costs you
 
 ⚠️ `row_count` is gone from the archive entry
-(`GET /networks/:slug/archive`) as of protocol **v8**. It is the first
+(`GET /networks/:network_id/archive`) as of protocol **v8**. It is the first
 and so far only field this wire has taken back.
 
 **Why it was allowed.** An exact per-target row count has to visit that
@@ -178,7 +180,7 @@ the whole socket, and this break is one listing. A pre-v8 client is
 still served everything else. The signal you get is `protocol_version`,
 in `GET /api/config` and in the user-topic join reply.
 
-### 2b. What this means for you, as a client author
+### 2c. What this means for you, as a client author
 
 - **A bump is not a breakage notice.** Under this rule most bumps carry
   nothing you must react to. Read `min_protocol_version` for that — it is
@@ -209,8 +211,8 @@ URL. This keeps the credential out of access logs. The phoenix.js client
 does this for you via `new Socket(url, {authToken: token})`; a raw client
 sends the bearer subprotocol alongside `"phoenix"`. A missing/invalid
 bearer is rejected with **403**. Source:
-`lib/grappa_web/channels/user_socket.ex` (`connect/3`, `extract_token/1`)
-+ `lib/grappa_web/endpoint.ex` (`auth_token: true`).
+`GrappaWeb.UserSocket` (`connect/3`, `extract_token/1`)
++ `GrappaWeb.Endpoint` (`auth_token: true`).
 
 ### 3b. Protocol version — the `client_proto` query param
 
@@ -258,13 +260,13 @@ wss://host/socket/websocket?client_proto=1&vsn=2.0.0
   `max_protocol_version` and there will not be one. Comparing
   `protocol_version` from `/api/config` against the version that
   introduced the fields you require is **your** side of the handshake
-  (§2b), and the socket opening tells you nothing about it.
+  (§2c), and the socket opening tells you nothing about it.
 
-Source: `lib/grappa_web/channels/user_socket.ex`
+Source: `GrappaWeb.UserSocket`
 (`check_protocol_version/1`) → returns `{:error, :upgrade_required}`,
 which the endpoint's `error_handler`
-(`user_socket.ex` `handle_ws_error/2`, wired on the `socket "/socket"`
-declaration in `endpoint.ex`) turns into the 426. The version check runs
+(`GrappaWeb.UserSocket.handle_ws_error/2`, wired on the `socket "/socket"`
+declaration in `GrappaWeb.Endpoint`) turns into the 426. The version check runs
 **before** auth, so a too-old client is refused regardless of its
 credential.
 
@@ -278,15 +280,15 @@ client that skipped `/api/config` still learns it on connect:
 join "grappa:user:vjt" → {:ok, {"protocol_version": 2}}   ← illustrative, see §2a
 ```
 
-Source: `lib/grappa_web/channels/grappa_channel.ex:332`
-(`join_reply({:user, _})`).
+Source: `GrappaWeb.GrappaChannel`, the `join_reply({:user, _}, _)`
+clause — it answers `%{protocol_version: Grappa.Protocol.version()}`.
 
 ---
 
 ## 4. Topics
 
 Topics are user-rooted (single source of truth
-`lib/grappa/pubsub/topic.ex`):
+`Grappa.PubSub.Topic`):
 
 | topic | shape | source |
 |-------|-------|--------|
@@ -497,9 +499,66 @@ came off a stranger's socket and the sender declared no MIME type at all,
 so **do not sniff, preview, inline or auto-open them** — hand the download
 to the browser.
 
-Check `protocol_version >= 20` before relying on any of this. The two event
-kinds landed at 19 and the `not_held` token at 20, so 20 is the floor for
-the surface as a whole.
+Check `protocol_version >= 21` before relying on the surface as a whole,
+and note that it is not one floor but three: the two event kinds landed at
+**19**, the `not_held` token at **20**, and the top-level
+`GET /dcc_files/:slug` door at **21** (issue 2127 — before that, fetching
+was `GET /networks/:network_id/dcc_files/:slug`, behind auth). So a v20
+server gives you the prompt and the consent verbs but NOT a link a browser
+tab can open, which is the half a client notices last.
+
+⚠️ This paragraph read *"20 is the floor for the surface as a whole"* until
+2026-09-18, in the same revision that added the v21 route move directly
+above it — the sentence was simply not revisited. A client that trusted it
+would have rendered 📥 links against a v20 server and collected 401s.
+
+### 4c. Standing consent for DCC, per network (issue 2143, v22)
+
+The prompt in §4b is the default, not the only mode. A per-`(subject,
+network)` opt-in lets the server accept an offer without asking, and it is
+off unless the operator turns it on:
+
+| route | answer |
+|---|---|
+| `GET /networks/:network_id/dcc-auto-accept` | 200 `{"enabled": true \| false}` |
+| `PUT /networks/:network_id/dcc-auto-accept` with `{"enabled": true \| false}` | 200 with the stored value |
+
+`enabled: true` does NOT mean "accept anything". It means *auto-accept from
+people I already talk to on this network* — the server still decides who
+qualifies, and an offer from a stranger keeps going through the consent
+prompt. So do not present the switch as "accept all files"; your copy has
+the same honesty problem the × button has in §4b.
+
+What changes for your event handling is less than it looks: an
+auto-accepted offer still emits `dcc_offer` followed by
+`dcc_offer_resolved` with `"accepted"`. There is no third resolution and no
+flag distinguishing "a human said yes" from "the setting said yes" — if you
+draw the banner on `dcc_offer` you may see it appear and resolve in one
+breath. Drive the UI off `dcc_offer_resolved` exactly as before.
+
+Check `protocol_version >= 22`. An older server 404s both routes, which is
+a fine "the feature is not here" signal.
+
+### 4d. The subject's remembered leave and away text (issue 2150, v23)
+
+Two user-topic pushes carry settings the operator edits elsewhere, so a
+second device learns about the change:
+
+```json
+{"kind": "quit_part_reason_changed", "quit_part_reason": "back later"}
+{"kind": "auto_away_reason_changed",  "auto_away_reason": null}
+```
+
+🔴 **The key is ALWAYS PRESENT and `null` is a MEANING, not an absence.**
+This is the one place in this document where the ordinary "absent key =
+default" reading is wrong. `null` is how *"I cleared it"* travels: for
+`quit_part_reason` it means QUIT falls back to its own
+`"user-disconnect"` and PART goes bare; for `auto_away_reason` it means
+the bouncer keeps its built-in text. A client that coalesces `null` into
+its last known value will show a reason the server will not send, and will
+never render a clear.
+
+Both are `string | null`. Check `protocol_version >= 23`.
 
 ---
 
@@ -516,12 +575,19 @@ the surface as a whole.
   `docs/DESIGN_NOTES.md` 2026-07-27 for why.)
 - **REST for resources, Channels for events.** State changes are pushed
   over Channels, not polled over REST.
+- **`:network_id` in a path is a SLUG, not a number.** Every per-network
+  route is mounted under `scope "/networks/:network_id"`, and
+  `GrappaWeb.Plugs.ResolveNetwork` resolves that segment with
+  `Grappa.Networks.get_network_by_slug/1`. The parameter is named for an
+  id and carries a slug; this document used to spell the same segment
+  three ways (`{slug}`, `:slug`, `:network_id`) and a reader could not
+  tell whether they were one axis or three. They are one. Send the slug.
 
 ### 5a. Sending to someone other than the window (#640, #1225)
 
-`POST /networks/{slug}/channels/{channel}/messages` normally sends a PRIVMSG
-to `{channel}` and echoes it there. Two optional, mutually exclusive fields
-relay the frame elsewhere while keeping `{channel}` as the **source window**
+`POST /networks/:network_id/channels/:channel_id/messages` normally sends a PRIVMSG
+to `:channel_id` and echoes it there. Two optional, mutually exclusive fields
+relay the frame elsewhere while keeping `:channel_id` as the **source window**
 the echo renders in:
 
 | field | wire verb | echo row |
@@ -583,6 +649,25 @@ carry bahamut's restrict list (`z`) on one network and solanum's quiet list
 The names are historical. The event is `banlist_bundle` and the verb is
 `"banlist"` because the contract is additive-only (§2) and renaming a
 published kind is a removal; both have carried every list since #1251.
+
+### 5d. Which `:mode` rows changed the CHANNEL (issue 2176, v25)
+
+A `:mode` row carries `meta.structural: true` when the token it reports
+changed the **channel** — a ban, a key, a limit, a flag — rather than a
+member's status prefix. It lets a denoised window fold the `+o`/`+v`
+churn and still show the `+b`.
+
+| field | value |
+|---|---|
+| `meta.structural` | `true` on a channel-affecting `:mode` row |
+
+The key is **absent** otherwise, with no `null` form, so presence is the
+test — and absence means exactly what it meant before the key existed,
+which is why this was additive. It is absent on every row written before
+v25, so do not read absence as "not structural" on old history; read it as
+"unknown, treat as before".
+
+Check `protocol_version >= 25`.
 
 ---
 
@@ -651,7 +736,7 @@ GET /boot
 → 200 application/json
 {
   "networks": [ … ],                          // identical to GET /networks
-  "channels": { "<slug>": [ … ] },            // identical to GET /networks/<slug>/channels
+  "channels": { "<slug>": [ … ] },            // identical to GET /networks/:network_id/channels
   "heads":    { "<slug>": { "<chan>": [ … ] } } // newest page per channel
 }
 ```
@@ -725,11 +810,63 @@ what to tell them: `POST /me/client-tokens {label, password}` returns
 created_at, last_seen_at, ip, user_agent}` and never the secret again;
 `DELETE /me/client-tokens/:handle` revokes one.
 
-Source: `lib/grappa_web/controllers/auth_controller.ex`
-(`account_login/3`), `lib/grappa_web/plugs/require_full_session.ex`,
-`lib/grappa_web/controllers/client_token_controller.ex`.
+Source: `GrappaWeb.AuthController`
+(`account_login/3`), `GrappaWeb.Plugs.RequireFullSession`,
+`GrappaWeb.ClientTokenController`.
+
+---
+
+## 8. Two settings surfaces worth knowing about
+
+### 8a. `display_prefs` has SEVEN keys (issue 2167, v24)
+
+`GET` / `PUT /me/settings/display-prefs` carries the per-user display
+object. As of v24 it has seven keys, the seventh being `bold_mentions`:
+
+```
+time_format · colored_nicklist · presence_filter · show_bottom_bar ·
+strip_formatting · show_event_badge · bold_mentions
+```
+
+It is absent-tolerant in BOTH directions by construction — the server
+fills a missing key from its own defaults on the way in, so a `PUT` that
+omits keys does not erase them, and a client predating a key simply never
+sees it. That is why the object can keep growing without a floor move.
+Treat the set as open: a key you do not recognise is one you drop, per §2.
+`min_protocol_version` did not move for this.
+
+Source: `Grappa.UserSettings` (the `display_prefs` typespec and
+`default_display_prefs/0`), served by
+`GrappaWeb.UserSettingsController.show_display_prefs/2` /
+`update_display_prefs/2`.
+
+### 8b. The per-subject upload caps are visible but NOT actionable (issue 2175, v26)
+
+`Grappa.ServerSettings.Wire.upload_view/1` — the projection shared by
+`GET /api/server-settings`, `GET /admin/settings` and the
+`server_settings_changed` push — grew two keys at v26:
+
+| field | meaning |
+|---|---|
+| `per_user_cap_bytes` | total upload bytes one account may hold |
+| `per_visitor_cap_bytes` | the same for a visitor |
+
+🔴 **Read them; do not build a quota UI on them.** They are on the wire for
+the ADMIN console, and a client cannot act on them: a per-subject refusal
+is routed through the **existing** `:insufficient_storage` → **507**, the
+same status the instance-full case returns. So you cannot distinguish "this
+server is out of space" from "you are at your own quota" — both are a bare
+507, and a client that guesses will tell the user the wrong thing. The
+honest copy for a 507 is "the upload was refused for lack of space",
+without attributing the cause.
+
+They are published so the operator's own knob is readable in the admin
+surface; that is the whole reason, and it is recorded here so a client
+author does not read their presence as an invitation.
 
 ---
 
 *This document tracks a live contract. When it disagrees with the code,
-the code is right — start from the `file:line` anchors above.*
+the code is right — start from the module + function anchors above, and
+grep for the function name rather than trusting any line number,
+including one you may be tempted to add.*
