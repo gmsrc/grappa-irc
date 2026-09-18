@@ -1009,6 +1009,36 @@ WAS true; only `pgrep` on the host records what IS.
 Probe (non-interactive ssh has no docker on PATH):
 `ssh voyager 'export PATH=$PATH:/usr/local/bin:/opt/homebrew/bin; pgrep -f "check.sh|bats-exec|mix |integration.sh"; docker ps'`
 — `check.sh`'s bats stage shows NO container, so `docker ps` ALONE LIES; `pgrep` is the authority.
+🔴🔴 **NON ESISTE L'ALLOCAZIONE APERTA — misurato 2026-09-18, DUE `check.sh` IN VOLO SULLO
+STESSO `_build`, e nessuno dei due verdetti era attribuibile a nessun ramo.** Alle 09:3x avevo detto
+a w2 *"la corsia e' tua quando ti serve, basta che me la chiedi"* — che e' **un'allocazione, non
+un'offerta**: crea una concessione che non sai QUANDO scatta, quindi **non puoi piu' sapere se la
+corsia e' libera senza probare**. Venti minuti dopo l'ho ri-allocata a w1 **citando una proba di
+quindici minuti prima invece di riprobare**, e le due allocazioni erano entrambe valide. Misurato:
+`check.sh` pid 65036 lato w1 + `run-check.sh` lato w2, **`GRAPPA_CACHE_ID` assente da entrambi** ⇒
+caches condivise. 🥇 **La regola che avevo violato e' scritta da me tre righe sopra** (*un handoff
+registra cio' che ERA vero; solo `pgrep` registra cio' che E' vero*): **l'ho citata e non
+l'ho applicata, nello stesso documento.**
+⇒ **Si assegna a UNA worker sola, ADESSO, e la si riprende esplicitamente; e la proba dell'host va
+NELLO STESSO BLOCCO in cui scrivi l'ordine che assegna la corsia** — non prima, non "poco fa".
+🥇🥇 **E LA SONDA SINGOLA NON DISTINGUE UN PROCESSO VIVO DA UN RESIDUO — RI-PROBA A +20s E GUARDA
+SE I PID CAMBIANO** (tecnica di w1, non gliel'avevo chiesta): pid **stabile** = residuo/zombie; pid
+che **ruotano** = sta avanzando. Misurato: `run-check.sh` pid fermo nei due giri **ma i `bats-exec*`
+con pid diversi** ⇒ vivo. Su quella distinzione si decide **se spurgare o aspettare**, e io avevo
+ordinato uno spurgo che avrebbe sabotato il giro dell'altra worker: **w1 si e' rifiutata di
+eseguirlo** (*"spurgare il `_build` mentre il suo `check.sh` ci sta dentro non e' pulizia, e'
+sabotaggio del suo giro"*) **e aveva ragione.**
+🥇 **E la contaminazione si spacca per CLASSE, non si butta in blocco** (sempre w1, piu' fine della
+mia): i risultati **MIRATI** (nomi dei suoi test, sue assert, suoi stacktrace) restano evidenza forte
+— *"un `_build` contaminato non inventa il mio `504 session_timeout`"* — mentre i gate **A TAPPETO**
+(dialyzer, credo sull'albero intero) possono aver letto beam compilati dalla sorgente dell'altra ⇒
+**non attribuibili, si rifanno.**
+🔴 **E QUANDO RIPORTI UNA MISURA A UNA WORKER, CITA IL PATH E MAI IL NUMERO NUDO.** Le avevo scritto
+*"log 818 KB e 728 KB"* senza appaiarli ai file: lei ha concluso che il 818 fosse suo, confrontando
+il proprio valore finale col valore di w1 di tre minuti prima. **Due file attraversano dimensioni
+simili in momenti diversi** — il numero da solo non identifica niente, ed e' la stessa famiglia del
+numero di riga che scade appena main si muove.
+
 🔑 **REBASE BEFORE GATING.** 📟 `🧠 NN%` is the CONTEXT gauge (40%-clear rule); **`⚗️ NN％` is NOT context.**
 **CLEAR WORKERS AT 40%**, at a CLEAN BOUNDARY (after a commit, or while a long gate runs) — gate FIRST, then clear:
 clearing on unverified edits leaves the next session unable to tell whether they hold.
