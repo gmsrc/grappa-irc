@@ -16969,3 +16969,83 @@ ABBREVIATED form, a bare `` `:71` `` inheriting the filename from the
 anchor before it in the same sentence. That zero was not a measurement; it
 was a grep looking at the wrong shape. An inventory that cannot see every
 spelling of the thing it counts reports a clean number and is wrong.
+<!-- entry #2161 -->
+
+---
+
+## 2026-09-18 — #2161: the window bar stays in flow in a narrow pane (direction 2)
+
+In iPadOS Split View the OS claims both horizontal screen edges for the window
+divider, so neither of cic's edge swipes ever ARMS: #1041's left→sidebar and
+#308's right→members never start, and there is no signal distinguishing "not
+supported here" from "I swiped wrong". The issue offered two directions;
+**vjt ruled direction 2** (`#grappa`, 2026-09-18, one word: "2"). Below a
+viewport-width threshold the window bar renders regardless of the #1766
+preference. **The gesture stays lost — accepted, not worked around.**
+Direction 1 (arming a band INBOARD of the system's own) is not taken, and the
+reason is not cost: the width iPadOS reserves for the divider is unmeasured,
+and it is the whole content of that trade-off.
+
+### The threshold is 384, and only its two ENDS are measured
+
+The band is bounded by numbers; the point inside it is a tie-break, and
+conflating the two is how a guess gets cited as a measurement later.
+
+* `> 380` — the narrow Split View pane measured on the reporting device
+  (#2160: 380 x 650 CSS px, iPad Pro 11, iPadOS 26.7, landscape, installed
+  PWA with `standalone: true`). The ruling requires it INSIDE.
+* `< 393` — `devices["iPhone 15"].viewport.width` in `playwright.config.ts`,
+  the narrowest viewport this project's own e2e projects drive
+  (`chromium-pixel-touch` is a Pixel 7 at 412). A threshold at or above it
+  forces the bar back on for every phone the suite runs — which is #1766's
+  own configuration, and `issue1766-hide-bottom-bar.spec.ts` would go red for
+  asserting the preference it exists to prove.
+
+That leaves [381, 392]. 384 is `768 / 2`, half `MOBILE_QUERY`'s own
+breakpoint, chosen so the file gains no new number family. Nothing measures
+that choice and this entry does not pretend otherwise.
+
+### 🔴 Two things a width threshold cannot do, and both are accepted
+
+Neither is an oversight to cure with a second threshold — a scale of
+thresholds was explicitly out of scope, and the cause is not the number:
+
+* A Split View pane **WIDER** than 384 (a 50/50 split on the same device is
+  ~507 CSS px) loses the same two gestures and is **not covered**.
+* Several shipping phones in portrait are **NARROWER** than the measured pane
+  (iPhone SE 375, most Galaxy S 360), so they **are** covered and do lose the
+  preference even though their edge swipes work perfectly.
+
+Width cannot separate "the platform ate the edge" from "the viewport is
+small". Ruling out OS sniffing is what buys that, and it was ruled out
+deliberately. The honest statement of scope is: this covers the reported
+configuration and everything narrower, and nothing wider.
+
+### One derived reader, two gates, and the raw preference left alone
+
+`showBottomBar.windowBarInFlow()` is the effective gate — the ONLY thing the
+render path asks. `Shell.tsx` reads it twice, on the two halves of one
+decision: the bar mounts when it is true, the leading ☰ mounts when it is
+false. They are the same door seen from both sides (#1766: with a picker in
+flow, no second opener renders), so a second `||` written out at the second
+site could drift into rendering both doors or neither.
+
+`getShowBottomBar()` — the RAW preference — stays the reader at the two sites
+that must never see the override. `displayPrefs.buildWireMap()` is the body of
+every PUT to `/me/settings/display-prefs`, and `show_bottom_bar` is
+#449-synced and ACCOUNT-scoped: routing the wire map through the effective
+gate would make one toggle-anything from a narrow pane persist `true` onto the
+account and wipe the preference on every device the user owns. `SettingsDrawer`'s
+checkbox is the other: it reports what the user CHOSE, not what this viewport
+is doing with it. Mutating `buildWireMap` to read the effective gate turns
+exactly one test red and nothing else in 7513 — which is the measure of how
+invisible that failure would otherwise be.
+
+### What is NOT asserted here
+
+The band iPadOS reserves for the divider was never measured, so direction 1 is
+untouched rather than rejected on evidence. No real iPad ran this: the e2e
+drives 380 x 650 and 393 x 659 in WebKit and Chromium, which reproduces the
+WIDTH and not Split View, not the divider, and not the swallowed gesture. The
+`100lvh` landmine from #2160 (834px reported inside a 650px window) is a
+separate matter and stays open — ruling direction 2 did not rule on it.

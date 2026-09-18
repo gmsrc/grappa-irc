@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import { moduleRoot } from "./moduleRoot";
+import { isNarrowPane } from "./theme";
 
 // #1766 — "show the mobile window bar" display preference. Boolean, ON by
 // default: the BottomBar is not deleted, it becomes opt-OUT. That default is
@@ -69,4 +70,33 @@ export function getShowBottomBar(): boolean {
 export function setShowBottomBar(on: boolean): void {
   localStorage.setItem(STORAGE_KEY, on ? "true" : "false");
   setCurrent(on);
+}
+
+// issue 2161 — the EFFECTIVE gate, and the ONLY thing the render path may ask.
+// `Shell.tsx` reads it twice, on the two halves of one decision: the window bar
+// mounts when it is true, and the leading ☰ mounts when it is false. They are
+// the same door seen from both sides (#1766: with a picker in flow no second
+// opener renders), so they cannot be allowed to disagree — which is why this is
+// one function and not the same `||` written twice.
+//
+// The override is vjt's direction-2 ruling for iPadOS Split View, where the OS
+// eats both edge bands and the swipes never arm: below NARROW_PANE_QUERY the
+// bar stays in flow WHATEVER the preference says. See theme.ts for why the
+// threshold is 384 and for the two things a width cannot tell apart.
+//
+// 🔴 `getShowBottomBar()` — the RAW preference — stays the reader for the two
+// places that must never see the override, and both are load-bearing:
+//
+//   * `displayPrefs.buildWireMap()`, which is the body of EVERY PUT to
+//     `/me/settings/display-prefs`. Routing it through this function would make
+//     one toggle-anything from a narrow pane persist `show_bottom_bar: true`
+//     onto the account, wiping the preference on every device the user owns —
+//     a viewport would be writing an account-scoped setting.
+//   * `SettingsDrawer`'s checkbox, which must keep reporting what the user
+//     CHOSE rather than what this viewport is currently doing with it.
+//
+// A grep for `getShowBottomBar` that comes back with a RENDER site is a bug;
+// a grep that comes back with those two is the design.
+export function windowBarInFlow(): boolean {
+  return getShowBottomBar() || isNarrowPane();
 }

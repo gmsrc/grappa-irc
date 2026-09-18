@@ -43,6 +43,50 @@ const MOBILE_QUERY = "(max-width: 768px)";
 // cannot read a `var()`, so the number is mirrored, not shared.
 const ADMIN_NARROW_QUERY = "(max-width: 899px)";
 
+// issue 2161 — the NARROW-PANE breakpoint: the third viewport regime in this
+// module, and the narrowest.
+//
+// In iPadOS Split View the OS keeps both horizontal screen edges for the window
+// divider, so NEITHER of `Shell.tsx`'s edge swipes ever reaches the page
+// (#1041's left→sidebar, #308's right→members): the gesture does not fail, it
+// never arms, and there is no signal distinguishing "not supported here" from
+// "I swiped wrong". vjt ruled direction 2 (`#grappa`, 2026-09-18): below a
+// width threshold the window bar stays IN FLOW regardless of the #1766
+// preference, and the gesture STAYS LOST — accepted, not worked around.
+// Direction 1 (arming a band inboard of the system's own) is NOT taken: the
+// width iPadOS reserves for the divider is unmeasured and nobody is guessing it.
+//
+// ## Why 384, and against what it is measured
+//
+// Both ENDS of the admissible band are measured; the point inside it is a
+// tie-break, and this comment is the only place that says which is which.
+//
+//   * `> 380` — the narrow Split View pane measured on the reporting device
+//     (#2160: 380 x 650 CSS px, iPad Pro 11 landscape, installed PWA,
+//     `standalone: true`). The ruling requires that width to be INSIDE.
+//   * `< 393` — `devices["iPhone 15"].viewport.width`, the narrowest viewport
+//     this project's own e2e projects drive (`chromium-pixel-touch` is a
+//     Pixel 7 at 412). A threshold at or above it forces the bar back on for
+//     every phone the suite runs, which is #1766's own configuration — its
+//     spec would go red for asserting the preference it exists to prove.
+//
+// That leaves [381, 392]; inside it nothing is measured. 384 is `768 / 2`,
+// half MOBILE_QUERY's own breakpoint, so no new number family enters the file.
+//
+// 🔴 What a width threshold CANNOT do — this is the accepted cost of ruling
+// out OS sniffing, not an oversight to cure with a second threshold. A Split
+// View pane WIDER than 384 (a 50/50 split on the same device is ~507 CSS px)
+// loses the same two gestures and is NOT covered; and several shipping phones
+// in portrait are NARROWER than the measured pane (iPhone SE 375, most Galaxy
+// S 360), so they ARE covered and do lose the preference even though their
+// edge swipes work. Width cannot separate "the platform ate the edge" from
+// "the viewport is small".
+//
+// Same literal-in-CSS caveat as the two queries above — except that nothing
+// mirrors this one: the window bar is a JSX MOUNT gate (#1766), never a
+// `display: none`, so this number lives here and only here.
+const NARROW_PANE_QUERY = "(max-width: 384px)";
+
 // Resolves the OS preference via matchMedia. Defensive against environments
 // without matchMedia (older browsers, SSR — neither applies to cicchetto
 // today, but the boundary is cheap).
@@ -97,6 +141,12 @@ const exports_ = moduleRoot(() => {
       : false;
   const [adminNarrow, setAdminNarrow] = createSignal(adminNarrowInitial);
 
+  const narrowPaneInitial =
+    typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia(NARROW_PANE_QUERY).matches
+      : false;
+  const [narrowPane, setNarrowPane] = createSignal(narrowPaneInitial);
+
   const darkInitial =
     typeof window !== "undefined" && window.matchMedia
       ? window.matchMedia(DARK_QUERY).matches
@@ -111,6 +161,13 @@ const exports_ = moduleRoot(() => {
     const mmAdmin = window.matchMedia(ADMIN_NARROW_QUERY);
     mmAdmin.addEventListener("change", (e: MediaQueryListEvent) => setAdminNarrow(e.matches));
 
+    // issue 2161 — the listener is load-bearing, not symmetry: an iPadOS Split
+    // View pane is RESIZED by dragging the divider, so the regime flips while
+    // the page is live and a boot-time read alone would leave the window bar
+    // gone in a pane the user just narrowed.
+    const mmNarrow = window.matchMedia(NARROW_PANE_QUERY);
+    mmNarrow.addEventListener("change", (e: MediaQueryListEvent) => setNarrowPane(e.matches));
+
     const mmDark = window.matchMedia(DARK_QUERY);
     mmDark.addEventListener("change", (e: MediaQueryListEvent) => setPrefersDark(e.matches));
 
@@ -121,11 +178,12 @@ const exports_ = moduleRoot(() => {
       // Force the signals into the createRoot's tracking scope.
       void mobile();
       void adminNarrow();
+      void narrowPane();
       void prefersDark();
     });
   }
 
-  return { isMobile: mobile, isAdminNarrow: adminNarrow, prefersDark };
+  return { isMobile: mobile, isAdminNarrow: adminNarrow, isNarrowPane: narrowPane, prefersDark };
 });
 
 export const isMobile = exports_.isMobile;
@@ -135,6 +193,13 @@ export const isMobile = exports_.isMobile;
 // what the console's CSS is doing at that width reads THIS, not
 // `isMobile()`; the shell's own layout keeps `isMobile()`.
 export const isAdminNarrow = exports_.isAdminNarrow;
+
+// issue 2161 — true at or below NARROW_PANE_QUERY's width (see the derivation
+// there). Exactly ONE consumer by design: `showBottomBar.ts`'s
+// `windowBarInFlow()`, which is what decides whether the window bar or the ☰
+// is the door. A second reader would be a second policy — take it to the
+// ruling first.
+export const isNarrowPane = exports_.isNarrowPane;
 
 // #358 — the reactive OS dark-mode preference (true = dark). customTheme.ts's
 // apply effect subscribes to it; the gallery reads it to default the slot
