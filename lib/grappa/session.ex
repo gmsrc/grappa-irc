@@ -1439,10 +1439,13 @@ defmodule Grappa.Session do
   keeps the keys aligned with live membership (Q1 of P4-1 cluster).
 
   Returns `{:error, :no_session}` if no session is registered for
-  `(subject, network_id)`.
+  `(subject, network_id)`, and `{:error, :timeout}` when the registered
+  `Session.Server` does not answer within `call_session/3`'s 5s budget —
+  see the timeout note on `list_channels/3` below, which differs only in
+  who chooses the budget.
   """
   @spec list_channels(subject(), integer()) ::
-          {:ok, [String.t()]} | {:error, :no_session}
+          {:ok, [String.t()]} | {:error, :no_session | :timeout}
   def list_channels(subject, network_id)
       when is_subject(subject) and is_integer(network_id) do
     call_session(subject, network_id, {:list_channels})
