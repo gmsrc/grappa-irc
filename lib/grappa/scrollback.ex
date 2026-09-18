@@ -395,9 +395,17 @@ defmodule Grappa.Scrollback do
 
   @doc """
   Fetches up to `limit` messages for `(subject, network_id, channel)`,
-  ordered by `server_time` DESC then `id` DESC (stable inside same-ms
-  ties). The subject filter is the central per-subject iso boundary —
-  see moduledoc.
+  ordered by `id` DESC — newest first, arrival order. The subject filter
+  is the central per-subject iso boundary — see moduledoc.
+
+  The sort key is the CURSOR key on purpose (issue 2228): `before` filters
+  on `id`, so sorting on anything else leaves SQLite unable to serve seek
+  and order from one index, and — worse than slow — makes the paging
+  unsound, since a row the sort places outside the page the filter
+  admitted is a row no page ever returns. It used to sort
+  `(server_time DESC, id DESC)`; on this schema that is the SAME sequence,
+  because both columns advance with the same event. See `maybe_before/2`
+  for why, and for the one case where they can part.
 
   `subject` discriminated union (Task 4 + 30):
 
@@ -483,7 +491,7 @@ defmodule Grappa.Scrollback do
     |> channel_or_dm_where(channel, own_nick)
     |> maybe_exclude_presence(hide_presence)
     |> maybe_before(before)
-    |> order_by([m], desc: m.server_time, desc: m.id)
+    |> order_by([m], desc: m.id)
     |> limit(^capped)
     |> preload(:network)
     |> Repo.all()
@@ -1399,7 +1407,26 @@ defmodule Grappa.Scrollback do
 
   # Cursor key is monotonic id post-CP29 R-2 — was server_time, but
   # same-ms ties straddling a page boundary could lose / duplicate rows.
-  # Order remains `(server_time DESC, id DESC)` for display stability.
+  #
+  # issue 2228 — the SORT key is now `id` too, so filter and sort agree.
+  # CP29 R-2 moved only the filter and left `fetch/7` sorting
+  # `(server_time DESC, id DESC)` "for display stability", which made the
+  # cursored page unservable by any index: SQLite could satisfy the seek or
+  # the order, never both, so the page cost went linear in the channel's
+  # history instead of the page size. "Display stability" was never a
+  # property `server_time` had and `id` lacked — both columns advance with
+  # the same event, because `server_time` is `System.system_time/1` sampled
+  # inside this (subject, network) Session.Server immediately before the
+  # synchronous insert that mints the `id`. The IRCv3 `server-time` cap is
+  # never REQd (only `sasl` / `labeled-response` are), so the tag never
+  # arrives and no upstream clock can reach this column.
+  #
+  # They can therefore only disagree if the LOCAL wall clock steps
+  # backwards between two persists in one partition — and there `id` is the
+  # MORE faithful order, being arrival rather than a timestamp that lied.
+  # That case is pinned by the pagination test: with a divergent row the
+  # old sort silently DROPPED it from every page (filter and sort
+  # disagreeing is a lost row, not a cosmetic reorder).
   defp maybe_before(query, before) when is_integer(before),
     do: where(query, [m], m.id < ^before)
 

@@ -99,6 +99,33 @@ defmodule Grappa.ScrollbackTest do
     rows |> List.flatten() |> Enum.map_join("\n", &to_string/1)
   end
 
+  # issue 2228 — six rows whose arrival order (`id`) and `server_time`
+  # DISAGREE, the only shape on this schema that can tell the two sort keys
+  # apart. The 4th row to arrive carries a `server_time` older than its three
+  # predecessors: a local wall clock that stepped backwards mid-partition.
+  @clock_step_rows [{100, "a"}, {200, "b"}, {300, "c"}, {50, "STEPPED"}, {400, "e"}, {500, "f"}]
+
+  defp clock_step_rows(user, net) do
+    for {server_time, body} <- @clock_step_rows do
+      {:ok, row} = ScrollbackHelpers.insert(sample(user, net, server_time, %{body: body}))
+      row
+    end
+  end
+
+  # issue 2228 — drives `fetch/7` the way cic's scroll-up does: take a page,
+  # re-enter with the oldest row's id as the next `before`, until empty.
+  # Returns every row the walk ever saw, so a lost or duplicated one shows up
+  # as a count/set mismatch rather than as an ordering opinion.
+  defp page_through(subject, net, channel, limit),
+    do: page_through(subject, net, channel, limit, nil, [])
+
+  defp page_through(subject, net, channel, limit, before, acc) do
+    case Scrollback.fetch(subject, net.id, channel, before, limit, nil, false) do
+      [] -> Enum.reverse(acc)
+      rows -> page_through(subject, net, channel, limit, List.last(rows).id, Enum.reverse(rows) ++ acc)
+    end
+  end
+
   # #393 — the FULL production folded DM-peer read (via the public
   # `channel_or_dm_where/3`, so the predicate tracks `where_dm_peer/2`
   # verbatim: the sargable single `fold(COALESCE(dm_with, channel)) == peer`
@@ -109,7 +136,7 @@ defmodule Grappa.ScrollbackTest do
     |> where([m], m.network_id == ^net.id)
     |> subject_filter(subject)
     |> Scrollback.channel_or_dm_where(peer, nil)
-    |> order_by([m], desc: m.server_time, desc: m.id)
+    |> order_by([m], desc: m.id)
     |> limit(50)
   end
 
@@ -840,7 +867,7 @@ defmodule Grappa.ScrollbackTest do
   end
 
   describe "fetch/5" do
-    test "returns the latest page in descending server_time order",
+    test "returns the latest page newest-first (id DESC)",
          %{user: user, network: net} do
       for i <- 0..4, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
 
@@ -858,6 +885,65 @@ defmodule Grappa.ScrollbackTest do
       next_page = Scrollback.fetch({:user, user.id}, net.id, "#sniffo", last_of_first_page.id, 2, nil, false)
 
       assert Enum.map(next_page, & &1.body) == ["msg 2", "msg 1"]
+    end
+
+    # issue 2228 — THE discriminating pair for the sort-key change. Every
+    # other ordering assertion in this file passes under BOTH sorts, because
+    # on real data `id` and `server_time` agree row for row (measured: 0
+    # divergences in 385,580 prod rows). So the only test that can tell the
+    # two apart is one built on data where they DISAGREE — a local wall clock
+    # that stepped backwards between two persists, the sole way this schema
+    # can produce it.
+    #
+    # `server_time` here is the `sample/4` index, so the step back is
+    # explicit: the 4th row to arrive carries a server_time older than its
+    # three predecessors. Helpers live with the other fixtures, up top.
+    test "cursor paging returns every row exactly once when the clock stepped backwards",
+         %{user: user, network: net} do
+      inserted = clock_step_rows(user, net)
+
+      seen = page_through({:user, user.id}, net, "#sniffo", 2)
+
+      # The outcome that matters is COMPLETENESS, not order: with the cursor
+      # filtering on `id` and the sort keyed on `server_time`, the stepped row
+      # sorts into a page whose id-window already closed, so no page ever
+      # returns it — a silently DROPPED message, not a cosmetic reorder.
+      assert Enum.sort(Enum.map(seen, & &1.id)) == Enum.sort(Enum.map(inserted, & &1.id)),
+             "cursor paging lost or duplicated rows; saw #{inspect(Enum.map(seen, & &1.body))}"
+
+      assert length(seen) == length(Enum.uniq_by(seen, & &1.id)),
+             "cursor paging returned a duplicate row"
+    end
+
+    test "a single page is ordered by id DESC — arrival order, not the stepped clock",
+         %{user: user, network: net} do
+      clock_step_rows(user, net)
+
+      page = Scrollback.fetch({:user, user.id}, net.id, "#sniffo", nil, 6, nil, false)
+
+      # Arrival order reversed. Under the old `(server_time DESC, id DESC)`
+      # sort "STEPPED" would land LAST (server_time 50, the oldest) instead of
+      # third — which is exactly the reordering that cost the row above.
+      assert Enum.map(page, & &1.body) == ["f", "e", "STEPPED", "c", "b", "a"]
+    end
+
+    test "NEGATIVE CONTROL: on monotonic rows the two sorts are the same sequence",
+         %{user: user, network: net} do
+      # Pins the claim the change rests on — and is deliberately NOT
+      # discriminating: it passes under both sorts. Its job is to fail if
+      # someone makes `id` and `server_time` disagree on ordinary data, which
+      # would turn the change above into a visible reordering for users.
+      for i <- 0..9, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
+
+      by_id = Scrollback.fetch({:user, user.id}, net.id, "#sniffo", nil, 10, nil, false)
+
+      by_server_time =
+        Message
+        |> where([m], m.user_id == ^user.id and m.network_id == ^net.id and m.channel == "#sniffo")
+        |> order_by([m], desc: m.server_time, desc: m.id)
+        |> Repo.all()
+
+      assert Enum.map(by_id, & &1.id) == Enum.map(by_server_time, & &1.id)
     end
 
     test "isolates rows by (network_id, channel)", %{user: user, network: net} do
@@ -3733,8 +3819,11 @@ defmodule Grappa.ScrollbackTest do
   # a near-constant SQLite dirty-scheduler burn — the "periodic multi-core
   # CPU spike" the operator reported.
   #
-  # Fix = the id-twin composites (KEEP the `server_time` twins; `fetch/6`
-  # still orders `server_time DESC`). Proven on a prod DB copy: the
+  # Fix = the id-twin composites (KEEP the `server_time` twins; back then
+  # `fetch/6` still ordered `server_time DESC` — issue 2228 has since made
+  # the sort key `id` too, so the seek and the order are now served by the
+  # SAME index and the `server_time` twins survive for the aggregates and
+  # the archive, not for this read). Proven on a prod DB copy: the
   # channel path flips to a clean index seek / COVERING scan, no sort.
   # These EXPLAIN tests pin that the id-cursor read is index-eligible and
   # is a regression guard against a future table-rebuild migration
