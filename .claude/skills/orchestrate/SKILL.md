@@ -1893,6 +1893,27 @@ la ricetta si chiede come INTENZIONE** (*"porta un controllo che DISCRIMINA su q
 un blob REALE per forzare l'asimmetria), ne ha aggiunto un secondo positivo su un path che diverge,
 e **lo script non stampa numeri se uno dei due manca**. *Una worker che rifiuta un mio paletto CON
 LA MISURA ha ragione: dillo, registra l'errore come mio, e vai avanti.*
+🔴🔴 **E LA RICETTA PRESUPPONE UN CONTRIBUTO IN **APPEND**: SU UNA MODIFICA DENTRO UNA ENTRY CHE MAIN
+GIA' PORTA, DUE DEI SUOI CHECK NON SONO SEVERI — SONO **INAPPLICABILI** (w1, 2026-09-19, rifiutando
+un mio brief con la misura).** Il caso: una RITARATURA, cioe' un ramo che riscrive una entry gia'
+mergiata invece di appenderne una nuova. Li':
+- il **prefisso byte-identico** (check 4) presuppone `mio == main + coda`. In una modifica **main e'
+  PIU' GRANDE di me, non piu' piccolo** ⇒ il `cmp` **non puo' passare, e non passerebbe per un motivo
+  legittimo**. Leggerlo come rosso accusa un rebase sano;
+- **`design-notes-gate.sh` risponde `adds no entry heading — the shape checks have nothing to judge`**
+  ⇒ **verde VUOTO**, gemello del `nothing to check` gia' documentato qui sopra: misura le entry che il
+  ramo AGGIUNGE, e una ritaratura non ne aggiunge nessuna.
+🥇 **I tre che DISCRIMINANO su questa forma, e vanno chiesti al loro posto:** (1) l'**aritmetica
+PREDETTA PRIMA** (misurata: `1011109 + 2091 = 1013200` byte e `17783 + 32 = 17815` righe, predetto ==
+misurato); (2) 🥇🥇 **le CANCELLAZIONI APPLICATE** — *`merge=union` non prende MAI le delete*, quindi
+su una ritaratura **il rischio vero e' che la prosa VECCHIA sopravviva accanto alla nuova**: si conta
+a **ZERO** ogni frase che il ramo doveva TOGLIERE (li': la vecchia prosa sui 38px), con pos ctrl su una
+che deve RESTARE; (3) il **marcatore unico** contro il contenuto CORRENTE di `origin/main`.
+🥇 **Regola generale, ed e' il motivo per cui la ricetta si chiede come INTENZIONE e mai come lista
+di comandi: prima di girarla, chiediti se il contributo APPENDE o MODIFICA.** Su un append il rischio
+e' la riga MANGIATA; su una modifica e' la riga **SOPRAVVISSUTA**. Sono difetti opposti e i check che
+li beccano non si sovrappongono. *Una worker che dichiara un mio check inapplicabile E ne porta tre
+che discriminano ha fatto piu' che obbedire: ha riparato il brief.*
 🔴 **`_Deploy:` NON E' UN CHECK, e' INERTE** — non citarlo, o dichiaralo inerte.
 ⚠️ Il gate "forma al confine" e' **VACUO** quando il merge non tocca `DESIGN_NOTES`: **dichiaralo vacuo.**
 🥇 **Un FF PURO (`ahead=N behind=0`, ref PATCH-ato via `gh api`) rende la ricetta vacua PER COSTRUZIONE** —
