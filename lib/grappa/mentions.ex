@@ -56,9 +56,39 @@ defmodule Grappa.Mentions do
       index is not a fix for it.
 
   Options, their measured numbers, and what none of them fixes are in
-  DESIGN_NOTES 2026-09-18. Nothing is chosen yet; do not "optimise" this
-  by adding an index without reading that entry first, because the
-  memory leg survives every index.
+  DESIGN_NOTES 2026-09-18. The harness that produced them is
+  `test/bench_2240.exs`.
+
+  ## The index was BUILT and MEASURED, and then declined (2026-09-19)
+
+  Do not re-derive this. `(user_id, network_id, server_time)` was
+  implemented, and it works: **162x at a one-hour window, 11.8x at a
+  day, 1.4x at a year, and the temp B-tree above disappears** because
+  `id` is the rowid and so the index's implicit trailing column. It is
+  a real win. It was declined anyway, on two measured grounds:
+
+    * **it steals the plan of the #393 folded-COALESCE DM read** — the
+      hot path that saturated the prod SQLite pool at 409 ms mean and
+      whose cure was making it sargable. That read is
+      `ORDER BY server_time DESC LIMIT 50` and the #393 index carries
+      `id` after the fold, not `server_time`, so it seeks the peer
+      exactly and then SORTS; the new index offers the ordering for
+      free, and with no `sqlite_stat*` SQLite trades the exact seek for
+      the skipped sort and walks the account backwards filtering. Fine
+      for a peer you spoke to an hour ago; #393 again for a cold DM.
+    * **the win, while real, is the SMALL leg.** It moves an ~87 ms
+      floor to sub-millisecond. The leg that carries the weight is the
+      absent `LIMIT` above, which no index touches.
+
+  So the trade was a latency improvement against re-lighting a fixed
+  production incident, and it was not taken. **A `server_time`-ordered
+  variant of the #393 DM family does win the seek back — measured** —
+  but that is a second index on the highest-write-rate table with an
+  unmeasured write cost; it is filed as backlog, not deferred silently.
+
+  🔴 **If you are about to add this index: it is not a new idea, and the
+  reason it is absent is not that nobody tried.** Read the entries
+  first, and price the DM read.
 
   ## Watchlist matching rule
 
