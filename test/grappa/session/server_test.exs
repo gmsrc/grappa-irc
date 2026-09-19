@@ -10829,8 +10829,41 @@ defmodule Grappa.Session.ServerTest do
   # machines that can arrive at that condition.
 
   describe "issue 2253 — bounded nick reclaim after a fallback registration" do
+    # The rename echo has to come from the SERVER reacting to what the session
+    # actually sent, never from the test feeding it.
+    #
+    # The first draft of this test fed `:<fallback> NICK :<configured>` by hand
+    # after a `wait_for_line`, and it passed WITHOUT the cure — twice wrong, in
+    # a way worth recording. `IRCServer.wait_for_line/3` matches the FIRST
+    # buffered line (see `await_sent_line_count/4` above, which exists for
+    # precisely this), so `NICK grappa-test\r\n` was satisfied by the
+    # REGISTRATION NICK, not by a reclaim; and the hand-fed echo then made the
+    # final assertion a statement about `EventRouter` handling a NICK echo,
+    # which it already did. The cure was not what turned it green.
+    #
+    # Counting the line is what distinguishes registration from reclaim, and
+    # sourcing the echo from the handler is what makes the state assertion
+    # depend on the reclaim having happened at all.
+    defp reclaim_echo_handler(configured, fallback) do
+      counter = :counters.new(1, [])
+
+      fn state, line ->
+        if line == "NICK #{configured}\r\n" do
+          n = :counters.get(counter, 1)
+          :counters.add(counter, 1, 1)
+
+          # 0 is the registration NICK — the test drives 001 itself, so the
+          # handler stays quiet. Anything after it is a reclaim, which a real
+          # server answers with the rename echo.
+          {:reply, if(n == 0, do: nil, else: ":#{fallback}!u@h NICK :#{configured}\r\n"), state}
+        else
+          {:reply, nil, state}
+        end
+      end
+    end
+
     test "a registration on <nick>_ ends up back on the configured nick" do
-      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {server, port} = IRCServer.start_server(reclaim_echo_handler("grappa-test", "grappa-test_"))
       {user, network, credential} = setup_user_and_network(port)
 
       {:ok, base_plan} = SessionPlan.resolve(credential)
@@ -10849,13 +10882,10 @@ defmodule Grappa.Session.ServerTest do
       {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
       assert SessionStateHelpers.nick(SessionStateHelpers.fetch(pid)) == "grappa-test_"
 
-      # The reclaim puts the configured nick back on the wire...
-      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "NICK grappa-test\r\n"), 1_000)
-
-      # ...and the upstream echo lands it. THE decisive assertion is the state.
-      IRCServer.feed(server, ":grappa-test_!u@h NICK :grappa-test\r\n")
-
-      assert await_nick(pid, "grappa-test", 1_000) == "grappa-test",
+      # THE decisive assertion, and nothing in this test hands it the answer:
+      # the nick only moves if the reclaim put a SECOND `NICK grappa-test` on
+      # the wire and the handler echoed it back.
+      assert await_nick(pid, "grappa-test", 2_000) == "grappa-test",
              "a session that registered on a fallback nick must end up on the configured one"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
