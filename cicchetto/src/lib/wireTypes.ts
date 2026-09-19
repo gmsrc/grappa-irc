@@ -669,6 +669,7 @@ export type NetworksCredentialsAdminWireT = {
   connection_state: NetworksCredentialConnectionState;
   connection_state_reason: string | null;
   connection_state_changed_at: string | null;
+  detached_at: string | null;
   inserted_at: string;
   updated_at: string;
   last_seen_at: string | null;
@@ -849,6 +850,12 @@ export type NetworksWireHomeData = {
   available_networks: NetworksWireAvailableNetworkRow[];
 };
 
+export type NetworksWireNetworkDetachedEvent = {
+  kind: "network_detached";
+  network_id: number;
+  network_slug: string;
+};
+
 export type NetworksWireConnectionStateEvent = {
   kind: "connection_state_changed";
   user_id: string | null;
@@ -864,6 +871,7 @@ export type NetworksWireConnectionStateEvent = {
 export type WireNetworksEvent =
   | NetworksWireNetworkWithNickJson
   | NetworksWireVisitorNetworkWithNickJson
+  | NetworksWireNetworkDetachedEvent
   | NetworksWireConnectionStateEvent;
 
 // === Grappa.Notify.Wire ===

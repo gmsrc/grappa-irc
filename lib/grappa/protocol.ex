@@ -698,7 +698,37 @@ defmodule Grappa.Protocol do
   # @min_protocol_version stays at 1. Two additive fields on a response body;
   # a bundle predating v26 ignores them and keeps working, and this server
   # keeps serving it.
-  @protocol_version 26
+  # ---------------------------------------------------------------------------
+  # 27 — issue 2219: the `network_detached` event + `detached_at` on the admin
+  #      credential row
+  # ---------------------------------------------------------------------------
+  #
+  # The accretion verb finally has an inverse (`DELETE /session/networks/:slug`),
+  # and it puts two additive things on the wire. A new user-topic event kind,
+  # `network_detached` (`network_id` + `network_slug`), because a detach is not
+  # a state transition and cannot honestly ride `connection_state_changed`:
+  # detaching an already-parked network moves no state at all. And one field on
+  # `Credentials.AdminWire.t()`, `detached_at`, so the operator console can say
+  # why a credential it lists answers no REST call and spawns at no boot.
+  #
+  # Both are generated shapes — the event is a `Networks.Wire` typespec and the
+  # field lands on an `AdminWire` one — so `wireTypes.ts` / `wireSchema.ts` move
+  # with them and `priv/wire/shape.pin` spans both. The gate demands this bump
+  # as well as the rule does.
+  #
+  # Nothing was taken away and no field changed meaning. What a client CANNOT
+  # see from the number alone is the read-side change underneath: a detached
+  # credential stops appearing in `GET /networks`, in `GET /boot` and in the
+  # `$home` envelope, and every `/networks/:slug/…` route answers the iso 404
+  # for it. That is a row going absent, which the wire has always permitted —
+  # an unbind has looked exactly like it since #105 — so it is not a shape
+  # change and does not reach `min_protocol_version`.
+  #
+  # @min_protocol_version stays at 1. An old bundle ignores an event kind it
+  # does not know (unknown-is-never-fatal, both directions) and ignores an
+  # extra key on an admin row; it keeps working against this server, and this
+  # server keeps serving it.
+  @protocol_version 27
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -733,7 +763,7 @@ defmodule Grappa.Protocol do
   # duplicated constant is positive evidence that the OTHER sites were
   # decided for you. Grep every site for the OLD number before continuing,
   # including the ones that are not Elixir.
-  @spec version() :: 26
+  @spec version() :: 27
   def version, do: @protocol_version
 
   @doc """

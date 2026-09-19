@@ -89,6 +89,7 @@ defmodule Grappa.Networks.Credentials.AdminWire do
           connection_state: Credential.connection_state(),
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: DateTime.t() | nil,
+          detached_at: DateTime.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t(),
           last_seen_at: DateTime.t() | nil,
@@ -203,6 +204,15 @@ defmodule Grappa.Networks.Credentials.AdminWire do
       connection_state: c.connection_state,
       connection_state_reason: c.connection_state_reason,
       connection_state_changed_at: c.connection_state_changed_at,
+      # issue 2219 — the attachment axis, READ-ONLY on this surface and
+      # separate from `connection_state` above. Without it the operator
+      # console shows a credential that answers no REST call and spawns at
+      # no boot, with nothing on the row saying why: the CLAUDE.md rule
+      # that an admin listing must carry BOTH truths rather than the
+      # tidier one. Not writable here — the subject owns this axis, and
+      # the operator's verb for a row they want gone is the unbind that is
+      # already on this controller.
+      detached_at: c.detached_at,
       inserted_at: c.inserted_at,
       updated_at: c.updated_at,
       live_state: live_state_to_json(live)
