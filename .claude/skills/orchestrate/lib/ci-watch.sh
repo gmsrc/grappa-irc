@@ -14,9 +14,20 @@
 #   - `gh pr checks` is TAB-separated AND the check name itself contains spaces
 #     ("cicchetto + grappa + azzurra-testnet"), so it MUST be split on \t, never on
 #     whitespace columns. It has no --json.
-#   - An EMPTY check list is reported explicitly as `NO-CHECKS (conflicting?)`, not
-#     swallowed: a conflicting PR builds no `refs/pull/N/merge`, so `pull_request`
-#     workflows never fire and the silence reads exactly like "not started yet".
+#   - An EMPTY check list is reported explicitly, not swallowed: a conflicting PR
+#     builds no `refs/pull/N/merge`, so `pull_request` workflows never fire and the
+#     silence reads exactly like "not started yet".
+#   - But it reports WHAT IT MEASURED, never WHY. It used to print
+#     `NO-CHECKS (conflicting?)` and that parenthesis was a cause it had not
+#     measured: on 2026-09-19 it printed exactly that for PRs #2248 and #2251 while
+#     a by-hand count found 8 and 9 check-runs, i.e. it asserted an emptiness it
+#     had never looked at. So the two cases are now SEPARATE:
+#       * `gh pr view` answers  => gh works => the empty list is REAL:
+#         `NO-CHECKS state=<state>/<mergeStateStatus>` (read the state yourself;
+#         CONFLICTING is the zero-CI trap, CLEAN is the ~30s spin-up window).
+#       * `gh pr view` also fails => NOTHING was measured:
+#         `UNMEASURED gh-failed` — this is NOT a count of zero, and acting on it
+#         (a rebase, a force-push) burns a branch over a network blip.
 #   - Never exits on its own. Stop it with TaskStop.
 #
 # Env: CI_WATCH_INTERVAL (default 60s), CI_WATCH_REPO (default: cwd's repo).
@@ -42,11 +53,17 @@ snapshot() {
           | awk -F'\t' -v p="$pr" 'NF>1 {printf "PR%s: %s = %s\n", p, $1, $2}' \
           | sort)
     if [ -z "$out" ]; then
-      # Distinguish "no checks" from a transient gh failure by asking for state.
+      # An empty list and an unreachable gh are DIFFERENT facts. Ask for the PR
+      # state: if that answers, gh works and the emptiness is real; if it does not,
+      # nothing was measured and we must say so instead of reporting a zero.
       local ms
       ms=$(gh pr view "$pr" "${REPO_ARG[@]}" --json mergeStateStatus,state \
            -q '.state + "/" + .mergeStateStatus' 2>/dev/null)
-      printf 'PR%s: NO-CHECKS (conflicting?) %s\n' "$pr" "${ms:-unreachable}"
+      if [ -n "$ms" ]; then
+        printf 'PR%s: NO-CHECKS state=%s\n' "$pr" "$ms"
+      else
+        printf 'PR%s: UNMEASURED gh-failed\n' "$pr"
+      fi
     else
       printf '%s\n' "$out"
     fi
