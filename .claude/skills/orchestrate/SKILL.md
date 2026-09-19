@@ -2331,6 +2331,32 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   ORDINE o CONTIGUITA' che il dato non garantisce.** Stessa famiglia del contatore di righe che non
   conta una grandezza stabile, vista da un'altra porta: li' il righello si muoveva, qui presuppone
   una forma che il soggetto non ha.
+- 🔴🔴 **COSTUME NUOVO E NESSUNO DEI PRECEDENTI LO COPRE: DUE LETTURE VALIDE DI UN OGGETTO
+  REMOTO **MUTABILE**, PRESE A TEMPI DIVERSI E COMPOSTE COME SE FOSSERO UNA MISURA SOLA (w1,
+  2026-09-19, PR 2257 — parole sue, migliori delle mie).** Non lo strumento rotto, non l'artefatto
+  sbagliato, non il privilegio, non il campionamento: **ogni singola lettura era giusta**, ed e' il
+  MONTAGGIO a produrre il falso. Misurato: `closingIssuesReferences` letto **1 alle ~18:15Z**, poi il
+  body grepato **alle ~18:2x** ⇒ **0 closing keyword** (con pos ctrl `Closes #2219.`⇒1 e neg ctrl
+  `addresses issue 2219`⇒0, quindi il grep discriminava davvero). Dal paio nasce l'inferenza *"il link
+  non e' testuale ⇒ viene dal pannello Development ⇒ **non si disinnesca editando il body, va slegato
+  in UI**"* — **falsa, e azionabile**, cioe' il tipo peggiore. La verita': `lastEditedAt`
+  **`18:19:35Z`**, `editor` = **l'autore del PR**, `userContentEdits`=2 ⇒ la keyword **c'era**, ed e'
+  stata tolta **esattamente editando il body**, fra le due letture.
+  🥇 **Il tell, ed e' sempre disponibile: un oggetto GitHub porta addosso la propria mutabilita'**
+  — `lastEditedAt` / `updatedAt` / `userContentEdits`. **Se due letture di uno stesso oggetto remoto
+  distano piu' di qualche secondo, il timestamp di modifica va letto PRIMA di comporle**, o non stai
+  misurando un oggetto: stai misurando due.
+  🥇 **E il corollario che vale per chi ORCHESTRA: due referti che si contraddicono su un oggetto
+  remoto NON sono per forza uno sbagliato.** Qui un pari lesse `Closes #NNNN` come prima riga del body
+  e una worker lesse zero keyword: **avevano ragione tutti e due, a venti minuti di distanza.**
+  **Prima di arbitrare, chiedi A CHE ORA ciascuno ha guardato** — e se l'oggetto e' mutabile, la
+  domanda giusta non e' *"chi ha sbagliato"* ma *"cosa e' successo in mezzo"*. Arbitrare senza quella
+  domanda condanna un misuratore corretto e archivia la causa vera.
+  ⚠️ **E la meta' che assolve: un'inferenza DICHIARATA tale costa una riga a correggere.** Lei aveva
+  scritto *(INFERITO)* accanto alla deduzione, quindi il ritiro e' stato immediato e chirurgico. **Una
+  conclusione spacciata per misura, nella stessa posizione, sarebbe arrivata a un contributore esterno
+  come istruzione.**
+
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
