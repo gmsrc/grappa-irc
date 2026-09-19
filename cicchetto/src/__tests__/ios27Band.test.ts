@@ -5,14 +5,28 @@
 // ora, magari da rimuovere in seguito») and deleting it must be a revert, not
 // an archaeology exercise. When the band goes, this file goes with it.
 //
-// WHAT WOULD MAKE THIS TEST WORTHLESS: passing on any UA at all. So the shape
-// is a DEVICE TABLE with the expectation written per row, and the rows are
-// chosen so that each half of the parser owns some of them:
+// 🔴 WHAT MADE THIS TEST WORTHLESS ONCE ALREADY — not a hypothetical, the
+// reason row 12 exists. Every row below was CONSTRUCTED from what we believed
+// iOS sends. The table was green, and the gate was dead on the only phone in
+// the world that has the band: iOS 27 still reports the legacy OS token
+// (`iPhone OS 18_7`) and puts the true major ONLY in `Version/27.0`, a shape
+// no constructed row carried. A device table proves the parser handles the
+// devices IN IT, and nothing whatsoever about the one that filed the issue.
+// When a real UA becomes available, it goes in here and it outranks our
+// beliefs about the platform — that is what happened to row 9.
+//
+// So the shape is a DEVICE TABLE with the expectation written per row, and
+// the rows are chosen so that each half of the parser owns some of them:
 //
 //   * rows 1, 2, 5 and 11 carry BOTH signals, agreeing on the same major;
+//   * row 12 carries BOTH signals DISAGREEING — the class no constructed row
+//     had, and the one the real device turned out to be in. It is the only
+//     row that can tell "take the first match" from "take the highest";
 //   * row 9 carries ONLY the `OS <n>_<n> like Mac OS X` shape (underscores,
-//     and the iPad spelling drops the device word) — the installed-PWA UA,
-//     which is the configuration this entire gate targets;
+//     and the iPad spelling drops the device word). HYPOTHETICAL: we have
+//     never observed it, and row 12 falsified the belief that the installed
+//     PWA looks like this. Kept because it is the only falsifier of that
+//     clause;
 //   * rows 3, 4 and 7 carry ONLY `Version/<n>`, the version signal on the
 //     iPadOS-desktop-mode UA, which says `Macintosh` and has no `iPad` token;
 //   * rows 6, 8 and 10 carry no iOS version signal in either shape.
@@ -22,13 +36,16 @@
 // alone — that is why `isIos()` carries its `Mac` + touch clause, and why the
 // parser deliberately does not pretend to answer "is this Apple mobile?".
 //
-// Mutation check that this table actually discriminates (run by hand, recorded
-// in the issue-2190 report). Each clause of the parser owns rows no other
-// clause can cover, so each one falls alone:
-//   * drop the `Version/` alternative  → rows 3, 4 and 7 fail, and ONLY those;
-//   * drop the `OS … like Mac OS X` one → row 9 fails, and ONLY that one.
+// Mutation check that this table actually discriminates (run by hand,
+// recorded in the issue-2190 report). Each clause of the parser owns rows no
+// other clause can cover, so each one falls alone:
+//   * drop the `Version/` alternative  → rows 3, 4, 7 and 12 fail, ONLY those;
+//   * drop the `OS … like Mac OS X` one → row 9 fails, and ONLY that one;
+//   * take the FIRST match instead of the highest → row 12 fails, ONLY it.
 // If everything falls, or nothing does, the table is a mirror and not a
-// measurement.
+// measurement. The third line is the one this file was missing: the parser
+// shipped with first-match-wins, every row agreed with itself, and nothing
+// was red.
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -136,13 +153,23 @@ const DEVICES: readonly DeviceRow[] = [
     band: false,
   },
   {
-    // NOT a hypothetical shape: iOS home-screen web apps have dropped the
-    // `Version/` and `Safari/` tokens since the feature existed, and a
-    // home-screen web app is the ONLY configuration this whole gate targets.
-    // So on the phone the band fires off the OS-shaped clause and off
-    // nothing else, which is also what makes that clause falsifiable here:
-    // every other iPhone row carries BOTH signals agreeing on the same major.
-    name: "9. iPhone, iOS 27, installed PWA UA — no `Version/` token at all",
+    // 🔴 HYPOTHETICAL, AND IT USED TO CLAIM THE OPPOSITE. This comment read
+    // "NOT a hypothetical shape: iOS home-screen web apps have dropped the
+    // `Version/` and `Safari/` tokens since the feature existed", and the row
+    // was named "installed PWA UA" on the strength of it. Row 12 measures the
+    // real thing and falsifies that on BOTH axes: the installed PWA on iOS 27
+    // sends the FULL UA, `Version/27.0` and `Safari/604.1` included, and its
+    // OS token reads `18_7` rather than `27_0`. The name moved to row 12,
+    // where it is earned.
+    //
+    // KEPT ANYWAY, and not out of sentiment — measured: this is the ONLY row
+    // in the table that falsifies the OS-token clause. Deleting the
+    // `OS … like Mac OS X` alternative changes no other row's outcome, so
+    // without this row that clause could be removed entirely and the suite
+    // would stay green. It is defensive coverage of a UA shape we have never
+    // observed, and it is labelled as such so the table stops teaching that
+    // the PWA drops `Version/`.
+    name: "9. iPhone, iOS 27, HYPOTHETICAL UA with no `Version/` token — never observed",
     ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
     maxTouchPoints: 5,
     standalone: true,
@@ -150,18 +177,19 @@ const DEVICES: readonly DeviceRow[] = [
     band: true,
   },
   {
-    // 🔴 THE KNOWN GAP, asserted so it is visible rather than discovered.
-    // If iPadOS strips `Version/` from the standalone UA the same way iOS
-    // does, the desktop-mode shape is left with NO version signal whatsoever
-    // — `Intel Mac OS X 10_15_7` is the frozen lie every such UA carries —
-    // and the iPad half of the cure never fires. We own no iOS 27 device and
-    // no recorded iPadOS standalone UA, in this tree or anywhere we can
-    // reach, so this row states what the code DOES (nothing), not what the
-    // platform does. It is the second thing to ask morph for, next to the
-    // screenshot: `navigator.userAgent` read inside the installed PWA on the
-    // iPad. If it keeps `Version/27.0`, row 4 covers reality and this row is
-    // unreachable; if it does not, this gate needs another signal and there
-    // may not be one.
+    // 🔴 THE KNOWN GAP, asserted so it is visible rather than discovered —
+    // and now LESS likely than when it was written, though still unmeasured.
+    // It used to reason "if iPadOS strips `Version/` from the standalone UA
+    // the same way iOS does"; row 12 measures iOS doing no such thing, so the
+    // analogy that motivated this row is gone. What survives is the shape
+    // itself: IF some iPad standalone UA arrives without `Version/`, the
+    // desktop-mode form is left with no version signal at all —
+    // `Intel Mac OS X 10_15_7` is the frozen lie every such UA carries — and
+    // the iPad half of the cure never fires. We have no recorded iPadOS
+    // standalone UA, in this tree or anywhere we can reach, so this row
+    // states what the code DOES (nothing), not what the platform does. The
+    // reading that would settle it is the same one that settled row 12:
+    // `navigator.userAgent` from inside the installed PWA, on the iPad.
     name: "10. iPad desktop-mode, installed PWA, `Version/` stripped — KNOWN GAP, does not fire",
     ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
     maxTouchPoints: 5,
@@ -176,6 +204,40 @@ const DEVICES: readonly DeviceRow[] = [
     standalone: false,
     major: 27,
     band: false,
+  },
+  {
+    // 🔴 MEASURED, and the only row in this table that is. Every other UA
+    // here was written from what we believed the platform sends; this one was
+    // read off the staging nginx access log — 293 of 293 requests from the
+    // reporter's device, one single form. It is in the table because the
+    // table was GREEN while the gate was dead on the only phone that has the
+    // band, and it was green precisely because no row carried the shape the
+    // device actually sends.
+    //
+    // What it shows: iOS 27 STILL reports the legacy OS token — `iPhone OS
+    // 18_7` — and the true major lives ONLY in `Version/27.0`. The two
+    // signals DISAGREE, which no constructed row did. Under the old
+    // first-match-wins `??` the OS clause matched, captured 18, short-
+    // circuited `Version/` away, and 18 >= 27 is false: the class never
+    // applied, so every rule gated on it was dead code on the device it was
+    // written for.
+    //
+    // WHERE `standalone: true` COMES FROM, precisely, because the two halves
+    // have different sources and only one of them is a measurement. The UA is
+    // from the log. That the client sending it was the INSTALLED PWA rather
+    // than a Safari tab is vjt's word (#grappa 2026-09-19 09:15, «pwa
+    // ovviamente»), and it has to be: an access log cannot answer it, since
+    // `isStandalonePwa()` reads the display-mode in the browser and not the
+    // UA, and one uniform UA form cannot distinguish "only ever used the tab"
+    // from "the PWA sends this same form". So the row is measured-plus-
+    // attested, never measured alone — and with the standalone half settled,
+    // the misread major is the ONLY reason the gate did not fire.
+    name: "12. iPhone, iOS 27, installed PWA UA — MEASURED; legacy `OS 18_7`, true major only in `Version/`",
+    ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1",
+    maxTouchPoints: 5,
+    standalone: true,
+    major: 27,
+    band: true,
   },
 ];
 

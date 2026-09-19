@@ -102,14 +102,33 @@ const IOS_UA_MAJOR = /\bOS (\d+)(?:_\d+)* like Mac OS X\b/;
 // its `Mac` + `maxTouchPoints > 0` clause, and on that shape `Version/` is
 // the only version signal there is. It is the SAFARI major, not the OS one —
 // a PROXY, accepted knowingly: the two have shipped in lockstep (Safari 26
-// with iOS 26, Safari 27 with iOS 27), and the alternative is a regex that
-// only knows `iPhone OS (\d+)`, which covers the phone, leaves EVERY iPad
-// uncovered, and is never noticed because the phone works.
+// with iOS 26, Safari 27 with iOS 27).
+//
+// 🔴 AND ON iOS 27 IT IS NOT A FALLBACK, IT IS THE ONLY TRUE SIGNAL. Measured
+// on the staging access log, 293 of 293 requests from the reporter's device,
+// one single form:
+//   "(iPhone; CPU iPhone OS 18_7 like Mac OS X) … Version/27.0 … Safari/604.1"
+// iOS 27 still reports the LEGACY OS token. `18_7` is what the shape above
+// captures on a phone that is running 27, and the real major lives only here.
 const SAFARI_UA_MAJOR = /\bVersion\/(\d+)/;
 
 /**
  * The major iOS/iPadOS version a user agent claims, or `null` when it does
- * not say. Both UA shapes; the OS-shaped one wins when both are present.
+ * not say. Both UA shapes; when both are present the HIGHEST wins.
+ *
+ * 🔴 HIGHEST, not first-match — and the difference shipped a dead gate. This
+ * used to read `IOS_UA_MAJOR.exec(ua) ?? SAFARI_UA_MAJOR.exec(ua)`, so on the
+ * real iOS 27 UA above the OS clause matched, captured 18, and short-circuited
+ * `Version/27.0` away. `18 >= 27` is false, `hasIos27Band()` returned false,
+ * and every rule gated on the class was dead code on the one device in the
+ * world that has the band. The device table was green throughout, because
+ * every row in it was constructed from what we believed iOS sends and no row
+ * carried two signals that DISAGREE.
+ *
+ * Taking the max is safe in the other direction too, by construction rather
+ * than by luck: a UA cannot understate its major through either token without
+ * also being wrong about itself, so the higher of two self-reports is the
+ * later OS. Verified a no-op against every pre-existing row of the table.
  *
  * PURE — takes the string rather than reading `navigator`, so the whole
  * device table is one table-driven test (`__tests__/ios27Band.test.ts`).
@@ -120,11 +139,13 @@ const SAFARI_UA_MAJOR = /\bVersion\/(\d+)/;
  * Compose, do not conflate — `hasIos27Band()` below is the composition.
  */
 export function iosMajorVersion(ua: string): number | null {
-  const match = IOS_UA_MAJOR.exec(ua) ?? SAFARI_UA_MAJOR.exec(ua);
-  const captured = match?.[1];
-  if (captured === undefined) return null;
-  const major = Number.parseInt(captured, 10);
-  return Number.isNaN(major) ? null : major;
+  const majors = [IOS_UA_MAJOR, SAFARI_UA_MAJOR].flatMap((pattern) => {
+    const captured = pattern.exec(ua)?.[1];
+    if (captured === undefined) return [];
+    const major = Number.parseInt(captured, 10);
+    return Number.isNaN(major) ? [] : [major];
+  });
+  return majors.length === 0 ? null : Math.max(...majors);
 }
 
 /** The first major that paints the band. morph measured 27; 26 is clean. */
