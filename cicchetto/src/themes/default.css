@@ -3978,27 +3978,47 @@ button.topic-bar-windows-opener {
    What the inset CANNOT do is size this clearance on its own, and that is
    the whole reason a constant is still needed: the veil reaches 100 CSS px
    from the screen edge while the inset stops at 62, so a layout that trusts
-   `safe-area-inset-top` alone parks its first line 38 px INSIDE the effect
-   and gets it half dissolved — which is the symptom as reported. The inset
-   is spent where it always was, on `.shell`; the 38 is what is owed BELOW
-   it. See the ADDITIVE note at the rule for how the two combine, because
-   getting that wrong is a regression and not a rounding error.
+   `safe-area-inset-top` alone parks its first line inside the effect and
+   gets it half dissolved — which is the symptom as reported. The inset is
+   spent where it always was, on `.shell`; the constant is what is owed
+   BELOW it. See the ADDITIVE note at the rule for how the two combine,
+   because getting that wrong is a regression and not a rounding error.
 
-   38px IS OURS NOW, unlike the 16px it replaces. 16 was a reported constant
-   (what other PWA authors had used); it shipped, and the screenshot taken
-   afterwards showed it did not cure the report. 38 is read off the probe
-   photographs: a ruler of numbered 4px bands says the veil dies 100 CSS px
-   from the SCREEN edge — of which the first 62 are the status bar, ceded
-   anyway, since nothing readable goes under the clock. The remainder owed
-   BELOW that inset is the bare 38. Stopping short does not work: at 40 px
-   from the screen edge the veil is still at 89 percent of its strength, and
-   the contrast curve at the scrollback's own edge runs 27 percent at +0,
-   71 at +18, 91 at +26 and crisp only at +34. Ruled by vjt with that curve
-   in hand; 26 is the honest cheaper fallback if he ever wants it, and needs
-   no new measurement. The measurements are the work of the fleet agent that
-   published the probe pages on issue 2190 — the GitHub comment is authored
-   under vjt's account because of how the fleet authenticates, and the
-   readings are not his.
+   WHERE 16px COMES FROM, AND WHY IT IS NOT THE 16 THIS ISSUE STARTED WITH.
+   Three numbers have sat in this token, and conflating them is how the
+   history stops making sense.
+
+   The FIRST 16 was a reported constant — what other PWA authors had used —
+   with nothing behind it. It shipped and did not cure the report.
+
+   38 replaced it, read off probe pages photographed on the reporter's
+   device: a ruler of numbered 4px bands puts the end of the veil at 100 CSS
+   px from the SCREEN edge, of which the first 62 are the status bar and are
+   ceded anyway, leaving 38 owed below the inset. That is a correct reading
+   of where the veil ENDS. It went to the device, and the verdict was «ok
+   meglio ma TROPPO sotto» — better, because the gate finally fired at all,
+   but too far down. Optimising for the last pixel of the veil bought more
+   dead space above the chrome than the residual veil was worth.
+
+   THIS 16 is derived from that verdict, and it is a DIFFERENT KIND OF
+   NUMBER from either. On a 1320x2868 @3x screenshot of the installed PWA
+   the bottom of the Dynamic Island sits at 50.7 CSS px and the top of cic's
+   chrome at 107, leaving 56 CSS px of dead black between them; the bar
+   itself is 48 CSS px, which is `--chrome-tap-min` exactly. Dropping the
+   token by 22 lifts the bar to 85 and leaves 34 px of black. So it is a
+   TRADE, deliberately: it concedes some residual veil at the very top of
+   the chrome to buy back vertical space, where 38 conceded space to clear
+   the veil completely.
+
+   🔴 PROVENANCE, and it is three different people, so do not collapse it.
+   The probe measurements and the screenshot measurements above are the work
+   of the fleet agent on this issue — the GitHub comments carrying them are
+   authored under vjt's account because of how the fleet authenticates, and
+   the readings are NOT his. 16 is that agent's derivation from those
+   numbers; **vjt did not name it**. What vjt supplied is the verdict that
+   38 was too far down, and the earlier ruling that the clearance belongs on
+   `.shell`. If it wants to go higher still, 8 is the next step already
+   proposed, and it is one token.
 
    GATED IN JS, NOT BY A MEDIA QUERY, and that is deliberate (ruling point 5):
    the gate is `isIos() AND isStandalonePwa() AND major >= 27`, which no media
@@ -4017,21 +4037,25 @@ button.topic-bar-windows-opener {
    runs from 62 to at least 110 CSS px REGARDLESS of the root font size while
    the veil dies at 100 — the whole of that window is chrome. Moving the
    clearance to the shell shifts the entire flow instead, chrome included.
-   THE PRICE, accepted with the ruling: 38 px of vertical screen, permanently,
+   THE PRICE, accepted with the ruling: 16 px of vertical screen, permanently,
    on every iOS 27 installed PWA.
 
    🔴 ADDITIVE, AND THE OBVIOUS SPELLING IS A REGRESSION. `.shell` ALREADY
    declares `padding-top: var(--safe-area-inset-top)`. A gated
-   `padding-top: var(--ios27-band-clearance)` does not ADD 38 px, it REPLACES
-   the inset — specificity 0,2,1 against 0,1,0 — for a NET LOSS of 24 px that
-   pulls the content up UNDER the Dynamic Island. That is the #913 trap run
+   `padding-top: var(--ios27-band-clearance)` does not ADD the clearance, it
+   hands the element the clearance INSTEAD OF the inset — specificity 0,2,1
+   against 0,1,0 — so a gated device ends up HIGHER than an ungated one
+   rather than lower, with the content pulled UP under the Dynamic Island.
+   Stated without the numbers on purpose: the clearance has been retuned
+   three times and the failure is the same at every value, so a figure here
+   would go stale while the trap did not. That is the #913 trap run
    backwards: #913 doubled the inset by re-adding it, this annihilates it by
    overwriting it. Same sheet, same token, opposite sign, and the notes
    elsewhere warn only about the doubling direction — which is exactly why
    the other one is easy to walk into. So the inset is RESTATED here, the way
    a padding always must be, since it cannot be written as "whatever it was,
    plus". `__tests__/ios27Band.test.ts` asserts the sum EXCEEDS the inset
-   rather than equalling 38px: an equality against the bare clearance is the
+   rather than equalling 16px: an equality against the bare clearance is the
    regression, written down and blessed.
 
    IT SUMS THE TOKEN, NOT WHICHEVER DECLARATION WON. There are TWO ungated
@@ -4051,11 +4075,11 @@ button.topic-bar-windows-opener {
    compete in the phone's cascade; OUTSIDE it, at 0,2,1, it beats BOTH
    declarations on BOTH renders. Keep it out of the media query.
 
-   THE 38px COMES OUT OF THE CONTENT BOX — the shell does NOT get taller.
+   THE 16px COMES OUT OF THE CONTENT BOX — the shell does NOT get taller.
    `box-sizing: border-box` is global and `.shell` is `height: 100dvh`, so
    padding is consumed FROM that height rather than added to it (the same
    mechanism the mobile inset note describes). That IS the cost vjt accepted:
-   38 px less usable vertical area, not 38 px of new box. Do not "optimise"
+   16 px less usable vertical area, not 16 px of new box. Do not "optimise"
    this later believing the shell grew.
 
    STILL VEILED AFTER THIS, and it is the only surface left: the overlays
@@ -4065,7 +4089,7 @@ button.topic-bar-windows-opener {
    needs to be readable, and it stays under the veil. Tracked separately;
    deliberately not fixed here. */
 html.is-ios27-band {
-  --ios27-band-clearance: 38px;
+  --ios27-band-clearance: 16px;
 }
 
 /* The one rule. See the ADDITIVE note above before touching the `calc`. */
