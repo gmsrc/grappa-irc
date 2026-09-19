@@ -2554,6 +2554,24 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   lasciata su una issue. E' UNA chiamata per issue parcheggiata, e l'handoff da solo non la
   sostituisce **proprio perche' e' una traccia**: la riga *"⏳ in attesa di X"* non scade da sola e
   **si rilegge identica per giorni, con l'aria di uno stato appena verificato.**
+  🔴🔴 **E LO SPECCHIO ESATTO DI QUEL CASO, MISURATO IL 2026-09-19 SULLA #2240: LI' LA RISPOSTA ERA
+  ARRIVATA E NESSUNO L'AVEVA LETTA; QUI LA DOMANDA NON ERA MAI ARRIVATA E TUTTI DAVANO PER SCONTATO
+  DI SI'.** w2 e' rimasta ferma **9,2 ore** (`STALL state=idle duration=33196s`) su una ruling A/B/C
+  che vjt **non ha mai visto**: il pari gliela aveva messa davanti come **QUATTRO messaggi** alle
+  00:08:27 mentre correva un thread diverso e caldo; alle **00:09:09 — quarantadue secondi dopo** —
+  lui ha risposto, ma **su un'altra issue**, e il muro e' stato scrollato via.
+  🥇 **Le due diagnosi hanno lo stesso osservabile — silenzio — e cure OPPOSTE:** *"ci sta pensando"*
+  ⇒ **aspetti e non solleciti**; *"non l'ha mai vista"* ⇒ **si ri-pone**, ed e' l'unica cosa che
+  sblocca. Leggerla nel verso sbagliato costa ore a una worker che non ha nulla da risolvere.
+  🥇 **IL DISCRIMINANTE E' MISURABILE E NON E' MIO: si legge nel log del bot COSA ha risposto in quel
+  minuto.** Se ha parlato d'altro subito dopo, la domanda e' stata scrollata, non considerata.
+  **A me leggere IRC e' VIETATO ⇒ la misura la chiedo al PARI** — *"e' ancora davanti a lui o va
+  ri-posta?"*, mai *"chiediglielo di nuovo"*. Chiedere una verifica non e' sollecitare.
+  🥇 **E LA FORMA DELLA DOMANDA E' LA VARIABILE, MISURATA SULLO STESSO SOGGETTO:** quattro messaggi a
+  mezzanotte ⇒ **mai risposta**; *"2240 dire1"*, UNA riga ⇒ **risposta in tre minuti**. ⇒ **una
+  domanda a vjt sta in UNA riga, con le opzioni come clausole singole e un «dimmi una lettera»
+  esplicito.** Il muro di contesto e' per la issue, non per il canale — e' la stessa regola del
+  `/caveman` su `#grappa`, vista dal lato del costo di NON applicarla.
 - 🔴🔴 **`<verificatore> || echo "PULITO"` TRASFORMA UN VERIFICATORE ROTTO IN UN VERDE — e il
   verde e' indistinguibile da quello vero (w2, 2026-08-26, sulla scansione closing-keyword).**
   Il pattern briefato conteneva **`fix(|es|ed)`**, cioe' una **sotto-espressione ALTERNATIVA VUOTA**:
