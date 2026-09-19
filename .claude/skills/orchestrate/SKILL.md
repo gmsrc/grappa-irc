@@ -2653,6 +2653,23 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   🥇 **Due rifiuti in mezza giornata, entrambi pagati: w1 e' andata a leggere `numeric.h` di DUE
   ircd, w2 e' andata a leggere la ruling. Chiedi «dimmi cosa hai rifiutato di affermare» in OGNI
   brief — e chiedilo anche a chi SCRIVE le issue.**
+  🔴🔴 **CORREZIONE A ME STESSA, PORTATA DA w1 LEGGENDO IL COMMIT QUI SOPRA: «non c'era una
+  rete» E' FALSO, LA RETE C'ERA ED ERA LA MIA.** Avevo scritto *"cost was zero because the worker
+  refused… that is her doing, not a net I had put up"*. **`DIMMI COSA HAI RIFIUTATO DI AFFERMARE` e'
+  l'ultima riga dei miei non-negoziabili e stava nel brief che lei aveva ricevuto**, e ha prodotto
+  **due rifiuti su due nella stessa mattina**.
+  🥇 **Perche' la correzione va incassata invece di lasciarla passare per modestia: una regola che
+  FUNZIONA e viene messa a verbale come «non ha aiutato» e' una regola che la prossima potatura
+  cancella.** Sottostimare la propria rete non e' umilta', e' **un dato sbagliato sul cosa tenere** —
+  e in un file che si pota per restare leggibile, quel dato decide cosa sopravvive.
+  🥇 **Resta vero l'altro lato, e i due non si annullano:** la rete PONE la domanda, **non porta la
+  misura**. `numeric.h` di due ircd e la ruling per numero le hanno cercate loro. ⇒ **credito alla
+  regola per aver chiesto, credito alla worker per aver guardato.**
+  🥇 **E l'attribuzione l'ha fatta come si deve: per PATH (`skills/orchestrate/`), SERIE (`orchestrate:`)
+  e CONTENUTO in prima persona — mai dai metadati**, notando da se' che l'identita' git e' condivisa
+  (`Marcello Barnaba <vjt@openssl.it>` su tutto) e il `Co-Authored-By` generico ⇒ **dal git da solo
+  nessuno attribuisce un commit a un pane.** E' la regola gia' scritta per `mergedBy`, applicata da
+  una worker a un commit MIO senza che nessuno gliela ricordasse.
   🔴🔴 **IL NOME DEL RAMO NON IDENTIFICA IL PANE — misurato 2026-08-30, e questa riga diceva il
   contrario.** Dispatchata la #1877 al pane **`%16`** (titolo `grappa-worker`, cioè w1 per
   l'handoff), un minuto dopo sull'host compare la worktree **`w2-1877`**. Sembrava che il lavoro
