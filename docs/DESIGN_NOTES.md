@@ -17654,3 +17654,130 @@ published the probe pages on issue 2190; the GitHub comment carrying them is
 authored under vjt's account because of how the fleet authenticates, and the
 readings are not his. The 38 and the `.shell` placement are vjt's rulings,
 relayed through the orchestrator, not read from IRC directly.
+<!-- entry #2240b -->
+
+---
+
+## 2026-09-19 — #2240b: the away-window index was built, measured, and declined — the bound is the leg that carries the weight
+
+The entry above is the measurement and chose nothing. The choice is **option
+C: no index.** vjt on #grappa, 09:21 Rome, relayed: *"se index non serve ca
+bene c"*.
+
+**🔴 Read the ruling with its premise corrected, because the premise is not
+what was measured.** *"If the index is not needed"* was put back to him rather
+than banked, and the honest form is this: **the index is needed in the sense
+that it WORKS.** It beats the scan at every window measured, and it removes a
+temp B-tree sort as well. What the measurement actually established is that
+**the win, while real, is the SMALL leg** — and that taking it costs something
+that was not on the table when the two options were drawn up. Under that
+reading C is coherent, and this entry exists so that nobody later reads "we
+declined it" as "it did not work".
+
+### What was built, and what it did
+
+`(user_id, network_id, server_time) WHERE user_id IS NOT NULL`, with its
+migration and a plan assertion. Measured, on a five-row table and agreeing with
+the 1.94M-row corpus:
+
+    before:
+      SEARCH m0 USING INDEX messages_archive_user_idx (user_id=? AND network_id=?)
+      USE TEMP B-TREE FOR ORDER BY
+
+    after:
+      SEARCH m0 USING INDEX messages_user_id_network_id_server_time_index
+        (user_id=? AND network_id=? AND server_time>? AND server_time<?)
+
+One line, and the sort gone with it: `id` is the rowid, so it is the index's
+implicit trailing column and `ORDER BY server_time, id` is served outright.
+**162x at 1h, 11.8x at 1d, 3.2x at 7d, 1.6x at 30d, 1.4x at 365d.** Write cost
++9.2 % of WAL pages; the wall-clock attempt at the same question was
+non-conclusive in both directions (sign test p = 0.07-0.29) and is not to be
+rounded down to "free".
+
+**A five-row table reproducing a 1.94M-row plan is not luck**, and it is the
+detail worth keeping: prod carries no `sqlite_stat*` and the app never runs
+`ANALYZE`, so the planner works from fixed default estimates that never consult
+real table size. Index-choice regressions on this table are therefore
+reproducible in CI, not only in prod — which is exactly how the next paragraph
+was found.
+
+### Why it was declined — it steals the #393 DM read's plan
+
+Not predicted by the measurement; found because the suite pins plans. With the
+index present, the folded-COALESCE DM read — the hot path that saturated the
+prod SQLite pool at 409 ms mean, whose cure was making it sargable — loses its
+seek:
+
+    was:  SEARCH m0 USING INDEX messages_user_id_network_id_dm_coalesce_fold_id_kind_index
+            (user_id=? AND network_id=? AND <expr>=?)
+    with: SEARCH m0 USING INDEX messages_user_id_network_id_server_time_index
+            (user_id=? AND network_id=?)
+
+**The mechanism is the `LIMIT`, not the index shape.** That read is
+`ORDER BY server_time DESC, id DESC LIMIT 50`, and the #393 index carries `id`
+after the fold rather than `server_time`, so it seeks the peer exactly and then
+SORTS. The new index offers the ordering for free, and with no statistics to
+say how selective the fold equality is, SQLite trades the exact seek for the
+sort it can skip and walks the account backwards filtering instead. Fine for a
+peer you spoke to an hour ago; #393 again for a cold DM.
+
+**The trade, stated plainly: a latency improvement on the smaller leg, bought
+by re-lighting a fixed production incident on the larger one.** That is what
+was declined — not the index's usefulness.
+
+No number is offered for how bad the DM regression would be. The corpora were
+deleted; this is read off the plan, not off a clock, and pricing it is refused
+rather than guessed.
+
+### The remedy that now has no home, recorded before it dies with the branch
+
+An index carrying `lower(COALESCE(dm_with, channel))` **followed by**
+`server_time` wins the DM seek back — measured, the plan returns to
+`(user_id=? AND network_id=? AND <expr>=?)`. With C nobody is forced to ask
+that question any more, so it is filed as backlog rather than left in a dead
+branch. Two caveats travel with it: its **write cost is NOT measured**, and as
+a fourth candidate it also displaces the #393 index from the
+`rename_dm_peer/4` UPDATE path — so the honest shape is to reshape that family,
+which is a third issue again.
+
+⚠️ **The first probe of that remedy was DEGENERATE and is recorded as such.** It
+spelled the fold as the rfc1459 four-`replace` form copied from
+`20260725120000`, but `Identifier.nick_fold_sql/1` has been plain `lower()`
+since the #525 ASCII posture. SQLite saw a different expression, could never
+match, and the probe reported "the remedy does not work" — a plausible negative
+from an instrument that was not connected. The byte-identity hazard CLAUDE.md
+warns about, paid in person; the measurement above is the corrected probe.
+
+### Two things learned on the way that outlive the ruling
+
+**An index-only migration is HOT, and "a schema migration forces a COLD deploy"
+is the wrong shorthand.** The #2240 entry's own gate-hygiene note says the
+opposite ("a new migration file makes the deploy COLD by construction,
+Preflight class 5") and it is wrong. `Preflight.classify_migration/1` parses the
+`change/0` AST, and a bare `create index` is an allowlisted expand op — four
+index migrations already sit in `PreflightTest`'s `@expected_hot` for exactly
+that reason. **Class 5 is about what a migration DOES, not about a file
+appearing.** Read off the pin test, which went red until the new migration was
+listed. Nothing deploys here, but do not budget a cold restart for that class.
+
+**A bench ships Credo-clean, which is more than "a bench ships".**
+`.credo.exs` includes `test/` with no bench carve-out of any kind, and the
+tracked benches with functions already carry specs (`bench_1626.exs` 13 for 12,
+`bench_1859.exs` 15 for 16; `bench_1767.exs` defines none). Committing
+`test/bench_2240.exs` therefore cost twelve `@spec`s, an `IO.inspect` and three
+unused variable names — with the measurement logic untouched, and `plan`,
+`mem` and `sweep` re-run end to end to prove the instrument still works rather
+than assuming it.
+
+### What is still unfixed, and where it now lives
+
+The severe leg is untouched by C, and was untouched by A: no `LIMIT`, so every
+content row in the window is materialised inside the session GenServer —
+**2,266 MB of peak heap to deliver 4.6 MB** at a full-year window, fatal at 4M
+partition rows five times out of five. It gets its own backlog issue rather
+than riding along on the index question, because it is a different defect with
+a different cure shape (a row cap plus a wire field to admit truncation, or
+pushing the sender exclusion into SQL as `WindowCounts` already does). The
+`Grappa.Mentions` moduledoc carries the warning in code as well, so the fact
+does not depend on an issue surviving.
