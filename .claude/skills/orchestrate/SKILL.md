@@ -2709,6 +2709,13 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   lo stato dell'albero si chiede a `gh` NELLO STESSO TURNO.** Una domanda posta su uno stato falso
   non produce un ruling, produce **un equivoco che sembra un ruling** — e poi qualcuno lo esegue.
   ⚠️ Vale anche per l'handoff: e' una traccia. **`gh` e' la misura.**
+  🥇🥇 **E LA META' SPECULARE, PORTATA DAL PARI IL 2026-09-19 E DA TENERE: PRIMA DI RELAYARE
+  UN BLOCCO, VERIFICA CHE SIA ANCORA UN BLOCCO.** Avevo fatto postare *"#2255 verde ma il merge mi
+  e' negato: sblocco o mergi tu"*; **falsa in due minuti** (il merge era gia' fatto). Misurato sul
+  `bot.log` col pari: **nessuna delle due righe e' mai uscita** — lui aveva **scartato** l'originale
+  proprio applicando questa regola. ⚠️ **Non contarla come rete: la rettifica resta TUA da mandare**,
+  e il relay puo' non filtrarla il giro dopo. 🥇 *Un blocco e' uno STATO, non un fatto: invecchia fra
+  il turno in cui lo scrivi e il turno in cui qualcuno lo legge.*
 - 🔴 **UN'INDISPONIBILITA' NON E' UN ORDINE.** *"mo non ho tempo di verificare"* e' stato tradotto
   da un relay in *"nessun merge senza il suo occhio, nemmeno col CI verde"*, cioe' **un ordine
   permanente che ribaltava chi mergia**. 🥇 **Non si prende un cambio di regola da una parafrasi:**
