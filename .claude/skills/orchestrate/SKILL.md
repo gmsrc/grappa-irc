@@ -2123,6 +2123,21 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   🥇 **Un grep su un identificatore misura le OCCORRENZE DEL TESTO, non gli USI**, e i commenti che
   spiegano una rimozione sono esattamente dove quel testo sopravvive. *Gemello esatto di "un grep sul
   NOME non misura la duplicazione", visto dall'altro lato: lì assolveva, qui accusa.*
+- 🔴🔴 **COSTUME NUOVO, E LO FABBRICA IL TUO STESSO AVVISO: SE DICI A UNA WORKER QUALI ROSSI
+  ASPETTARSI, LA LORO ASSENZA DAL LOG NON E' UNA MISURA — IL GATE PUO' ESSERE MORTO PRIMA DI
+  ARRIVARCI (w2, 2026-09-19, parole sue: «non sono stati girati, il che e' NIENTE, non ZERO»).**
+  Avevo avvisato entrambe che `760-763` (+ `664`) sarebbero usciti rossi, che sono roba MIA, e
+  ordinato di riportarmi **se ce ne fossero ALTRI oltre a quelli** — l'unica cosa che discrimina il
+  loro guasto dal mio. Il `check.sh` di w2 e' morto **alla fase CREDO**, su una riga di codice SUO
+  (`Function body is nested too deep`, `if` dentro `if` dentro `fn`, introdotta dalla correzione di
+  uno specchio) ⇒ **non ha MAI raggiunto ne' ExUnit ne' bats**, quindi i tre attesi **non
+  compaiono** — e quel non-comparire si legge **identico a «questo giro erano verdi»**.
+  🥇 **La domanda «ce ne sono ALTRI?» PRESUPPONE che la fase sia stata RAGGIUNTA, e su un gate
+  morto presto non ha risposta.** ⇒ **l'ordine va sempre accoppiato: «e dimmi a QUALE FASE e' morto
+  il gate»**, o l'avviso che doveva prevenire un falso allarme **fabbrica un falso pulito**.
+  ⚠️ Stesso giro: la notifica dell'harness diceva **`exit code 0` su un gate a `rc=1` — QUARTA
+  volta** (e' l'rc del WRAPPER). **Solo l'rc su FILE conta**, e il conteggio delle bugie lo teneva
+  lei meglio di me.
 - 🔴🔴 **UN GREP SU `passed|failed` IN UN LOG PLAYWRIGHT MISURA I NOMI DEI TEST, NON GLI ESITI** (orch,
   2026-08-19). Ho dichiarato *"giro tagliato al test 383 di 756, zero rossi"*: **entrambi falsi.** Le parole
   `fail`/`failed` stanno dentro i NOMI (`issue38-...-rejoin-fail`, `issue511-failed-autojoin`,
