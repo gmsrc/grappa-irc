@@ -1212,6 +1212,24 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   checking whether any event existed to run: main had not moved since 10:32Z, so the silence was
   correct. 🥇 *A third instance of the false-and-plausible zero, wearing a new costume: a count of
   zero runs that means "nobody asked", not "something broke".*
+- 🔴🔴 **E C'E' UNA **QUARTA** CAUSA DI ZERO CI, LA PIU' SILENZIOSA DELLE QUATTRO: UN PUSH SU UN RAMO
+  LA CUI PR E' GIA' **MERGIATA** (orch, 2026-09-19, misurato su `w1-2190`).** Le altre tre lasciano
+  almeno una PR aperta da interrogare; qui **non esiste nessuna PR da interrogare**, quindi
+  `gh pr checks` non ha nemmeno un bersaglio e `gh run list --branch <ramo>` e' VUOTO. Misurato:
+  `origin/w1-2190 = 5408d00a0`, **`tot=0` check-run sulla head**, e `gh pr list --state all --head
+  w1-2190` restituisce **una sola riga, `#2247 MERGED`**. La worker aveva fatto tutto bene e aveva
+  scritto *"GitHub mostra ancora la head vecchia, si allinea da se'"* — frase vera di una PR APERTA,
+  **falsa di una chiusa: non si allineera' mai.**
+  🥇 **Il tell che separa questa dalle altre tre in UNA chiamata:**
+  `gh pr list --state all --head <ramo>` — se l'unica riga e' `MERGED`, **la CI non e' rossa e non e'
+  in ritardo: non e' mai stata chiesta**, e la cura non e' un rebase ne' un `rerun`, e' **aprire la
+  PR**. ⚠️ Compagno dello stesso errore: un push post-merge invita ad aggiornare il body di QUELLA PR,
+  e allora **il body di una PR mergiata descrive lavoro che dentro non c'e'**.
+  🥇 *Quinta faccia dello zero falso e plausibile in questa famiglia, e la piu' facile da mancare
+  proprio perche' il ramo e' quello GIUSTO e il lavoro e' quello GIUSTO: manca solo il contenitore.*
+  🔑 **Regola operativa: dopo che una PR e' stata mergiata, il suo ramo e' BRUCIATO come contenitore.**
+  Il giro successivo su quel ramo vuole una PR NUOVA — e chi la apre deve **verificare con i propri
+  occhi che i check-run comincino a comparire sulla sua head**, non dedurlo dal fatto di aver pushato.
 - 🔧 **`gh run rerun <run-id> --failed` re-runs just the failed jobs of an EXISTING run, and needs no
   `workflow_dispatch`.** Use it when a settled run went red on a diagnosed-transient cause — it beats pushing an
   empty commit (no history pollution) and beats close/reopen (which does nothing). The "no manual lever" rule above
