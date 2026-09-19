@@ -344,6 +344,21 @@ defmodule GrappaWeb.Router do
     # boundary (`GrappaWeb.ShareToken.mint/2`) states the same rule
     # independently of where the route is declared.
     post "/me/share-token", ShareTokenController, :mint
+
+    # issue 2219 — DETACH a network from the caller's own session: the
+    # inverse `POST /session/networks` never had. Parks + quits the
+    # network, then marks the credential detached; everything the subject
+    # authored survives, and re-POSTing the slug restores it.
+    #
+    # In THIS block while its POST sibling rides the lighter pipeline
+    # below, and the split follows the rule at the top of the scope
+    # rather than tidiness. Accreting adds a binding a per-client token
+    # may then use; detaching takes one away from every client the
+    # account has, which is a change to what the account IS. The POST is
+    # named in `RouterScopeTest`'s client-usable set as an exact route
+    # for the same reason — a `/session/networks` PREFIX would have
+    # swallowed this DELETE and asserted nothing about it.
+    delete "/session/networks/:slug", SessionController, :detach_network
   end
 
   scope "/", GrappaWeb do

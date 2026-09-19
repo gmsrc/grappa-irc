@@ -83,7 +83,16 @@ defmodule GrappaWeb.Plugs.ResolveNetwork do
   defp resolve({:user, %User{} = user}, slug) do
     case Networks.get_network_by_slug(slug) do
       {:ok, network} ->
-        case Credentials.get_credential(user, network) do
+        # issue 2219 — the ATTACHED reader, not the bare one. A detached
+        # credential still exists (that is the point of the column), and
+        # asking only "is there a row" would keep every `/networks/:slug/…`
+        # route open on a network the subject has taken off its session —
+        # readable, sendable, reconnectable. This is the ONE gate the whole
+        # family passes through, so the controllers downstream
+        # (`ChannelsController.subject_autojoin/2`,
+        # `NetworksController.fetch_credential/2`) keep using the bare
+        # reader: by the time they run, ownership is already asserted here.
+        case Credentials.get_attached_credential(user, network) do
           {:ok, _} -> {:ok, network}
           {:error, :not_found} -> {:error, :no_credential}
         end

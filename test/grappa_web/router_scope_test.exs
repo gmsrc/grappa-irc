@@ -65,7 +65,6 @@ defmodule GrappaWeb.RouterScopeTest do
     "/networks",
     "/themes",
     "/push/subscriptions",
-    "/session/networks",
     "/api/uploads",
     "/api/server-settings"
   ]
@@ -76,6 +75,14 @@ defmodule GrappaWeb.RouterScopeTest do
   # scope refusal.
   @client_usable_routes [
     {"DELETE", "/auth/logout"},
+    # issue 2219 — accretion is client-usable and was covered by a
+    # `/session/networks` PREFIX until that issue added a DELETE under the
+    # same path. A prefix cannot tell the two apart, so the detach would
+    # have been excluded from `gated_routes/0` and asserted nowhere —
+    # passing vacuously while the thing it exists to check went unchecked.
+    # Named one verb at a time now, the way the `/me` namespace already is
+    # and for the same reason.
+    {"POST", "/session/networks"},
     # #1679 — the boot envelope. Client-usable by the same reasoning as
     # `GET /me` and the `/networks` prefix it is assembled from: it is the
     # read a client performs to know what it is connected to, and refusing
