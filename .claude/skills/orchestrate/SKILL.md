@@ -2628,6 +2628,31 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   🥇 *E la cura e' un ordine di correzione alla worker che dice esplicitamente **cosa NON
   cambia** (l'ordine operativo) e **cosa cambia** (la forza della frase) — piu' la ritrattazione
   DOVE SI E' SPARSO. Una ragione sbagliata a verbale e' peggio di nessuna ragione.*
+  🔴🔴 **E LA STESSA CLASSE ENTRA DA UNA PORTA CHE NON SORVEGLIAVO: LA SEZIONE «ASKS» DI UNA
+  ISSUE. UN BRIEF NON RELAYA UNA PRESCRIZIONE (orch, 2026-09-19, issue 2253).** L'Ask diceva
+  *"tratta 435/437/433 come TERMINALI per quel tentativo"*; l'ho trascritto in un ordine a w2 senza
+  chiedermi **a quale FSM** si applicasse. Applicato a `RecoverIdentity` **rovescia la ruling #623**,
+  che e' MISURATA e dice l'opposto **per un motivo diverso**: li' il 433/437 dopo un RECOVER/RELEASE
+  significa *"l'hold dei services non si e' ancora liberato"* — **condizione che cambia da sola** — e
+  il retry **non e' cieco**, e' limitato dal deadline host di 15 s (`recover_identity.ex`, module doc
+  p.6, `step/2` su `:awaiting_nick`). Lo stato provocante misurato nella issue era **un altro**: NICK
+  mandato mentre la sessione e' in un canale la cui condizione rifiuta il cambio.
+  🔑 **LA TERMINALITA' NON E' UNA PROPRIETA' DEL NUMERICO: E' UNA PROPRIETA' DELLA COPPIA
+  (NUMERICO, STATO CHE LO HA PROVOCATO).** Stesso numero, fatto diverso dietro. Gemello esatto di
+  *"«e' un'etichetta» e' una proprieta' del SINGOLO PORTATORE, non della classe"*.
+  🥇 **La regola operativa: un brief porta il DIFETTO e le MISURE; i VINCOLI li metti tu e devono
+  essere vincoli che sai DIFENDERE.** E' la regola gia' scritta per i commenti — *cita il FATTO, mai
+  la QUALIFICA* — **estesa agli Asks**, e non l'avevo estesa perche' li' la prescrizione arriva
+  **dentro l'artefatto che stai eseguendo**, quindi sembra parte del lavoro invece che un'opinione su
+  come farlo. **Una issue descrive un DIFETTO; come si cura lo decidi al momento di curarlo.**
+  ⚠️ **Costo reale ZERO, e va detto perche' NON assolve:** w2 ha rifiutato **prima di costruire**,
+  con la misura e citando la ruling per numero. **E' zero perche' LEI ha guardato, non perche' io
+  avessi messo una rete.** Eseguito alla lettera avrebbe rovesciato una ruling misurata **dentro una
+  fetta che non la nominava nemmeno** — cioe' il modo peggiore di perdere una decisione: non
+  discussa, **EROSA**.
+  🥇 **Due rifiuti in mezza giornata, entrambi pagati: w1 e' andata a leggere `numeric.h` di DUE
+  ircd, w2 e' andata a leggere la ruling. Chiedi «dimmi cosa hai rifiutato di affermare» in OGNI
+  brief — e chiedilo anche a chi SCRIVE le issue.**
   🔴🔴 **IL NOME DEL RAMO NON IDENTIFICA IL PANE — misurato 2026-08-30, e questa riga diceva il
   contrario.** Dispatchata la #1877 al pane **`%16`** (titolo `grappa-worker`, cioè w1 per
   l'handoff), un minuto dopo sull'host compare la worktree **`w2-1877`**. Sembrava che il lavoro
