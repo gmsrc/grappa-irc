@@ -2331,6 +2331,25 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   ORDINE o CONTIGUITA' che il dato non garantisce.** Stessa famiglia del contatore di righe che non
   conta una grandezza stabile, vista da un'altra porta: li' il righello si muoveva, qui presuppone
   una forma che il soggetto non ha.
+- 🔴🔴 **FRATELLO DEL PRECEDENTE, ALTRO ASSE, E VA TENUTO ACCANTO (peluche su PR 2257,
+  2026-09-19 — parole sue: «IL COMMENTO ERA IL BUG»).** Non due letture montate male: **UNA FRASE IN
+  UN COMMENTO che diventa la PREMESSA di un ragionamento che nessuno rimisura.** Misurato: un
+  commento in `home.ts` affermava che l'arm `connection_state_changed` *"refetches /me"*. **Falso** —
+  quell'arm chiama `refetchNetworks()` e basta, e l'unico `refetchUser()` del file stava nell'arm del
+  detach. Su quella frase poggiava la decisione *"sul reattach non serve broadcast"*, quindi il
+  difetto vero (una tab gemella che resta stantia) **non e' stato scritto: e' stato DEDOTTO da una
+  riga di prosa**, e il codice accanto la contraddiceva da sempre.
+  🥇 **Perche' e' peggio di un commento semplicemente stantio: un commento non ha un cancello.**
+  Il codice ha i test, il wire ha `wire_pin`, le migrazioni hanno il preflight — **la prosa non ha
+  niente che la rompa quando diventa falsa**, quindi invecchia in silenzio e il prossimo la legge
+  come corrente. E la legge **PRIMA** del codice, che e' esattamente il motivo per cui e' comoda.
+  🥇 **La cura che ha applicato, ed e' quella da chiedere: il commento si corregge NELLO STESSO
+  COMMIT del difetto che ha causato**, non in un giro di pulizia dopo — *"chi ragiona su questo codice
+  lo legge per primo"*. Un fix che lascia in piedi la frase che lo ha prodotto **riarma la trappola**.
+  🥇 **Nei brief: quando un finding poggia su un commento, chiedi che la frase sia VERIFICATA
+  CONTRO IL CODICE e detto quale delle due si e' mossa.** Vale anche al contrario — un reviewer che
+  cita un commento come prova di comportamento sta citando prosa, non una misura.
+
 - 🔴🔴 **COSTUME NUOVO E NESSUNO DEI PRECEDENTI LO COPRE: DUE LETTURE VALIDE DI UN OGGETTO
   REMOTO **MUTABILE**, PRESE A TEMPI DIVERSI E COMPOSTE COME SE FOSSERO UNA MISURA SOLA (w1,
   2026-09-19, PR 2257 — parole sue, migliori delle mie).** Non lo strumento rotto, non l'artefatto
