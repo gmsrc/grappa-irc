@@ -17594,6 +17594,47 @@ At inset 0 — which is what every engine we can drive reports — `calc(inset +
 exceeds the ungated one; the unit test asserts the sum's shape and refuses an
 equality against `38px`, because that equality is the bug written down.
 
+### 🔴 And none of it ran: the gate was dead on the only phone with the band
+
+The clearance above went to staging and changed nothing, and the reason was
+neither the number nor the placement. iOS 27 **still reports the legacy OS
+token**. Measured on the staging nginx access log — 293 of 293 requests from
+the reporter's device, one single form:
+
+```
+Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15
+(KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1
+```
+
+`iosMajorVersion()` read `IOS_UA_MAJOR.exec(ua) ?? SAFARI_UA_MAJOR.exec(ua)`.
+The OS clause matched, captured **18**, and the `??` short-circuited
+`Version/27.0` away. `18 >= 27` is false, so `hasIos27Band()` returned false,
+the class was never applied, and **every rule gated on it was dead code on the
+device it was written for** — the 16px of the first slice included, which is
+why that attempt "did not fix it" in a way no amount of retuning would have
+addressed. The cure takes the **highest** of the two signals rather than the
+first that matches; verified a no-op against every pre-existing row of the
+device table.
+
+The lesson is about the test, not the regex. **The device table was green the
+whole time.** Every row in it was constructed from what we believed iOS sends,
+so it proved the parser handles the devices *in it* and nothing whatever about
+the one that filed the issue — and no constructed row carried two version
+signals that DISAGREE, which is the entire failure class. The real UA is now a
+row, marked measured, and it is the only row in that table that comes from the
+world rather than from our heads. Its mutation line is the one that was
+missing: *take the first match instead of the highest → that row fails, and
+only it.* A row that passes in both states proves nothing, which is precisely
+how this shipped twice.
+
+Two smaller corrections fall out of the same reading. The row named "installed
+PWA UA" asserted the home-screen app drops `Version/` and `Safari/`, on the
+belief that it always had; the installed PWA sends the **full** UA, so that row
+is relabelled hypothetical and kept only because it is the sole falsifier of
+the OS-token clause. And the iPad known-gap row reasoned by analogy from "the
+way iOS does it" — that analogy is gone, though the gap itself stays open for
+want of a recorded iPadOS standalone UA.
+
 ### What this does not claim
 
 Playwright's webkit does not reproduce iOS Safari, so no gate here can show the
