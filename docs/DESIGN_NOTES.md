@@ -17813,3 +17813,77 @@ a different cure shape (a row cap plus a wire field to admit truncation, or
 pushing the sender exclusion into SQL as `WindowCounts` already does). The
 `Grappa.Mentions` moduledoc carries the warning in code as well, so the fact
 does not depend on an issue surviving.
+<!-- entry #2252 -->
+
+---
+
+## 2026-09-19 — #2252: a /nick refusal filed in a channel, and the numeric each ircd names after the other
+
+A `/nick` refused by bahamut with **435** left the user no explanation where
+he typed it. `POST /networks/:network/nick` answered 202, the frame reached
+the wire, the nick did not move, and the numeric was not dropped — it was
+persisted in the wrong window. Traced off the live session
+(`:erlang.trace/3`, 2026-09-19): `["vjt_", "vjt", "#sniffo", "Cannot change
+to a banned nickname"]`, six rows under `#sniffo`, zero under `$server`.
+
+**435 is in `@active_numerics` now, and the reason it was missing is not that
+somebody forgot a sibling.** Its three neighbours — 432, 433, 437 — are
+denied because their offending token merely LOOKS nick-shaped. 435 carries a
+**real channel**, so `scan_params/2`'s channel-prefix branch wins ahead of
+the nick branch (`numeric_router.ex`, `scan_params/2` → `channel_prefix?/1`)
+and the row lands in a channel window. It is the only member of the
+nick-failure family that can do that, which is why it is the only one that
+misrouted, and why "add the sibling we missed" undersells what the entry is
+for.
+
+### Cite the NUMBER: the two ircds swap these names
+
+The issue was filed as "435 ERR_BANNICKCHANGE". On the ircd that runs all of
+prod that name belongs to a **different numeric**, and this repo already
+says so. The correction is on the record at the issue itself —
+`issues/2252#issuecomment-5741230756`, which also carries the retitle — and
+it was confirmed there against the running ircd independently of the reading
+below, rather than taken on this branch's word.
+
+| | bahamut (Azzurra) | solanum (Libera) |
+|---|---|---|
+| **435** | `ERR_BANONCHAN` (`include/numeric.h:331`) | `ERR_BANNICKCHANGE` (`include/numeric.h:245`) |
+| **437** | `ERR_BANNICKCHANGE` (`include/numeric.h:333`) | `ERR_UNAVAILRESOURCE` (`include/numeric.h:247`) |
+
+solanum's own header admits the crossing — `435` carries the comment
+*"bahamut's ERR_BANONCHAN -- jilles"*. The 437 half was already read from
+source here (DESIGN_NOTES 2026-08, `join_failure.ex`), so importing the
+issue's label would have put two different numerics under one name in one
+file. **A symbolic numeric name is not an identifier across flavours; the
+number is.** Written down because the next reader will copy a title, as this
+branch nearly did — the title is fixed now, but the log outlives the edit.
+
+### The cross-flavour check, which this module requires and which passes
+
+Membership in the deny list is a claim about MEANING on **both** bound ircds,
+not about shape on one (the 485 lesson, and the reason 437 is excluded from
+`JoinFailure.numerics/0` rather than denied). Both emitters were read:
+bahamut `src/m_nick.c:531` with the format at `src/s_err.c:488`, solanum
+`modules/core/m_nick.c:632` with `include/messages.h:164`. Both pass
+`(nick, chname)` after the recipient, so both put
+`[own_nick, rejected_nick, channel, reason]` on the wire for the same
+meaning — a nick change refused because the nick is banned. There is no
+second meaning to keep inert.
+
+### What this deliberately does NOT do
+
+vjt ruled twice in one minute: `$server` first, then *"ancora meglio — nella
+finestra dove hai dato /nick"*. This entry buys the FIRST only. The second is
+a different change — a pending-origin field on the session state in the
+family of `whois_pending`, plus an origin the REST request does not carry
+today — and it improves 432/433/437 with it, so it is worth its own slice
+rather than riding in on a deny-list entry. **The interim is not cosmetic:
+`$server` is where the other three nick failures already land, so a 435 stops
+being the one refusal filed somewhere the user never looked.**
+
+**The labelled-response road is closed on Azzurra, and that is measured, not
+assumed:** on the live session `caps_active` is an EMPTY MapSet and
+`labels_pending` is `%{}` — bahamut negotiates no caps at all, so
+`label_lookup/2` can never hit and the origin has to be remembered
+server-side. Anyone reaching for `labeled-response` to carry the origin
+window should read this line first.
