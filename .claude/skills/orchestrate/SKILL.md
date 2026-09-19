@@ -943,6 +943,24 @@ il ciclo *"edito `cicchetto/src/`, builddo"*, **non per spedire un ramo appena m
 ⇒ **Dopo un merge, `git pull --ff-only` nel checkout PRIMA di `deploy-cic.sh`**, e verifica per
 contenuto dopo. *Ennesima faccia della famiglia: tre segnali di successo concordi — rc, log, mtime —
 che insieme non rispondono alla domanda posta.*
+🥇 **E IL DISCRIMINANTE ESATTO E' DOVE IL COMMIT E' NATO, non "c'e' stato un merge" (pari, 2026-09-19,
+raffinando questa riga dopo che l'aveva applicata di riflesso):**
+- commit nato **SU GITHUB** — un merge di PR lo esegue `gh` lato server — ⇒ **l'albero locale resta
+  indietro finche' non lo TIRI**, e il `pull`/`rebase` prima del build e' obbligatorio;
+- commit nato **QUI**, committato e pushato dal checkout stesso ⇒ **non c'e' niente da tirare**, e un
+  `rebase` difensivo ribasa il vuoto. Misurato quel giorno: `HEAD == origin/main`, `--left-right
+  --count` **0/0**, `porcelain` 0 righe, dopo un mio commit+push locale.
+⚠️ **E prima di credere a un «sono indietro di uno», guarda se sono DUE ALBERI o UNO:**
+`/home/vjt/code/grappa-irc` **E'** `/srv/grappa` (catena `code/grappa-irc -> IRC/grappa-irc ->
+/srv/grappa`, verificata con `readlink -f` ai due lati, stessa stringa). Un albero solo non puo'
+essere indietro rispetto a se' stesso. 🥇 *Li' l'errore del pari fu DEDURRE lo stato dal mio
+messaggio invece di misurarlo — e l'ha detto lui per primo. Un checkout condiviso e' esattamente il
+posto dove lo stato si misura e non si deduce.*
+🔎 **E la stessa domanda decide se `.claude/**` puo' finire nello staging servito: MISURALO.**
+`grep -rn '\.claude' cicchetto/vite.config.ts cicchetto/package.json scripts/deploy-cic.sh` ⇒ **0
+hit**, pos ctrl `src` **10** in `vite.config.ts` ⇒ un commit docs-only non entra nel bundle. **Ma e'
+una regola per-PATH**: se un giorno tocchi un path che il build GUARDA, su `/srv/grappa` locale e
+servito sono la stessa cosa, e va detto a chi deploya **prima**, non dopo.
 🔎 **AN UNCHANGED SERVED HASH IS NOT A FAILED CIC DEPLOY — vite hashes are CONTENT-derived (2026-08-05).**
 Staging rebuilt to the *same* `index-DZvSYJMc.js` because cic deploys are ORTHOGONAL to server deploys and
 the bundle was already current. **What settles it is the MTIME of the actually-served artefact**
