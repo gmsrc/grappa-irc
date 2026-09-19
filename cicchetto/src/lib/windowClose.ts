@@ -1,7 +1,8 @@
-import { patchNetwork, postPart } from "./api";
+import { ApiError, detachNetwork, patchNetwork, postPart } from "./api";
 import { getSubject, token } from "./auth";
 import { channelKey } from "./channelKey";
 import { requestConfirm } from "./confirmDialog";
+import { friendlyApiError } from "./friendlyApiError";
 import { closeQueryWindowState } from "./queryWindows";
 import { forceParted } from "./windowState";
 
@@ -192,5 +193,67 @@ export function confirmDisconnectNetwork(networkSlug: string): void {
     attachments: null,
     choice: null,
     defaultButton: "cancel",
+  });
+}
+
+// issue 2219 — confirm-gated network REMOVE, the inverse of the home
+// page's one-tap connect. Lives beside the disconnect confirm because it
+// is the same shape of question, and stays OFF the rail x deliberately:
+// vjt's ruling puts each destructive verb on the surface that already
+// lists the thing it acts on, so the x keeps meaning park and neither
+// verb is ever one distracted tap away from the other.
+//
+// The body names what SURVIVES rather than what is lost, because that is
+// the true sentence here and the difference decides whether the operator
+// should hesitate: nothing is destroyed, the binding is put away. The
+// dialog is still Cancel-focused (#195) — a reversible action may be
+// mistap-able, but there is no reason to make it easy.
+//
+// Errors land in the CALLER's sink rather than a console.warn. The park
+// behind the x can afford silence (the next render tells the story either
+// way); a removal that silently does nothing leaves a row the operator
+// has asked twice to be rid of, with no clue why it stayed.
+export function confirmRemoveNetwork(
+  networkSlug: string,
+  onError: (message: string) => void,
+): void {
+  requestConfirm({
+    title: "Remove network",
+    body:
+      `Remove ${networkSlug} from your session? Your nick, login details ` +
+      `and autojoin channels are kept — connecting it again restores them.`,
+    confirmLabel: "Remove",
+    onConfirm: () => removeNetwork(networkSlug, onError),
+    alternative: null,
+    attachments: null,
+    choice: null,
+    defaultButton: "cancel",
+  });
+}
+
+// The DELETE behind the confirm. Subject-undefined takes the same safe
+// path `disconnectNetwork` above does: no-op plus a warn, since a token
+// without a subject is the post-logout race and not something to act on.
+function removeNetwork(networkSlug: string, onError: (message: string) => void): void {
+  // Every early exit SPEAKS. `disconnectNetwork` above may return in
+  // silence because the next render tells the story either way; this one
+  // may not, and the two token/subject guards are exits like any other —
+  // returning quietly here would reproduce the very case the sink exists
+  // to prevent, one layer earlier (CLAUDE.md, no silent-swallow).
+  const t = token();
+  if (t === null) {
+    onError("not signed in");
+    return;
+  }
+  if (getSubject() === null) {
+    console.warn(
+      `[/remove] no subject in localStorage for slug=${networkSlug}; skipping (token-without-subject race)`,
+    );
+    onError("not signed in");
+    return;
+  }
+  void detachNetwork(t, networkSlug).catch((err) => {
+    console.warn(`[/remove] DELETE failed for network ${networkSlug}:`, err);
+    onError(err instanceof ApiError ? friendlyApiError(err) : "remove failed");
   });
 }

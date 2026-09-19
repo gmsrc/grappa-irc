@@ -30,6 +30,7 @@ defmodule GrappaWeb.SessionControllerTest do
   alias Grappa.IRC.Identifier
   alias Grappa.{IRCServer, Repo, Visitors}
   alias Grappa.Networks.Credentials
+  alias Grappa.PubSub.Topic
   alias Grappa.Visitors.Visitor
 
   setup do
@@ -335,6 +336,331 @@ defmodule GrappaWeb.SessionControllerTest do
 
       {:ok, _} = IRCServer.wait_for_line(server_b, &String.starts_with?(&1, "NICK"), 5_000)
       assert is_pid(Grappa.Session.whereis({:visitor, visitor.id}, network_b.id))
+    end
+  end
+
+  describe "DELETE /session/networks/:slug (issue 2219 — detach)" do
+    test "detaches a parked network: 204, row kept whole, listings drop it",
+         %{conn: conn} do
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: 6667, slug: "libera")
+
+      credential_fixture(user, network, %{
+        nick: "peluche",
+        sasl_user: "peluche-sasl",
+        password: "s3cret-nickserv",
+        auth_method: :sasl,
+        autojoin_channels: ["#sbiffo"],
+        connection_state: :parked
+      })
+
+      conn
+      |> put_bearer(session.id)
+      |> delete("/session/networks/libera")
+      |> response(204)
+
+      # The row survives with everything the subject authored — the
+      # property that separates this from the admin unbind.
+      assert {:ok, cred} = Credentials.get_credential_by_ids(user.id, network.id)
+      assert %DateTime{} = cred.detached_at
+      assert cred.nick == "peluche"
+      assert cred.sasl_user == "peluche-sasl"
+      assert cred.autojoin_channels == ["#sbiffo"]
+      assert is_binary(cred.password_encrypted)
+
+      # ... and it is no longer one of the subject's networks.
+      networks =
+        build_conn()
+        |> put_bearer(session.id)
+        |> get("/networks")
+        |> json_response(200)
+
+      refute Enum.any?(networks, &(&1["slug"] == "libera"))
+    end
+
+    test "every /networks/:slug route answers the iso 404 afterwards", %{conn: conn} do
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: 6667, slug: "libera")
+      credential_fixture(user, network, %{connection_state: :parked})
+      _ = network
+
+      conn |> put_bearer(session.id) |> delete("/session/networks/libera") |> response(204)
+
+      # `Plugs.ResolveNetwork` is the one gate the whole family passes
+      # through, so proving it here proves the family. A detached network
+      # that stayed readable, sendable and reconnectable would be a hide
+      # that hid nothing.
+      assert build_conn()
+             |> put_bearer(session.id)
+             |> get("/networks/libera/channels")
+             |> json_response(404)
+
+      assert build_conn()
+             |> put_bearer(session.id)
+             |> patch("/networks/libera", %{"connection_state" => "connected"})
+             |> json_response(404)
+    end
+
+    test "parks and quits a LIVE network before detaching it", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, network, cred} = user_with_credential(port, %{})
+      session = session_fixture(user)
+      assert cred.connection_state == :connected
+
+      pid = start_session_for(user, network)
+      :ok = IRCServer.await_handshake(server, 5_000)
+      ref = Process.monitor(pid)
+
+      conn
+      |> put_bearer(session.id)
+      |> delete("/session/networks/" <> network.slug)
+      |> response(204)
+
+      assert {:ok, quit} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "QUIT"), 5_000)
+
+      assert quit =~ "detaching network"
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
+      assert Grappa.Session.whereis({:user, user.id}, network.id) == nil
+
+      assert {:ok, detached} = Credentials.get_credential_by_ids(user.id, network.id)
+      assert detached.connection_state == :parked
+      assert %DateTime{} = detached.detached_at
+    end
+
+    test "404 for a slug this deployment does not carry", %{conn: conn} do
+      {_, session} = user_and_session()
+
+      conn
+      |> put_bearer(session.id)
+      |> delete("/session/networks/nosuchnetwork")
+      |> json_response(404)
+    end
+
+    test "404 for a network somebody else holds — no oracle", %{conn: conn} do
+      {owner, _} = user_and_session()
+      {stranger, stranger_session} = user_and_session()
+      {network, _} = network_with_server(port: 6667, slug: "libera")
+      credential_fixture(owner, network, %{connection_state: :parked})
+
+      conn
+      |> put_bearer(stranger_session.id)
+      |> delete("/session/networks/libera")
+      |> json_response(404)
+
+      # The owner's binding is untouched: the refusal is not a no-op that
+      # happened to hit the wrong row.
+      assert {:ok, cred} = Credentials.get_credential_by_ids(owner.id, network.id)
+      assert cred.detached_at == nil
+      refute stranger.id == owner.id
+    end
+
+    test "404 for a network already detached", %{conn: conn} do
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: 6667, slug: "libera")
+      credential_fixture(user, network, %{connection_state: :parked})
+      _ = network
+
+      conn |> put_bearer(session.id) |> delete("/session/networks/libera") |> response(204)
+
+      build_conn()
+      |> put_bearer(session.id)
+      |> delete("/session/networks/libera")
+      |> json_response(404)
+    end
+
+    test "403 for a visitor — its identity lives on the credential", %{conn: conn} do
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {visitor, network} = visitor_with_network(port)
+      session = visitor_session_fixture(visitor)
+
+      conn
+      |> put_bearer(session.id)
+      |> delete("/session/networks/" <> network.slug)
+      |> json_response(403)
+
+      assert {:ok, cred} = Credentials.get_visitor_credential(visitor.id, network.id)
+      assert cred.detached_at == nil
+    end
+  end
+
+  describe "POST /session/networks (issue 2219 — revive)" do
+    test "re-attaching restores the nick, SASL user and autojoin", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: port, slug: "libera", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network.id) end)
+
+      credential_fixture(user, network, %{
+        nick: "peluche",
+        sasl_user: "peluche-sasl",
+        auth_method: :none,
+        autojoin_channels: ["#sbiffo"],
+        connection_state: :parked
+      })
+
+      conn |> put_bearer(session.id) |> delete("/session/networks/libera") |> response(204)
+
+      build_conn()
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "libera"})
+      |> response(204)
+
+      {:ok, nick_line} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK"), 5_000)
+      assert nick_line =~ "peluche"
+
+      # The whole promise of the reversible verb, in one assertion: what
+      # comes back is the credential that went away, not a blank one.
+      assert {:ok, revived} = Credentials.get_credential_by_ids(user.id, network.id)
+      assert revived.detached_at == nil
+      assert revived.nick == "peluche"
+      assert revived.sasl_user == "peluche-sasl"
+      assert revived.autojoin_channels == ["#sbiffo"]
+      assert is_pid(Grappa.Session.whereis({:user, user.id}, network.id))
+    end
+
+    test "revives a network OUTSIDE the visitor_enabled tier", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: port, slug: "private", visitor_enabled: false)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network.id) end)
+
+      credential_fixture(user, network, %{nick: "peluche", connection_state: :parked})
+
+      conn
+      |> put_bearer(session.id)
+      |> delete("/session/networks/private")
+      |> response(204)
+
+      # The allowlist asks whether a STRANGER may attach this network. The
+      # detached row is standing proof that this subject already held it,
+      # so the revive runs ahead of that gate — otherwise an admin-bound
+      # network would be hideable and never restorable, which is a delete
+      # wearing a hide's label.
+      build_conn()
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "private"})
+      |> response(204)
+
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK"), 5_000)
+      assert {:ok, revived} = Credentials.get_credential_by_ids(user.id, network.id)
+      assert revived.detached_at == nil
+      assert revived.nick == "peluche"
+    end
+
+    test "re-attaching ANNOUNCES itself on the user topic (issue 2219 F2)", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: port, slug: "libera", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network.id) end)
+
+      credential_fixture(user, network, %{nick: "peluche", connection_state: :parked})
+
+      conn |> put_bearer(session.id) |> delete("/session/networks/libera") |> response(204)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      build_conn()
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "libera"})
+      |> response(204)
+
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK"), 5_000)
+
+      # The detach announcing itself while the attach stayed silent left a
+      # second tab offering a network the account already holds — one tap
+      # from a request the server refuses. `connection_state_changed` does
+      # not cover it: it refreshes the network list and never the `/me`
+      # envelope the `$home` rows come from.
+      nid = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{
+                         kind: :network_attached,
+                         network_id: ^nid,
+                         network_slug: "libera"
+                       }
+                     },
+                     5_000
+    end
+
+    test "a FRESH accretion announces the same way", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: port, slug: "beta", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network.id) end)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "beta"})
+      |> response(204)
+
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK"), 5_000)
+
+      # One signal for both ways in. A client cannot rely on an event that
+      # fires for the re-attach and not for the first attach, and splitting
+      # them is how one of the two later stops firing.
+      nid = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       payload: %{kind: :network_attached, network_id: ^nid, network_slug: "beta"}
+                     },
+                     5_000
+    end
+
+    test "a REFUSED spawn announces nothing", %{conn: conn} do
+      {user, session} = user_and_session()
+      # No IRC server behind this port, and a network total of zero admits
+      # nothing: the spawn is refused, the accreted credential rolls back,
+      # and an attachment that did not survive the request must not be
+      # reported as one.
+      {network, _} =
+        network_with_server(port: IRCServer.pick_unused_port(), slug: "gamma", visitor_enabled: true)
+
+      {:ok, _} =
+        Grappa.Networks.update_network_settings(network, %{max_concurrent_user_sessions: 0})
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "gamma"})
+      |> json_response(503)
+
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :network_attached}}, 300
+    end
+
+    test "a network never held stays refused by the allowlist", %{conn: conn} do
+      {_, session} = user_and_session()
+      {_, _} = network_with_server(port: 6667, slug: "private", visitor_enabled: false)
+
+      # The negative control for the arm above: bypassing the gate is a
+      # property of the DETACHED ROW, not of the route.
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "private"})
+      |> json_response(403)
+    end
+
+    test "a detached network is offered back on GET /me", %{conn: conn} do
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: 6667, slug: "private", visitor_enabled: false)
+      credential_fixture(user, network, %{connection_state: :parked})
+      _ = network
+
+      conn
+      |> put_bearer(session.id)
+      |> delete("/session/networks/private")
+      |> response(204)
+
+      me = build_conn() |> put_bearer(session.id) |> get("/me") |> json_response(200)
+      home = me["home_data"]
+
+      refute Enum.any?(home["networks"], &(&1["slug"] == "private"))
+      assert Enum.any?(home["available_networks"], &(&1["slug"] == "private"))
     end
   end
 end

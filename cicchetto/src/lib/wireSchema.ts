@@ -635,6 +635,7 @@ export const S_NetworksCredentialsAdminWireT = {
     connection_state: S_NetworksCredentialConnectionState,
     connection_state_reason: { u: ["s", "z"] },
     connection_state_changed_at: { u: ["s", "z"] },
+    detached_at: { u: ["s", "z"] },
     inserted_at: "s",
     updated_at: "s",
     last_seen_at: { u: ["s", "z"] },
@@ -780,6 +781,16 @@ export const S_NetworksWireHomeData = {
     networks: { a: S_NetworksWireHomeNetworkRow },
     available_networks: { a: S_NetworksWireAvailableNetworkRow },
   },
+} as const;
+
+// Grappa.Networks.Wire.network_attached_event/0
+export const S_NetworksWireNetworkAttachedEvent = {
+  o: { kind: { l: "network_attached" }, network_id: "i", network_slug: "s" },
+} as const;
+
+// Grappa.Networks.Wire.network_detached_event/0
+export const S_NetworksWireNetworkDetachedEvent = {
+  o: { kind: { l: "network_detached" }, network_id: "i", network_slug: "s" },
 } as const;
 
 // Grappa.Networks.Wire.network_with_nick_json/0

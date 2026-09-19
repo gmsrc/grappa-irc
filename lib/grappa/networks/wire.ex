@@ -294,6 +294,45 @@ defmodule Grappa.Networks.Wire do
         }
 
   @typedoc """
+  issue 2219 — wire payload for `kind: "network_detached"`, broadcast on
+  `Topic.user(subject_label)` when a subject detaches a network.
+
+  Carries the identity of the network that left and nothing else. There
+  is no state to report: a detach of an already-parked credential moves
+  no `connection_state`, and the row it describes is, by the time a
+  consumer reads this, absent from `GET /networks` and from the `$home`
+  envelope. So the payload names what went, and the client re-reads the
+  two surfaces that own the answer.
+  """
+  @type network_detached_event :: %{
+          kind: :network_detached,
+          network_id: integer(),
+          network_slug: String.t()
+        }
+
+  @typedoc """
+  issue 2219 — wire payload for `kind: "network_attached"`, the twin of
+  `network_detached` above, broadcast when a network JOINS the subject's
+  set: a fresh accretion or the re-attach of something detached.
+
+  It exists because the detach announcing itself and the attach staying
+  silent is worse than neither announcing. A second tab that did not
+  initiate the re-attach would keep the network under
+  `available_networks` with no attached row, and a third-party client
+  would have no signal at all — `connection_state_changed` fires on the
+  `:parked → :connected` flip but refreshes only `GET /networks`, never
+  the `/me` envelope the `$home` rows come from.
+
+  Same three fields and the same contract as its twin: it carries no
+  state, and the client re-reads the two surfaces that own the answer.
+  """
+  @type network_attached_event :: %{
+          kind: :network_attached,
+          network_id: integer(),
+          network_slug: String.t()
+        }
+
+  @typedoc """
   Wire payload for `kind: "connection_state_changed"` broadcast on
   `Topic.user(user_name)`. Cic's `userTopic.ts` consumes this to refresh
   the per-network connection-state badge + the HomePane row in-place
@@ -555,6 +594,24 @@ defmodule Grappa.Networks.Wire do
       at: WireTime.iso8601_or_nil(c.connection_state_changed_at),
       network: home_network_row(c, nick)
     }
+  end
+
+  @doc """
+  issue 2219 — builds the `network_detached` payload. `:network` MUST be
+  preloaded (same convention as every builder in this module).
+  """
+  @spec network_detached_event(Credential.t()) :: network_detached_event()
+  def network_detached_event(%Credential{network: %Network{slug: slug}} = c) do
+    %{kind: :network_detached, network_id: c.network_id, network_slug: slug}
+  end
+
+  @doc """
+  issue 2219 — builds the `network_attached` payload. `:network` MUST be
+  preloaded (same convention as every builder in this module).
+  """
+  @spec network_attached_event(Credential.t()) :: network_attached_event()
+  def network_attached_event(%Credential{network: %Network{slug: slug}} = c) do
+    %{kind: :network_attached, network_id: c.network_id, network_slug: slug}
   end
 
   @doc """

@@ -6,6 +6,32 @@ defmodule GrappaWeb.SessionController do
       network to the authenticated subject + spawn its upstream session.
       For a visitor the identity stays ONE `%Visitor{}` spanning both
       networks; for a user it binds an additional user credential.
+    * `DELETE /session/networks/:slug` — issue 2219, the inverse that was
+      missing: DETACH the network from the caller's own session. Parks +
+      quits it, then marks the credential detached. Everything the
+      subject authored survives, and re-POSTing the same slug brings it
+      all back.
+
+  ## issue 2219 — why the two verbs sit in different scopes
+
+  The POST rides `[:api, :authn, :request_budget]`; the DELETE rides
+  `:full_session` as well. That asymmetry is deliberate and the router
+  comment at the `:full_session` block states the rule it follows —
+  everything there can change what the account IS. Accreting a network
+  adds a binding a per-client token may then use; detaching one takes a
+  binding away from every client the account has, which is credential
+  management.
+
+  ## issue 2219 — the DELETE is refused to visitors, on purpose
+
+  A visitor's identity LIVES on its credentials: `representative_visitor_
+  credential/1` is where the nick comes from and `visitor_registered?/1`
+  derives permanence from the per-network secret. Detaching a visitor's
+  only network would therefore hide the identity rather than a binding,
+  which is `DELETE /me`'s job and not this verb's. The 80% that fits is
+  the park-and-mark mechanism; the 20% that does not is whose identity
+  the row anchors, and that is the domain boundary. A visitor gets 403
+  until someone rules otherwise.
 
   ## #211 phase 6 — the disconnect ⇄ reconnect pair is RETIRED
 
@@ -56,6 +82,16 @@ defmodule GrappaWeb.SessionController do
 
   require Logger
 
+  # issue 2219 — the QUIT text the upstream sees when a detach parks a
+  # live network. Says what happened rather than naming the product verb:
+  # the channel reads this line, not the operator.
+  @detach_quit_reason "detaching network"
+
+  # issue 2219 — the QUIT text for the revive rollback. Distinct from the
+  # deliberate detach above so an upstream log says which of the two put
+  # the session down.
+  @revive_failed_quit_reason "reconnect failed, network detached"
+
   @doc """
   `POST /session/networks` — attach + spawn an available `visitor_enabled`
   network for the authenticated subject. Body: `{"network": "<slug>"}`.
@@ -72,6 +108,52 @@ defmodule GrappaWeb.SessionController do
   end
 
   def add_network(_, _), do: {:error, :bad_request}
+
+  @doc """
+  `DELETE /session/networks/:slug` — issue 2219: detach the network from
+  the caller's OWN session. 204 on success.
+
+  404 for a slug that does not exist AND for one the caller does not
+  hold attached — one answer for both, the same no-oracle posture
+  `Plugs.ResolveNetwork` takes on the iso boundary, so the route cannot
+  be used to enumerate which networks a deployment carries. 403 for a
+  visitor (see the moduledoc).
+
+  Detaching an already-detached network is the 404 arm, not a success:
+  the caller named a network that is not one of theirs, and that is the
+  same sentence for every reason it might not be.
+  """
+  @spec detach_network(Plug.Conn.t(), map()) ::
+          Plug.Conn.t()
+          | {:error,
+             :forbidden
+             | :bad_request
+             | :not_found
+             | :db_unavailable
+             | Ecto.Changeset.t()}
+  def detach_network(conn, %{"slug" => slug}) when is_binary(slug) and slug != "" do
+    dispatch_detach(conn, slug)
+  end
+
+  def detach_network(_, _), do: {:error, :bad_request}
+
+  # Subject-union narrow, mirroring `dispatch_accretion/2` above. The
+  # visitor clause is an explicit refusal rather than a missing clause,
+  # so the boundary is readable at the door instead of inferred from a
+  # FunctionClauseError.
+  @spec dispatch_detach(Plug.Conn.t(), String.t()) :: Plug.Conn.t() | {:error, term()}
+  defp dispatch_detach(%{assigns: %{current_subject: {:user, %User{} = user}}} = conn, slug) do
+    with {:ok, network} <- Networks.get_network_by_slug(slug),
+         {:ok, credential} <- Credentials.get_attached_credential(user, network),
+         {:ok, _} <- Networks.detach(credential, @detach_quit_reason) do
+      send_resp(conn, :no_content, "")
+    end
+  end
+
+  defp dispatch_detach(%{assigns: %{current_subject: {:visitor, %Visitor{}}}}, _),
+    do: {:error, :forbidden}
+
+  defp dispatch_detach(_, _), do: {:error, :forbidden}
 
   # ---------------------------------------------------------------------------
   # Subject-union narrow (#481) — one door, two credential paths. Matches on
@@ -109,7 +191,7 @@ defmodule GrappaWeb.SessionController do
   # ---------------------------------------------------------------------------
 
   @spec add_user_network(Plug.Conn.t(), User.t(), String.t()) ::
-          {:ok, pid()}
+          {:ok, Credential.t()}
           | {:error,
              :network_not_visitor_enabled
              | :network_unconfigured
@@ -117,10 +199,91 @@ defmodule GrappaWeb.SessionController do
              | :resolve_failed
              | term()}
   defp add_user_network(conn, %User{} = user, slug) do
+    with {:ok, credential} <- attach_user_network(conn, user, slug) do
+      # issue 2219 — ONE announcement, after the session is live, for both
+      # the revive and the fresh bind. Announcing inside `reattach/1`
+      # instead would announce an attachment that a failed spawn then
+      # rolls back; announcing per-branch would be two call sites saying
+      # the same thing, which is how one of them later stops saying it.
+      :ok = Networks.broadcast_network_attached(credential)
+      {:ok, credential}
+    end
+  end
+
+  @spec attach_user_network(Plug.Conn.t(), User.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, term()}
+  defp attach_user_network(conn, %User{} = user, slug) do
+    case fetch_detached_credential(user, slug) do
+      {:ok, credential} -> revive_user_network(conn, user, credential)
+      {:error, :not_detached} -> accrete_user_network(conn, user, slug)
+    end
+  end
+
+  # issue 2219 — REVIVE takes priority over accrete, and it runs BEFORE
+  # the `visitor_enabled` gate rather than after it.
+  #
+  # That ordering is the whole promise of the detach. The allowlist asks
+  # "may a stranger attach this network"; a detached credential is
+  # standing proof that this subject already held it, however it was
+  # bound. Running the gate first would make an admin-bound network
+  # hideable and never restorable — a delete wearing a hide's label —
+  # and it grants nothing: the row cannot name a network the subject was
+  # not given, so the worst a revive can reach is exactly what it lost.
+  @spec fetch_detached_credential(User.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :not_detached}
+  defp fetch_detached_credential(%User{} = user, slug) do
+    with {:ok, network} <- Networks.get_network_by_slug(slug),
+         {:ok, %Credential{detached_at: %DateTime{}} = credential} <-
+           Credentials.get_credential(user, network) do
+      {:ok, credential}
+    else
+      _ -> {:error, :not_detached}
+    end
+  end
+
+  # The revive twin of `spawn_or_rollback/4`, and it must NOT be that
+  # function. Its rollback is `unbind_credential_resilient/2`, a DELETE:
+  # firing it here would destroy the nick, secrets, perform list and
+  # autojoin the subject detached precisely in order to keep, turning a
+  # refused spawn into the data loss the reversible verb exists to avoid.
+  #
+  # The rollback that belongs here is the detach itself. `Networks.
+  # detach/2` parks whatever came up, stops the session and re-marks the
+  # row, so a failed revive lands exactly where it started — which is
+  # also why it is safe to run unconditionally on the error arm.
+  @spec revive_user_network(Plug.Conn.t(), User.t(), Credential.t()) ::
+          {:ok, Credential.t()} | {:error, term()}
+  defp revive_user_network(conn, %User{} = user, %Credential{} = credential) do
+    with {:ok, revived} <- Networks.reattach(credential) do
+      case spawn_revived(conn, user, revived) do
+        {:ok, _} ->
+          {:ok, revived}
+
+        {:error, _} = err ->
+          _ = Networks.detach(revived, @revive_failed_quit_reason)
+          err
+      end
+    end
+  end
+
+  @spec spawn_revived(Plug.Conn.t(), User.t(), Credential.t()) ::
+          {:ok, pid()} | {:error, term()}
+  defp spawn_revived(conn, %User{} = user, %Credential{} = credential) do
+    with {:ok, plan} <- resolve_user_plan(user, credential),
+         {:ok, pid} <- NetworkSpawn.orchestrate(conn, {:user, user}, credential, plan),
+         {:ok, _} <- Networks.connect(credential) do
+      {:ok, pid}
+    end
+  end
+
+  @spec accrete_user_network(Plug.Conn.t(), User.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, term()}
+  defp accrete_user_network(conn, %User{} = user, slug) do
     with {:ok, network} <- Networks.fetch_accretable_network(slug),
          :ok <- ensure_user_not_attached(user, network),
-         {:ok, credential} <- bind_user_credential(user, network) do
-      spawn_or_rollback(conn, user, network, credential)
+         {:ok, credential} <- bind_user_credential(user, network),
+         {:ok, _} <- spawn_or_rollback(conn, user, network, credential) do
+      {:ok, credential}
     end
   end
 

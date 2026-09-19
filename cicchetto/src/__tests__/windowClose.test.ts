@@ -17,6 +17,7 @@ vi.mock(import("../lib/api"), async (importOriginal) => {
   return {
     ...actual,
     patchNetwork: vi.fn().mockResolvedValue({}),
+    detachNetwork: vi.fn().mockResolvedValue(undefined),
     postPart: vi.fn().mockResolvedValue(undefined),
     setOn401Handler: vi.fn(),
     listNetworks: vi.fn().mockResolvedValue([]),
@@ -304,5 +305,81 @@ describe("dismissPseudoWindow — drops a pseudo-row; the landing is bucket E's"
     dismissPseudoWindow("freenode", "#inv");
     expect(setSelectedChannelMock).not.toHaveBeenCalled();
     expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
+  });
+});
+
+// issue 2219 — the REMOVE verb behind the `$home` confirm. The interesting
+// part is not that it calls DELETE; it is that the failure reaches the
+// caller. `disconnectNetwork` above can afford a console.warn because the
+// next render tells the story either way, but a removal that silently does
+// nothing leaves a row the operator has asked twice to be rid of.
+describe("removeNetwork — the detach behind the confirm (issue 2219)", () => {
+  it("DELETEs the network for the authenticated subject", async () => {
+    const api = await import("../lib/api");
+    const auth = await import("../lib/auth");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u-1", name: "alice", is_admin: false }),
+    );
+    auth.setToken("utok");
+
+    const { confirmRemoveNetwork } = await import("../lib/windowClose");
+    const onError = vi.fn();
+    confirmRemoveNetwork("libera", onError);
+
+    const { confirmRequest, acceptConfirm } = await import("../lib/confirmDialog");
+    expect(confirmRequest()).not.toBeNull();
+    // Cancel-focused, per #195: a reversible action may be mistap-able,
+    // but there is no reason to make it easy.
+    expect(confirmRequest()?.defaultButton).toBe("cancel");
+    // The body names what SURVIVES, which is the true sentence for a
+    // reversible verb and the one that decides whether to hesitate.
+    expect(confirmRequest()?.body).toMatch(/kept/i);
+
+    acceptConfirm();
+    await Promise.resolve();
+
+    expect(api.detachNetwork).toHaveBeenCalledWith("utok", "libera");
+    expect(auth.logout).not.toHaveBeenCalled();
+  });
+
+  it("does nothing until the confirm is accepted", async () => {
+    const api = await import("../lib/api");
+    const auth = await import("../lib/auth");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u-1", name: "alice", is_admin: false }),
+    );
+    auth.setToken("utok");
+
+    const { confirmRemoveNetwork } = await import("../lib/windowClose");
+    confirmRemoveNetwork("libera", vi.fn());
+
+    const { dismissConfirm } = await import("../lib/confirmDialog");
+    dismissConfirm();
+    await Promise.resolve();
+
+    expect(api.detachNetwork).not.toHaveBeenCalled();
+  });
+
+  it("hands a failed DELETE to the caller's sink", async () => {
+    const api = await import("../lib/api");
+    const auth = await import("../lib/auth");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u-1", name: "alice", is_admin: false }),
+    );
+    auth.setToken("utok");
+    vi.mocked(api.detachNetwork).mockRejectedValueOnce(new Error("boom"));
+
+    const { confirmRemoveNetwork } = await import("../lib/windowClose");
+    const onError = vi.fn();
+    confirmRemoveNetwork("libera", onError);
+
+    const { acceptConfirm } = await import("../lib/confirmDialog");
+    acceptConfirm();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(onError).toHaveBeenCalled();
   });
 });

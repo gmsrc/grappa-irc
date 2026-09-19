@@ -1191,13 +1191,13 @@ defmodule Grappa.Visitors do
       when is_binary(slug) and (is_binary(source_ip) or is_nil(source_ip)) do
     with {:ok, network} <- Networks.fetch_accretable_network(slug),
          :ok <- ensure_not_attached(visitor, network),
-         {:ok, _} <- attach_credential(visitor, network),
+         {:ok, credential} <- attach_credential(visitor, network),
          {:ok, plan} <- resolve_accreted_plan(visitor, network) do
       capacity_input = accretion_capacity_input(visitor, network.id, source_ip)
 
       case SpawnOrchestrator.spawn({:visitor, visitor.id}, network.id, plan, capacity_input) do
-        {:ok, :spawned, pid} -> {:ok, pid}
-        {:ok, :already_started, pid} -> {:ok, pid}
+        {:ok, :spawned, pid} -> announce_attached(credential, pid)
+        {:ok, :already_started, pid} -> announce_attached(credential, pid)
         {:ok, :ignored} -> {:error, {:start_failed, :ignore}}
         {:error, _} = err -> err
       end
@@ -1308,6 +1308,19 @@ defmodule Grappa.Visitors do
   # `:resolve_failed`-class abort via the caller's `with`.
   @spec attach_credential(Visitor.t(), Networks.Network.t()) ::
           {:ok, Credential.t()} | {:error, :no_identity | :db_unavailable | Ecto.Changeset.t()}
+  # issue 2219 — a network joined this visitor's set, so say so on the
+  # visitor's own user-rooted topic. The USER door announces the same
+  # thing for the same reason, and the two had to move together: a signal
+  # that exists for one subject and not the other is a signal a client
+  # cannot rely on, and `$home` is one component for both (#211 phase 6
+  # ruling A). Announced here rather than at the credential write because
+  # a spawn that never comes up must not be reported as an attachment.
+  @spec announce_attached(Credential.t(), pid()) :: {:ok, pid()}
+  defp announce_attached(%Credential{} = credential, pid) do
+    :ok = Networks.broadcast_network_attached(credential)
+    {:ok, pid}
+  end
+
   defp attach_credential(%Visitor{id: id}, %Networks.Network{id: network_id}) do
     case Credentials.representative_visitor_credential(id) do
       {:ok, %Credential{nick: nick, ident: ident, realname: realname}} ->

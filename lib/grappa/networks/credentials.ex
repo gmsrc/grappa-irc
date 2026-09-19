@@ -1386,9 +1386,129 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  Detaches `user` from `network`: deletes the user's credential row and
+  The attached-only sibling of `get_credential/2` (issue 2219).
+
+  `get_credential/2` answers "is there a row", which is the right
+  question for the admin unbind door and for every internal resolver
+  that holds a `(user_id, network_id)` pair. This one answers "is this
+  one of the subject's networks", which is the right question at the
+  subject-facing REST boundary — `Plugs.ResolveNetwork`'s iso gate and
+  the controllers that read a network the caller names.
+
+  The two must stay distinct. Filtering `get_credential/2` itself would
+  have hidden a detached credential from `Admin.CredentialsController`,
+  so an operator could no longer unbind the very row the subject had
+  put out of its own sight.
+  """
+  @spec get_attached_credential(User.t(), Network.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found}
+  def get_attached_credential(%User{id: user_id}, %Network{id: network_id}) do
+    query =
+      from(c in Credential,
+        where: c.user_id == ^user_id and c.network_id == ^network_id and is_nil(c.detached_at)
+      )
+
+    case Repo.one(query) do
+      %Credential{} = c -> {:ok, c}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  issue 2219 — BOTH sides of the attachment axis in ONE query, for the
+  caller that needs both.
+
+  `Networks.home_data_for_user/1` is that caller: the `$home` envelope
+  lists the attached networks AND offers the detached ones back, so it
+  would otherwise ask the same partition twice. #1679 made the boot cost
+  a pinned constant (`GrappaWeb.BootCostTest` asserts the query count of
+  `GET /me` to the integer), and a second read would have spent one of
+  those on a partition already in hand — measured, not feared: the pin
+  moved from 7 to 8 the moment the second query existed.
+
+  So the filter is an `Enum.split_with/2` at the caller rather than a
+  second `WHERE`, and `list_credentials_for_user_id/1` above stays the
+  attached-only reader for everybody who wants one side.
+
+  A detached network has to be re-offerable EVEN WHEN it is not in the
+  `visitor_enabled` self-serve tier: the operator already granted this
+  subject that binding, the row still holds their nick and secrets, and a
+  hide the subject cannot undo would not be a hide.
+  """
+  @spec list_every_credential_for_user_id(Ecto.UUID.t()) :: [Credential.t()]
+  def list_every_credential_for_user_id(user_id) when is_binary(user_id) do
+    query =
+      from(c in Credential,
+        where: c.user_id == ^user_id,
+        preload: [:network, :avatar_upload]
+      )
+
+    Repo.all(query)
+  end
+
+  @doc """
+  issue 2219 — marks a credential DETACHED: the subject stops holding this
+  binding, the row keeps everything it holds.
+
+  Row-level only, and that is the point of the split: parking the network
+  and stopping its `Session.Server` is `Grappa.Networks.detach/2`'s job,
+  because this context must not depend on `Networks` (the edge runs the
+  other way). A caller reaching this function without going through that
+  verb would strand a live session behind a binding nobody can see — so
+  do not add one.
+
+  Idempotent: re-detaching an already-detached credential rewrites the
+  timestamp rather than refusing, since the caller's intent is already
+  satisfied and the only observable is a field no surface reads for
+  ordering.
+
+  Through `Repo.BusyRetry` — the same web-reachable 503 door
+  `remove_autojoin_channel/3` uses (#1374 P-S8), and here the naked
+  alternative is worse than usual: by the time this runs, `detach/2` has
+  already QUIT upstream and stopped the session, so a raised SQLITE_BUSY
+  would leave the network DOWN and still ATTACHED, with a 500 as the only
+  account of it.
+  """
+  @spec mark_detached(Credential.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def mark_detached(%Credential{} = credential) do
+    Repo.BusyRetry.run(fn ->
+      credential
+      |> Credential.attachment_changeset(%{
+        detached_at: DateTime.truncate(DateTime.utc_now(), :second)
+      })
+      |> Repo.update()
+    end)
+  end
+
+  @doc """
+  issue 2219 — the inverse of `mark_detached/1`: the subject holds this
+  binding again, with the nick, `sasl_user`, secrets, perform list and
+  autojoin it was detached with.
+
+  Clears the column and nothing else — the state it comes back in is
+  whatever `Networks.detach/2` left, and that verb owns the claim about
+  which one that is.
+  """
+  @spec mark_attached(Credential.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def mark_attached(%Credential{} = credential) do
+    Repo.BusyRetry.run(fn ->
+      credential
+      |> Credential.attachment_changeset(%{detached_at: nil})
+      |> Repo.update()
+    end)
+  end
+
+  @doc """
+  UNBINDS `user` from `network`: deletes the user's credential row and
   stops the running `Session.Server`, if any. Idempotent — a
   non-existent binding still returns `:ok`.
+
+  issue 2219 — this word used to be "detaches", and it cannot be any
+  more: `mark_detached/1` now owns that verb for the REVERSIBLE axis.
+  This one destroys the row, and with it the nick, `sasl_user`, the three
+  encrypted secrets, the perform list and the autojoin set.
 
   The network row is NEVER touched (GH #105). A network whose last
   binding is removed simply persists as shared per-deployment infra;
@@ -1468,8 +1588,17 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  Returns every credential bound to `user`, with networks preloaded
-  for display.
+  Returns every ATTACHED credential bound to `user`, with networks
+  preloaded for display.
+
+  issue 2219 — a detached row is excluded. This is the subject-facing
+  listing (`GET /networks`, `GET /boot`, the `$home` rows), so "the
+  subject's networks" is the question it answers, and a network the
+  subject hid is not one of them. The two enumerate-to-stop callers
+  (`AccountDeletion`, `Operator.delete_user`) are complete on this list
+  by construction: `Networks.detach/2` stops the session before it marks
+  the row, so a detached credential never has one left to stop, and the
+  row itself goes by FK cascade rather than from this enumeration.
   """
   @spec list_credentials_for_user(User.t()) :: [Credential.t()]
   def list_credentials_for_user(%User{id: user_id}), do: list_credentials_for_user_id(user_id)
@@ -1487,7 +1616,7 @@ defmodule Grappa.Networks.Credentials do
   def list_credentials_for_user_id(user_id) when is_binary(user_id) do
     query =
       from(c in Credential,
-        where: c.user_id == ^user_id,
+        where: c.user_id == ^user_id and is_nil(c.detached_at),
         preload: [:network, :avatar_upload]
       )
 
@@ -1495,8 +1624,11 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  Returns the `[Network.t()]` bound to a `subject` — user OR visitor —
-  with `:network` preloaded. Subject-generic wrapper over the two
+  Returns the `[Network.t()]` ATTACHED to a `subject` — user OR visitor —
+  with `:network` preloaded. issue 2219: the user branch excludes
+  detached rows, for the reason `list_credentials_for_user/1` states;
+  the visitor branch has nothing to exclude, since the detach verb is
+  refused to visitors. Subject-generic wrapper over the two
   subject-scoped credential readers (`WHERE user_id ==` /
   `WHERE visitor_id ==`), so a caller that only needs the network set
   (e.g. #229's per-session umode cold-snapshot, which fans out one push
@@ -1505,7 +1637,11 @@ defmodule Grappa.Networks.Credentials do
   """
   @spec list_networks_for_subject(Grappa.Session.subject()) :: [Network.t()]
   def list_networks_for_subject({:user, user_id}) when is_binary(user_id) do
-    query = from(c in Credential, where: c.user_id == ^user_id, preload: [:network])
+    query =
+      from(c in Credential,
+        where: c.user_id == ^user_id and is_nil(c.detached_at),
+        preload: [:network]
+      )
 
     query
     |> Repo.all()
@@ -1520,8 +1656,14 @@ defmodule Grappa.Networks.Credentials do
 
   @doc """
   Returns every credential the bouncer is meant to bring up at boot —
-  `connection_state in [:connected, :failing]` — with `:network`
-  preloaded.
+  `connection_state in [:connected, :failing]`, attached — with
+  `:network` preloaded.
+
+  issue 2219 — `is_nil(detached_at)` is belt AND braces, and it is worth
+  the clause: detach parks before it marks, so the state filter alone
+  already excludes a detached row today. The invariant lives in a verb,
+  not in the schema, and the cost of it ever being broken here is a
+  session spawned for a binding the subject cannot see or stop.
 
   Used by `Grappa.Bootstrap` to spawn one `Grappa.Session.Server` per
   bound (user, network) at boot. Sub-task 2j swapped the boot path
@@ -1569,7 +1711,9 @@ defmodule Grappa.Networks.Credentials do
     # explicit-worthy.
     query =
       from(c in Credential,
-        where: c.connection_state in [:connected, :failing] and not is_nil(c.user_id),
+        where:
+          c.connection_state in [:connected, :failing] and not is_nil(c.user_id) and
+            is_nil(c.detached_at),
         order_by: [asc: c.inserted_at, asc: c.user_id, asc: c.network_id],
         preload: [network: :servers]
       )
@@ -1642,7 +1786,11 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  Returns a map of `connection_state` → USER-credential row count. Used
+  Returns a map of `connection_state` → ATTACHED USER-credential row
+  count (issue 2219 — a detached row is counted nowhere, so that the
+  breakdown keeps matching the set `list_credentials_for_all_users/0`
+  actually spawns; the honesty line is the whole point of this reader).
+  Used
   by `Grappa.Bootstrap.run/0` to surface honest startup logs when zero
   credentials are `:connected` (e.g. all parked after
   T32 disconnect) — the pre-T-4 "no credentials bound — running
@@ -1665,7 +1813,7 @@ defmodule Grappa.Networks.Credentials do
   def count_by_state do
     query =
       from(c in Credential,
-        where: not is_nil(c.user_id),
+        where: not is_nil(c.user_id) and is_nil(c.detached_at),
         group_by: c.connection_state,
         select: {c.connection_state, count()}
       )

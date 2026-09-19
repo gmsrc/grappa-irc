@@ -83,6 +83,7 @@ const userCredential = (): AdminCredential =>
     connection_state: "connected",
     connection_state_reason: null,
     connection_state_changed_at: null,
+    detached_at: null,
     inserted_at: "2026-05-16T00:00:00Z",
     updated_at: "2026-05-16T00:00:00Z",
     last_seen_at: "2026-08-10T00:00:00Z",

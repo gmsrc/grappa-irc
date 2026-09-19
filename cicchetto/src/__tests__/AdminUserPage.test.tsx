@@ -100,6 +100,7 @@ const CRED: AdminCredential = {
   connection_state: "connected",
   connection_state_reason: null,
   connection_state_changed_at: null,
+  detached_at: null,
   inserted_at: "2026-05-31T00:00:00Z",
   updated_at: "2026-05-31T00:00:00Z",
   live_state: {

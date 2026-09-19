@@ -685,8 +685,14 @@ defmodule Grappa.Networks do
   functions differ only in HOW they list attached credentials.
   """
   @spec home_data_for_user(User.t()) :: Wire.home_data()
-  def home_data_for_user(%User{id: user_id} = user) do
-    credentials = Credentials.list_credentials_for_user(user)
+  def home_data_for_user(%User{id: user_id}) do
+    # issue 2219 — ONE read of the partition, split here rather than
+    # asked for twice. See `list_every_credential_for_user_id/1` for why
+    # a second query was not an option.
+    {credentials, detached} =
+      user_id
+      |> Credentials.list_every_credential_for_user_id()
+      |> Enum.split_with(&is_nil(&1.detached_at))
 
     pairs =
       Enum.map(credentials, fn cred ->
@@ -695,9 +701,20 @@ defmodule Grappa.Networks do
 
     attached_slugs = MapSet.new(credentials, fn cred -> cred.network.slug end)
 
+    # issue 2219 — a network this user DETACHED is offered back here, and
+    # it is offered whether or not the operator put it in the
+    # `visitor_enabled` self-serve tier. The tier answers "may a stranger
+    # attach this"; the detached row answers "did this subject already
+    # have it", and the second question is the one re-attaching asks. An
+    # admin-bound network left out of this union would be hideable and
+    # never restorable, which is a delete wearing a hide's label.
+    detached_slugs = Enum.map(detached, & &1.network.slug)
+
     available_slugs =
       list_visitor_enabled()
       |> Enum.map(& &1.slug)
+      |> Enum.concat(detached_slugs)
+      |> Enum.uniq()
       |> Enum.reject(&MapSet.member?(attached_slugs, &1))
 
     Wire.home_data(pairs, available_slugs)
@@ -1064,6 +1081,141 @@ defmodule Grappa.Networks do
   # addition rather than silently `FunctionClauseError`-ing.
   def disconnect(%Credential{connection_state: other}, _),
     do: raise(ArgumentError, "Networks.disconnect: unhandled connection_state #{inspect(other)}")
+
+  @doc """
+  issue 2219 — DETACHES a credential: the subject stops holding this
+  binding, and every field they authored survives for the day they put
+  it back.
+
+  The inverse of `POST /session/networks`, which had none. The rail has
+  hidden a parked network since #1985, but `$home` kept listing it and
+  the row kept the nick, `sasl_user`, the three encrypted secrets, the
+  perform list and the autojoin set — so "I joined the wrong network"
+  had no answer short of `DELETE /me`.
+
+  Ordered park-then-mark, and the order is load-bearing. The session is
+  stopped and the row transitioned BEFORE it is marked. Marking first
+  would leave a live session behind a binding no subject-facing reader
+  returns — a session nobody can see, stop or reconnect, which is the
+  wedge `spawn_or_rollback/4` exists to prevent on the way in.
+
+  **A detached credential always comes to rest `:parked`, from every
+  starting state**, so `reattach/1` hands the accretion door the same
+  shape a freshly bound credential has. Three arms reach that rest:
+
+    * `:connected` / `:failing` → `disconnect/2`, which QUITs upstream,
+      stops the session, writes the transition and broadcasts it.
+    * `:failed` → no QUIT (there is no link to say goodbye on) but the
+      row still moves, and the move is BROADCAST. That broadcast is not
+      bookkeeping: `networkParked.ts` deliberately keeps a `:failed`
+      network IN the sidebar (#1985 — a failure is something the
+      operator must see), so the operator may be looking at a window on
+      it right now, and the `:failed → :parked` event is what drives
+      cic's bucket-D redirect home before the row goes.
+    * `:parked` → nothing to move and nothing to announce; #1985 already
+      took it out of the sidebar, so no selection can be pointing at it.
+
+  **The session stop is UNCONDITIONAL**, not gated on the state, for the
+  reason `Credentials.unbind_credential/2` gives for doing the same: the
+  column and the live pid are separate sources of truth and they can
+  disagree (CLAUDE.md). A row reading `:parked` whose `Session.Server` is
+  in fact alive is exactly the case this verb must not wave through — it
+  would hide the session behind an invisible binding. `stop_session/3` is
+  idempotent, so on the two arms that have already stopped one it costs a
+  no-op.
+
+  Idempotent on an already-detached credential: re-detaching rewrites the
+  timestamp rather than refusing. No production caller reaches that arm —
+  `SessionController.detach_network/2` resolves through
+  `get_attached_credential/2` and 404s first — so it is a property of the
+  function rather than a case being handled.
+  """
+  @spec detach(Credential.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def detach(%Credential{} = cred, reason) when is_binary(reason) do
+    cred = preload_subject_and_network(cred)
+
+    with {:ok, detached} <- cred |> park_for_detach(reason) |> Credentials.mark_detached() do
+      broadcast_network_detached(detached)
+      {:ok, detached}
+    end
+  end
+
+  # The three arms onto `:parked`. Each returns a credential whose
+  # associations are still loaded — `disconnect/2` preloads the same ones
+  # and `Repo.update!` carries them onto what it returns — so the caller
+  # never has to rebuild a struct for the broadcast.
+  @spec park_for_detach(Credential.t(), String.t()) :: Credential.t()
+  defp park_for_detach(%Credential{connection_state: state} = cred, reason)
+       when state in [:connected, :failing] do
+    {:ok, updated} = disconnect(cred, reason)
+    updated
+  end
+
+  defp park_for_detach(%Credential{connection_state: :failed} = cred, reason) do
+    :ok = Session.stop_session(subject_of(cred), cred.network_id, reason)
+    updated = transition!(cred, :parked, reason)
+    broadcast_state_change(updated, :failed, :parked, reason)
+    updated
+  end
+
+  defp park_for_detach(%Credential{connection_state: :parked} = cred, reason) do
+    :ok = Session.stop_session(subject_of(cred), cred.network_id, reason)
+    cred
+  end
+
+  @doc """
+  issue 2219 — the inverse of `detach/2`: the subject holds this binding
+  again, with everything it was detached with.
+
+  Writes the column and nothing else — no QUIT, no spawn, no broadcast.
+  The caller that revives a credential is the accretion door
+  (`GrappaWeb.SessionController.add_network/2`), which then runs the
+  SAME `spawn_or_rollback/4` a freshly bound credential runs, and that
+  path already emits `connection_state_changed` at `:parked →
+  :connected`. A broadcast here would be a second event for one change,
+  the REV-J M15 shape this codebase folded away once already.
+
+  The credential comes back `:parked` from EVERY starting state, because
+  `detach/2` brings all three onto that rest — including `:failed`, which
+  it parks rather than preserving, so a re-attach never resumes carrying a
+  failure the subject already chose to put away. That is also where the
+  accretion door binds a new credential, so revive and bind hand the spawn
+  path the same shape.
+  """
+  @spec reattach(Credential.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def reattach(%Credential{} = cred), do: Credentials.mark_attached(cred)
+
+  @doc """
+  issue 2219 — announces that a network JOINED the subject's set, on the
+  subject's own user-rooted topic.
+
+  The twin of the detach broadcast, and it is not symmetry for its own
+  sake. Without it the detach announces and the attach does not, which is
+  worse than neither announcing: a second tab that did not initiate the
+  re-attach keeps the network under `available_networks` with no attached
+  row, and a third-party client gets no signal at all.
+
+  `connection_state_changed` does NOT cover this. It fires on the
+  `:parked → :connected` flip, but the only surface it drives a refresh of
+  is `GET /networks`; the `$home` rows come from the `/me` envelope, and
+  nothing refetches that. The detach arm is the one place in `userTopic.ts`
+  that calls `refetchUser()`, and this event is what gives the other
+  direction the same reach.
+
+  Called from the accretion door rather than from `reattach/1`, and the
+  distinction is the ordering: a revive that then fails to spawn is rolled
+  back by re-detaching it, so announcing at the write would announce an
+  attachment that does not survive the request. The door announces once,
+  after the session is live.
+  """
+  @spec broadcast_network_attached(Credential.t()) :: :ok
+  def broadcast_network_attached(%Credential{} = cred) do
+    cred = preload_subject_and_network(cred)
+    topic = Topic.user(subject_label_of(cred))
+    :ok = Grappa.PubSub.broadcast_event(topic, Wire.network_attached_event(cred))
+  end
 
   @doc """
   Server-internal: marks a credential `:failed` after a hard upstream
@@ -1516,5 +1668,21 @@ defmodule Grappa.Networks do
     # one broadcast.
     payload = Wire.connection_state_changed_event(cred, from, to, reason, nick)
     :ok = Grappa.PubSub.broadcast_event(topic, payload)
+  end
+
+  # issue 2219 — a detach is not a state transition, so it cannot ride
+  # `connection_state_changed`. Detaching an already-parked network moves
+  # no state at all, and inventing a transition to carry the news would
+  # put a lie on the wire for the sake of reusing a payload.
+  #
+  # What a second tab does with it: `GET /networks` and the `$home`
+  # envelope both stop returning the network, so a tab still showing its
+  # `[Reconnect]` chip is one tap from a 404 — `Plugs.ResolveNetwork`
+  # answers the iso 404 for a detached binding by design. The event is
+  # what turns that into a row that simply goes away.
+  @spec broadcast_network_detached(Credential.t()) :: :ok
+  defp broadcast_network_detached(%Credential{} = cred) do
+    topic = Topic.user(subject_label_of(cred))
+    :ok = Grappa.PubSub.broadcast_event(topic, Wire.network_detached_event(cred))
   end
 end

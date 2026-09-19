@@ -226,6 +226,7 @@ defmodule Grappa.Networks.Credential do
           connection_state: connection_state() | nil,
           connection_state_reason: String.t() | nil,
           connection_state_changed_at: DateTime.t() | nil,
+          detached_at: DateTime.t() | nil,
           away_reason: String.t() | nil,
           away_since: DateTime.t() | nil,
           profile_age: String.t() | nil,
@@ -325,6 +326,28 @@ defmodule Grappa.Networks.Credential do
     field :connection_state, Ecto.Enum, values: @connection_states, default: :connected
     field :connection_state_reason, :string
     field :connection_state_changed_at, :utc_datetime
+
+    # issue 2219 — the subject DETACHED this binding: it keeps every
+    # user-authored field (nick, sasl_user, the three encrypted secrets,
+    # perform list, autojoin) and stops being one of the subject's
+    # networks until they re-attach. `nil` ⟺ attached, which is why the
+    # column needed no backfill.
+    #
+    # A SEPARATE AXIS from `connection_state`, deliberately. Those four
+    # values answer "what is the upstream link doing" (#1675); this one
+    # answers "does the subject still hold this binding at all". A
+    # detached row is always `:parked` — `Networks.detach/2` brings every
+    # starting state, `:failed` included, onto that rest before it writes
+    # here — but the reverse does not hold, and that asymmetry
+    # is the whole reason this is not a fifth `connection_state`: every
+    # verb in that state machine pattern-matches the closed set, and a
+    # visibility fact smuggled into it would have to grow a clause in
+    # each one.
+    #
+    # Written ONLY by `attachment_changeset/2`, never by the wide
+    # `changeset/2` — same narrow-verb discipline as `away_changeset/3`
+    # and `connection_state_changeset/2` below.
+    field :detached_at, :utc_datetime
 
     # GH #417 — persisted EXPLICIT away so it survives a session crash /
     # `:transient` respawn / upstream reconnect. Both nil ⟺ not away.
@@ -574,6 +597,27 @@ defmodule Grappa.Networks.Credential do
     ])
     |> validate_required([:connection_state, :connection_state_changed_at])
     |> validate_change(:connection_state_reason, &Identity.safe_line_token/2)
+  end
+
+  @doc """
+  Narrow changeset for the issue-2219 attachment axis: sets or clears
+  `detached_at` and touches nothing else.
+
+  Deliberately NOT a clause on the wide `changeset/2`. That one casts
+  every user-authored field, so an attrs map that happened to carry a
+  `detached_at` key — from a REST body, a test fixture, a future admin
+  form — could hide or restore a binding as a side effect of editing a
+  nick. The verbs that own this axis (`Credentials.mark_detached/2` and
+  `mark_attached/2`) are the only writers, and they come through here.
+
+  Same shape as `connection_state_changeset/2` above: cast only the field
+  the verb owns, validate only what applies to it. No
+  `validate_required/2` — `nil` is the meaningful "attached" value, so
+  requiring it would make re-attaching impossible.
+  """
+  @spec attachment_changeset(t(), map()) :: Ecto.Changeset.t()
+  def attachment_changeset(credential, attrs) do
+    cast(credential, attrs, [:detached_at])
   end
 
   @doc """

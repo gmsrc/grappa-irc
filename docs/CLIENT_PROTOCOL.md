@@ -560,6 +560,61 @@ never render a clear.
 
 Both are `string | null`. Check `protocol_version >= 23`.
 
+### 4e. A network left or joined the session (issue 2219, v28)
+
+`DELETE /session/networks/:slug` detaches a network from the caller's own
+session: it parks and quits the network, then marks the binding detached.
+Everything the subject authored survives — nick, SASL user, the stored
+secrets, the perform list and the autojoin set — and `POST
+/session/networks` on the same slug brings all of it back. It is the
+inverse of the accretion verb, not a delete.
+
+204 on success. 404 covers both a slug this deployment does not carry and
+one the caller does not hold attached, deliberately: one answer for every
+reason, so the route cannot be used to enumerate networks. 403 for a
+visitor, whose identity lives on the credential.
+
+The detach is announced on the user topic:
+
+```json
+{"kind": "network_detached", "network_id": 7, "network_slug": "libera"}
+```
+
+🔴 **This is NOT a `connection_state_changed`, and it carries no state.**
+Detaching a network that was already parked moves no `connection_state` at
+all, so there is no transition to report. Re-read the two surfaces that
+own the answer instead: `GET /networks` for the sidebar and `GET /me` for
+the `$home` rows. Both stop returning the network, and every
+`/networks/:slug/...` route answers 404 for it from that moment — so a
+client still showing a `[Reconnect]` chip for it is one tap from a refusal.
+
+A detached network reappears in `home_data.available_networks`, whether or
+not the operator put it in the self-serve tier: your own detached binding
+is always re-attachable. One `POST /session/networks` with that slug
+restores the credential and spawns the session.
+
+The other direction has its own event, and you need it:
+
+```json
+{"kind": "network_attached", "network_id": 7, "network_slug": "libera"}
+```
+
+It fires whenever a network JOINS the session — a fresh accretion or the
+re-attach of something detached — for both subject kinds. 🔴 **Do not try
+to infer an attach from `connection_state_changed`.** That event fires on
+the `:parked → :connected` flip, but it describes a LINK and the
+attachment set is a different fact: a client that refreshes only its
+network list on it will keep showing the network under
+`available_networks` with no attached row. Re-read the same two surfaces
+this event's twin asks for.
+
+Neither event carries state, and that is the contract: they name what
+moved, and `GET /networks` plus `GET /me` own the answer.
+
+Check `protocol_version >= 28`. ⚠️ There is no 27 — the shape moved twice
+before this version was published, and the pin gate requires a number per
+move. Nothing ever spoke 27.
+
 ---
 
 ## 5. Wire format

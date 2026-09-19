@@ -68,10 +68,19 @@ const exports = moduleRoot(() => {
     if (Object.keys(live).length === 0) return m.home_data;
     // Overlay live patches on the envelope rows by slug. Unknown slugs
     // (broadcast for a network not in the cold-load envelope — e.g.
-    // accreted mid-session) are dropped here; the `connection_state_changed`
-    // handler also `refetchNetworks()`/refetches /me so a new row lands on
-    // the next envelope. `available_networks` rides through unchanged (live
-    // patches only touch attached-network rows).
+    // accreted mid-session) are dropped here, and what brings the new row
+    // in is a refetch of THIS envelope.
+    //
+    // issue 2219 — that used to read "the `connection_state_changed`
+    // handler also refetches /me", and it was false: that arm calls
+    // `refetchNetworks()` only, which refreshes `GET /networks` and never
+    // the `/me` envelope these rows come from. The sentence mattered
+    // because it was the whole argument for not announcing an attach. The
+    // events that DO refetch /me are `network_attached` and
+    // `network_detached`, and they are the reason a dropped slug here is
+    // now a gap of one round-trip rather than until the next cold load.
+    // `available_networks` rides through unchanged (live patches only
+    // touch attached-network rows).
     const merged = m.home_data.networks.map((row) => live[row.slug] ?? row);
     return { networks: merged, available_networks: m.home_data.available_networks };
   });

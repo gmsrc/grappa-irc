@@ -1231,6 +1231,27 @@ export type WireUserEvent =
       // payload, one broadcast.
       network: HomeNetworkRow;
     }
+  | {
+      // issue 2219 — a network left this session. NOT a
+      // `connection_state_changed`: detaching an already-parked network
+      // moves no state at all, and inventing a transition to carry the
+      // news would put a lie on the wire for the sake of reusing a
+      // payload. By the time this lands, `GET /networks` and the `$home`
+      // envelope have both stopped returning the network, so the arm names
+      // what went and re-reads the two surfaces that own the answer.
+      kind: "network_detached";
+      network_id: number;
+      network_slug: string;
+    }
+  | {
+      // issue 2219 — the twin: a network JOINED this session, whether by a
+      // fresh accretion or by re-attaching something detached. Carries no
+      // state for the same reason its twin does not; re-read `GET /networks`
+      // and `GET /me`.
+      kind: "network_attached";
+      network_id: number;
+      network_slug: string;
+    }
   | ({ kind: "whois_bundle" } & WhoisBundle)
   // M3b — the peer-avatar fetch is a detached task, so it can finish after
   // the `whois_bundle` it belongs to has already been pushed. This arm is
@@ -3010,6 +3031,26 @@ export async function addNetwork(token: string, networkSlug: string): Promise<vo
     method: "POST",
     headers: buildHeaders(token),
     body: JSON.stringify({ network: networkSlug }),
+  });
+  if (!res.ok) throw await readError(res);
+}
+
+// issue 2219 — the inverse `POST /session/networks` never had: DETACH a
+// network from this session (`DELETE /session/networks/:slug`). 204 on
+// success. The credential survives with the nick, SASL user, secrets,
+// perform list and autojoin it was detached with, and `addNetwork` on the
+// same slug brings all of it back — which is why the UI calls this a
+// remove and not a delete.
+//
+// 404 covers both an unknown slug and a network this account does not hold
+// attached; 403 is a visitor, whose identity lives on the credential and
+// so cannot detach it. The server broadcasts `network_detached` on the
+// user topic, so sibling tabs drop the row without this caller plumbing a
+// refetch to them.
+export async function detachNetwork(token: string, networkSlug: string): Promise<void> {
+  const res = await fetch(`/session/networks/${encodeURIComponent(networkSlug)}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
 }
