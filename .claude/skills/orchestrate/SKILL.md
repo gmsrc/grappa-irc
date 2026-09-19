@@ -877,6 +877,24 @@ The daemon-survives-clear design means the *record* is never lost. The **listene
   🥇 **Regola: una modifica dell'orchestratrice a `.claude/skills/**` o a qualunque file tracciato del
   checkout condiviso si COMMITTA nel turno in cui la fai** — sono docs, main è lecito. Lasciarla nel
   working tree la espone a ogni `reset`/`checkout`/`stash` di chiunque altro lavori lì, worker E umano.
+  🔴🔴 **E IL COMMIT NON BASTA: SU UN CHECKOUT CHE E' ANCHE UN DEPLOY, UN COMMIT LOCALE NON PUSHATO
+  NON E' UN APPUNTO PRIVATO — E' DEBITO DI QUALCUN ALTRO (misurato 2026-09-19).** Avevo deciso di
+  tenere le lezioni committate ma **locali**, con la ragione *"tanto il checkout del Pi e' quello che
+  leggo a ogni `/orchestrate`, quindi mi raggiungono gia'; pushare mette una worker 1 indietro per
+  rumore mio"*. La ragione e' vera e **incompleta**: `/srv/grappa` **E' STAGING** (bind-mount), quindi
+  non e' solo cio' che leggo io, e' cio' che un altro **deve poter deployare**. Cinque commit miei lo
+  tenevano **5 avanti**, e il pari ha dovuto rebasarlo per far partire un deploy. **Il conto di una
+  mia scelta e' arrivato a lui.**
+  🥇 **Regola: una lezione docs-only si PUSHA nel turno in cui la committi.** Prima, pero', **verifica
+  che quel path non sia gatato invece di assumerlo**: qui `SKILL.md` non lo e', lo e' `lib/` via
+  `test/scripts/*.bats` (misurato: l'unico path citato e' `lib/auto-clear-watch.sh`) — la regola e'
+  **per-PATH**, gia' scritta piu' sopra, e questo e' il posto in cui si applica.
+  ⚠️ **`origin` e' https e il Pi non ha credential helper** ⇒ il push nudo muore *"could not read
+  Username"*. Forma: `git -c credential.helper='!gh auth git-credential' push origin HEAD:refs/heads/main`,
+  **e `git fetch origin` SUBITO dopo** — vale qui come per ogni merge fatto fuori da `git push`.
+  🥇 **E dopo che un ALTRO ha rebasato i tuoi commit, si verificano per CONTENUTO, mai per sha**: il
+  rebase le riscrive, quindi un confronto di sha accusa un lavoro intatto. Un hit per lezione con
+  **pos ctrl**, **neg ctrl** su una frase inventata, e il `--numstat` del file.
   ⚠️ **`/home/vjt/code/grappa-irc` È `/srv/grappa`** (symlink, stesso `.git` inode): due nomi, un solo
   albero. **Non leggere due path diversi come due checkout diversi** prima di aver risolto il symlink.
   🥇 *E quando l'umano ti dice cosa ha rotto invece di lasciartelo scoprire dal disco, il reflog te lo
