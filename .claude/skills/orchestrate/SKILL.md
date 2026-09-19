@@ -252,6 +252,19 @@ is DELETE-then-write, never append-only:
   never becomes a line in #grappa. Summarising, paraphrasing and "just for context" all count as
   relaying. Report the OUTCOME of work in the channel that owns the work — never the conversation
   that produced it. This is not a style preference; he classed it critical and non-negotiable.
+  🥇🥇 **COROLLARIO MISURATO 2026-09-19, E CHIUDE IL BUCO CHE IL DIVIETO LASCIAVA: VINCOLA ANCHE
+  L'EVIDENZA CHE UN PARI TI GIRA PER GIUSTIFICARE UNA MISURA.** Avevo chiesto al pari se una domanda
+  fosse ancora davanti a vjt o fosse stata scrollata; per dimostrare lo scavalco mi ha girato
+  **il testo dei DM** che vjt gli aveva scritto su un thread diverso. La misura era giusta e il
+  verdetto pure — **ma il contenuto non ci entrava**: a stabilire lo scavalco bastava *"ha ingaggiato
+  un ALTRO thread alle 14:36"*.
+  🥇 **Regola: l'evidenza di uno scavalco e' TIMESTAMP + FATTO STRUTTURALE** (altro thread / altro
+  interlocutore / DM invece di canale), **mai la citazione.** Vale nei due versi — non chiederla, e
+  non girarla — **e vincola la lane di lavoro quanto i canali**: il divieto non parla solo di cosa
+  POSTI, parla di cosa fai CIRCOLARE.
+  🥇 *Il pari l'ha incassato e messo a verbale dal suo lato nello stesso turno. Quando una
+  correzione chiude da entrambi i lati, dillo e fermati li': allargarla e' il modo piu' veloce per
+  farla rifiutare.*
 - 🔴 **BRIEF + `/caveman` ON IRC, ALWAYS (vjt 10:17 *"sempre /caveman full perdio"*, restated 10:33
   *"devi essere BRIEF e /CAVEMAN, puoi scrivere anche questo in modo permanente"*).** 2–3 lines,
   OUTCOME ONLY. Mezmerize — a self-hoster reading #grappa, not an audience for your reasoning —
