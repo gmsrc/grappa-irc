@@ -13361,6 +13361,46 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "435 (deny-listed) files a /nick refusal on $server, never in the ban channel (issue 2252)" do
+      # The regression the deny list exists to prevent, at the layer that
+      # writes the row. Pre-fix the param scan resolved this to
+      # `{:channel, "#sniffo"}` and SIX refusals were persisted there on
+      # prod (2026-09-19) — the user only found them by opening a channel
+      # he was not typing in. Feeding it post-handshake is safe in a way
+      # 432/433 are not: those two are the AuthFSM's nick-rejection path
+      # (`auth_fsm.ex:582`), 435 has no handler outside the router.
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, network, _} = setup_user_and_network(port)
+
+      topic = Topic.channel(user.name, network.slug, "$server")
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, topic)
+
+      pid = start_session_for(user, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+      IRCServer.feed(server, ":irc.test.org 435 vjt_ vjt #sniffo :Cannot change to a banned nickname\r\n")
+
+      assert_message_event(
+        kind: :notice,
+        body: "Cannot change to a banned nickname",
+        channel: "$server",
+        network: network.slug,
+        meta: %{
+          numeric: 435,
+          severity: :error,
+          raw_params: ["vjt_", "vjt", "#sniffo", "Cannot change to a banned nickname"]
+        }
+      )
+
+      [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
+      assert row.meta.numeric == 435
+
+      # The half that would have caught the bug: nothing under the channel
+      # token the numeric merely NAMES.
+      assert [] == Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "401 ERR_NOSUCHNICK with NO open window is redirected to $server (#640)" do
       # #640 — a raw 401 for a nick the operator has NO query window with (a
       # /ctcp or /ping to a nonexistent nick opened none) scans syntactically

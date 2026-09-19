@@ -85,7 +85,11 @@ defmodule Grappa.Session.NumericRouterTest do
   # dotless A-line is never a query destination) is unchanged — the unprimed
   # branch persists to $server — but it is now proven at its new owner, in
   # `event_router_test.exs`, not here.
-  @active_numerics [4, 42, 263, 410, 421, 432, 433, 437, 461, 472, 512, 734] ++
+  # issue 2252 — 435 joined the nick-failure siblings. It is the only one
+  # of them whose params carry a CHANNEL, so it is the only one the param
+  # scan could file in a channel window; the property below pins its
+  # membership, the wire-shape test pins what it used to route to.
+  @active_numerics [4, 42, 263, 410, 421, 432, 433, 435, 437, 461, 472, 512, 734] ++
                      (Enum.to_list(211..250) -- [221]) ++
                      Enum.to_list(200..210) ++
                      [261, 262] ++
@@ -388,6 +392,25 @@ defmodule Grappa.Session.NumericRouterTest do
     test "432 ERR_ERRONEUSNICKNAME: bad nick is NOT a query destination" do
       m = msg(432, ["vjt", "bad_nick", "Erroneous nickname"])
       assert {:server, nil} = NumericRouter.route(m, state())
+    end
+
+    test "435: the channel you are banned in is NOT the window for a /nick refusal (issue 2252)" do
+      # The params are the MEASURED ones, traced off the live Azzurra
+      # session on 2026-09-19 (`:erlang.trace/3` on the session pid):
+      # nick `vjt_` asked for `vjt` and is banned in `#sniffo`.
+      #
+      # 435 differs in KIND from its nick-failure siblings above, which is
+      # why it misrouted where they do not: their offending token is merely
+      # nick-SHAPED, while 435 carries a real CHANNEL at `params[2]`
+      # (bahamut ERR_BANONCHAN `src/m_nick.c:531` +
+      # `src/s_err.c:488`; solanum ERR_BANNICKCHANGE
+      # `modules/core/m_nick.c:632` + `include/messages.h:164` — the two
+      # ircds SWAP these names with 437, so the number is the identifier).
+      # `scan_params/2` prefers a channel-prefix token over a nick-shaped
+      # one, so pre-fix this resolved to `{:channel, "#sniffo"}` and filed
+      # a NICK failure in a channel the user was not typing in.
+      m = msg(435, ["vjt_", "vjt", "#sniffo", "Cannot change to a banned nickname"])
+      assert {:server, nil} = NumericRouter.route(m, state(own_nick: "vjt_"))
     end
 
     test "421 ERR_UNKNOWNCOMMAND: unknown verb is NOT a query destination" do
