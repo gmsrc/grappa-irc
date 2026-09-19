@@ -235,13 +235,21 @@ export function confirmRemoveNetwork(
 // path `disconnectNetwork` above does: no-op plus a warn, since a token
 // without a subject is the post-logout race and not something to act on.
 function removeNetwork(networkSlug: string, onError: (message: string) => void): void {
+  // Every early exit SPEAKS. `disconnectNetwork` above may return in
+  // silence because the next render tells the story either way; this one
+  // may not, and the two token/subject guards are exits like any other —
+  // returning quietly here would reproduce the very case the sink exists
+  // to prevent, one layer earlier (CLAUDE.md, no silent-swallow).
   const t = token();
-  if (!t) return;
-  const subject = getSubject();
-  if (subject === null) {
+  if (t === null) {
+    onError("not signed in");
+    return;
+  }
+  if (getSubject() === null) {
     console.warn(
       `[/remove] no subject in localStorage for slug=${networkSlug}; skipping (token-without-subject race)`,
     );
+    onError("not signed in");
     return;
   }
   void detachNetwork(t, networkSlug).catch((err) => {

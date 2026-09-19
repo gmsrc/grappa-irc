@@ -132,8 +132,13 @@ defmodule Grappa.Networks.DetachTest do
       {user, network, fresh} = user_with_credential(6667, @authored)
       {:ok, _} = Networks.detach(park(fresh), "detaching network")
 
+      # `home_data_for_user/1` reads the whole partition once and splits it
+      # here rather than asking twice — the boot cost is a pinned constant
+      # (#1679), so this is the shape the offer list is built from.
       assert [%Credential{network: %{slug: slug}}] =
-               Credentials.list_detached_credentials_for_user_id(user.id)
+               user.id
+               |> Credentials.list_every_credential_for_user_id()
+               |> Enum.reject(&is_nil(&1.detached_at))
 
       assert slug == network.slug
     end
@@ -163,6 +168,72 @@ defmodule Grappa.Networks.DetachTest do
       assert %DateTime{} = detached.detached_at
     end
 
+    test "a FAILED network is parked too, and the move is announced" do
+      {user, network, fresh} = user_with_credential(6667, @authored)
+
+      failed =
+        fresh
+        |> Ecto.Changeset.change(%{
+          connection_state: :failed,
+          connection_state_reason: "k-line: trial",
+          connection_state_changed_at: DateTime.truncate(DateTime.utc_now(), :second)
+        })
+        |> Repo.update!()
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      assert {:ok, detached} = Networks.detach(failed, "detaching network")
+
+      # Rest state is `:parked` from EVERY arm, so a re-attach never resumes
+      # carrying a failure the subject already chose to put away.
+      assert detached.connection_state == :parked
+      assert %DateTime{} = detached.detached_at
+
+      # And the move is BROADCAST, which is not bookkeeping: `networkParked.ts`
+      # keeps a failed network IN the sidebar on purpose, so the operator may
+      # be looking at a window on it, and this event is what redirects them
+      # home before the row goes.
+      nid = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       payload: %{
+                         kind: :connection_state_changed,
+                         network_id: ^nid,
+                         from: :failed,
+                         to: :parked
+                       }
+                     },
+                     500
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       payload: %{kind: :network_detached, network_id: ^nid}
+                     },
+                     500
+    end
+
+    test "an ALREADY-PARKED row with a live session still has it stopped" do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, network, cred} = user_with_credential(port, @authored)
+
+      pid = start_session_for(user, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+      ref = Process.monitor(pid)
+
+      # The column says parked while the pid is alive. That disagreement is
+      # NOT hypothetical bookkeeping — CLAUDE.md names DB state and live state
+      # as separate sources of truth, and `unbind_credential/2` stops
+      # unconditionally for exactly this reason. Gating the stop on the state
+      # would hide this session behind a binding no reader returns.
+      parked = park(cred)
+      assert is_pid(Grappa.Session.whereis({:user, user.id}, network.id))
+
+      assert {:ok, detached} = Networks.detach(parked, "detaching network")
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+      assert Grappa.Session.whereis({:user, user.id}, network.id) == nil
+      assert %DateTime{} = detached.detached_at
+    end
+
     test "re-detaching an already-detached network succeeds and re-broadcasts" do
       {user, network, fresh} = user_with_credential(6667, @authored)
       {:ok, first} = Networks.detach(park(fresh), "detaching network")
@@ -189,7 +260,7 @@ defmodule Grappa.Networks.DetachTest do
 
       # Back in the subject's own listings, and out of the offer list.
       assert [%Credential{}] = Credentials.list_credentials_for_user(user)
-      assert Credentials.list_detached_credentials_for_user_id(user.id) == []
+      assert Enum.all?(Credentials.list_every_credential_for_user_id(user.id), &is_nil(&1.detached_at))
       assert {:ok, %Credential{}} = Credentials.get_attached_credential(user, network)
     end
 

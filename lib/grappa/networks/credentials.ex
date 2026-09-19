@@ -1461,14 +1461,24 @@ defmodule Grappa.Networks.Credentials do
   timestamp rather than refusing, since the caller's intent is already
   satisfied and the only observable is a field no surface reads for
   ordering.
+
+  Through `Repo.BusyRetry` — the same web-reachable 503 door
+  `remove_autojoin_channel/3` uses (#1374 P-S8), and here the naked
+  alternative is worse than usual: by the time this runs, `detach/2` has
+  already QUIT upstream and stopped the session, so a raised SQLITE_BUSY
+  would leave the network DOWN and still ATTACHED, with a 500 as the only
+  account of it.
   """
-  @spec mark_detached(Credential.t()) :: {:ok, Credential.t()} | {:error, Ecto.Changeset.t()}
+  @spec mark_detached(Credential.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def mark_detached(%Credential{} = credential) do
-    credential
-    |> Credential.attachment_changeset(%{
-      detached_at: DateTime.truncate(DateTime.utc_now(), :second)
-    })
-    |> Repo.update()
+    Repo.BusyRetry.run(fn ->
+      credential
+      |> Credential.attachment_changeset(%{
+        detached_at: DateTime.truncate(DateTime.utc_now(), :second)
+      })
+      |> Repo.update()
+    end)
   end
 
   @doc """
@@ -1476,16 +1486,18 @@ defmodule Grappa.Networks.Credentials do
   binding again, with the nick, `sasl_user`, secrets, perform list and
   autojoin it was detached with.
 
-  Clears the column and nothing else. The credential comes back
-  `:parked` (detach parked it), which is exactly the state the accretion
-  door binds a fresh credential in before it spawns — so the revive path
-  and the bind path hand `spawn_or_rollback/4` the same shape.
+  Clears the column and nothing else — the state it comes back in is
+  whatever `Networks.detach/2` left, and that verb owns the claim about
+  which one that is.
   """
-  @spec mark_attached(Credential.t()) :: {:ok, Credential.t()} | {:error, Ecto.Changeset.t()}
+  @spec mark_attached(Credential.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def mark_attached(%Credential{} = credential) do
-    credential
-    |> Credential.attachment_changeset(%{detached_at: nil})
-    |> Repo.update()
+    Repo.BusyRetry.run(fn ->
+      credential
+      |> Credential.attachment_changeset(%{detached_at: nil})
+      |> Repo.update()
+    end)
   end
 
   @doc """

@@ -336,8 +336,9 @@ defmodule Grappa.Networks.Credential do
     # A SEPARATE AXIS from `connection_state`, deliberately. Those four
     # values answer "what is the upstream link doing" (#1675); this one
     # answers "does the subject still hold this binding at all". A
-    # detached row is always `:parked` — `Networks.detach/2` parks before
-    # it writes here — but the reverse does not hold, and that asymmetry
+    # detached row is always `:parked` — `Networks.detach/2` brings every
+    # starting state, `:failed` included, onto that rest before it writes
+    # here — but the reverse does not hold, and that asymmetry
     # is the whole reason this is not a fifth `connection_state`: every
     # verb in that state machine pattern-matches the closed set, and a
     # visibility fact smuggled into it would have to grow a clause in

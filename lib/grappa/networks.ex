@@ -1093,46 +1093,75 @@ defmodule Grappa.Networks do
   perform list and the autojoin set — so "I joined the wrong network"
   had no answer short of `DELETE /me`.
 
-  Ordered park-then-mark, and the order is load-bearing. `disconnect/2`
-  QUITs upstream, stops the `Session.Server` and writes the transition;
-  only then does the row get marked. Marking first would leave a live
-  session behind a binding no subject-facing reader returns — a session
-  nobody can see, stop or reconnect, which is the wedge
-  `spawn_or_rollback/4` exists to prevent on the way in.
+  Ordered park-then-mark, and the order is load-bearing. The session is
+  stopped and the row transitioned BEFORE it is marked. Marking first
+  would leave a live session behind a binding no subject-facing reader
+  returns — a session nobody can see, stop or reconnect, which is the
+  wedge `spawn_or_rollback/4` exists to prevent on the way in.
 
-  A credential that is already `:parked` or `:failed` skips the park (it
-  has nothing left to stop) and is marked directly; `disconnect/2` would
-  refuse it with `:not_connected`, which is the right answer to "please
-  disconnect this" and the wrong one to "please detach this".
+  **A detached credential always comes to rest `:parked`, from every
+  starting state**, so `reattach/1` hands the accretion door the same
+  shape a freshly bound credential has. Three arms reach that rest:
 
-  Idempotent on an already-detached credential — re-detaching is a
-  no-op-shaped success, not a refusal, because the caller's intent is
-  already true. It still broadcasts: a second tab that has not yet seen
-  the first detach needs the event more than the initiator does.
+    * `:connected` / `:failing` → `disconnect/2`, which QUITs upstream,
+      stops the session, writes the transition and broadcasts it.
+    * `:failed` → no QUIT (there is no link to say goodbye on) but the
+      row still moves, and the move is BROADCAST. That broadcast is not
+      bookkeeping: `networkParked.ts` deliberately keeps a `:failed`
+      network IN the sidebar (#1985 — a failure is something the
+      operator must see), so the operator may be looking at a window on
+      it right now, and the `:failed → :parked` event is what drives
+      cic's bucket-D redirect home before the row goes.
+    * `:parked` → nothing to move and nothing to announce; #1985 already
+      took it out of the sidebar, so no selection can be pointing at it.
+
+  **The session stop is UNCONDITIONAL**, not gated on the state, for the
+  reason `Credentials.unbind_credential/2` gives for doing the same: the
+  column and the live pid are separate sources of truth and they can
+  disagree (CLAUDE.md). A row reading `:parked` whose `Session.Server` is
+  in fact alive is exactly the case this verb must not wave through — it
+  would hide the session behind an invisible binding. `stop_session/3` is
+  idempotent, so on the two arms that have already stopped one it costs a
+  no-op.
+
+  Idempotent on an already-detached credential: re-detaching rewrites the
+  timestamp rather than refusing. No production caller reaches that arm —
+  `SessionController.detach_network/2` resolves through
+  `get_attached_credential/2` and 404s first — so it is a property of the
+  function rather than a case being handled.
   """
   @spec detach(Credential.t(), String.t()) ::
-          {:ok, Credential.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def detach(%Credential{} = cred, reason) when is_binary(reason) do
     cred = preload_subject_and_network(cred)
 
-    # `disconnect/2` preloads the same associations and `Repo.update!`
-    # carries them onto what it returns, so the parked credential is
-    # already broadcast-shaped — no struct rebuild, and nothing here has
-    # to know which associations the broadcast will want.
-    parked =
-      case cred.connection_state do
-        state when state in [:connected, :failing] ->
-          {:ok, updated} = disconnect(cred, reason)
-          updated
-
-        _ ->
-          cred
-      end
-
-    with {:ok, detached} <- Credentials.mark_detached(parked) do
+    with {:ok, detached} <- cred |> park_for_detach(reason) |> Credentials.mark_detached() do
       broadcast_network_detached(detached)
       {:ok, detached}
     end
+  end
+
+  # The three arms onto `:parked`. Each returns a credential whose
+  # associations are still loaded — `disconnect/2` preloads the same ones
+  # and `Repo.update!` carries them onto what it returns — so the caller
+  # never has to rebuild a struct for the broadcast.
+  @spec park_for_detach(Credential.t(), String.t()) :: Credential.t()
+  defp park_for_detach(%Credential{connection_state: state} = cred, reason)
+       when state in [:connected, :failing] do
+    {:ok, updated} = disconnect(cred, reason)
+    updated
+  end
+
+  defp park_for_detach(%Credential{connection_state: :failed} = cred, reason) do
+    :ok = Session.stop_session(subject_of(cred), cred.network_id, reason)
+    updated = transition!(cred, :parked, reason)
+    broadcast_state_change(updated, :failed, :parked, reason)
+    updated
+  end
+
+  defp park_for_detach(%Credential{connection_state: :parked} = cred, reason) do
+    :ok = Session.stop_session(subject_of(cred), cred.network_id, reason)
+    cred
   end
 
   @doc """
@@ -1147,11 +1176,15 @@ defmodule Grappa.Networks do
   :connected`. A broadcast here would be a second event for one change,
   the REV-J M15 shape this codebase folded away once already.
 
-  The credential comes back `:parked`, which is where `detach/2` left it
-  and where the accretion door binds a new one — so revive and bind hand
-  the spawn path the same shape.
+  The credential comes back `:parked` from EVERY starting state, because
+  `detach/2` brings all three onto that rest — including `:failed`, which
+  it parks rather than preserving, so a re-attach never resumes carrying a
+  failure the subject already chose to put away. That is also where the
+  accretion door binds a new credential, so revive and bind hand the spawn
+  path the same shape.
   """
-  @spec reattach(Credential.t()) :: {:ok, Credential.t()} | {:error, Ecto.Changeset.t()}
+  @spec reattach(Credential.t()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def reattach(%Credential{} = cred), do: Credentials.mark_attached(cred)
 
   @doc """

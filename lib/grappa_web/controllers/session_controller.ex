@@ -124,7 +124,13 @@ defmodule GrappaWeb.SessionController do
   same sentence for every reason it might not be.
   """
   @spec detach_network(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :forbidden | :bad_request | :not_found}
+          Plug.Conn.t()
+          | {:error,
+             :forbidden
+             | :bad_request
+             | :not_found
+             | :db_unavailable
+             | Ecto.Changeset.t()}
   def detach_network(conn, %{"slug" => slug}) when is_binary(slug) and slug != "" do
     dispatch_detach(conn, slug)
   end
