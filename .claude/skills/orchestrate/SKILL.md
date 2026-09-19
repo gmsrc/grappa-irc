@@ -2064,6 +2064,33 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     diff), non si indovina.
     🥇 *Detto alla worker che quel rebase era per un mio errore di ordinamento e non suo: una worker
     che paga il conto di una mia decisione ha diritto di saperlo.*
+14. 🔴🔴 **UN CONTROLLO PUNTATO SULL'ASSE SBAGLIATO NON PUO' FALLIRE, E IL SUO SILENZIO SI LEGGE
+    COME UN RISULTATO — nuovo costume della famiglia, misurato 2026-09-19 e gia' PUBBLICATO prima
+    di essere smentito.** `POST /networks/:net/nick` rispondeva `202 {"ok":true}` col nick fermo. Per
+    distinguere *"il numerico di rifiuto viene ingoiato"* da *"il comando non fa nulla"* ho tentato un
+    bersaglio **che nessuno puo' tenere e nessuno puo' aver bannato** (`grappa-w1-p9`): inerte pure
+    quello ⇒ ho concluso **"non e' un numerico ingoiato"** e l'ho messo su `#grappa-live`.
+    🔑 **Falso.** Il trace del pari (`:erlang.trace` sul pid, mentre girava il MIO tentativo) mostra
+    **`{:numeric, 437}` … `["grappa-w1_", "#grappa-live", "Cannot change nickname while banned or
+    moderated on channel"]`**: il NICK parte, arriva, e il server rifiuta **sulla CONDIZIONE NEL
+    CANALE** (`+m`, e la sessione senza `+v`) — **non sul bersaglio**. Il mio discriminante variava
+    l'asse BERSAGLIO contro un meccanismo che il bersaglio non lo guarda: **non poteva produrre una
+    differenza in nessun caso**, quindi la sua uniformita' non era un dato.
+    🥇 **La regola: prima di leggere l'assenza di differenza come evidenza, chiediti se la variabile
+    che hai mosso ENTRA nel meccanismo che stai testando.** Se non ci entra, il controllo e' muto per
+    costruzione ed e' la stessa classe del *controllo negativo che non puo' fallire* e del *positivo
+    che non puo' riuscire*, con la variabile spostata di un posto: li' e' rotto lo STRUMENTO, qui e'
+    rotta la SCELTA DELL'ASSE. **E l'avevo pure scritto io, due frasi sopra, che non sapevo se il NICK
+    partisse — e poi ho ragionato come se sapessi che non partiva.** Un limite dichiarato e poi
+    ignorato e' peggio di un limite non visto: ti sei gia' detto la risposta.
+    🥇🥇 **E LA MOSSA DEL PARI, DA CHIEDERE NEI BRIEF: UN NUMERICO CHE DICE «A OPPURE B» SI CHIUDE
+    ELIMINANDO UN RAMO, NON SCEGLIENDO IL PIU' PLAUSIBILE.** Il 437 dice *"banned **or** moderated"*:
+    invece di assumere il moderated ha letto la **ban list** (367/368, due voci, nessuna che matcha i
+    soggetti) **e** la stringa di modo (324 → `+mtnr`) ⇒ `+m` misurato, ban escluso. **Due letture,
+    l'ambiguita' chiusa da entrambi i lati.**
+    ⚠️ **E quando la catena e' stabilita, guarda cosa resta CONFUSO e dillo:** l'unica sessione col
+    `+v` era anche l'unica non disconnessa — **due proprieta', un esemplare** ⇒ *"il voice protegge
+    dal taglio"* non e' sostenuto da nulla. **Declassato, non chiuso.**
 
 ## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
 - 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
