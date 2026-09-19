@@ -4014,11 +4014,13 @@ button.topic-bar-windows-opener {
    The probe measurements and the screenshot measurements above are the work
    of the fleet agent on this issue — the GitHub comments carrying them are
    authored under vjt's account because of how the fleet authenticates, and
-   the readings are NOT his. 16 is that agent's derivation from those
-   numbers; **vjt did not name it**. What vjt supplied is the verdict that
-   38 was too far down, and the earlier ruling that the clearance belongs on
-   `.shell`. If it wants to go higher still, 8 is the next step already
-   proposed, and it is one token.
+   the readings are NOT his. 16 is that agent's DERIVATION from those
+   numbers: vjt did not compute it, he APPROVED it («16 first», #grappa
+   2026-09-19 10:36) after supplying the verdict that 38 sat too low — and,
+   earlier, the ruling that the clearance belongs on `.shell`. Derived by
+   the agent, endorsed by him: both halves, neither collapsed into the
+   other. If 16 is still too much, 8 is the next step already proposed, and
+   it is one token.
 
    GATED IN JS, NOT BY A MEDIA QUERY, and that is deliberate (ruling point 5):
    the gate is `isIos() AND isStandalonePwa() AND major >= 27`, which no media

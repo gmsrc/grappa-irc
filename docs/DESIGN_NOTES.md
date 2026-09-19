@@ -17574,9 +17574,11 @@ it wants to go higher still, 8 is the next step and it is one token.
 ⚠️ **Provenance, three sources, do not collapse them.** The probe and
 screenshot measurements are the fleet agent's (the GitHub comments carrying
 them are authored under vjt's account because of how the fleet authenticates;
-the readings are not his). **16 is that agent's derivation from those numbers
-— vjt did not name it.** What vjt supplied is the verdict that 38 sat too low,
-and the earlier ruling that the clearance belongs on `.shell`.
+the readings are not his). **16 is that agent's derivation from those numbers.**
+vjt did not compute it; he *approved* it («16 first», #grappa 2026-09-19
+10:36), having supplied the verdict that 38 sat too low and, earlier, the
+ruling that the clearance belongs on `.shell`. Derived by the agent, endorsed
+by him — both halves, neither collapsed into the other.
 
 🔴 **Unexplained, and recorded rather than smoothed over:** 62 + 38 is 100, but
 the chrome's measured top is 107. The 7 CSS px are unaccounted for — the retune
