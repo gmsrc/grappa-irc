@@ -612,6 +612,15 @@ not the surrounding code.**
   detach (403): their identity LIVES on the credential
   (`representative_visitor_credential/1`, `visitor_registered?/1`), so
   hiding the last one hides the identity, which is `DELETE /me`'s job.
+  **Both directions announce, and they had to move together:**
+  `network_attached` / `network_detached` on the user topic, each carrying
+  only `(network_id, network_slug)`. `connection_state_changed` does NOT
+  stand in for either — it describes the LINK and refreshes only
+  `GET /networks`, while the `$home` rows come from the `/me` envelope, so
+  a client keyed off it keeps offering a network the account already holds.
+  A one-way signal is worse than none: a client that sees the detach learns
+  to trust the feed, and the missing twin then reads as "no change" rather
+  than "no signal".
   `AdminSessionsTab` surfaces BOTH columns and shows an explicit
   `null` when the live pid is gone — diagnostic value beats false
   uniformity. When adding a new admin listing, return both

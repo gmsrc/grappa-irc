@@ -120,6 +120,7 @@ import type {
   NetworksCredentialAuthMethod,
   NetworksCredentialGender,
   NetworksWireConnectionStateEvent,
+  NetworksWireNetworkAttachedEvent,
   NetworksWireNetworkDetachedEvent,
   NotifyWireNotifyListPayload,
   QueryWindowsWireWindowsListPayload,
@@ -385,6 +386,7 @@ type CrossModuleArm = {
   // the transition above it, so the Session walk cannot reach it and only
   // a named counterpart pins the shape.
   network_detached: NetworksWireNetworkDetachedEvent;
+  network_attached: NetworksWireNetworkAttachedEvent;
   bundle_hash: CicWireBundleHashPayload;
   // Two generated types carry `kind: "web_session_severed"` with different
   // shapes — `AdminEventsWireWebSessionSeveredEvent` (admin topic, five

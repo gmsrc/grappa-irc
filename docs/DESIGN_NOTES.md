@@ -18192,3 +18192,58 @@ ordering is then a belt rather than the only brace.
 **Any change to the rail ×.** It still parks, #1985 still hides a parked
 network, and neither destructive verb is one distracted tap away from a
 disconnect — which was the whole substance of the corrected ruling.
+
+### The attach had to announce itself too (vjt's review, F2)
+
+Shipped first as a one-way signal: `network_detached` fired, nothing fired
+for the re-attach, and the reasoning written here for that was that the
+`:parked → :connected` flip already covers it. vjt measured the sentence the
+reasoning rested on and it was false. `connection_state_changed` calls
+`refetchNetworks()` alone; the `$home` rows come from the `/me` envelope, and
+the detach arm was the ONLY `refetchUser()` in `userTopic.ts`. A comment in
+`lib/home.ts` claimed that handler refetched `/me`, and that comment is what
+made the gap look closed.
+
+So a second tab that did not initiate the re-attach kept the network under
+*Available to connect* with no attached row — one tap from a request the
+server refuses — and a third-party client had no re-attach signal at all.
+
+**Announcing one direction is worse than announcing neither.** A client that
+sees a detach learns to trust the feed; the missing twin then reads as "no
+change" rather than as "no signal". `network_attached` is the twin, same
+three fields, same no-state contract, and it fires for a FRESH accretion as
+well as a revive. Splitting those two would have been the same mistake one
+axis over: a client cannot rely on an event that covers one way in and not
+the other, and the half that fires less is the half that later stops firing.
+
+Emitted at the accretion DOOR rather than in `reattach/1`, because a revive
+that then fails to spawn is rolled back by re-detaching it — announcing at
+the write would announce an attachment that does not survive the request.
+Both subjects announce: the visitor door got the same call, since `$home` is
+one component for both (#211 phase 6 ruling A) even though visitors have no
+detach to revive from.
+
+### 27 is skipped, and that is the gate working
+
+The pair was going to ship under the already-written v27, on the argument
+that 27 had never reached main so folding a second event into it kept the
+sequence whole. `mix grappa.wire_pin --update` refused: the shape had moved
+and the number had not.
+
+The refusal is right. The rule is total by design — a shape change bumps,
+full stop — and "unpublished" is exactly the carve-out that makes a floor
+stop meaning anything, because the next reader inherits the carve-out and not
+the reasoning. The cost is a gap on main, 26 → 28, and no server ever spoke
+27. Harmless in the direction the number exists for, since no client can
+require a version nothing published, and written down in `Grappa.Protocol`
+and `CLIENT_PROTOCOL.md` so the gap reads as a decision rather than as a lost
+commit.
+
+### One correction to this entry's own record
+
+It said above that D was "already modelled, which is a measurement rather
+than a decision". That stands. What did NOT stand was the claim that no
+broadcast was needed on re-attach: it was reasoning from a comment instead of
+from the code, which is the failure mode CLAUDE.md names under "never
+fabricate explanations". The comment is fixed in the same commit as the
+event, because the next person to reason about this will read it first.

@@ -699,17 +699,37 @@ defmodule Grappa.Protocol do
   # a bundle predating v26 ignores them and keeps working, and this server
   # keeps serving it.
   # ---------------------------------------------------------------------------
-  # 27 — issue 2219: the `network_detached` event + `detached_at` on the admin
-  #      credential row
+  # 28 — issue 2219: the `network_detached` / `network_attached` pair +
+  #      `detached_at` on the admin credential row (27 skipped, see below)
   # ---------------------------------------------------------------------------
   #
   # The accretion verb finally has an inverse (`DELETE /session/networks/:slug`),
-  # and it puts two additive things on the wire. A new user-topic event kind,
-  # `network_detached` (`network_id` + `network_slug`), because a detach is not
-  # a state transition and cannot honestly ride `connection_state_changed`:
-  # detaching an already-parked network moves no state at all. And one field on
+  # and it puts three additive things on the wire. Two new user-topic event
+  # kinds, `network_detached` and `network_attached` (`network_id` +
+  # `network_slug` each), because neither direction is a state transition and
+  # so neither can honestly ride `connection_state_changed`: detaching an
+  # already-parked network moves no state at all, and the `:parked →
+  # :connected` flip an attach DOES emit refreshes `GET /networks` and never
+  # the `/me` envelope the `$home` rows come from. And one field on
   # `Credentials.AdminWire.t()`, `detached_at`, so the operator console can say
   # why a credential it lists answers no REST call and spawns at no boot.
+  #
+  # ⚠️ 27 IS SKIPPED, AND THE GATE IS WHY. This branch pinned 27 for the
+  # detach half, then vjt's review asked for `network_attached` — announcing
+  # the detach while the attach stayed silent is worse than announcing
+  # neither, because a second tab keeps offering a network it already holds.
+  # The obvious move was to fold the new event into the still-unpublished 27,
+  # and `mix grappa.wire_pin --update` REFUSED: the shape had moved and the
+  # number had not.
+  #
+  # The refusal is right and the argument for folding was wrong. The rule is
+  # total by design — a shape change bumps, full stop — and "unpublished"
+  # is exactly the kind of carve-out that makes a floor stop meaning
+  # anything, because the next reader inherits the carve-out and not the
+  # reasoning. The cost is a gap: main goes 26 → 28 and no server ever spoke
+  # 27. That is harmless in the direction the number exists for, since no
+  # client can require a version nothing ever published, and it is written
+  # down here so the gap reads as a decision rather than as a lost commit.
   #
   # Both are generated shapes — the event is a `Networks.Wire` typespec and the
   # field lands on an `AdminWire` one — so `wireTypes.ts` / `wireSchema.ts` move
@@ -724,11 +744,11 @@ defmodule Grappa.Protocol do
   # an unbind has looked exactly like it since #105 — so it is not a shape
   # change and does not reach `min_protocol_version`.
   #
-  # @min_protocol_version stays at 1. An old bundle ignores an event kind it
+  # @min_protocol_version stays at 1. An old bundle ignores event kinds it
   # does not know (unknown-is-never-fatal, both directions) and ignores an
   # extra key on an admin row; it keeps working against this server, and this
   # server keeps serving it.
-  @protocol_version 27
+  @protocol_version 28
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -763,7 +783,7 @@ defmodule Grappa.Protocol do
   # duplicated constant is positive evidence that the OTHER sites were
   # decided for you. Grep every site for the OLD number before continuing,
   # including the ones that are not Elixir.
-  @spec version() :: 27
+  @spec version() :: 28
   def version, do: @protocol_version
 
   @doc """

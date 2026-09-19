@@ -1243,6 +1243,15 @@ export type WireUserEvent =
       network_id: number;
       network_slug: string;
     }
+  | {
+      // issue 2219 — the twin: a network JOINED this session, whether by a
+      // fresh accretion or by re-attaching something detached. Carries no
+      // state for the same reason its twin does not; re-read `GET /networks`
+      // and `GET /me`.
+      kind: "network_attached";
+      network_id: number;
+      network_slug: string;
+    }
   | ({ kind: "whois_bundle" } & WhoisBundle)
   // M3b — the peer-avatar fetch is a detached task, so it can finish after
   // the `whois_bundle` it belongs to has already been pushed. This arm is

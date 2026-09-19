@@ -560,7 +560,7 @@ never render a clear.
 
 Both are `string | null`. Check `protocol_version >= 23`.
 
-### 4e. A network left the session (issue 2219, v27)
+### 4e. A network left or joined the session (issue 2219, v28)
 
 `DELETE /session/networks/:slug` detaches a network from the caller's own
 session: it parks and quits the network, then marks the binding detached.
@@ -593,7 +593,27 @@ not the operator put it in the self-serve tier: your own detached binding
 is always re-attachable. One `POST /session/networks` with that slug
 restores the credential and spawns the session.
 
-Check `protocol_version >= 27`.
+The other direction has its own event, and you need it:
+
+```json
+{"kind": "network_attached", "network_id": 7, "network_slug": "libera"}
+```
+
+It fires whenever a network JOINS the session — a fresh accretion or the
+re-attach of something detached — for both subject kinds. 🔴 **Do not try
+to infer an attach from `connection_state_changed`.** That event fires on
+the `:parked → :connected` flip, but it describes a LINK and the
+attachment set is a different fact: a client that refreshes only its
+network list on it will keep showing the network under
+`available_networks` with no attached row. Re-read the same two surfaces
+this event's twin asks for.
+
+Neither event carries state, and that is the contract: they name what
+moved, and `GET /networks` plus `GET /me` own the answer.
+
+Check `protocol_version >= 28`. ⚠️ There is no 27 — the shape moved twice
+before this version was published, and the pin gate requires a number per
+move. Nothing ever spoke 27.
 
 ---
 

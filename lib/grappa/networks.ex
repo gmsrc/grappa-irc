@@ -1188,6 +1188,36 @@ defmodule Grappa.Networks do
   def reattach(%Credential{} = cred), do: Credentials.mark_attached(cred)
 
   @doc """
+  issue 2219 — announces that a network JOINED the subject's set, on the
+  subject's own user-rooted topic.
+
+  The twin of the detach broadcast, and it is not symmetry for its own
+  sake. Without it the detach announces and the attach does not, which is
+  worse than neither announcing: a second tab that did not initiate the
+  re-attach keeps the network under `available_networks` with no attached
+  row, and a third-party client gets no signal at all.
+
+  `connection_state_changed` does NOT cover this. It fires on the
+  `:parked → :connected` flip, but the only surface it drives a refresh of
+  is `GET /networks`; the `$home` rows come from the `/me` envelope, and
+  nothing refetches that. The detach arm is the one place in `userTopic.ts`
+  that calls `refetchUser()`, and this event is what gives the other
+  direction the same reach.
+
+  Called from the accretion door rather than from `reattach/1`, and the
+  distinction is the ordering: a revive that then fails to spawn is rolled
+  back by re-detaching it, so announcing at the write would announce an
+  attachment that does not survive the request. The door announces once,
+  after the session is live.
+  """
+  @spec broadcast_network_attached(Credential.t()) :: :ok
+  def broadcast_network_attached(%Credential{} = cred) do
+    cred = preload_subject_and_network(cred)
+    topic = Topic.user(subject_label_of(cred))
+    :ok = Grappa.PubSub.broadcast_event(topic, Wire.network_attached_event(cred))
+  end
+
+  @doc """
   Server-internal: marks a credential `:failed` after a hard upstream
   failure (k-line / permanent SASL — see plan S1.4 lenient triggers).
   Terminates the `Session.Server` (the `:transient` restart strategy

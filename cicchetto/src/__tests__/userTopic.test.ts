@@ -2786,4 +2786,39 @@ describe("narrowUserEvent — #1393d strict arms", () => {
       });
     });
   });
+
+  // issue 2219 F2 — the twin. The detach announcing itself while the
+  // attach stayed silent left a second tab offering a network the account
+  // already holds, so both directions take the same two reads.
+  describe("network_attached", () => {
+    const attached = (over: Record<string, unknown> = {}) => ({
+      kind: "network_attached",
+      network_id: 1,
+      network_slug: "libera",
+      ...over,
+    });
+
+    it("re-reads BOTH /me and /networks", async () => {
+      const nw = await import("../lib/networks");
+      channelMock.fireEvent(attached());
+      expect(nw.refetchUser).toHaveBeenCalled();
+      expect(nw.refetchNetworks).toHaveBeenCalled();
+    });
+
+    it("drops a payload naming no network", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      const { network_slug: _drop, ...without } = attached();
+      expect(narrowUserEvent(without)).toBeNull();
+      expect(narrowUserEvent(attached({ network_id: "1" }))).toBeNull();
+    });
+
+    it("accepts the well-formed payload verbatim", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(attached())).toMatchObject({
+        kind: "network_attached",
+        network_id: 1,
+        network_slug: "libera",
+      });
+    });
+  });
 });

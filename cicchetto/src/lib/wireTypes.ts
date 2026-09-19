@@ -856,6 +856,12 @@ export type NetworksWireNetworkDetachedEvent = {
   network_slug: string;
 };
 
+export type NetworksWireNetworkAttachedEvent = {
+  kind: "network_attached";
+  network_id: number;
+  network_slug: string;
+};
+
 export type NetworksWireConnectionStateEvent = {
   kind: "connection_state_changed";
   user_id: string | null;
@@ -872,6 +878,7 @@ export type WireNetworksEvent =
   | NetworksWireNetworkWithNickJson
   | NetworksWireVisitorNetworkWithNickJson
   | NetworksWireNetworkDetachedEvent
+  | NetworksWireNetworkAttachedEvent
   | NetworksWireConnectionStateEvent;
 
 // === Grappa.Notify.Wire ===

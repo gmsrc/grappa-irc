@@ -81,6 +81,7 @@ import { narrowIsupportChanged, narrowWindowStateEvent } from "./wireNarrow";
 // Do not migrate one of those without re-measuring it first.
 import {
   S_NetworksWireConnectionStateEvent,
+  S_NetworksWireNetworkAttachedEvent,
   S_NetworksWireNetworkDetachedEvent,
   S_NotifyWireNotifyListPayload,
   S_QueryWindowsWireWindowsListPayload,
@@ -383,6 +384,9 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // nothing to widen: a payload missing the slug names no network and
       // the only sane reaction is to drop it.
       return validate(S_NetworksWireNetworkDetachedEvent, r);
+    case "network_attached":
+      // issue 2219 — the arm IS its schema, like its twin above.
+      return validate(S_NetworksWireNetworkAttachedEvent, r);
     case "whois_bundle": {
       // C2 — every numeric-derived field is nullable; only network +
       // target are required. is_operator + channels also tolerate
@@ -1103,6 +1107,21 @@ moduleRoot(() => {
           // redirect; a detach of an already-parked one cannot be the
           // window in view, because #1985 took parked networks out of the
           // sidebar.
+          refetchUser();
+          refetchNetworks();
+          return;
+
+        case "network_attached":
+          // issue 2219 — the same two reads, for the opposite direction.
+          // The detach announcing itself while the attach stayed silent was
+          // worse than neither announcing: a tab that did not initiate the
+          // re-attach kept the network under `available_networks` with no
+          // attached row, one tap from a request the server would refuse.
+          //
+          // `connection_state_changed` does not cover it. That arm fires on
+          // the `:parked → :connected` flip and refetches `GET /networks`
+          // alone, so the `$home` rows — which come from the `/me` envelope
+          // — never move.
           refetchUser();
           refetchNetworks();
           return;

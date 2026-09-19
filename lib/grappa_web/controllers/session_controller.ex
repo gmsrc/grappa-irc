@@ -191,7 +191,7 @@ defmodule GrappaWeb.SessionController do
   # ---------------------------------------------------------------------------
 
   @spec add_user_network(Plug.Conn.t(), User.t(), String.t()) ::
-          {:ok, pid()}
+          {:ok, Credential.t()}
           | {:error,
              :network_not_visitor_enabled
              | :network_unconfigured
@@ -199,6 +199,20 @@ defmodule GrappaWeb.SessionController do
              | :resolve_failed
              | term()}
   defp add_user_network(conn, %User{} = user, slug) do
+    with {:ok, credential} <- attach_user_network(conn, user, slug) do
+      # issue 2219 — ONE announcement, after the session is live, for both
+      # the revive and the fresh bind. Announcing inside `reattach/1`
+      # instead would announce an attachment that a failed spawn then
+      # rolls back; announcing per-branch would be two call sites saying
+      # the same thing, which is how one of them later stops saying it.
+      :ok = Networks.broadcast_network_attached(credential)
+      {:ok, credential}
+    end
+  end
+
+  @spec attach_user_network(Plug.Conn.t(), User.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, term()}
+  defp attach_user_network(conn, %User{} = user, slug) do
     case fetch_detached_credential(user, slug) do
       {:ok, credential} -> revive_user_network(conn, user, credential)
       {:error, :not_detached} -> accrete_user_network(conn, user, slug)
@@ -238,12 +252,12 @@ defmodule GrappaWeb.SessionController do
   # row, so a failed revive lands exactly where it started — which is
   # also why it is safe to run unconditionally on the error arm.
   @spec revive_user_network(Plug.Conn.t(), User.t(), Credential.t()) ::
-          {:ok, pid()} | {:error, term()}
+          {:ok, Credential.t()} | {:error, term()}
   defp revive_user_network(conn, %User{} = user, %Credential{} = credential) do
     with {:ok, revived} <- Networks.reattach(credential) do
       case spawn_revived(conn, user, revived) do
-        {:ok, pid} ->
-          {:ok, pid}
+        {:ok, _} ->
+          {:ok, revived}
 
         {:error, _} = err ->
           _ = Networks.detach(revived, @revive_failed_quit_reason)
@@ -263,12 +277,13 @@ defmodule GrappaWeb.SessionController do
   end
 
   @spec accrete_user_network(Plug.Conn.t(), User.t(), String.t()) ::
-          {:ok, pid()} | {:error, term()}
+          {:ok, Credential.t()} | {:error, term()}
   defp accrete_user_network(conn, %User{} = user, slug) do
     with {:ok, network} <- Networks.fetch_accretable_network(slug),
          :ok <- ensure_user_not_attached(user, network),
-         {:ok, credential} <- bind_user_credential(user, network) do
-      spawn_or_rollback(conn, user, network, credential)
+         {:ok, credential} <- bind_user_credential(user, network),
+         {:ok, _} <- spawn_or_rollback(conn, user, network, credential) do
+      {:ok, credential}
     end
   end
 

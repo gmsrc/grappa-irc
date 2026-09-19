@@ -30,6 +30,7 @@ defmodule GrappaWeb.SessionControllerTest do
   alias Grappa.IRC.Identifier
   alias Grappa.{IRCServer, Repo, Visitors}
   alias Grappa.Networks.Credentials
+  alias Grappa.PubSub.Topic
   alias Grappa.Visitors.Visitor
 
   setup do
@@ -545,6 +546,91 @@ defmodule GrappaWeb.SessionControllerTest do
       assert {:ok, revived} = Credentials.get_credential_by_ids(user.id, network.id)
       assert revived.detached_at == nil
       assert revived.nick == "peluche"
+    end
+
+    test "re-attaching ANNOUNCES itself on the user topic (issue 2219 F2)", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: port, slug: "libera", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network.id) end)
+
+      credential_fixture(user, network, %{nick: "peluche", connection_state: :parked})
+
+      conn |> put_bearer(session.id) |> delete("/session/networks/libera") |> response(204)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      build_conn()
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "libera"})
+      |> response(204)
+
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK"), 5_000)
+
+      # The detach announcing itself while the attach stayed silent left a
+      # second tab offering a network the account already holds — one tap
+      # from a request the server refuses. `connection_state_changed` does
+      # not cover it: it refreshes the network list and never the `/me`
+      # envelope the `$home` rows come from.
+      nid = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{
+                         kind: :network_attached,
+                         network_id: ^nid,
+                         network_slug: "libera"
+                       }
+                     },
+                     5_000
+    end
+
+    test "a FRESH accretion announces the same way", %{conn: conn} do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, session} = user_and_session()
+      {network, _} = network_with_server(port: port, slug: "beta", visitor_enabled: true)
+      on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network.id) end)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "beta"})
+      |> response(204)
+
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "NICK"), 5_000)
+
+      # One signal for both ways in. A client cannot rely on an event that
+      # fires for the re-attach and not for the first attach, and splitting
+      # them is how one of the two later stops firing.
+      nid = network.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       payload: %{kind: :network_attached, network_id: ^nid, network_slug: "beta"}
+                     },
+                     5_000
+    end
+
+    test "a REFUSED spawn announces nothing", %{conn: conn} do
+      {user, session} = user_and_session()
+      # No IRC server behind this port, and a network total of zero admits
+      # nothing: the spawn is refused, the accreted credential rolls back,
+      # and an attachment that did not survive the request must not be
+      # reported as one.
+      {network, _} =
+        network_with_server(port: IRCServer.pick_unused_port(), slug: "gamma", visitor_enabled: true)
+
+      {:ok, _} =
+        Grappa.Networks.update_network_settings(network, %{max_concurrent_user_sessions: 0})
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      conn
+      |> put_bearer(session.id)
+      |> post("/session/networks", %{"network" => "gamma"})
+      |> json_response(503)
+
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :network_attached}}, 300
     end
 
     test "a network never held stays refused by the allowlist", %{conn: conn} do

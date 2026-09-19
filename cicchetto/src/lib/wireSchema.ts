@@ -783,6 +783,11 @@ export const S_NetworksWireHomeData = {
   },
 } as const;
 
+// Grappa.Networks.Wire.network_attached_event/0
+export const S_NetworksWireNetworkAttachedEvent = {
+  o: { kind: { l: "network_attached" }, network_id: "i", network_slug: "s" },
+} as const;
+
 // Grappa.Networks.Wire.network_detached_event/0
 export const S_NetworksWireNetworkDetachedEvent = {
   o: { kind: { l: "network_detached" }, network_id: "i", network_slug: "s" },

@@ -322,6 +322,7 @@ const HAND_SWITCH_ARMS = [
   "lusers_bundle",
   "mentions_bundle",
   "names_reply",
+  "network_attached",
   "network_detached",
   "notify_list",
   "own_nick_changed",
@@ -721,11 +722,11 @@ describe("#1393 — user-topic boundary census", () => {
       censusedNotInSwitch: [...censused].filter((k) => !handSwitch.has(k)),
     }).toMatchInlineSnapshot(`
       {
-        "censused": 48,
+        "censused": 49,
         "censusedNotInSwitch": [
           "whois_avatar_ready",
         ],
-        "handArms": 47,
+        "handArms": 48,
         "inSwitchNotCensused": [],
       }
     `);
@@ -752,9 +753,9 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 40,
-        "armsCensused": 49,
-        "armsWithSchema": 48,
+        "armsAtParity": 41,
+        "armsCensused": 50,
+        "armsWithSchema": 49,
         "brokenOracles": [],
         "divergent": [
           {
@@ -890,10 +891,10 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtValueParity": 48,
-        "comparablePairs": 48,
+        "armsAtValueParity": 49,
+        "comparablePairs": 49,
         "divergent": [],
-        "pairs": 49,
+        "pairs": 50,
         "skippedOneSideRejected": 1,
       }
     `);
