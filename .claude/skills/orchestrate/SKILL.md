@@ -2658,6 +2658,15 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   sblocca. Leggerla nel verso sbagliato costa ore a una worker che non ha nulla da risolvere.
   🥇 **IL DISCRIMINANTE E' MISURABILE E NON E' MIO: si legge nel log del bot COSA ha risposto in quel
   minuto.** Se ha parlato d'altro subito dopo, la domanda e' stata scrollata, non considerata.
+  🔴🔴 **MA «E' COMPARSO» NON E' «HA SCAVALCATO» — terza lettura, e senza di essa il discriminante
+  produce solleciti a raffica (pari, 2026-09-19, misurato).** vjt comparso su un altro canale con un
+  `.pew` a un bot di gioco: **prova di VITA**, non scavalco — non ha risposto a nessuno, non ha aperto
+  un thread, ha premuto un tasto. ⇒ **lo scavalco e' ENGAGEMENT con qualcos'altro** (una risposta, una
+  ruling, una discussione), **non la presenza.** Chi legge «e' comparso ⇒ ri-poni» solleciterebbe a
+  ogni riga che digita, che e' il modo piu' veloce per far ignorare del tutto la domanda.
+  🥇 **E la soglia va letta contro il DANNO, non contro l'orologio:** 22 minuti non sono le 9 ore della
+  #2240, e li' il danno lo fece **il muro di quattro messaggi**, non l'attesa. ⇒ **si ri-pone quando
+  l'attesa e' lunga E lui ha ingaggiato altro; una riga sola, mai un muro.**
   **A me leggere IRC e' VIETATO ⇒ la misura la chiedo al PARI** — *"e' ancora davanti a lui o va
   ri-posta?"*, mai *"chiediglielo di nuovo"*. Chiedere una verifica non e' sollecitare.
   🥇 **E LA FORMA DELLA DOMANDA E' LA VARIABILE, MISURATA SULLO STESSO SOGGETTO:** quattro messaggi a
