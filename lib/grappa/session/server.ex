@@ -186,6 +186,21 @@ defmodule Grappa.Session.Server do
   # services outage holding the FSM open indefinitely.
   @ghost_recovery_timeout_ms 8_000
 
+  # issue 2253 — how long after 001 the bounded nick reclaim fires when the
+  # registration landed on a nick other than the configured one.
+  #
+  # STRICTLY GREATER than `@ghost_recovery_timeout_ms`, and that is the whole
+  # reason for the number. GhostRecovery's 8s timer is armed at the 433, which
+  # necessarily PRECEDES the 001 this one is armed at, so a 12s delay past 001
+  # cannot overlap the ghost window — the reclaim can never race the machine
+  # that is already trying to win the same nick. Shrink this below 8s and that
+  # guarantee is gone; the `ghost_recovery` arm in `reclaim_configured_nick/1`
+  # is what keeps the test seam honest, not a substitute for the ordering.
+  #
+  # Opts-overridable (`:nick_reclaim_ms`) as a test seam, mirroring
+  # `@connection_stable_ms` / `@autojoin_defer_ms`; production inherits this.
+  @nick_reclaim_ms 12_000
+
   # #581 — overall deadline for the recover-identity sequence (IDENTIFY →
   # +r → NICK → RECOVER/RELEASE → settle → NICK). Larger than the ghost
   # budget: it spans an IDENTIFY round-trip, the +r MODE echo, a NICK, an
@@ -440,6 +455,9 @@ defmodule Grappa.Session.Server do
           # #347 deferred-autojoin fallback window — test seam. Production
           # omits it and inherits `@autojoin_defer_ms`.
           optional(:autojoin_defer_ms) => pos_integer(),
+          # issue 2253 bounded nick-reclaim delay — test seam. Production
+          # omits it and inherits `@nick_reclaim_ms`.
+          optional(:nick_reclaim_ms) => pos_integer(),
           # #671 auto-away debounce window. Normally injected by
           # `Grappa.Session.start_session/3`, which resolves the subject's
           # #348 preference over the boot-resolved default; a test /
@@ -903,6 +921,12 @@ defmodule Grappa.Session.Server do
           # or is cancelled). See `@connection_stable_ms`.
           connection_stable_ms: pos_integer(),
           connection_stable_timer: reference() | nil,
+          # issue 2253 — the bounded nick-reclaim delay. Static config for the
+          # process lifetime, like `connection_stable_ms` above; unlike it there
+          # is NO sibling timer ref, because the tick is a one-shot that no-ops
+          # when the nick already converged. See `@nick_reclaim_ms` and
+          # `reclaim_configured_nick/1`.
+          nick_reclaim_ms: pos_integer(),
           # #543 INC-6 — the derived `::cb` source alias this session owns for
           # its upstream lifetime, or `nil` when the source is not a managed
           # alias (mode 1, a reservation, an admin `server_source` pin, or no
@@ -1384,6 +1408,9 @@ defmodule Grappa.Session.Server do
       # for tests. Timer armed on 001, nil until then.
       connection_stable_ms: Map.get(opts, :connection_stable_ms, @connection_stable_ms),
       connection_stable_timer: nil,
+      # issue 2253 bounded nick reclaim — config default, opts-overridable for
+      # tests. No timer ref: the tick is a one-shot that reads the live nick.
+      nick_reclaim_ms: Map.get(opts, :nick_reclaim_ms, @nick_reclaim_ms),
       # #215 — spawn stamp; `connected_at` fills on `:irc_connected`.
       started_at: DateTime.utc_now(),
       connected_at: nil,
@@ -3593,6 +3620,16 @@ defmodule Grappa.Session.Server do
       )
     end
 
+    # issue 2253 — the log line above used to be the WHOLE response to a
+    # registration that landed on the wrong nick: it recorded the drift and the
+    # session then wore `<nick>_` until the next reconnect. Nine prod sessions
+    # did exactly that for hours. Arm the bounded reclaim here, against
+    # `configured_nick/1` and NOT `state.nick`: the comparison above is a
+    # display-honest "did the server rename us", while the reclaim asks the
+    # different question "are we wearing the nick we were configured with",
+    # which is still wrong after a rename the session itself performed.
+    :ok = maybe_arm_nick_reclaim(state, welcomed_nick)
+
     # #100 sustained-reconnect reset gate: 001 RPL_WELCOME proves upstream
     # accepted us, but a welcome-then-drop flap that reset the Backoff
     # ladder here would re-hammer at the 5s base delay every cycle. Instead
@@ -3768,6 +3805,14 @@ defmodule Grappa.Session.Server do
   end
 
   def handle_info(:ghost_timeout, state), do: {:noreply, state}
+
+  # issue 2253 — the return leg the ghost machinery never had. Armed at 001 by
+  # `maybe_arm_nick_reclaim/2`; a single tick, no armed-guard clause and no
+  # sibling `nil` clause, because the decision lives entirely in the LIVE nick
+  # the handler reads rather than in a field this could be out of step with.
+  def handle_info(:nick_reclaim, state) do
+    {:noreply, reclaim_configured_nick(state)}
+  end
 
   # issue 2089 — one of these is armed per held DCC offer and nothing
   # cancels it, so a message naming an offer that has already been
@@ -5369,6 +5414,101 @@ defmodule Grappa.Session.Server do
 
   defp clear_ghost(state),
     do: %{state | ghost_recovery: nil, ghost_timer: nil, parked_nick_fallback: nil}
+
+  # issue 2253 — arm the bounded reclaim when 001 welcomed us under a nick that
+  # is not the configured one. Returns `:ok`, not the state: the tick carries no
+  # payload and no ref is kept, so there is genuinely nothing to thread, and a
+  # `t()` return whose value every caller discards would only look like there
+  # were.
+  #
+  # ONE tick per REGISTRATION, deliberately, and that is the bound. A second
+  # 001 in the same process (the defensive re-welcome) arms a second tick, which
+  # is right rather than sloppy: a fresh registration is a fresh world — other
+  # channels, a lapsed ban, a ghost that has since died — so the refusal that
+  # ended the previous attempt no longer describes it. What is NOT re-armed is
+  # the attempt itself; see `reclaim_configured_nick/1`.
+  #
+  # `Map.get` for the delay mirrors the #229 hot-reload posture used by every
+  # other field added to this state: a live proc predating the field must not
+  # KeyError on its next 001. The fallback is the module default, which is the
+  # production value, so a hot-reloaded session gets the real behaviour rather
+  # than a degraded one.
+  @spec maybe_arm_nick_reclaim(t(), String.t()) :: :ok
+  defp maybe_arm_nick_reclaim(state, welcomed_nick) do
+    if fold_key(state, welcomed_nick) == fold_key(state, configured_nick(state)) do
+      :ok
+    else
+      delay = Map.get(state, :nick_reclaim_ms, @nick_reclaim_ms)
+      _ = Process.send_after(self(), :nick_reclaim, delay)
+      :ok
+    end
+  end
+
+  # issue 2253 — ONE attempt at the configured nick, then done.
+  #
+  # Terminal by CONSTRUCTION rather than by reading the refusal. The measured
+  # reason is that bahamut's refusal is not about the nick at all: the wire
+  # trace in the issue is `437 [..., "#grappa-live", "Cannot change nickname
+  # while banned or moderated on channel"]` and `435 [..., "#sniffo", "Cannot
+  # change to a banned nickname"]` — the server is answering about THIS
+  # session's condition in a channel it is joined to (`+m` without `+v`, a
+  # matching ban), not about who holds the target nick. Asking again cannot
+  # change that answer, so a ladder here would spin for as long as the session
+  # stays in the channel. The refusal is therefore left to ROUTE (issue 2252's
+  # half) instead of being consumed here: the operator needs to read why their
+  # nick did not come back, and silence is what made this invisible for hours.
+  #
+  # This does NOT touch `RecoverIdentity`'s #623 bounded retry, which answers a
+  # different question — there the 433/437 follows a `RECOVER`/`RELEASE` and
+  # means "the services hold has not cleared YET", a condition that genuinely
+  # does change on its own. Same numerics, different fact behind them.
+  #
+  # Three arms, and the middle one is the load-bearing skip:
+  #
+  #   * converged — the nick came back on its own (GhostRecovery's `:succeeded`
+  #     leg, a services rename, the operator's own `/nick`). Folded compare, so
+  #     a case-only difference is NOT a drift: bahamut folds `A-Z`, so `VJT` and
+  #     `vjt` are one nick and re-NICKing between them is churn.
+  #   * owned — GhostRecovery or RecoverIdentity is mid-sequence on this very
+  #     nick. Firing here would race a machine already trying to win it. This
+  #     cannot happen on the production delay (see `@nick_reclaim_ms`), so it
+  #     exists for the shortened test seam and for a future caller — and it
+  #     LOGS, because a silent skip is indistinguishable from "never armed",
+  #     which is precisely the diagnosis this issue could not make.
+  #   * drifted — send it, once. `maybe_log_send_failure/2` keeps a dead socket
+  #     non-fatal: `Client.send_line/2` answers `{:error, :no_socket}` on a nil
+  #     client, so a session whose socket died inside the delay warns instead of
+  #     crashing.
+  @spec reclaim_configured_nick(t()) :: t()
+  defp reclaim_configured_nick(state) do
+    want = configured_nick(state)
+
+    cond do
+      fold_key(state, state.nick) == fold_key(state, want) ->
+        state
+
+      identity_sequence_armed?(state) ->
+        Logger.info("nick reclaim skipped — an identity sequence owns the nick",
+          from: state.nick,
+          to: want
+        )
+
+        state
+
+      true ->
+        Logger.info("nick reclaim attempted", from: state.nick, to: want)
+        maybe_log_send_failure("nick_reclaim", Client.send_nick(state.client, want))
+        state
+    end
+  end
+
+  # #229 hot-reload safety — `Map.get`, never dot-access, for the same reason
+  # the `:recover_identity` readers elsewhere in this module use it.
+  @spec identity_sequence_armed?(t()) :: boolean()
+  defp identity_sequence_armed?(state) do
+    match?(%GhostRecovery{}, Map.get(state, :ghost_recovery)) or
+      match?(%RecoverIdentity{}, Map.get(state, :recover_identity))
+  end
 
   # #676 h14 — release the advisory EventRouter parked at 001.
   #

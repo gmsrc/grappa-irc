@@ -17887,3 +17887,125 @@ assumed:** on the live session `caps_active` is an EMPTY MapSet and
 `label_lookup/2` can never hit and the origin has to be remembered
 server-side. Anyone reaching for `labeled-response` to carry the origin
 window should read this line first.
+<!-- entry #2253 -->
+
+---
+
+## 2026-09-19 — #2253: the reclaim a fallback registration never armed, and why terminality belongs to the pair and not to the numeric
+
+Nine prod sessions on azzurra registered as `<nick>_` inside one reconnect
+window on 2026-09-19 (10:03:06Z–10:04:38Z) and were still wearing it hours
+later, every recovery field `nil`. The GHOST leg had fired — Azzurra's side
+shows `Killed (NickServ (Comando GHOST usato da vjt_))` one second after
+`event=registered nick=vjt_`, so the ghost died and the configured nick was
+free. Nothing sent the NICK back.
+
+### The code fact, which is stronger than the post-hoc state
+
+`@ghost_recovery_timeout_ms` is 8_000 and `:ghost_timeout` clears the FSM via
+`release_nick_fallback/1`, so hours later a session that failed is byte-for-byte
+indistinguishable from one that never armed. The prod snapshot therefore cannot
+say which leg broke, and this entry does not claim to know.
+
+It does not need to. Read from the source instead: `GhostRecovery` has THREE
+terminal legs and not one of them re-arms.
+
+  * `:failed` via 311 — the WHOIS still found the ghost.
+  * `:failed` via the 8s timeout — NickServ never answered.
+  * `:succeeded` via 401 — and this is the one worth naming, because it *looks*
+    like the working path. It flushes `NICK <orig>` and clears the FSM in the
+    SAME step (`advance_ghost/2`, `:succeeded` → `clear_ghost/1`), never
+    checking that the nick came back. A refusal arriving after that point is
+    observed by nobody.
+
+So the gap is not "the ghost path is broken". It is that every exit from the
+ghost path, success included, hands the session back with no one watching
+whether it is wearing the right name.
+
+### The cure: derive the condition, do not track it
+
+A one-shot `:nick_reclaim` tick, armed at 001 when the welcomed nick differs
+from `configured_nick/1`, firing `@nick_reclaim_ms` later. At fire time it reads
+the LIVE nick and does one of three things: nothing (converged), nothing plus a
+log line (another identity sequence owns the nick), or one `NICK <configured>`.
+
+Two properties are deliberate and both are about *not* adding machinery:
+
+**No timer ref is stored, and no new state field beyond the injectable delay.**
+The decision lives entirely in the live nick the handler reads, so there is no
+parallel structure that can go out of step with it. A late tick after the nick
+came back is a benign no-op by construction rather than by cancellation.
+
+**12_000 is strictly greater than the ghost budget of 8_000, and that ordering
+is the whole number.** GhostRecovery's timer is armed at the 433, which
+necessarily PRECEDES the 001 this one is armed at, so the two windows cannot
+overlap. The race is excluded by ORDERING, not by the guard. The guard exists
+anyway — for the shortened test seam and for a future caller — and it LOGS when
+it skips, because a silent skip is indistinguishable from "never armed", which
+is exactly the diagnosis this issue could not make.
+
+It also covers more than the incident. The condition is `state.nick` folded
+against `configured_nick/1`, so it catches a fallback arrived at by ANY route —
+GhostRecovery's three terminals, AuthFSM's #676 collision ladder (which needs no
+NickServ secret at all), a services rename. That breadth is the reason
+`RecoverIdentity` was NOT reused despite being the literal "reclaim FSM": it
+REQUIRES a stored NickServ secret, so it cannot serve the credential-less half
+of the class.
+
+### Terminality is a property of the PAIR, not of the numeric
+
+The bounded reclaim gets ONE attempt. This is terminal by construction — there
+is no ladder to stop — and the reason is measured, from the wire trace in the
+issue:
+
+```
+437 ["grappa-w1_", "#grappa-live", "Cannot change nickname while banned or moderated on channel"]
+435 ["vjt_", "vjt", "#sniffo", "Cannot change to a banned nickname"]
+```
+
+bahamut is answering about THIS session's condition in a channel it is joined to
+— `+m` without `+v`, a matching ban — and not about who holds the target nick.
+Asking again cannot change that answer. A retry ladder here spins for as long as
+the session stays in the channel.
+
+**And yet #623 is not touched, deliberately.** `RecoverIdentity` treats a
+433/437 at `:awaiting_nick` as a bounded RETRY, and that ruling is correct where
+it stands: there the numeric follows a `RECOVER`/`RELEASE`, so it means "the
+services hold has not cleared YET" — a condition that genuinely does change on
+its own — and the loop is bounded by that FSM's 15s host deadline, so it was
+never the blind loop the reclaim has to avoid. #623 reversed the earlier F2
+"one shot, terminal" rule for exactly that reason.
+
+Same numerics. Different fact behind them. The rule this entry writes down:
+
+> **Terminality is not a property of a numeric. It is a property of the pair
+> (numeric, the state that provoked it).** A refusal that answers a question
+> about a condition the session cannot change by waiting is terminal; the same
+> code answering about an asynchronous hold is not. A future arm that wants to
+> feed 433/435/437 to a state machine MUST say which of the two it is looking
+> at, and scope its terminality to its own arm rather than to the numeric.
+
+### The refusal ROUTES; it is not consumed
+
+The #581 precedent consumes a 433/437 while a recover is in flight, to keep the
+managed sequence quiet. This arm deliberately does the opposite: it observes
+nothing and consumes nothing, so the refusal reaches the numeric router and the
+operator can read why their nick did not come back. Silence is what made this
+invisible for hours; a cure that also hid the refusal would have bought the
+symptom back in a different shape. Where that refusal LANDS is issue 2252's
+half — 435 appears zero times in `lib/` today — and the two changes compose
+rather than compete.
+
+One consequence worth writing down rather than rediscovering: if 2252 grows a
+pending-origin field written by the `{:send_nick, _}` handler, this reclaim does
+not travel through it, so the origin for a reclaim refusal is `nil`. That is
+correct — an automatic reclaim has no origin window — but it is a `nil` that
+means something, not a gap.
+
+### Not claimed
+
+The cause of the 10:03–10:05Z mass reconnect is not established and is not
+addressed here. Which of GhostRecovery's three terminals the nine sessions
+actually took is unknowable from the surviving state, and this change was built
+so it does not matter. The reclaim is not proven to SUCCEED in the field: where
+the refusal is a channel condition it will correctly fail, once, and say so.

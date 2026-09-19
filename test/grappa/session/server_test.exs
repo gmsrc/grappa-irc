@@ -10811,6 +10811,150 @@ defmodule Grappa.Session.ServerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # issue 2253 — the bounded nick reclaim after a fallback registration
+  # ---------------------------------------------------------------------------
+  #
+  # Measured on prod (2026-09-19): nine sessions registered as `<nick>_` inside
+  # one reconnect window and were still wearing it hours later, every recovery
+  # field `nil`. `GhostRecovery` has three terminal legs and none of them
+  # re-arms — `:succeeded` included, because it flushes `NICK <orig>` and clears
+  # the FSM in the SAME step, never checking that the nick came back. A refusal
+  # arriving after that point is observed by nobody.
+  #
+  # These tests drive 001 with a nick that differs from the configured one and
+  # assert on the SESSION STATE, never on a log line. They deliberately do NOT
+  # route through the 433 → AuthFSM-ladder → GhostRecovery chain: the condition
+  # the reclaim keys on is `welcomed_nick != configured_nick`, and producing it
+  # directly keeps the assertion about THIS mechanism instead of about the three
+  # machines that can arrive at that condition.
+
+  describe "issue 2253 — bounded nick reclaim after a fallback registration" do
+    # The rename echo has to come from the SERVER reacting to what the session
+    # actually sent, never from the test feeding it.
+    #
+    # The first draft of this test fed `:<fallback> NICK :<configured>` by hand
+    # after a `wait_for_line`, and it passed WITHOUT the cure — twice wrong, in
+    # a way worth recording. `IRCServer.wait_for_line/3` matches the FIRST
+    # buffered line (see `await_sent_line_count/4` above, which exists for
+    # precisely this), so `NICK grappa-test\r\n` was satisfied by the
+    # REGISTRATION NICK, not by a reclaim; and the hand-fed echo then made the
+    # final assertion a statement about `EventRouter` handling a NICK echo,
+    # which it already did. The cure was not what turned it green.
+    #
+    # Counting the line is what distinguishes registration from reclaim, and
+    # sourcing the echo from the handler is what makes the state assertion
+    # depend on the reclaim having happened at all.
+    defp reclaim_echo_handler(configured, fallback) do
+      counter = :counters.new(1, [])
+      registration = "NICK #{configured}\r\n"
+      echo = ":#{fallback}!u@h NICK :#{configured}\r\n"
+
+      fn state, line -> {:reply, nick_echo(line, registration, echo, counter), state} end
+    end
+
+    # Count 0 is the REGISTRATION NICK — the test drives 001 itself, so the
+    # handler stays quiet for it. Anything after it is a reclaim, which a real
+    # server answers with the rename echo. Split out of the closure rather than
+    # nested inside it: the `if`-in-`if` shape that expressed this was three
+    # levels deep and Credo strict is right to refuse it.
+    defp nick_echo(line, registration, echo, counter) when line == registration do
+      n = :counters.get(counter, 1)
+      :counters.add(counter, 1, 1)
+      if n == 0, do: nil, else: echo
+    end
+
+    defp nick_echo(_, _, _, _), do: nil
+
+    test "a registration on <nick>_ ends up back on the configured nick" do
+      {server, port} = IRCServer.start_server(reclaim_echo_handler("grappa-test", "grappa-test_"))
+      {user, network, credential} = setup_user_and_network(port)
+
+      {:ok, base_plan} = SessionPlan.resolve(credential)
+      plan = Map.put(base_plan, :nick_reclaim_ms, 150)
+      {:ok, pid} = Session.start_session({:user, user.id}, network.id, plan)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      # The upstream welcomes us under the FALLBACK — the prod shape.
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test_ :Welcome\r\n")
+
+      # POSITIVE CONTROL on the premise: the autojoin JOIN proves 001 was fully
+      # processed, and the nick assertion proves the session really is wearing
+      # the wrong one. Without both, this test could pass on a session that
+      # never drifted at all.
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+      assert SessionStateHelpers.nick(SessionStateHelpers.fetch(pid)) == "grappa-test_"
+
+      # THE decisive assertion, and nothing in this test hands it the answer:
+      # the nick only moves if the reclaim put a SECOND `NICK grappa-test` on
+      # the wire and the handler echoed it back.
+      assert await_nick(pid, "grappa-test", 2_000) == "grappa-test",
+             "a session that registered on a fallback nick must end up on the configured one"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # The measured constraint (issue 2253 wire trace): bahamut refuses a nick
+    # change on the session's condition IN A CHANNEL, not on who holds the
+    # target nick — `437 ["grappa-w1_", "#grappa-live", "Cannot change nickname
+    # while banned or moderated on channel"]`. That answer does not become true
+    # by being asked again, so the reclaim gets ONE attempt and no ladder.
+    #
+    # This is what makes "bounded" a measurement rather than a promise: it
+    # COUNTS the reclaim lines on the wire instead of trusting that no loop was
+    # written. `{:error, {:timeout, 2}}` is the load-bearing shape — it asserts
+    # both that no third attempt arrived and that exactly two ever did.
+    test "a refused reclaim is terminal — one attempt, no retry loop" do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, network, credential} = setup_user_and_network(port)
+
+      {:ok, base_plan} = SessionPlan.resolve(credential)
+      plan = Map.put(base_plan, :nick_reclaim_ms, 150)
+      {:ok, pid} = Session.start_session({:user, user.id}, network.id, plan)
+
+      :ok = IRCServer.await_handshake(server, 1_000)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test_ :Welcome\r\n")
+
+      reclaim? = &(&1 == "NICK grappa-test\r\n")
+
+      # Registration sent the first; the reclaim is the second.
+      assert await_sent_line_count(server, reclaim?, 2, 1_000) == :ok
+
+      # The refusal, params verbatim from the prod trace shape.
+      IRCServer.feed(
+        server,
+        ":irc.test.org 437 grappa-test_ #sniffo " <>
+          ":Cannot change nickname while banned or moderated on channel\r\n"
+      )
+
+      # 600ms is four reclaim windows. A loop would have spent them.
+      assert await_sent_line_count(server, reclaim?, 3, 600) == {:error, {:timeout, 2}},
+             "a refused reclaim must not spin — bahamut's answer is about the channel, not the nick"
+
+      assert SessionStateHelpers.nick(SessionStateHelpers.fetch(pid)) == "grappa-test_"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
+  # Condition-poll the live session nick until it reaches `want` or the deadline
+  # passes. Returns whatever the last sample was, so a failure reports the nick
+  # the session was actually wearing rather than a bare timeout.
+  defp await_nick(pid, want, timeout_ms) do
+    do_await_nick(pid, want, System.monotonic_time(:millisecond) + timeout_ms)
+  end
+
+  defp do_await_nick(pid, want, deadline) do
+    seen = pid |> SessionStateHelpers.fetch() |> SessionStateHelpers.nick()
+
+    cond do
+      seen == want -> seen
+      System.monotonic_time(:millisecond) >= deadline -> seen
+      true -> do_await_nick(pid, want, deadline)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # S2.4 — WHOIS-userhost cache (ban-mask derivation)
   # ---------------------------------------------------------------------------
   #
