@@ -473,6 +473,35 @@ defmodule Grappa.Session.NumericRouter do
                          432,
                          # 433 ERR_NICKNAMEINUSE — nick taken in /nick
                          433,
+                         # 435 — a /nick refused because the nick you asked
+                         # for is banned where you are. Cite the NUMBER: the
+                         # two ircds SWAP the names with 437, so a symbolic
+                         # one names a different numeric depending on who is
+                         # reading. bahamut ERR_BANONCHAN
+                         # (`include/numeric.h:331`), solanum
+                         # ERR_BANNICKCHANGE (`include/numeric.h:245`, whose
+                         # own comment reads "bahamut's ERR_BANONCHAN");
+                         # below, 437 is bahamut's ERR_BANNICKCHANGE and
+                         # solanum's ERR_UNAVAILRESOURCE.
+                         #
+                         # Unlike every other member of this block it is NOT
+                         # a nick-shaped token problem — it carries a REAL
+                         # CHANNEL, and that is why it alone misrouted.
+                         # `[own_nick, rejected_nick, channel, reason]` on
+                         # BOTH ircds (bahamut `src/m_nick.c:531` +
+                         # `src/s_err.c:488`; solanum
+                         # `modules/core/m_nick.c:632` +
+                         # `include/messages.h:164`), so `scan_params/2`'s
+                         # channel-prefix branch wins ahead of the nick one
+                         # and files a NICK failure in a channel window the
+                         # user was not typing in. Measured on prod
+                         # 2026-09-19: six refusals in `#sniffo`. The
+                         # meaning is the same on both flavours, so there is
+                         # no cross-flavour collision to keep inert here —
+                         # unlike 485, and unlike 437, which is why that one
+                         # is excluded from `JoinFailure.numerics/0` rather
+                         # than merely denied.
+                         435,
                          # 437 ERR_UNAVAILRESOURCE — nick temporarily unavailable
                          437,
                          # 461 ERR_NEEDMOREPARAMS — command missing required params
