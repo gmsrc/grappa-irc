@@ -66,6 +66,7 @@ const networksMock = vi.fn<() => unknown[]>(() => []);
 // the SAME verb the sidebar/bottom-bar × fires. Mock it so the unit test
 // asserts the row REUSES that path (not raw disconnectNetwork / patchNetwork).
 const confirmDisconnectNetworkMock = vi.fn<(slug: string) => void>();
+const confirmRemoveNetworkMock = vi.fn<(slug: string, onError: (m: string) => void) => void>();
 // #349 — the "Register nick" launcher's three lib boundaries: the flavor
 // resolver, the identity source, and the wizard open verb. Defaults
 // hide the button (no flavor), so the pre-#349 row assertions are
@@ -185,6 +186,11 @@ vi.mock("../lib/selection", () => ({
 // the #283 e2e (issue283-home-disconnect.spec.ts).
 vi.mock("../lib/windowClose", () => ({
   confirmDisconnectNetwork: (slug: string) => confirmDisconnectNetworkMock(slug),
+  // issue 2219 — the Remove confirm takes the row's error sink as its
+  // second argument, so the stub forwards both and the tests can drive the
+  // failure path by calling the captured callback.
+  confirmRemoveNetwork: (slug: string, onError: (m: string) => void) =>
+    confirmRemoveNetworkMock(slug, onError),
 }));
 
 vi.mock("../lib/friendlyApiError", () => ({
@@ -742,6 +748,50 @@ describe("HomePane", () => {
       fireEvent.click(disconnectBtn);
 
       expect(confirmDisconnectNetworkMock).toHaveBeenCalledWith("azzurra");
+    });
+
+    // issue 2219 — Remove, the inverse of the one-tap connect above. It
+    // sits on the DISCONNECTED row and not on the connected one, which
+    // makes the two-step path (Disconnect, look at it, then Remove) the
+    // only path and keeps the verb from ever firing against a live
+    // session from the UI.
+    it(":parked row 'Remove' button fires confirmRemoveNetwork (issue 2219)", () => {
+      homeDataMock.mockReturnValue(TWO_NETWORKS);
+      render(() => <HomePane />);
+
+      const removeBtn = screen.getByRole("button", { name: /remove freenode/i });
+      fireEvent.click(removeBtn);
+
+      expect(confirmRemoveNetworkMock).toHaveBeenCalledWith("freenode", expect.any(Function));
+      // Behind the confirm, like Disconnect — never a raw call, never a jump.
+      expect(patchNetworkMock).not.toHaveBeenCalled();
+      expect(setSelectedChannelMock).not.toHaveBeenCalled();
+    });
+
+    it(":connected row does NOT render a Remove button (issue 2219)", () => {
+      homeDataMock.mockReturnValue(TWO_NETWORKS);
+      render(() => <HomePane />);
+
+      // azzurra is connected: Disconnect first, and the row becomes the one
+      // that offers Remove. A live network cannot be removed in one tap.
+      expect(screen.queryByRole("button", { name: /remove azzurra/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /remove freenode/i })).toBeInTheDocument();
+    });
+
+    it("a failed Remove surfaces its reason in the row's alert sink (issue 2219)", () => {
+      homeDataMock.mockReturnValue(TWO_NETWORKS);
+      render(() => <HomePane />);
+
+      fireEvent.click(screen.getByRole("button", { name: /remove freenode/i }));
+
+      // The row hands the confirm its OWN error sink, so a removal that
+      // does not happen says so rather than leaving a row the operator has
+      // asked twice to be rid of with no clue why it stayed.
+      const call = confirmRemoveNetworkMock.mock.calls[0];
+      expect(call).toBeDefined();
+      call?.[1]("remove failed");
+
+      expect(screen.getByText("remove failed")).toBeInTheDocument();
     });
 
     it(":parked row does NOT render a Disconnect button (#283 — connected-only)", () => {

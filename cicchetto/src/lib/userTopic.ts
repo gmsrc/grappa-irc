@@ -25,7 +25,7 @@ import { applyLusersBundle, clearLusersRequested } from "./lusersBundle";
 import { setMentionsBundle } from "./mentionsWindow";
 import { moduleRoot } from "./moduleRoot";
 import { setNamesReply } from "./namesModal";
-import { mutateNetworkNick, refetchChannels, refetchNetworks } from "./networks";
+import { mutateNetworkNick, refetchChannels, refetchNetworks, refetchUser } from "./networks";
 import { nickEquals } from "./nickEquals";
 import { refreshNotificationPrefs } from "./notificationPrefs";
 import {
@@ -81,6 +81,7 @@ import { narrowIsupportChanged, narrowWindowStateEvent } from "./wireNarrow";
 // Do not migrate one of those without re-measuring it first.
 import {
   S_NetworksWireConnectionStateEvent,
+  S_NetworksWireNetworkDetachedEvent,
   S_NotifyWireNotifyListPayload,
   S_QueryWindowsWireWindowsListPayload,
   S_ScrollbackWireArchiveChangedPayload,
@@ -377,6 +378,11 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // — verdict AND returned value, both censuses — so the transcription
       // goes and the generated schema stands in its place.
       return validate(S_NetworksWireConnectionStateEvent, r);
+    case "network_detached":
+      // issue 2219 — the arm IS its schema. Three fields, all required,
+      // nothing to widen: a payload missing the slug names no network and
+      // the only sane reaction is to drop it.
+      return validate(S_NetworksWireNetworkDetachedEvent, r);
     case "whois_bundle": {
       // C2 — every numeric-derived field is nullable; only network +
       // target are required. is_operator + channels also tolerate
@@ -1075,6 +1081,30 @@ moduleRoot(() => {
           if (payload.to === "parked" || payload.to === "failed") {
             setReconnecting(payload.network_slug, false);
           }
+          return;
+
+        case "network_detached":
+          // issue 2219 — this network is no longer one of the account's.
+          // BOTH refetches, because the two surfaces come from different
+          // endpoints: the sidebar and its channel trees hang off
+          // `GET /networks`, the `$home` rows off the `/me` envelope, and
+          // dropping a network takes a row out of each. `refetchNetworks`
+          // alone would leave `$home` offering a `[Reconnect]` chip for a
+          // network whose every route now answers the iso 404.
+          //
+          // Nothing is mutated locally on the way past. cic never
+          // originates state: the row goes when the two reads say it is
+          // gone, which is also what makes this arm correct in the tab that
+          // did NOT initiate the detach — the only tab that needs it.
+          //
+          // No selection rescue here, and none is missing. A detach of a
+          // LIVE network parks it first, and that transition drives
+          // `noteConnectionState` above into selection.ts's bucket-D
+          // redirect; a detach of an already-parked one cannot be the
+          // window in view, because #1985 took parked networks out of the
+          // sidebar.
+          refetchUser();
+          refetchNetworks();
           return;
 
         case "window_pending":

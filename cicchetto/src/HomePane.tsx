@@ -26,7 +26,7 @@ import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
 import { isShareableSubject, openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
 import { pushLinks, pushRecover } from "./lib/socket";
-import { confirmDisconnectNetwork } from "./lib/windowClose";
+import { confirmDisconnectNetwork, confirmRemoveNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { windowStateByChannel } from "./lib/windowState";
 import NickText from "./NickText";
@@ -431,6 +431,22 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
   const reconnector = createNetworkReconnect(setError);
 
+  // issue 2219 — Remove sits on THIS row and not on the connected one, and
+  // that is the two-step path rather than a missing affordance: a network
+  // has to be disconnected before it can be removed, so the operator sees
+  // the thing stopped before deciding to put it away. It also means the
+  // verb never fires against a live session from the UI, and the server's
+  // own park-before-mark ordering is a belt rather than the only brace.
+  //
+  // Fire-and-forget behind the confirm, like Disconnect: success is the
+  // row disappearing when `network_detached` lands and the two refetches
+  // answer. Failures come back into the same `role="alert"` sink Reconnect
+  // already renders, so a removal that does not happen says so.
+  const onRemove = () => {
+    setError(null);
+    confirmRemoveNetwork(props.row.slug, setError);
+  };
+
   return (
     <li
       class="home-pane-network-row"
@@ -466,6 +482,15 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
             onClick={() => void reconnector.reconnect(props.row.slug)}
           >
             {reconnector.pending() ? "Reconnecting…" : "Reconnect"}
+          </button>
+          <button
+            type="button"
+            class="adm-btn adm-btn--danger home-pane-network-action home-pane-network-remove"
+            data-testid={`home-remove-network-${props.row.slug}`}
+            aria-label={`Remove ${props.row.slug}`}
+            onClick={onRemove}
+          >
+            Remove
           </button>
         </div>
       </div>

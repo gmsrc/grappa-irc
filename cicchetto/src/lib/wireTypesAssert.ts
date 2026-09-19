@@ -120,6 +120,7 @@ import type {
   NetworksCredentialAuthMethod,
   NetworksCredentialGender,
   NetworksWireConnectionStateEvent,
+  NetworksWireNetworkDetachedEvent,
   NotifyWireNotifyListPayload,
   QueryWindowsWireWindowsListPayload,
   RateLimitWireWebSessionSeveredEvent,
@@ -380,6 +381,10 @@ type CrossModuleArm = {
   auto_away_reason_changed: UserSettingsWireAutoAwayReasonChangedPayload;
   server_settings_changed: ServerSettingsWireChangedPayload;
   connection_state_changed: NetworksWireConnectionStateEvent;
+  // issue 2219 — the detach event. A `Grappa.Networks.Wire` payload like
+  // the transition above it, so the Session walk cannot reach it and only
+  // a named counterpart pins the shape.
+  network_detached: NetworksWireNetworkDetachedEvent;
   bundle_hash: CicWireBundleHashPayload;
   // Two generated types carry `kind: "web_session_severed"` with different
   // shapes — `AdminEventsWireWebSessionSeveredEvent` (admin topic, five

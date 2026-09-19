@@ -30,6 +30,9 @@ vi.mock("../lib/networks", () => ({
   user: vi.fn(() => ({ kind: "user", id: "u1", name: "vjt", is_admin: false, inserted_at: "x" })),
   refetchChannels: vi.fn(),
   refetchNetworks: vi.fn(),
+  // issue 2219 — the detach arm reads the `/me` envelope back as well as
+  // `GET /networks`, so the mock carries both refetches.
+  refetchUser: vi.fn(),
   networks: vi.fn(() => []),
   mutateNetworkNick: vi.fn(),
 }));
@@ -2732,6 +2735,55 @@ describe("narrowUserEvent — #1393d strict arms", () => {
     it("still rejects a non-array extra_lines (unchanged)", async () => {
       const { narrowUserEvent } = await import("../lib/userTopic");
       expect(narrowUserEvent(whois({ extra_lines: "nope" }))).toBeNull();
+    });
+  });
+
+  // issue 2219 — the detach arm. A network leaving the session is not a
+  // state transition, so it arrives as its own kind and the client's whole
+  // job is to re-read the two surfaces that own the answer.
+  describe("network_detached", () => {
+    const detached = (over: Record<string, unknown> = {}) => ({
+      kind: "network_detached",
+      network_id: 1,
+      network_slug: "libera",
+      ...over,
+    });
+
+    it("re-reads BOTH /me and /networks", async () => {
+      const nw = await import("../lib/networks");
+      channelMock.fireEvent(detached());
+      // Two endpoints, two rows: the sidebar hangs off `GET /networks` and
+      // the `$home` list off the `/me` envelope. Refetching only the former
+      // would leave `$home` offering a [Reconnect] chip for a network whose
+      // every route now answers the iso 404.
+      expect(nw.refetchNetworks).toHaveBeenCalled();
+      expect(nw.refetchUser).toHaveBeenCalled();
+    });
+
+    it("originates no state of its own", async () => {
+      const home = await import("../lib/home");
+      channelMock.fireEvent(detached());
+      // cic never originates state. The row goes when the two reads say it
+      // is gone — patching a store on the way past would be this client
+      // deciding, and it is the tab that did NOT initiate the detach that
+      // has to be right here.
+      expect(home.patchHomeNetwork).not.toHaveBeenCalled();
+    });
+
+    it("drops a payload naming no network", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      const { network_slug: _drop, ...without } = detached();
+      expect(narrowUserEvent(without)).toBeNull();
+      expect(narrowUserEvent(detached({ network_id: "1" }))).toBeNull();
+    });
+
+    it("accepts the well-formed payload verbatim", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(detached())).toMatchObject({
+        kind: "network_detached",
+        network_id: 1,
+        network_slug: "libera",
+      });
     });
   });
 });
