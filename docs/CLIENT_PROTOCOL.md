@@ -560,6 +560,41 @@ never render a clear.
 
 Both are `string | null`. Check `protocol_version >= 23`.
 
+### 4e. A network left the session (issue 2219, v27)
+
+`DELETE /session/networks/:slug` detaches a network from the caller's own
+session: it parks and quits the network, then marks the binding detached.
+Everything the subject authored survives — nick, SASL user, the stored
+secrets, the perform list and the autojoin set — and `POST
+/session/networks` on the same slug brings all of it back. It is the
+inverse of the accretion verb, not a delete.
+
+204 on success. 404 covers both a slug this deployment does not carry and
+one the caller does not hold attached, deliberately: one answer for every
+reason, so the route cannot be used to enumerate networks. 403 for a
+visitor, whose identity lives on the credential.
+
+The detach is announced on the user topic:
+
+```json
+{"kind": "network_detached", "network_id": 7, "network_slug": "libera"}
+```
+
+🔴 **This is NOT a `connection_state_changed`, and it carries no state.**
+Detaching a network that was already parked moves no `connection_state` at
+all, so there is no transition to report. Re-read the two surfaces that
+own the answer instead: `GET /networks` for the sidebar and `GET /me` for
+the `$home` rows. Both stop returning the network, and every
+`/networks/:slug/...` route answers 404 for it from that moment — so a
+client still showing a `[Reconnect]` chip for it is one tap from a refusal.
+
+A detached network reappears in `home_data.available_networks`, whether or
+not the operator put it in the self-serve tier: your own detached binding
+is always re-attachable. One `POST /session/networks` with that slug
+restores the credential and spawns the session.
+
+Check `protocol_version >= 27`.
+
 ---
 
 ## 5. Wire format

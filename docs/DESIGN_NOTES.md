@@ -18009,3 +18009,186 @@ addressed here. Which of GhostRecovery's three terminals the nine sessions
 actually took is unknowable from the surviving state, and this change was built
 so it does not matter. The reclaim is not proven to SUCCEED in the field: where
 the refusal is a channel condition it will correctly fail, once, and say so.
+<!-- entry #2219 -->
+
+---
+
+## 2026-09-19 — issue 2219: a network can leave a session, and come back with everything it had
+
+`POST /session/networks` has accreted a network since #211 phase 4c. Nothing
+has ever taken one back. peluche connected to Libera, changed his mind, and
+found no way out; vjt's own reading of the surface agreed, and the only
+user-reachable escape was `DELETE /me` — a total account wipe as the answer to
+"I joined the wrong network".
+
+### The rulings, and who answered what
+
+vjt settled ruling A on IRC: a user may delete their own credential AND their
+own scrollback, and the two destructive verbs live on two different surfaces —
+the credential in `$home`, the logs in the archive view, where each thing is
+already listed. B, C and D were left open.
+
+Gabriele answered all three on 2026-09-19:
+
+* **B — may a user detach a network an admin bound for them?** Yes. There is
+  no provenance column and this slice does not add one; an operator can
+  re-bind, and the reversible verb makes even that unnecessary.
+* **C — what happens to the messages?** They stay. A re-attach is not a data
+  loss event, and the archive's own per-target delete is the verb for logs.
+* **D — is a zero-network session legal?** Yes — and it was already modelled,
+  which is a measurement rather than a decision: cic renders `no networks` in
+  the sidebar and `No networks bound` in `$home`, the boot envelope answers
+  with empty collections by design, and `Bootstrap` logs web-only. Nothing
+  needed building for the last network to go.
+
+The half Gabriele added is the one that shaped the slice: *"I want to retrieve
+settings if I decided to go back."* That is `detached_at` — vjt's first bullet,
+the reversible hide — and it is what this entry is about. The hard credential
+delete is NOT in this slice; see "What is deliberately not here".
+
+### Why a column and not a fifth `connection_state`
+
+`connection_state` is a closed set of four (#1675) and every one of them
+answers the same question: what is the upstream LINK doing. `detached_at`
+answers a different one — does the subject still hold this binding at all.
+
+Folding the second question into the first was the tempting shape and it is
+the one CLAUDE.md names: a shared data model with a type flag is a boundary
+violation. Concretely, `connect/1`, `disconnect/2`, `mark_failed/2`,
+`mark_failing/2` and `mark_registered/1` all pattern-match the closed set, and
+a fifth value would make each of them grow a clause about a state none of them
+is about — while `:failed`'s own history (#1675 added `:failing` rather than a
+reason string on `:failed`) is the precedent for splitting rather than
+overloading.
+
+A detached row is always `:parked`. The converse does not hold, and that
+asymmetry is exactly why the two axes are two.
+
+### Park BEFORE mark, and the invariant that rests on it
+
+`Networks.detach/2` disconnects first — QUIT upstream, stop the
+`Session.Server`, write the transition, broadcast — and only then marks the
+row. Marking first would leave a live session behind a binding that no
+subject-facing reader returns: a session nobody can see, stop or reconnect.
+That is the same wedge `spawn_or_rollback/4` was written to prevent on the way
+in (#642 defect 2), reached from the opposite direction.
+
+A credential already `:parked` or `:failed` skips the park. `disconnect/2`
+refuses those with `:not_connected`, which is the right answer to "please
+disconnect this" and the wrong one to "please detach this".
+
+The invariant lives in the verb rather than in the schema, so
+`list_credentials_for_all_users/0` filters on BOTH the state and the column.
+Belt and braces, and the brace is cheap: the cost of that invariant ever being
+broken is a session spawned at boot for a binding its owner cannot reach.
+
+### Which readers filter, and the one that deliberately does not
+
+Four subject-facing readers exclude a detached row: the listing behind
+`GET /networks` / `GET /boot` / `$home`, the network set the WS channel fans
+out on, the boot wanted-up set, and `count_by_state/0` — the last because its
+whole job is an honesty line about the set that actually spawns.
+
+`get_credential/2` is NOT one of them, and that is the interesting half.
+Filtering it would have been the tidy move and it would have broken the
+operator: `Admin.CredentialsController.delete/2` resolves through it, so an
+operator could no longer unbind the very row a subject had put out of its own
+sight. The attached question got its own reader, `get_attached_credential/2`,
+and the two document each other — the same split this context already keeps
+between `list_all_credentials/0` and `list_credentials_every_subject/0`.
+
+One gate covers the REST family. `Plugs.ResolveNetwork` is the single door
+every `/networks/:slug/...` route passes through, so pointing IT at the
+attached reader closes the family in one edit and the controllers downstream
+keep their bare reads — `NetworksController.fetch_credential/2`'s own comment
+already says ownership was asserted upstream. A detached network that stayed
+readable, sendable and reconnectable would be a hide that hid nothing.
+
+### The revive runs AHEAD of the allowlist, and that is the promise
+
+`POST /session/networks` now checks for a detached credential before it
+consults `visitor_enabled`. That ordering is the whole value of the column.
+
+The allowlist asks whether a STRANGER may attach a network. A detached
+credential is standing proof that this subject already held it, however it was
+bound. Gating the revive on the allowlist would make an admin-bound network
+hideable and never restorable — a delete wearing a hide's label — and it grants
+nothing, because the row cannot name a network the subject was not given. The
+worst a revive can reach is exactly what it lost. `home_data_for_user/1`'s
+available list unions the subject's own detached slugs for the same reason, so
+the offer back is actually there to tap.
+
+The revive could not reuse `spawn_or_rollback/4`. Its rollback is
+`unbind_credential_resilient/2`, a DELETE: firing it on a refused spawn would
+destroy the nick, secrets, perform list and autojoin the subject detached in
+order to KEEP, turning a capacity refusal into the data loss the reversible
+verb exists to avoid. The rollback that belongs to a revive is the detach
+itself, which lands the row exactly where it started and is therefore safe to
+run unconditionally on the error arm.
+
+### Visitors are refused, and the refusal is the design
+
+`POST /session/networks` serves both subjects, so a DELETE that serves only
+users is an asymmetry that owes an explanation. It is this: a visitor's
+identity LIVES on its credentials. `representative_visitor_credential/1` is
+where the nick comes from and `visitor_registered?/1` derives permanence from
+the per-network secret, so detaching a visitor's only network hides the
+identity rather than a binding — which is `DELETE /me`'s job.
+
+CLAUDE.md's reuse rule puts it exactly: the 80% that fits is the park-and-mark
+mechanism, and the 20% that does not is whose identity the row anchors. That
+20% is the domain boundary. 403 until someone rules otherwise.
+
+### The wire, and a test that fixed itself by breaking
+
+`network_detached` is a new event kind rather than a reuse. A detach of an
+already-parked network moves no `connection_state` at all, so riding
+`connection_state_changed` would have meant inventing a transition — a lie on
+the wire to save a payload. cic answers it with BOTH refetches, because the
+sidebar hangs off `GET /networks` and the `$home` rows off the `/me` envelope;
+refetching only the first would leave a sibling tab offering a `[Reconnect]`
+chip for a network whose every route now answers the iso 404.
+
+No selection rescue is wired to that arm and none is missing: a detach of a
+LIVE network parks it first, which drives selection.ts's bucket-D redirect, and
+a detach of an already-parked one cannot be the window in view because #1985
+took parked networks out of the sidebar.
+
+`detached_at` also lands read-only on the admin credential row. An operator
+looking at a credential that answers no REST call and spawns at no boot is
+owed the reason on the row, which is CLAUDE.md's both-truths rule for admin
+listings.
+
+Moving the DELETE under `:full_session` broke `RouterScopeTest`, and the break
+was the point. That suite matched `/session/networks` as a PREFIX, so the new
+route would have been classified client-usable and asserted NOWHERE — passing
+vacuously while the thing the test exists to check went unchecked. The POST is
+named one verb at a time now, the way the `/me` namespace already is and for
+the same reason. The asymmetry itself follows the rule at the top of that
+scope: accreting adds a binding a per-client token may then use; detaching
+takes one away from every client the account has.
+
+### What is deliberately not here
+
+**The hard credential delete.** vjt's corrected ruling A puts it in `$home`
+alongside this verb, and it is not in this slice, for a reason that is a
+measurement rather than a preference: ruling C's remaining half — what happens
+to the archive of a network whose credential is GONE — is still open, and the
+answer changes what gets built. `ArchiveModal` iterates the raw `networks()`
+store, so a purged network's scrollback becomes unreachable AND undeletable,
+while a per-`(subject, network)` cascade would have to span `messages`,
+`read_cursors`, `query_windows`, `notify_entries` and the `(network, peer)`
+mutes. Detach has no such problem: everything comes back on re-attach,
+archive included.
+
+**A reversible verb for visitors**, per the boundary above.
+
+**`$home` Remove on a CONNECTED row.** The button renders on the disconnected
+row only, which makes Disconnect-then-Remove the only path. That is the
+two-step vjt described for the cautious user, it keeps the verb from ever
+firing against a live session from the UI, and the server's park-before-mark
+ordering is then a belt rather than the only brace.
+
+**Any change to the rail ×.** It still parks, #1985 still hides a parked
+network, and neither destructive verb is one distracted tap away from a
+disconnect — which was the whole substance of the corrected ruling.

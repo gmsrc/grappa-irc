@@ -590,6 +590,28 @@ not the surrounding code.**
   `:connected` — there is no registration watchdog, deliberately. A new
   reader of `connection_state` MUST decide which fact it wants and say so;
   a liveness check is `Grappa.Session.whereis/2`, not this column.
+  **🔴 There is a THIRD axis, and it is a column and not a fifth state:
+  `network_credentials.detached_at` (issue 2219).** `connection_state`
+  answers what the upstream LINK is doing; `detached_at` answers whether
+  the subject still HOLDS the binding at all. A detached row keeps
+  everything the subject authored (nick, `sasl_user`, the three encrypted
+  secrets, perform list, autojoin) and re-attaching via `POST
+  /session/networks` restores all of it — it is a reversible hide, NOT
+  `unbind_credential/2`, which still deletes. The invariant is
+  **detached ⇒ `:parked`**, enforced by `Networks.detach/2` parking
+  BEFORE it marks (mark-first strands a live `Session.Server` behind a
+  binding no subject-facing reader returns) and NOT by the schema, which
+  is why the boot query filters on both. **A new SUBJECT-FACING reader
+  MUST exclude detached rows**; the four that do are
+  `list_credentials_for_user_id/1`, `list_networks_for_subject/1`,
+  `list_credentials_for_all_users/0` and `count_by_state/0`, plus the ONE
+  REST gate `Plugs.ResolveNetwork`. `get_credential/2` deliberately does
+  NOT — it is what the admin unbind door resolves through, and filtering
+  it would leave an operator unable to unbind the row a subject hid; the
+  attached question is `get_attached_credential/2`. Visitors cannot
+  detach (403): their identity LIVES on the credential
+  (`representative_visitor_credential/1`, `visitor_registered?/1`), so
+  hiding the last one hides the identity, which is `DELETE /me`'s job.
   `AdminSessionsTab` surfaces BOTH columns and shows an explicit
   `null` when the live pid is gone — diagnostic value beats false
   uniformity. When adding a new admin listing, return both
