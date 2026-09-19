@@ -391,6 +391,21 @@ is DELETE-then-write, never append-only:
   🥇 **Quindi la sequenza si allunga di un passo, e il passo va PRIMA dell'upstream:** `-d` NUDO →
   se *"not fully merged"*, **`git fetch origin` e `-d` NUDO di nuovo** → SOLO SE rifiuta ancora,
   misura l'upstream e, se manca, `--set-upstream-to=origin/main` + `-d` NUDO.
+  🔴🔴 **MA QUEL «PRIMA DELL'UPSTREAM» È UN ORDINE DI TENTATIVI, NON UNA CATENA CAUSALE, E LETTO
+  COME CATENA FA CHIAMARE «FALLBACK» QUELLO CHE È LA CAUSA (w1, 2026-09-19, misurato su `w1-2190`).**
+  Dopo il `fetch` l'`origin/main` locale era **fresco** e `-d` **rifiutava identico**; a farlo passare
+  è stato `--set-upstream-to=origin/main`, e allora `-d` NUDO ha dato `rc=0` stampando da sé la prova
+  (*"has been merged to `refs/remotes/origin/main`, but not yet merged to HEAD"*). 🔑 **La ragione:
+  senza upstream `-d` non guarda NESSUNA remote-tracking ref — ripiega su `HEAD`**, cioè sul `main`
+  LOCALE del checkout principale di voyager, fermo a `88c5148bf` mentre il merge era `a9b2176d3`. ⇒
+  **su un ramo SENZA upstream il `fetch` non può spostare il verdetto, per costruzione**: aggiorna una
+  ref che quel confronto non consulta.
+  🥇 **Il discriminante si LEGGE prima di scegliere, e costa un comando:**
+  `git config --get-regexp 'branch\.<b>\.'` — **upstream ASSENTE ⇒ `--set-upstream-to`, il `fetch` è
+  un passo che sai già inutile; upstream PRESENTE e già corretto ⇒ `fetch`** (è il tell della quarta
+  causa qui sopra, dove `--set-upstream-to` risponde *"set up to track"* ed è un no-op). **Stesso
+  osservabile — `not fully merged` — due cure disgiunte, e provarle in ordine funziona solo perché
+  sono entrambe innocue: non scambiare la sequenza per una spiegazione.**
   ⚠️ **È la stessa trappola già scritta in questo file per il push via URL ssh esplicito, da una
   terza porta:** *qualunque* merge che non passi da `git push` lascia la tua remote-tracking ref
   a mentire, e qui la bugia non si presenta come un numero sbagliato ma come **un divieto**. *Un
