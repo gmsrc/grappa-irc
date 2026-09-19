@@ -2123,6 +2123,24 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   riga di nginx. **Un controllo positivo va scelto fra le cose che NON POSSONO essere assenti**
   — non fra quelle che ti aspetti presenti: `sshd` (anch'esso 0, mentre ci parlavo sopra) è già
   più debole, perché un `sshd` assente è concepibile e invita a discutere.
+  🔴🔴 **MA QUEL MODELLO L'HO RIUSATO SU voyager IL 2026-09-19 ED E' PASSATO PER IL MOTIVO
+  SBAGLIATO: `pgrep -l init` LI' MATCHA `secinitd`.** Tre processi, nessuno dei quali e' `init` —
+  che su macOS **non esiste**, il pid 1 e' `launchd`. **Il controllo positivo ha risposto SI senza
+  che la cosa nominata esistesse**, cioe' un pos ctrl VERDE e INVALIDO: mi ha salvata il caso, non
+  il progetto.
+  🔬 **Misurato subito dopo, e i modi di mentire sono TRE, non uno:**
+  **(1) `pgrep` matcha per SOTTOSTRINGA** ⇒ `init` becca `secinitd`; **(2) `pgrep -f` allarga alla
+  RIGA DI COMANDO INTERA** ⇒ `launchd` becca **tre** processi che quella parola ce l'hanno solo
+  come **argomento** (`usbmuxd -launchd`, `corebrightnessd --launchd`, `universalaccessd launchd -s`);
+  **(3) e puo' MANCARE cio' che di sicuro c'e'** ⇒ `pgrep -l launchd` e `pgrep -x launchd` danno
+  **rc=1** mentre `ps -p 1 -o pid,user,comm` stampa `1 root /sbin/launchd`. **Il "no" di `pgrep` non
+  e' prova di assenza, e il suo "si" non e' prova che abbia visto CIO' CHE HAI NOMINATO.**
+  🥇 **Regola: un pos ctrl per una sonda `pgrep` si sceglie (a) fra processi del TUO STESSO UTENTE**
+  — su voyager vedo **523 processi su 770**, il resto e' invisibile come su m42, meccanismo diverso
+  stessa famiglia — **(b) confermabile con un SECONDO strumento (`ps`), e (c) si verifica che il
+  MATCH sia la cosa nominata**, non una sottostringa. **Il piu' forte in assoluto: i processi
+  FRATELLI del bersaglio** (i `bats-exec` accanto al `check.sh` che stai cercando), perche' stessa
+  utenza, stessa forma, e se ci sono provano che la sonda vede la classe giusta.
   ⇒ **Forma che regge: `sudo -n` per le sonde di processo, oppure leggi un artefatto leggibile
   (il pidfile), e in ogni caso il pos ctrl DENTRO la stessa cattura.** ⚠️ La ricetta di
   verifica del deploy prod si salva **per fortuna, non per progetto**: usa `sudo -n jexec 11`.
