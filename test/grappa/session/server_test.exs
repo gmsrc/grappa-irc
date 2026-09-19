@@ -10846,21 +10846,24 @@ defmodule Grappa.Session.ServerTest do
     # depend on the reclaim having happened at all.
     defp reclaim_echo_handler(configured, fallback) do
       counter = :counters.new(1, [])
+      registration = "NICK #{configured}\r\n"
+      echo = ":#{fallback}!u@h NICK :#{configured}\r\n"
 
-      fn state, line ->
-        if line == "NICK #{configured}\r\n" do
-          n = :counters.get(counter, 1)
-          :counters.add(counter, 1, 1)
-
-          # 0 is the registration NICK — the test drives 001 itself, so the
-          # handler stays quiet. Anything after it is a reclaim, which a real
-          # server answers with the rename echo.
-          {:reply, if(n == 0, do: nil, else: ":#{fallback}!u@h NICK :#{configured}\r\n"), state}
-        else
-          {:reply, nil, state}
-        end
-      end
+      fn state, line -> {:reply, nick_echo(line, registration, echo, counter), state} end
     end
+
+    # Count 0 is the REGISTRATION NICK — the test drives 001 itself, so the
+    # handler stays quiet for it. Anything after it is a reclaim, which a real
+    # server answers with the rename echo. Split out of the closure rather than
+    # nested inside it: the `if`-in-`if` shape that expressed this was three
+    # levels deep and Credo strict is right to refuse it.
+    defp nick_echo(line, registration, echo, counter) when line == registration do
+      n = :counters.get(counter, 1)
+      :counters.add(counter, 1, 1)
+      if n == 0, do: nil, else: echo
+    end
+
+    defp nick_echo(_, _, _, _), do: nil
 
     test "a registration on <nick>_ ends up back on the configured nick" do
       {server, port} = IRCServer.start_server(reclaim_echo_handler("grappa-test", "grappa-test_"))
