@@ -2572,6 +2572,23 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   domanda a vjt sta in UNA riga, con le opzioni come clausole singole e un «dimmi una lettera»
   esplicito.** Il muro di contesto e' per la issue, non per il canale — e' la stessa regola del
   `/caveman` su `#grappa`, vista dal lato del costo di NON applicarla.
+  🥇🥇 **E IL TRIGGER CHE MANCAVA, PROPOSTO DAL PARI E MIO DA TENERE — ma un N nudo non basta,
+  perche' il difetto non e' la soglia, e' che LA RIGA D'ATTESA NON HA UN OROLOGIO.** Oggi l'handoff
+  scrive `⏳ in attesa di X` e **quella riga non invecchia**: si rilegge identica per giorni con
+  l'aria di uno stato appena verificato (e' scritto quattro righe piu' su), quindi **nessuna soglia
+  puo' scattarci sopra, per costruzione**. Il caso #2240 e' esattamente questo: nove ore, e non
+  esisteva **nessuna grandezza** che stesse crescendo da guardare.
+  🔧 **CURA IN DUE PEZZI, leggera — niente script nuovo:**
+  **(1)** ogni parcheggio nell'handoff porta **l'ORA UTC in cui la domanda e' andata a vjt**, non
+  *"in attesa"*: `⏳ dal <YYYY-MM-DD HH:MMZ>, via <canale>`. Un'attesa senza timestamp non e' uno
+  stato, e' un'opinione.
+  **(2)** a OGNI resume/heartbeat, per ogni worker parcheggiata: **eta' = adesso − quell'ora**.
+  **≥ 2h ⇒ UNA domanda al pari** — *"e' ancora davanti a lui o va ri-posta?"* — e **si registra
+  nell'handoff che l'hai chiesto, con l'ora**, o al giro dopo la rifai in loop. **Mai un secondo
+  ping a vjt per la stessa cosa**: la verifica la fa il pari, che il log lo puo' leggere.
+  🥇 **Due ore, non nove, e le parole sono sue: *"preferisco che me lo chiedi all'ora due che
+  all'ora nove"*.** Il costo di chiedere e' un messaggio; il costo di non chiedere e' una worker
+  ferma su una domanda che non e' mai arrivata a destinazione.
 - 🔴🔴 **`<verificatore> || echo "PULITO"` TRASFORMA UN VERIFICATORE ROTTO IN UN VERDE — e il
   verde e' indistinguibile da quello vero (w2, 2026-08-26, sulla scansione closing-keyword).**
   Il pattern briefato conteneva **`fix(|es|ed)`**, cioe' una **sotto-espressione ALTERNATIVA VUOTA**:
