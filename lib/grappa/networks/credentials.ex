@@ -1415,22 +1415,32 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  issue 2219 — the networks this user has detached, `:network` preloaded.
+  issue 2219 — BOTH sides of the attachment axis in ONE query, for the
+  caller that needs both.
 
-  Feeds `Networks.home_data_for_user/1`'s available-to-connect list. A
-  detached network has to be re-offerable EVEN WHEN it is not in the
+  `Networks.home_data_for_user/1` is that caller: the `$home` envelope
+  lists the attached networks AND offers the detached ones back, so it
+  would otherwise ask the same partition twice. #1679 made the boot cost
+  a pinned constant (`GrappaWeb.BootCostTest` asserts the query count of
+  `GET /me` to the integer), and a second read would have spent one of
+  those on a partition already in hand — measured, not feared: the pin
+  moved from 7 to 8 the moment the second query existed.
+
+  So the filter is an `Enum.split_with/2` at the caller rather than a
+  second `WHERE`, and `list_credentials_for_user_id/1` above stays the
+  attached-only reader for everybody who wants one side.
+
+  A detached network has to be re-offerable EVEN WHEN it is not in the
   `visitor_enabled` self-serve tier: the operator already granted this
-  subject that binding, the row still holds their nick and secrets, and
-  a hide the subject cannot undo would not be a hide. Without this the
-  promise the whole column exists for — "put it back and your settings
-  are there" — would hold only for the allowlisted networks.
+  subject that binding, the row still holds their nick and secrets, and a
+  hide the subject cannot undo would not be a hide.
   """
-  @spec list_detached_credentials_for_user_id(Ecto.UUID.t()) :: [Credential.t()]
-  def list_detached_credentials_for_user_id(user_id) when is_binary(user_id) do
+  @spec list_every_credential_for_user_id(Ecto.UUID.t()) :: [Credential.t()]
+  def list_every_credential_for_user_id(user_id) when is_binary(user_id) do
     query =
       from(c in Credential,
-        where: c.user_id == ^user_id and not is_nil(c.detached_at),
-        preload: [:network]
+        where: c.user_id == ^user_id,
+        preload: [:network, :avatar_upload]
       )
 
     Repo.all(query)

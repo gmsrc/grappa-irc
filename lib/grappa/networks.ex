@@ -685,8 +685,14 @@ defmodule Grappa.Networks do
   functions differ only in HOW they list attached credentials.
   """
   @spec home_data_for_user(User.t()) :: Wire.home_data()
-  def home_data_for_user(%User{id: user_id} = user) do
-    credentials = Credentials.list_credentials_for_user(user)
+  def home_data_for_user(%User{id: user_id}) do
+    # issue 2219 — ONE read of the partition, split here rather than
+    # asked for twice. See `list_every_credential_for_user_id/1` for why
+    # a second query was not an option.
+    {credentials, detached} =
+      user_id
+      |> Credentials.list_every_credential_for_user_id()
+      |> Enum.split_with(&is_nil(&1.detached_at))
 
     pairs =
       Enum.map(credentials, fn cred ->
@@ -702,10 +708,7 @@ defmodule Grappa.Networks do
     # have it", and the second question is the one re-attaching asks. An
     # admin-bound network left out of this union would be hideable and
     # never restorable, which is a delete wearing a hide's label.
-    detached_slugs =
-      user_id
-      |> Credentials.list_detached_credentials_for_user_id()
-      |> Enum.map(& &1.network.slug)
+    detached_slugs = Enum.map(detached, & &1.network.slug)
 
     available_slugs =
       list_visitor_enabled()
