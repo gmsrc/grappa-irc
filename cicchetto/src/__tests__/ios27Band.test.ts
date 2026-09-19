@@ -306,37 +306,43 @@ describe("applyIos27BandClass — the <html> hook", () => {
 });
 
 // The CSS half. The clearance is a stylesheet rule, so what is pinnable here
-// is the SOURCE: that the value is the measured 38px, that the rule ADDS it
+// is the SOURCE: that the value is the derived 16px, that the rule ADDS it
 // to the inset rather than replacing it, and — the property the ruling asks
 // for in point 5 — that no rule reading it is reachable without the class.
 // jsdom cascades none of this and resolves no length; the RESOLVED px are
 // asserted in e2e (issue2190-ios27-compositor-band.spec.ts), which is also
 // where the "exceeds the inset" half becomes a number rather than a shape.
 describe("the clearance rules are gated — no platform without the class pays", () => {
-  it("declares the measured 38px exactly once, on the gating class", () => {
-    // 38 REPLACED 16, and the two numbers have different provenance — which
-    // is the reason this assertion moved rather than being retuned quietly.
-    // 16 was a reported constant (what other PWA authors had used); it
-    // shipped, and the screenshot showed it did not cure the report. 38 is
-    // read off five probe pages photographed on the reporter's iOS 27 device:
-    // the veil dies 100 CSS px from the SCREEN edge, the first 62 of which
-    // are the status bar and are ceded anyway, leaving 38 as the net cost the
-    // layout has to buy. Ruled by vjt, informed by that curve.
-    expect(ruleBody(`html.${IOS27_BAND_CLASS}`)).toMatch(/--ios27-band-clearance:\s*38px;/);
+  it("declares the derived 16px exactly once, on the gating class", () => {
+    // THREE numbers have sat in this token and they are NOT interchangeable,
+    // which is why the value is asserted here at all rather than left to the
+    // sheet. The FIRST 16 was a reported constant — what other PWA authors
+    // had used — with nothing behind it; it shipped and did not cure the
+    // report. 38 replaced it off probe photographs: the veil ends 100 CSS px
+    // from the SCREEN edge, of which the first 62 are the status bar and are
+    // ceded anyway. That correctly clears the whole veil, and on the device
+    // it read as too far down. THIS 16 is derived from a measured screenshot
+    // of the installed PWA and trades some residual veil at the top of the
+    // chrome for 22px of vertical space. Same digits as the first one, an
+    // entirely different claim — the stylesheet comment carries the numbers.
+    expect(ruleBody(`html.${IOS27_BAND_CLASS}`)).toMatch(/--ios27-band-clearance:\s*16px;/);
   });
 
   it("ADDS the clearance to the inset on `.shell` — never replaces it", () => {
     // 🔴 THE REGRESSION THIS FILE EXISTS TO STOP, and it was one edit away.
     // `.shell` already declares `padding-top: var(--safe-area-inset-top)`, so
     // the natural-looking gated rule — `padding-top:
-    // var(--ios27-band-clearance)` — does not add 38px, it OVERRIDES the
-    // inset (specificity 0,2,1 against 0,1,0) for a net LOSS of 24px that
-    // pulls content up under the Dynamic Island. It is the #913 trap with the
+    // var(--ios27-band-clearance)` — does not ADD the clearance, it hands the
+    // element the clearance INSTEAD OF the inset (specificity 0,2,1 against
+    // 0,1,0), so a gated device ends up HIGHER than an ungated one rather
+    // than lower, pulling content up under the Dynamic Island. Stated without
+    // a figure on purpose: the token has been retuned three times and the
+    // failure is identical at every value. It is the #913 trap with the
     // sign flipped: that one doubled the inset by re-adding it, this one
     // annihilates it by overwriting it.
     //
     // So the assertion is on the SUM, and deliberately NOT an equality
-    // against `38px` — an equality against the bare clearance is precisely
+    // against `16px` — an equality against the bare clearance is precisely
     // the bug, written down and blessed. Both terms, in a calc, or red.
     const gated = ruleBody(`html.${IOS27_BAND_CLASS} .shell`);
     expect(gated).toContain(
@@ -362,7 +368,7 @@ describe("the clearance rules are gated — no platform without the class pays",
     // calc(0.5rem + …)` plus the matching `scroll-padding-top` — came out.
     // Pinned as an ABSENCE rather than deleted quietly: a future edit that
     // re-adds clearance on the scroll container while the shell already
-    // shifts the whole flow pays the 38px twice, and nothing else would say
+    // shifts the whole flow pays the clearance twice, and nothing else would say
     // so. `scrollbackBottomAlign.test.ts` lost its coupling test for the
     // same reason.
     const readers = allRules().filter((rule) => rule.body.includes("--ios27-band-clearance"));

@@ -17543,17 +17543,48 @@ explanation going around is falsified by that same flat-tint probe. `theme-color
 is inert here too, tested under both status-bar styles with the dark-theme shot
 confirmed.
 
-### Why 38 and not 100, and why not the inset alone
+### The number: 16, and it is the THIRD one — do not read it as the first
 
 The veil dies 100 CSS px from the **screen** edge. The first 62 of those are
 the status bar and are ceded anyway — nothing readable goes under the clock —
-so the net cost owed below the inset is **38**. Trusting the inset alone parks
-the first line 38px inside the effect, which is the reported symptom exactly;
-stopping at 40px from the screen edge does not work either, the veil is still
-at 89 percent of its strength there. The contrast curve at the clearance's own
-edge runs 27 percent at +0, 71 at +18, 91 at +26, crisp at +34. vjt ruled 38
-with that curve in hand; **26 is the honest cheaper fallback** and needs no new
-measurement.
+so the cost owed below the inset to clear the veil ENTIRELY is **38**.
+Trusting the inset alone parks the first line inside the effect, the reported
+symptom exactly; stopping at 40px from the screen edge does not work either,
+the veil is still at 89 percent of its strength there. The contrast curve at
+the clearance's own edge runs 27 percent at +0, 71 at +18, 91 at +26, crisp at
++34.
+
+**38 went to the device and came back wrong in the other direction.** vjt:
+«ok meglio ma TROPPO sotto». The "meglio" is load-bearing on its own — it is
+the evidence that the gate finally fired at all, which nothing before it had
+established. The "troppo sotto" is the retune: measured on a 1320x2868 @3x
+screenshot of the installed PWA, the bottom of the Dynamic Island sits at 50.7
+CSS px and the top of cic's chrome at 107, leaving **56 CSS px of dead black**
+between them, with the bar itself 48 px — `--chrome-tap-min` exactly. Dropping
+the token by 22 lifts the bar to 85 and leaves 34 px of black.
+
+So the token now reads **16**, and it is a different KIND of number from both
+of its predecessors. The first 16 was a reported constant with nothing behind
+it. 38 was a correct reading of where the veil ENDS, optimising for the last
+pixel of it. This 16 is a **trade**, chosen against a measured screenshot: it
+concedes some residual veil at the very top of the chrome to buy back vertical
+space. Same digits as the first attempt, an entirely different claim — and if
+it wants to go higher still, 8 is the next step and it is one token.
+
+⚠️ **Provenance, three sources, do not collapse them.** The probe and
+screenshot measurements are the fleet agent's (the GitHub comments carrying
+them are authored under vjt's account because of how the fleet authenticates;
+the readings are not his). **16 is that agent's derivation from those numbers.**
+vjt did not compute it; he *approved* it («16 first», #grappa 2026-09-19
+10:36), having supplied the verdict that 38 sat too low and, earlier, the
+ruling that the clearance belongs on `.shell`. Derived by the agent, endorsed
+by him — both halves, neither collapsed into the other.
+
+🔴 **Unexplained, and recorded rather than smoothed over:** 62 + 38 is 100, but
+the chrome's measured top is 107. The 7 CSS px are unaccounted for — the retune
+does not depend on them, since it rests on the *delta* (−22 lifts 107 to 85,
+which is exact), but the decomposition of the absolute position does not close
+and nobody should quote it as though it did.
 
 ### Ruling point 4: the clearance sits on `.shell`
 
@@ -17564,7 +17595,7 @@ chrome spans 62 to at least 110 CSS px **regardless of the root font size**
 while the veil ends at 100. The whole of that window is chrome. vjt ruled
 `.shell` (#grappa 2026-09-16 00:42), so the clearance now shifts the entire
 flow and the scrollback pair — `padding-top` plus `scroll-padding-top` — came
-out. **The accepted price is 38px of vertical screen, permanently**, and
+out. **The accepted price is 16px of vertical screen, permanently**, and
 because `box-sizing` is `border-box` and `.shell` is `height: 100dvh`, that
 padding is consumed FROM the height: the shell does not grow, the usable area
 shrinks.
@@ -17573,8 +17604,9 @@ shrinks.
 
 `.shell` already declares `padding-top: var(--safe-area-inset-top)`, so the
 natural-looking gated rule — `padding-top: var(--ios27-band-clearance)` — does
-not add 38px, it **replaces** the inset at specificity 0,2,1 against 0,1,0, for
-a net loss of 24px that pulls content up under the Dynamic Island. #913 doubled
+not add the clearance, it **replaces** the inset with it at specificity 0,2,1
+against 0,1,0, so a gated device ends up HIGHER than an ungated one rather than
+lower, pulling content up under the Dynamic Island. #913 doubled
 the inset by re-adding it; this annihilates it by overwriting it. Same sheet,
 same token, opposite sign — and every note in the tree warns only about the
 doubling direction, which is precisely why the other one is easy to walk into.
@@ -17588,11 +17620,11 @@ both on both renders. One rule, both platforms — and it must stay on `.shell`,
 not `.shell-mobile`, or the iPad is dropped silently.
 
 At inset 0 — which is what every engine we can drive reports — `calc(inset +
-38px)` and a bare `38px` compute the same number, so the regression above is
+16px)` and a bare `16px` compute the same number, so the regression above is
 **invisible to a test that does not stub the inset**. The e2e spec re-declares
 `--safe-area-inset-top` on a `:root:root` override and asserts the gated shell
 exceeds the ungated one; the unit test asserts the sum's shape and refuses an
-equality against `38px`, because that equality is the bug written down.
+equality against `16px`, because that equality is the bug written down.
 
 ### 🔴 And none of it ran: the gate was dead on the only phone with the band
 
@@ -17652,7 +17684,7 @@ most needs to be readable. Tracked separately, deliberately not fixed here.
 🔁 The measurements in this entry are the work of the fleet agent that
 published the probe pages on issue 2190; the GitHub comment carrying them is
 authored under vjt's account because of how the fleet authenticates, and the
-readings are not his. The 38 and the `.shell` placement are vjt's rulings,
+readings are not his. The `.shell` placement is vjt's ruling,
 relayed through the orchestrator, not read from IRC directly.
 <!-- entry #2240b -->
 

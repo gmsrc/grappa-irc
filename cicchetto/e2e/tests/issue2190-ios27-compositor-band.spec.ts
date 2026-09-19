@@ -1,4 +1,4 @@
-// issue 2190 — the iOS/iPadOS 27 compositor band, and the 38px of clearance
+// issue 2190 — the iOS/iPadOS 27 compositor band, and the 16px of clearance
 // gated under it on `.shell`.
 //
 // WHAT THIS SPEC CAN AND CANNOT SEE. It cannot see the band: that is painted
@@ -8,17 +8,18 @@
 // What it CAN see, and what jsdom structurally cannot since it has no layout
 // engine, is the thing the cure has to deliver mechanically: that on an iOS
 // 27 installed PWA the whole shell — chrome included, which is the point of
-// vjt's ruling on point 4 — sits 38 real pixels lower, that the clearance is
+// vjt's ruling on point 4 — sits CLEARANCE_PX real pixels lower, that the
+// clearance is
 // ADDED to the safe-area inset rather than replacing it, and that on
 // everything else NOTHING moves.
 //
 // 🔴 WHY THE INSET IS STUBBED, AND WHY THE SPEC IS WORTHLESS WITHOUT IT.
 // Playwright synthesizes no safe-area inset on any engine — they resolve to
 // 0, measured in issue913-rail-menu-safe-area.spec.ts. At a zero inset
-// `calc(var(--safe-area-inset-top) + 38px)` and a bare `38px` compute the
+// `calc(var(--safe-area-inset-top) + 16px)` and a bare `16px` compute the
 // SAME number, so the headline regression this rule guards against — the
-// gated declaration OVERRIDING `.shell`'s inset instead of adding to it, a
-// net loss of 24px that pulls content under the Dynamic Island — is
+// gated declaration OVERRIDING `.shell`'s inset instead of adding to it,
+// which pulls content UP under the Dynamic Island instead of down — is
 // invisible at inset 0. Re-declaring `--safe-area-inset-top` at a non-zero
 // length on a `:root:root` override is what makes the two cases different
 // numbers, and it is the same seam #913 uses to prove its own wiring.
@@ -52,9 +53,11 @@ const CHANNEL = AUTOJOIN_CHANNELS[0] as string;
 // the stylesheet (`src/__tests__/ios27Band.test.ts`).
 const BAND_CLASS = "is-ios27-band";
 
-// The measured clearance. 38 CSS px: the veil dies 100 px from the screen
-// edge, the first 62 of which are the status bar and are ceded anyway.
-const CLEARANCE_PX = 38;
+// The clearance. DERIVED, not measured: 38px cleared the veil completely and
+// vjt's verdict on the device was «ok meglio ma TROPPO sotto», so this trades
+// some residual veil at the very top of the chrome for 22px of vertical space.
+// The stylesheet comment carries the screenshot numbers behind it.
+const CLEARANCE_PX = 16;
 
 // The stubbed inset. An arbitrary non-zero length — its only job is to be
 // distinguishable from both 0 and from CLEARANCE_PX, so that "added" and
@@ -139,7 +142,7 @@ async function measure(page: Page): Promise<Geometry> {
   });
 }
 
-test("@webkit issue2190 — iOS 27 PWA shifts the whole shell 38px, iOS 26 renders identically", async ({
+test("@webkit issue2190 — iOS 27 PWA shifts the whole shell 16px, iOS 26 renders identically", async ({
   browser,
 }) => {
   const on = await bootInstalledPwa(browser, 27);
@@ -168,9 +171,10 @@ test("@webkit issue2190 — iOS 27 PWA shifts the whole shell 38px, iOS 26 rende
     expect(withBand.outside).toEqual(without.outside);
 
     // ── Part 2, THE ONE THAT CATCHES THE REGRESSION. With a real inset in
-    // play the two candidate rules stop agreeing: adding gives inset + 38,
-    // replacing gives 38 flat, i.e. 21px LESS than the ungated control gets.
-    // At the engine's native inset of 0 both read 38 and Part 1 passes
+    // play the two candidate rules stop agreeing: adding gives inset +
+    // CLEARANCE_PX, replacing gives CLEARANCE_PX flat — LESS than the ungated
+    // control gets, i.e. the gated device ends up higher rather than lower.
+    // At the engine's native inset of 0 both read CLEARANCE_PX and Part 1 passes
     // either way, which is why this half is not optional.
     await stubTopInset(on.page, STUB_INSET_PX);
     await stubTopInset(off.page, STUB_INSET_PX);
