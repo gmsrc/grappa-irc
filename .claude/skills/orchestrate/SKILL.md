@@ -2903,6 +2903,27 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   🥇 *La morale non e' sul tmux: **un rilevatore va provato contro un soggetto che ha DAVVERO la
   proprieta' che cerchi**, e finche' quel soggetto non ce l'hai, ogni predicato che proponi e'
   un'ipotesi — per quanto ragionevole sembri.*
+  🔴🔴 **SETTIMO GIRO, E TOCCA L'UNICO SOPRAVVISSUTO: IL PID E' RIUSABILE, E DOPO IL WRAP
+  `ps -p <pid>` DIVENTA UN FALSO POSITIVO.** Misurato: **`pid_max` = 4.194.304**, pid vivo piu' alto
+  **4.093.421**, **margine 100.883** (*il RATE di consumo NON e' misurato — servirebbero due
+  campioni distanziati: dichiarato, non stimato*). Dopo il wrap i pid ripartono dal basso e possono
+  **ricapitare su un orfano**: a quel punto `ps -p 2278987` risponde **VIVO** su una sessione morta
+  da un mese. ⇒ **il socket orfano smette di essere inerte e diventa una TRAPPOLA ARMATA: oggi non
+  prova niente, dopo il wrap AFFERMA IL FALSO.**
+  🔑 **Cura: il pairing socket↔processo si verifica col TEMPO DI NASCITA, e sono DUE condizioni, non
+  una.** `ps -p <pid> -o comm=` deve dare **`claude`** **E** `lstart` deve combaciare col `mtime` del
+  socket. **Misurato su due vivi:** il mio → socket `1789042419` vs processo `1789042417`, **2
+  secondi**; il pari → `1787381912` vs `1787381911`, **1 secondo** (il socket nasce subito DOPO il
+  processo). **Neg ctrl:** l'orfano ha il socket e **nessun processo**. Un pid riciclato nascerebbe
+  **mesi dopo** il socket che porta il suo numero ⇒ **una tolleranza larga (decine di secondi) e'
+  abbondante e robusta**: il segnale e' di ordini di grandezza, non al secondo.
+  🥇🥇 **E QUESTA E' LA COSA PIU' GRANDE DELLA GIORNATA, piu' della tabella: QUATTRO strumenti
+  funzionano OGGI per una ragione che nessuno aveva DICHIARATO** — `remain-on-exit off`, la radice
+  `bash`, il socket orfano, e adesso **un contatore che non ha ancora girato**. **Non e' sfortuna:
+  e' che un predicato lo provi contro lo STATO PRESENTE del sistema, e lo stato presente e' UNA
+  delle configurazioni possibili, non la sola.** ⇒ **quando eleggi un discriminante, scrivi accanto
+  la CONDIZIONE DI CONTORNO che lo rende valido** — altrimenti la scadenza non ce l'ha nessuno, e il
+  giorno in cui quella condizione cambia il check non si rompe: **comincia a mentire.**
   🪞 **Nota di metodo sulla catena: il pari aveva verificato `%19`, che e' il pane di
   `ha-eisenberg-4c`; il SUO e' `%82`** — pos ctrl preso su un soggetto che non e' quello di cui
   parli. **L'ha confermato lui risalendo l'ancestry dal proprio `$$`**, invece di discuterla.
