@@ -2162,6 +2162,27 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     🥇 *Due sonde diverse vanno tenute SEPARATE nel verbale anche quando rispondono a domande vicine:
     "e' successo qualcosa sull'issue?" e "vjt ha risposto?" sono legittime tutt'e due, e una non
     sostituisce l'altra nemmeno per un giro.*
+    🥇🥇 **E DA LI' IL PARI HA NOMINATO IL BUCO STRUTTURALE CHE STA SOTTO TUTTA QUESTA SEZIONE, E VA
+    SCRITTO PERCHE' NON SI VEDE DA DENTRO: LA CATENA DI VERIFICA INCROCIATA SI FERMA AL CONFINE DI
+    IRC.** Fatto misurato sulla giornata del 2026-09-20: **nessuno dei cinque scontri di numeri e'
+    stato trovato da chi l'aveva commesso** — tutti dal SECONDO lettore, e tutti su grandezze
+    leggibili in due (issue, commit, db di prod, pane, socket, pid). **A me leggere IRC e' vietato**
+    ⇒ ogni misura su `bot.log` e' **single-reader PER COSTRUZIONE**: un `12:37:52Z` non me lo puo'
+    contestare nessuno, quindi un errore li' cade in un punto cieco del processo.
+    🔑 **DUE DOVERI SPECULARI, e sono diversi — non e' "fidarsi meno".**
+    **(a) Chi PRENDE** una misura che nessun altro puo' riprendere la **MARCA single-reader** e li'
+    tiene il metodo PIU' STRETTO proprio perche' manca il secondo paio d'occhi: istante letto con
+    `date`, canale dichiarato, predicato scritto per esteso. Non e' rigore di facciata, **e' l'unica
+    difesa rimasta.**
+    **(b) Chi la RICEVE** non le da' la stessa confidenza di una incrociata, **e contesta la parte
+    che RESTA contestabile.** Il grezzo no, ma **il DERIVATO si': l'elapsed, la conclusione, il
+    predicato.** Il mio *"~1h36m"* e' esattamente quello — un numero SUO letto bene e da me ricucinato
+    male. ⇒ **su una misura single-reader si chiede l'ISTANTE e si rifa' la sottrazione, mai si
+    accetta la durata gia' fatta** (e' la regola istante-vs-elapsed, applicata al confine fra agenti
+    invece che dentro uno solo).
+    ⚠️ **Il costo di NON scriverlo: una grandezza che nessuno puo' ricontrollare accumula la stessa
+    aria di solidita' di una che in dieci l'hanno guardata** — e nel verbale, dopo due giorni, sono
+    indistinguibili.
 
 ## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
 - 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
