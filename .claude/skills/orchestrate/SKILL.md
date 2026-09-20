@@ -2297,6 +2297,27 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     outbound di quel giorno ci sono altre domande, tutte **gia' chiuse**, e **della «(5)» nessuna
     traccia.** ⇒ **non stavamo misurando un silenzio: misuravamo l'assenza di risposta a una domanda
     mai fatta** — che produce un silenzio **PERFETTO, con tutte le difese in piedi, per sempre.**
+    🔴🔴 **CORREZIONE ALLA FONTE, `2026-09-20 21:5xZ`: «DELLA (5) NESSUNA TRACCIA» E' SBAGLIATO, E
+    L'HA RITRATTATO IL PARI STESSO PORTANDO L'ARTEFATTO CHE GLI AVEVO CHIESTO.** La (5) **E' USCITA**:
+    istante **`12:14:58Z`**, canale **DM a vjt**, testo verbatim (*"…resta solo da decidere se il wire
+    e' una gamba del design o un prerequisito, con calma"*), **predicato letterale dichiarato, pos ctrl
+    361 righe outbound nella stessa finestra, un hit solo.** ⇒ **due misure dello stesso agente in
+    disaccordo, nessuna mia: vince quella che porta predicato e pos ctrl**, e una lezione non puo'
+    citare un numero che non la misura.
+    🥇🥇 **MA LA VERITA' E' PIU' AFFILATA DELL'ERRORE, E LA REGOLA NE ESCE RAFFORZATA INVECE CHE
+    DEMOLITA: era uscita COME FRASE, non e' MAI STATA POSTA COME DOMANDA.** Stava **in CODA a un
+    messaggio che ne conteneva un'altra formulata come richiesta d'azione** (*"dimmi solo «totale» e
+    chiudo"*), e lui ha risposto a QUELLA. **Prova indipendente dal ricordo di chiunque: il suo «go on»
+    successivo elencava DUE voci e non tre** — non ne saltava una, **ne aveva vista una sola.**
+    🔑 **⇒ «L'HO MANDATA» NON BASTA: si chiede se era POSTA.** Una domanda spedita in coda a un
+    messaggio che contiene un'altra domanda esplicita **non e' una domanda posta: e' rumore accanto a
+    un'istruzione**, e produce lo stesso silenzio perfetto di una mai scritta — con in piu' un outbound
+    verificabile che la fa sembrare posta. ⇒ **l'artefatto di una pendenza non e' solo istante+canale:
+    e' istante + canale + LA FORMA** (domanda secca e sola, o coda di qualcos'altro).
+    🥇 *E il pari ha portato TRE correzioni a proprio carico senza che gliene chiedessi nessuna — fra
+    cui un istante del suo activity log sbagliato di due minuti rispetto al log vero. Quando qualcuno
+    ti smentisce e nello stesso turno smentisce se' stesso con piu' rigore, la sua misura vale di piu',
+    non di meno.*
     🔑 **⇒ PRIMA di misurare una risposta, VERIFICA CHE LA DOMANDA SIA USCITA** — e si verifica nel
     canale OUTBOUND, non nella memoria e non nell'handoff. E' lo stesso errore gia' scritto qui
     sopra per l'ASSE e per il CANALE, salito di un piano: li' misuravi la cosa giusta nel posto
