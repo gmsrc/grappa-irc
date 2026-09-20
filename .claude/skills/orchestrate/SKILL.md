@@ -1946,6 +1946,20 @@ quelli — il vuoto e' diventato un vuoto VERO. 🥇 **Il positivo non si scegli
 rispondere SI: si sceglie DIMOSTRANDO che risponde SI**, e la dimostrazione sta nella stessa cattura
 del negativo, non in un'altra sessione e non nella tua testa. *Un controllo positivo che non puo'
 riuscire e' un controllo che non c'e' — esattamente come il negativo che non puo' fallire.*
+🔴🔴 **E UN POS CTRL MUTO HA DUE DIAGNOSI CHE PRODUCONO LO STESSO OSSERVABILE — STRUMENTO MORTO
+oppure POS CTRL SCELTO MALE — e presi il verso sbagliato entro l'ora dall'aver committato la regola
+(orch, 2026-09-20).** Verificavo i topic GitHub di `vjt/grappa-irc`: lo strumento dava **0**, e il mio
+positivo (`elixir-lang/elixir`, *"figurati se non ha topic"*) dava **0 pure lui** ⇒ ho dichiarato lo
+strumento morto. **Falso: lo strumento era sano e `elixir` NON HA topic davvero** — scelto assumendo
+che rispondesse SI invece di dimostrarlo, cioe' l'errore che la riga qui sopra vieta testualmente.
+🥇 **Il discriminante costa UNA chiamata: gira lo strumento SOSPETTO su un soggetto di cui hai gia'
+PROVATO la proprieta'.** Li': `repos/Sythos/Cordiale --jq .topics` ⇒ **n=10** sullo strumento che
+avevo appena condannato ⇒ **sano**, e il problema era il campione.
+🥇🥇 **E IL POS CTRL MIGLIORE SPESSO VIVE DENTRO LA TESI CHE STAI VERIFICANDO.** Il referto diceva
+*"nel topic c'e' un repo solo, il suo Cordiale"* ⇒ **se la tesi e' anche solo in parte vera, Cordiale
+QUELLA PROPRIETA' CE L'HA PER FORZA** ⇒ e' un positivo la cui riuscita non va assunta, **la garantisce
+l'affermazione sotto esame** — e se tace, non hai perso nulla: quel silenzio falsifica la tesi
+direttamente. *Non pescare il positivo dal mondo quando ce l'hai dentro il claim.*
 🔴🔴 **TERZA FACCIA, MISURATA IL 2026-09-11 DA w1 CONTRO UN MIO PALETTO: UN CONTROLLO NEGATIVO CHE
 NON PUO' *RIUSCIRE* — cioe' che ACCUSA lo strumento CORRETTO.** Avevo prescritto, per un confronto
 ramo-contro-main, *"un path FASULLO deve dare DIFFERENT; se risponde identical il tuo ciclo e'
