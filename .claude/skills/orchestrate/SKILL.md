@@ -1332,6 +1332,22 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   contain your merge — they stay CONFLICTING and you "fix" them twice.** Did exactly this to #780 and #776 on
   2026-08-03. **`git fetch origin` IMMEDIATELY after any direct main push, and re-read `origin/main` before
   using it as a rebase base.**
+- 🔴🔴 **DOPO UN MERGE LATO SERVER, LA SHA CHE LEGGI DAL `git log` LOCALE E' LA **BASE**, NON IL
+  RISULTATO — E SI PRESENTA COME UNA RISPOSTA PLAUSIBILE (pari, 2026-09-20, misurato sulla #2263).**
+  Questo file dice gia' *"dopo un merge via `gh`: `git fetch` + `ff-only`"*, e **non basta**: descrive
+  la cura dello STATO e tace sul fatto che, finche' non l'hai applicata, **ogni lettura di sha dal
+  locale risponde a un'altra domanda.** Misurato: merge commit reale **`f44586308`**
+  (`gh pr view N --json mergeCommit`), sha citata a verbale **`a0ec7efeb`** — che era il commit
+  **precedente**, cioe' la base su cui il merge era stato costruito. Il checkout leggeva `behind=1`.
+  🥇 **Perche' e' la meta' peggiore della coppia, e sono le sue parole: una sha sbagliata a verbale
+  NON SI ANNUNCIA.** Uno stato stantio lo becchi al primo comando che lo tocca; una sha sbagliata
+  sta ferma in un handoff o in un messaggio finche' qualcuno la cerca fra tre giorni **e non la
+  trova**, e a quel punto non sa piu' se manca il commit o e' sbagliato il riferimento.
+  ⇒ **La sha di un merge si legge da `gh pr view N --json mergeCommit`, MAI dal `git log` locale** —
+  e vale per ogni merge che non sia passato da un tuo `git push`: `gh pr merge`, il `PATCH` del ref
+  via `gh api`, il bottone sul sito.
+  ⚠️ **E il conto lo paga un terzo:** `/srv/grappa` **e' anche STAGING**, quindi un checkout lasciato
+  indietro non e' un difetto cosmetico — **e' debito scaricato su chi deploya**.
 - 🔑 **NEVER HAND-TYPE THE SHA IN `--force-with-lease`.** Derive it: `gh pr view N --json headRefOid -q
   .headRefOid`. A mistyped expected-SHA fails with *"stale info"*, which reads like a race and is really a
   typo — the lease correctly refused rather than clobbering.
