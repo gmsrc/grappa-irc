@@ -18338,3 +18338,94 @@ Documentation and a gate only. `Grappa.Protocol` is untouched and
 `protocol_version` does not move — the rule bumps on wire-SHAPE changes, and
 nothing about the emitted set changed here. What changed is that it is now
 written down.
+<!-- entry #1365 -->
+
+---
+
+## 2026-09-20 — #1365: the DM listener wins a contended own-nick topic, and a fixture that hid the path it claimed to test
+
+The original report closed with "fixing it needs a precedence rule between the
+query-windows loop and the DM-listener loop — which loop yields a contended key
+— and that is design, not a bugfix". This is that rule, decided and measured.
+It cures the production symptom only; the identity design the issue carries —
+give the DM conversation an id of its own, because `query_windows.id` is the id
+of an OPEN WINDOW and `close/4` deletes the row — stays open.
+
+### The rule: the DM listener wins, the query loop yields
+
+Two of `subscribe.ts`'s four `joined.set` sites can hold the own-nick key, and
+only one of them routes correctly. `installChannelHandler` keys a row on the
+TOPIC it arrived on; the DM-listener handler re-keys it on the SENDER. So a
+query subscription sitting on the own-nick topic funnels every inbound DM, from
+every peer, into the own-nick bucket. Precedence can therefore only run one
+way.
+
+The key becomes contended because `ensureQueryTopicJoined` skips own-nick
+against the CURRENT nick: a window opened while we wore a different nick keeps
+a key a later rename makes ours. The DM-listener arm was a bare
+`if (joined.has(key)) continue`, so #1341's ownership release handed the old key
+back and this guard then refused the new one — **measured, the rename produced
+no new join at all and the account was left with no DM listener on any topic.**
+That is the whole symptom: not a mis-route, an absence.
+
+Seizing is safe for the loop that yields, and nothing new had to be built to
+make it so: the query-windows effect reads `networks()`, so it re-runs on the
+very rename that triggered the seizure and re-acquires the key with its own
+handler once it is no longer our own nick. Clearing `queryJoinAcks` for the
+seized key is what keeps that re-acquire off a stale in-flight ack. Both #1341
+ownership tests stay green. Honest limit on that sentence: the OUTCOME is
+measured, the re-acquire MECHANISM is read from the source — no mutant was run
+against the `queryJoinAcks` line.
+
+### Why this does not breach "cic NEVER originates state"
+
+The rule decides which LOCAL handler owns a LOCAL subscription. The server
+neither knows nor can know which handler cic installed, so there is no server
+state being guessed at, no optimistic window state, no parallel state machine —
+the prohibition is about originating STATE, and subscription ownership is a
+client concern by construction. Nothing goes on the wire, so `protocol_version`
+does not move and a second client learns nothing new. Six lines of code.
+
+### The limit, and why it is the correct behaviour rather than a leftover
+
+Precedence separates everybody except a peer wearing OUR OWN nick: the re-key is
+on the sender, and there the sender's key IS our key, so that conversation
+shares the self window's bucket. This is not a regression and not a client
+defect — the server collapses the same pair, because the fold-unique index on
+`query_windows` makes our self window and a query with a peer who bore that nick
+ONE row (#948). cic agreeing with the server is right until the conversation has
+an identity of its own. It is pinned by a test so the cure is not read as
+total. (A ruling making that index TOTAL rather than scoping it to open
+conversations was relayed while this landed; at the time of writing it is
+relayed rather than seen first-hand and not confirmed, so it is recorded here as
+context and not as settled. If it holds, the collapse above stops being
+incidental and becomes intentional.)
+
+### The fixture that hid the path it was named after
+
+`focus-rule.test.ts` stubbed `GET /channels` with a bare `alice` row — a nick in
+the channel list — under a comment asserting the server "routes incoming DMs to
+this channel slot". It cannot, and that is measurable on both halves of the
+endpoint: the autojoin half is validated by `Identifier.valid_channel?/1` in
+`Credential.validate_autojoin_channels`, and the live half is
+`state.members |> Map.keys()`, the channels we JOINed, never a DM peer.
+
+The cost was silent and it is the more useful half of this work. That row made
+the channels loop take the own-nick topic, the DM listener was deduped away, and
+the test named "incoming DM PRIVMSG (auto-open) does not change focus" drove the
+CHANNEL handler — **it never exercised the DM path it claims to cover.** The
+file's `queryWindows` mock is missing `canonicalQueryNick` for exactly that
+reason: the arm needing it was unreachable, so nothing ever asked for it.
+
+The repair removes the impossible row and completes the mock rather than raising
+the handler-count barrier to accommodate a state the server cannot produce. The
+total stays 3 and is reached honestly — 1 channel, 1 DM listener, 1 `$server`.
+**The general rule worth keeping: when a change makes a barrier count go up, ask
+whether the fixture that set the old count was reachable, before adjusting the
+number.** Here the count was right and the world behind it was invented.
+
+### Not established
+
+All of it is vitest against the socket mock; no real stack was driven, which is
+the same limitation the original report declared for itself and is carried
+forward rather than papered over.
