@@ -18660,3 +18660,129 @@ not reachable from the worker host. And the audit can name the spellings it
 searched and the one it proved impossible, but a narrow expressed as data, or
 reached through a wrapper whose name does not mention `kind`, would still escape
 all four greps.
+<!-- entry #2270 -->
+
+---
+
+## 2026-09-21 — #2270: dates rendered in the browser's UI language, and the one input that can say otherwise
+
+Five user-facing sites formatted an instant with a bare `toLocaleString()` /
+`toLocaleDateString(undefined, …)`. That reads the JS runtime's default locale,
+which in a browser is the **UI language** — not the region, and not the date
+convention the user configured. An English-language Chrome therefore rendered
+`mm/dd/yyyy` for a reader in Italy.
+
+### What the reported device proves, and why no default could have fixed it
+
+The report came from iOS, where *language* and *region* are separate fields:
+Preferred Language English, Region Italy, Date Format shown by the OS itself as
+`19/08/2026`. A web page receives the **language** tag, so `Intl` resolves a US
+default and renders month-first on a device whose own setting says otherwise.
+
+Three measurements taken while the shape was decided, all of which close off
+the "just sniff harder" direction:
+
+* the web exposes **no region** to a page — there is nothing to derive from;
+* `en-IT` is **not a real CLDR locale**: ICU falls it back to `en` and renders
+  `9/20/2026`;
+* the only day-first English locale is `en-GB`, and nothing on the page can
+  reach it.
+
+So the platform default is not merely weak here — it is **provably unable** to
+express a setting the user has already made. A stored preference is the only
+channel that can carry it. `auto` is a REAL key and not the absence of one:
+absence cannot be told from "never chose", and the drawer must render something
+selected.
+
+### The key touches ORDER, never LANGUAGE
+
+An instant needs a timezone and a notation needs a locale; on the reporter's
+devices those disagree (`en-US` + `Europe/Rome`). The TZ half was already right
+and is untouched. Of the locale half, the preference governs field ORDER only.
+This is why the scrollback day separator takes both a key and a locale: an
+Italian viewer who picks `dmy` must still read `lunedì`, and answering a
+notation question by switching the language to `en-GB` would be a worse bug
+than the one being fixed. Under an explicit key the separator therefore renders
+the localized weekday beside the chosen numeric notation — `auto` keeps today's
+long-form label verbatim, punctuation included (measured: `en-GB` carries no
+comma, `en-US` does).
+
+### Two things that came out of the gates rather than out of the design
+
+**The renderer had to be TOTAL, and the first cut was not.**
+`Date.prototype.toLocaleString()` answers the string `"Invalid Date"` for a
+non-finite instant; `Intl.DateTimeFormat.format()` throws `RangeError: date
+value is not finite`. Swapping one for the other silently turned a total
+function into a partial one, inside render paths where a throw is a blank pane
+rather than a bad string. `RailContext.test.tsx` caught it on a WHOIS bundle
+whose `signon` was absent. All three public renderers now answer an em-dash for
+a non-finite instant — never `"Invalid Date"`, which `channelTopic.ts` already
+says must not reach a reader. **The general rule: replacing a total renderer
+with a partial one is a regression even when no current caller can reach the
+partial arm.**
+
+**The select earns no `fieldset`.** The first cut wrapped it in one and #1766's
+count assertion went red. That ruling is right and the markup was wrong: a
+fieldset is earned by a RADIO GROUP, where the box is what makes the
+exclusivity legible. A `<select>` is exclusive by construction and carries its
+own label, so a box would be a fourth container saying what the label already
+says.
+
+### The preview is generated, not written
+
+vjt's explicit requirement: the option labels show a live rendering produced by
+the same `renderDate` the five call sites use, over `Date.now()`. A hardcoded
+example is the thing that goes on saying `19/08/2026` after the renderer stops
+agreeing with it. The descriptor beside each preview is a WORD ("day first")
+rather than a pattern like `dd/mm/yyyy`, for the same reason — a second
+spelling of the format is a second thing that can drift.
+
+### The bump, and what the gate could and could not see
+
+`@protocol_version` 28 → 29 under #1393d. The two verdicts are recorded as two
+because they are different: `mix grappa.wire_pin --check` was **GREEN at 28**
+with the key already added server-side, and it reported `pin_stale` once the
+number moved — digest **unchanged** at `sha256:b0e5d018…` on both sides. The
+display-prefs body is hand-typed in `cicchetto/src/lib/userSettings.ts` and no
+`GrappaWeb.*JSON` `@spec` spells its shape, so the digest cannot see this field
+at all. The number moves because the rule says every wire-shape change moves
+it, not because a gate went red. Same silence its seven predecessors on this
+body hit (#1766, #2029, #2037 B, issue 2167 …).
+
+The gate was MOVED rather than trusted: a bogus field injected into
+`Grappa.Accounts.Wire`'s `user_json` turned `--check` red with a **different**
+digest (`sha256:06fd68ee…`) and a **different failure class**
+(`shape_moved_without_bump`, not `pin_stale`); reverting restored the source
+byte-for-byte and the digest with it. So the gate's silence on `date_format` is
+a coverage fact, not a broken gate.
+
+`min_protocol_version` stays at 1: the key is absent-tolerant in both
+directions by construction — a PUT omitting it is ACCEPTED (not 422'd) and
+filled from `default_display_prefs/0`, and cic coalesces it against the same
+default on the way out.
+
+### Present-and-wrong is not absent
+
+The eighth `display_prefs` key is the second closed-set STRING among six
+booleans, and its validator is asymmetric on purpose. **Absent ⇒ the default**,
+for #1766's reason: cic and the server deploy separately, so a bundle already
+loaded in a tab sends the seven keys it knows, and a mandatory eighth would 422
+that tab's every display write. **Present but outside the set ⇒ 422**, not a
+coerce to `auto` — a coerced write reads back as `auto`, so the drawer would
+show a preference the subject never chose while the save reported success.
+
+No migration: `display_prefs` lives inside `user_settings.data`, an Ecto `:map`
+JSON blob. Zero migrations name `display_prefs`, against eight that name
+`user_settings`. **The deploy stays HOT.**
+
+### The regression guard is a vitest census, not a biome rule
+
+The issue asked for a lint rule. It lives in
+`cicchetto/src/__tests__/localeDateGuard.test.ts` instead, beside
+`moduleRootGuard` / `biomePin` / `versionSource`, because biome's rule set has
+nothing that expresses "this method, outside this module", and because a test
+can pin the PREDICATE with fixtures — a guard that has only ever run over a
+clean tree proves nothing about what it would catch. `LusersCard.tsx` is
+exempt (`Number.prototype.toLocaleString`, thousands separators, a different
+axis the issue left open), and the exemption is held honest by a second
+assertion that the file contains no `Date` at all.
