@@ -4902,3 +4902,179 @@ describe("subscribe — presence pause kill switch is OFF (#1848)", () => {
     );
   });
 });
+
+// issue 1365 — PRECEDENCE on a contended own-nick topic.
+//
+// Two loops can hold the own-nick key and only one of them routes correctly.
+// `installChannelHandler` keys a row on the TOPIC it arrived on; the
+// DM-listener handler re-keys it on the SENDER. So when a query subscription
+// is sitting on the own-nick topic, every inbound DM — from every peer —
+// lands in the own-nick bucket, which is the production symptom.
+//
+// The key gets contended because `ensureQueryTopicJoined` skips own-nick
+// against the CURRENT nick: a window opened while we wore a different nick
+// keeps a key that a later rename makes ours. Pre-fix the DM-listener arm was
+// a bare `if (joined.has(key)) continue`, so #1341's release handed the old
+// key back and the guard refused the new one — the account was left with no
+// DM listener on any topic at all. The join COUNT is the tell: pre-fix a
+// rename into a contended key produces no new join.
+//
+// These drive the two cases measured in the original report, and assert the
+// routing OUTCOME (which scrollback bucket the row lands in), not the call
+// sequence — the same convention as the #1341 block above.
+describe("subscribe — the DM listener wins a contended own-nick topic (issue 1365)", () => {
+  const boot1365 = async (ownNick: string, peers: () => string[]) => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const api = await import("../lib/api");
+    vi.mocked(api.listNetworks).mockResolvedValue([
+      { id: 1, slug: "freenode", nick: ownNick, inserted_at: "x", updated_at: "y" },
+    ]);
+    const qw = await import("../lib/queryWindows");
+    vi.mocked(qw.queryWindowsByNetwork).mockImplementation(() => ({
+      1: peers().map((targetNick) => ({ targetNick, openedAt: "2026-08-16T00:00:00Z" })),
+    }));
+    await usePerTopicChannels();
+    const store = await loadStores();
+    const socket = await import("../lib/socket");
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalled();
+    });
+    return { store, socket };
+  };
+
+  // Deliver a row the way the socket does — to every LIVE Channel on that
+  // topic; one that was `.leave()`d is off the socket and gets nothing.
+  // Returns the scrollback buckets it landed in, which is what the operator
+  // sees. Same instrument as the #1341 block's `deliverOnTopic`.
+  const deliverOn = async (
+    socket: typeof import("../lib/socket"),
+    topic: string,
+    row: { id: number; sender: string },
+  ) => {
+    const calls = vi.mocked(socket.joinChannel).mock.calls;
+    const payload = {
+      kind: "message",
+      message: {
+        id: row.id,
+        network: "freenode",
+        channel: topic,
+        server_time: row.id,
+        kind: "privmsg",
+        sender: row.sender,
+        body: "body",
+        meta: {},
+      },
+    };
+    calls.forEach((call, i) => {
+      if (call[2] !== topic) return;
+      const mock = perTopicChannels[i];
+      if (mock === undefined || mock.left) return;
+      for (const on of mock.on.mock.calls) {
+        if (on[0] === "event") (on[1] as (p: unknown) => void)(payload);
+      }
+    });
+    const scrollback = await import("../lib/scrollback");
+    return Object.entries(scrollback.scrollbackByChannel())
+      .filter(([, rows]) => (rows as { id: number }[]).some((r) => r.id === row.id))
+      .map(([key]) => key)
+      .sort();
+  };
+
+  it("a rename onto a nick an open query window holds keeps the DM listener installed", async () => {
+    // The mirror case: own nick `alice`, an open query with the peer `zelda`,
+    // then `alice -> zelda`. Pre-fix the join count stays put and a DM from a
+    // third party lands in the peer's window instead of their own.
+    const [peers] = createSignal<string[]>(["zelda"]);
+    const { store, socket } = await boot1365("alice", peers);
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "zelda",
+        expect.any(Function),
+        {},
+      );
+    });
+    const joinsBefore = vi.mocked(socket.joinChannel).mock.calls.length;
+
+    store.mutateNetworkNick(1, "zelda");
+    await vi.waitFor(() => {
+      expect(vi.mocked(socket.joinChannel).mock.calls.length).toBeGreaterThan(joinsBefore);
+    });
+
+    const landed = await deliverOn(socket, "zelda", { id: 1365_01, sender: "carol" });
+    expect(landed).toEqual([channelKey("freenode", "carol")]);
+  });
+
+  it("taking a nick a query window already holds moves that topic to the DM listener", async () => {
+    // The ownership case: we are `bob` with an open query on the peer `alice`,
+    // so the key `freenode alice` belongs to the query loop. We then TAKE the
+    // nick `alice`. The topic is now ours and only the DM-listener handler
+    // re-keys an inbound DM onto its sender.
+    const [peers] = createSignal<string[]>(["alice"]);
+    const { store, socket } = await boot1365("bob", peers);
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "alice",
+        expect.any(Function),
+        {},
+      );
+    });
+    const joinsBefore = vi.mocked(socket.joinChannel).mock.calls.length;
+
+    store.mutateNetworkNick(1, "alice");
+    await vi.waitFor(() => {
+      expect(vi.mocked(socket.joinChannel).mock.calls.length).toBeGreaterThan(joinsBefore);
+    });
+
+    const landed = await deliverOn(socket, "alice", { id: 1365_02, sender: "carol" });
+    expect(landed).toEqual([channelKey("freenode", "carol")]);
+  });
+
+  it("a peer wearing our OWN nick still shares the self window's key", async () => {
+    // The limit, pinned so nobody reads the two tests above as a full cure.
+    // Precedence separates everybody EXCEPT a peer who bears our own nick:
+    // the DM-listener re-key is on the sender, and there the sender's key IS
+    // our key. That is not a client defect and not a regression — the server
+    // collapses the same pair, because the fold-unique index on
+    // `query_windows` makes our self window and a query with a peer who bore
+    // that nick ONE row (#948). Only giving the conversation an identity of
+    // its own separates them; until then cic agreeing with the server is the
+    // correct behaviour, and carol staying separate is what this asserts is
+    // still true alongside it.
+    const [peers] = createSignal<string[]>(["zelda"]);
+    const { store, socket } = await boot1365("alice", peers);
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "zelda",
+        expect.any(Function),
+        {},
+      );
+    });
+    store.mutateNetworkNick(1, "zelda");
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "zelda",
+        expect.any(Function),
+        {},
+      );
+    });
+
+    const fromPeer = await deliverOn(socket, "zelda", { id: 1365_03, sender: "zelda" });
+    const fromCarol = await deliverOn(socket, "zelda", { id: 1365_04, sender: "carol" });
+
+    expect(fromPeer).toEqual([channelKey("freenode", "zelda")]);
+    expect(fromCarol).toEqual([channelKey("freenode", "carol")]);
+  });
+});
