@@ -35,11 +35,11 @@ vi.mock("../lib/networks", () => ({
   networkIdBySlug: () => undefined,
   networks: () => [
     {
-      // Bucket F H4: Network is now a discriminated union; the Sidebar
-      // narrows on `kind === "user"` before reading connection_state.
-      // Tests here exercise the user branch — visitors don't have a
-      // connection_state to grey out, so the visitor variant is
-      // covered by an explicit absence test below.
+      // Bucket F H4 / issue 2222: Network is a discriminated union, but the
+      // Sidebar no longer narrows on it — BOTH arms declare
+      // `connection_state` and `connection_state_reason` non-optional since
+      // #211 phase 6. `mockNetworkKind` flips this getter so the visitor twins
+      // below run the SAME assertions as the user cases.
       get kind() {
         return mockNetworkKind.freenode ?? "user";
       },
@@ -677,6 +677,106 @@ describe("Sidebar", () => {
       const h3 = screen.getByText("freenode");
       expect(h3.getAttribute("title")).toBeNull();
     });
+
+    // issue 2222 — the greying half, for a VISITOR. `networkGreyedState`
+    // narrowed on `kind === "user"` on the premise that only a UserNetwork
+    // carries `connection_state`; #211 phase 6 retired it (both wire shapes
+    // declare the field, and its sibling `connection_state_reason`, as
+    // non-optional). vjt's ruling of 2026-09-20 is that the whole class goes,
+    // not just the hiding predicate.
+    //
+    // These four are the whole treatment, asserted separately because they
+    // reach the operator by four different senses: the colour (class), the
+    // cascade onto the rows under it, the WHY (tooltip) and the announced word
+    // (sr-only). Nothing here changes WHICH states grey — `NETWORK_GREYED_STATES`
+    // is still `{failed}` on this component — only WHO the rule applies to.
+    it("a FAILED VISITOR network header gets .sidebar-network-greyed, same as a user's (issue 2222)", () => {
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
+      render(() => <Sidebar />);
+      const header = screen.getByText("freenode").closest(".sidebar-network-section");
+      expect(header?.classList.contains("sidebar-network-greyed")).toBe(true);
+    });
+
+    it("a FAILED VISITOR network cascades greyed onto its rows (issue 2222)", () => {
+      // The cascade is the same conditional as the user's — it reads
+      // `networkGreyedState`, so it was gated by the narrow too. A stale
+      // `joined` window state must not win here either.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
+      mockWindowState = { "freenode #italia": "joined" };
+      render(() => <Sidebar />);
+      const btn = screen.getByText("#italia").closest("li")?.querySelector(".sidebar-window-btn");
+      expect(btn?.classList.contains("sidebar-window-greyed")).toBe(true);
+    });
+
+    it("a FAILED VISITOR network's tooltip tells them WHY (issue 2222)", () => {
+      // This is the assertion that makes `networkReason`'s own de-narrowing
+      // observable. On its own that change was INERT: the one consumer is this
+      // tooltip, and the ternary gating it calls `isNetworkGreyed` →
+      // `networkGreyedState`, which narrowed the same way. Both narrows had to
+      // fall for a visitor to be told anything at all.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
+      mockNetworkConnectionReason = { freenode: "Closing Link: no ident response" };
+      render(() => <Sidebar />);
+      expect(screen.getByText("freenode").getAttribute("title")).toBe(
+        "Closing Link: no ident response",
+      );
+    });
+
+    it("a FAILED VISITOR network speaks its state to a screen reader (issue 2222)", () => {
+      // #96's sr-only word. The greyed treatment is muted + italic and
+      // pixel-identical to `.parted`, so without this a visitor gets colour
+      // that says nothing and no word at all.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
+      render(() => <Sidebar />);
+      // Scoped to the HEADER row, not the whole section: `RowState` renders on
+      // every row, so a section-wide query answers with whichever row comes
+      // first in the DOM and would read ` (parted)` off a channel.
+      const header = screen.getByText("freenode").closest(".sidebar-network-header");
+      expect(header?.querySelector(".sr-only")?.textContent).toBe(" (failed)");
+    });
+
+    it("a CONNECTED VISITOR network is NOT greyed (issue 2222)", () => {
+      // The negative half. Pre-fix this passed VACUOUSLY — the narrow answered
+      // `null` to everything visitor-shaped, so it could not fail. It carries
+      // weight only alongside the positives above; the mutation that proves it
+      // is generalising the set to "any non-connected state", which turns the
+      // `failing` twins red.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "connected" };
+      render(() => <Sidebar />);
+      const header = screen.getByText("freenode").closest(".sidebar-network-section");
+      expect(header?.classList.contains("sidebar-network-greyed")).toBe(false);
+    });
+
+    // #1675 keeps `failing` out of the greyed set because the network is
+    // retrying on its own and has a way back. Both kinds, because uniformity
+    // has to reach the negative cases or the visitor path gets quietly
+    // generalised to "any non-connected state" while nothing looks.
+    //
+    // The USER half was MISSING until issue 2222 and nothing noticed: the
+    // block's only `failing` case (in the hiding suite below) asserts the
+    // section is KEPT, which a generalised greying rule does not disturb.
+    // Found by mutating this component's rule to `!== "connected"` — the
+    // mutation turned exactly one test red, and a lone red on the visitor arm
+    // was the evidence that the shipping arm had no guard at all.
+    it("a FAILING USER network is NOT greyed (#1675 — it is retrying on its own)", () => {
+      mockNetworkConnectionState = { freenode: "failing" };
+      render(() => <Sidebar />);
+      const header = screen.getByText("freenode").closest(".sidebar-network-section");
+      expect(header?.classList.contains("sidebar-network-greyed")).toBe(false);
+    });
+
+    it("a FAILING VISITOR network is NOT greyed (#1675 holds for both kinds)", () => {
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failing" };
+      render(() => <Sidebar />);
+      const header = screen.getByText("freenode").closest(".sidebar-network-section");
+      expect(header?.classList.contains("sidebar-network-greyed")).toBe(false);
+    });
   });
 
   // issue 1985 — a parked network LEAVES the sidebar. vjt's ruling
@@ -747,13 +847,30 @@ describe("Sidebar", () => {
       expect(container.querySelector(".sidebar-network-section")).not.toBeNull();
     });
 
-    it("a VISITOR network is never hidden — the predicate narrows on kind first", () => {
-      // A visitor has no credential row to park, so `connection_state` is not
-      // part of its wire shape at all. The value is planted here anyway: if
-      // the narrow were dropped, this network would vanish, and that is
-      // exactly the regression the narrow exists to prevent.
+    it("a PARKED VISITOR network leaves the sidebar too (issue 2222)", () => {
+      // This case asserted the opposite until issue 2222, on the premise that
+      // "a visitor has no credential row to park, so `connection_state` is not
+      // part of its wire shape at all". #211 phase 6 retired that: both
+      // network shapes declare `connection_state` non-optional, and prod
+      // `network_credentials` id 712 is a visitor row reading `parked`. The
+      // reporter who saw the network that would not go away WAS a visitor.
+      //
+      // Inverted rather than joined by a twin: the sidebar cannot both keep
+      // and drop the row, and a suite holding the old answer is what let the
+      // narrow survive green for as long as it did.
       mockNetworkKind = { freenode: "visitor" };
       mockNetworkConnectionState = { freenode: "parked" };
+      const { container } = render(() => <Sidebar />);
+      expect(container.querySelector(".sidebar-network-section")).toBeNull();
+      expect(screen.queryByText("#italia")).not.toBeInTheDocument();
+    });
+
+    it("a FAILED VISITOR network keeps its section, same as a user's (issue 2222)", () => {
+      // The other half of "same behaviour for both kinds": uniformity had to
+      // reach the negative cases too, or the visitor path would have been
+      // quietly generalised to "any non-connected state" while nothing looked.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
       const { container } = render(() => <Sidebar />);
       expect(container.querySelector(".sidebar-network-section")).not.toBeNull();
       expect(screen.getByText("freenode")).toBeInTheDocument();

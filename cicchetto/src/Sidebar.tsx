@@ -139,9 +139,18 @@ const Sidebar: Component<Props> = (props) => {
   // class AND the cascading per-channel/per-query overlay in
   // `greyedState/2` below.
   //
-  // Bucket F H4: only UserNetwork carries connection_state. Narrow on
-  // network.kind first; visitor networks are never greyed at the
-  // network level (visitors have no credential row to park / fail).
+  // issue 2222 — no `kind` narrow, and the premise paragraph that justified
+  // one is deleted rather than corrected: it is the sentence that would put
+  // the narrow back at the next reading. It claimed only a UserNetwork
+  // carries `connection_state`; #211 phase 6 converged the two rows and both
+  // `NetworksWireNetworkWithNickJson` and
+  // `NetworksWireVisitorNetworkWithNickJson` declare the field non-optional.
+  //
+  // This is the narrow that made `networkReason`'s de-narrowing inert — the
+  // header `title` below reaches it only through `isNetworkGreyed`, i.e.
+  // through here. WHO the rule applies to changes; WHAT it is does not:
+  // `NETWORK_GREYED_STATES` is still `{failed}`, so `parked` (already hidden)
+  // and `failing` (#1675, retrying on its own) stay out for both kinds.
   //
   // #96 — returns the STATE WORD, not a boolean: the greyed treatment is
   // muted + italic, which is (a) invisible to a screen reader and (b)
@@ -151,7 +160,7 @@ const Sidebar: Component<Props> = (props) => {
   // word (announced) — so the two can never disagree.
   const networkGreyedState = (slug: string): string | null => {
     const net = networkBySlug(slug);
-    if (net?.kind !== "user") return null;
+    if (net === undefined) return null;
     return NETWORK_GREYED_STATES.has(net.connection_state) ? net.connection_state : null;
   };
 
@@ -185,10 +194,18 @@ const Sidebar: Component<Props> = (props) => {
 
   const isGreyed = (slug: string, name: string): boolean => greyedState(slug, name) !== null;
 
+  // issue 2222 — no `kind` narrow. It carried the same premise #211 phase 6
+  // retired as `isNetworkParked`'s did: `connection_state_reason` is declared
+  // on BOTH network shapes in `wireTypes.ts`, so gating on `kind` only meant a
+  // visitor never got told WHY a network failed.
+  //
+  // On its own this was INERT, and that measurement is why it did not ship
+  // with the hiding half: the one consumer is the header `title` below, gated
+  // behind `isNetworkGreyed` → `networkGreyedState`, which narrowed the same
+  // way. Dropping the narrow here only moved the gate one function up. It is
+  // live because that one falls in the same change.
   const networkReason = (slug: string): string | undefined => {
-    const net = networkBySlug(slug);
-    if (net?.kind !== "user") return undefined;
-    return net.connection_state_reason ?? undefined;
+    return networkBySlug(slug)?.connection_state_reason ?? undefined;
   };
 
   // Synthetic non-joined window rows come from the shared projection in

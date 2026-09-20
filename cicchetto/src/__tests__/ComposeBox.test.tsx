@@ -79,6 +79,10 @@ vi.mock("../lib/uploadHost", async () => {
 
 let mockWindowState: Record<string, string> = {};
 let mockNetworkConnectionState: Record<string, string | undefined> = {};
+// issue 2222 — per-slug network kind, so the visitor twins below drive the
+// SAME derivation the user cases do. Lazy-read inside the mock factory (the
+// `vi.mock` hoists above this declaration), same pattern as the line above.
+let mockNetworkKind: Record<string, "user" | "visitor" | undefined> = {};
 
 // #1331 — the seam's reconnect issues the SAME `PATCH /networks/:slug` the
 // HomePane chip and the `/connect` slash arm already issue. Only that one
@@ -100,14 +104,15 @@ vi.mock("../lib/networks", () => ({
   // #1861 — casemappingForSlug (lib/casemapping.ts) resolves the fold
   // through this map, so the mock has to carry it.
   networkIdBySlug: () => undefined,
-  // Bucket F H4: ComposeBox narrows on `kind === "user"` before
-  // reading connection_state. Tests exercise the user branch (the
-  // greyed cascade only applies to user subjects' credential rows;
-  // visitors don't have one). Default to "connected" when the
-  // per-test override is absent so the not-greyed branch is the
-  // baseline.
+  // Bucket F H4 / issue 2222: ComposeBox no longer narrows on `kind` —
+  // BOTH network shapes declare `connection_state` non-optional since #211
+  // phase 6, and the server's own PATCH door is subject-agnostic ("visitors
+  // park/reconnect a network through it", NetworksController moduledoc).
+  // `mockNetworkKind` flips the discriminator so the visitor twins run the
+  // SAME assertions. Default to "connected" when the per-test override is
+  // absent so the not-greyed branch is the baseline.
   networkBySlug: (slug: string) => ({
-    kind: "user",
+    kind: mockNetworkKind[slug] ?? "user",
     id: 1,
     slug,
     nick: "vjt",
@@ -145,6 +150,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockWindowState = {};
   mockNetworkConnectionState = {};
+  mockNetworkKind = {};
   mockUploadStateValue = null;
   mockUploadBatchValue = null;
   // Reset the module-singleton confirm-dialog store so a prior test's
@@ -1215,6 +1221,74 @@ describe("ComposeBox", () => {
       const form = document.querySelector(".compose-box");
       expect(form?.classList.contains("compose-box-greyed")).toBe(true);
     });
+
+    // issue 2222 — the same derivation, for a VISITOR. This component narrowed
+    // on `kind === "user"` on the premise that a visitor has no credential row
+    // to park or fail; #211 phase 6 retired it on BOTH sides of the wire. The
+    // server says so in as many words: "visitors park/reconnect a network
+    // through it — visitors carry a real connection_state now"
+    // (`NetworksController` moduledoc), and its PATCH door has no subject
+    // branch. cic was the only layer still narrowing.
+    //
+    // 🔴 THIS COMPONENT'S SET IS NOT THE SIDEBAR'S and does not become it.
+    // Here it is {parked, failed}; the Sidebar's is {failed}, because a parked
+    // network leaves the sidebar entirely and has no header left to grey
+    // (issue 1985). Those two were already different on the SAME kind before
+    // this change. vjt's ruling uniforms the SUBJECT, not two rules that were
+    // distinct for a reason.
+    it("a PARKED VISITOR network greys the compose box, same as a user's (issue 2222)", () => {
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "parked" };
+      mockWindowState = { "freenode #a": "joined" };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const form = document.querySelector(".compose-box");
+      expect(form?.classList.contains("compose-box-greyed")).toBe(true);
+      expect(screen.queryByText(/\(not joined\)/i)).not.toBeNull();
+    });
+
+    it("a FAILED VISITOR network greys the compose box, same as a user's (issue 2222)", () => {
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
+      mockWindowState = {};
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const form = document.querySelector(".compose-box");
+      expect(form?.classList.contains("compose-box-greyed")).toBe(true);
+    });
+
+    it("a CONNECTED VISITOR network does NOT grey the compose box (issue 2222)", () => {
+      // The negative. Vacuous pre-fix — the narrow answered `null` to
+      // everything visitor-shaped — and load-bearing only next to the
+      // positives; the mutation that gives it weight is generalising the set
+      // to "any non-connected state", which turns the `failing` twins red.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "connected" };
+      mockWindowState = { "freenode #a": "joined" };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const form = document.querySelector(".compose-box");
+      expect(form?.classList.contains("compose-box-greyed")).toBe(false);
+    });
+
+    // #1675 keeps `failing` out of the set on BOTH kinds: the network is
+    // retrying on its own, and greying would disable the compose box on every
+    // network that blinks. Neither arm existed here before issue 2222 — this
+    // component had no `failing` case at all, so nothing guarded the rule its
+    // own set comment states.
+    it("a FAILING USER network does NOT grey the compose box (#1675)", () => {
+      mockNetworkConnectionState = { freenode: "failing" };
+      mockWindowState = { "freenode #a": "joined" };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const form = document.querySelector(".compose-box");
+      expect(form?.classList.contains("compose-box-greyed")).toBe(false);
+    });
+
+    it("a FAILING VISITOR network does NOT grey the compose box (#1675 holds for both kinds)", () => {
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failing" };
+      mockWindowState = { "freenode #a": "joined" };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      const form = document.querySelector(".compose-box");
+      expect(form?.classList.contains("compose-box-greyed")).toBe(false);
+    });
   });
 
   // #1331 — the way OUT of the state the seam above renders. The greyed
@@ -1234,6 +1308,22 @@ describe("ComposeBox", () => {
     it("offers Reconnect when the network is failed", () => {
       mockNetworkConnectionState = { freenode: "failed" };
       mockWindowState = {};
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      expect(screen.getByRole("button", { name: /reconnect freenode/i })).toBeInTheDocument();
+    });
+
+    it("offers Reconnect to a VISITOR on a parked network (issue 2222)", () => {
+      // The chip rides `networkGreyedState()`, so the narrow withheld it from
+      // visitors too. It is not a new affordance for them and it is not a
+      // button that 403s: `HomePane`'s `DisconnectedRow` already renders the
+      // SAME chip for a visitor today (its rows come from the /me envelope,
+      // which carries no `kind` to narrow on), and the server's PATCH
+      // `connection_state` door is subject-agnostic by #211 phase 6 ruling D.
+      // What this fixes is the INCONSISTENCY: the way out existed on one
+      // surface and not on the other.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "parked" };
+      mockWindowState = { "freenode #a": "joined" };
       render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
       expect(screen.getByRole("button", { name: /reconnect freenode/i })).toBeInTheDocument();
     });

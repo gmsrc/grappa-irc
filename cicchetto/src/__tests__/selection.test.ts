@@ -808,6 +808,88 @@ describe("selection store", () => {
       });
     });
 
+    // issue 2222 — the same redirect, for a VISITOR, driven by the SAMPLE.
+    //
+    // The two feeds were not equally broken and the difference is the point.
+    // FEED 2 (the `connection_state_changed` event, via `noteConnectionState`)
+    // always worked for a visitor: it calls `observeConnectionState` directly
+    // and never saw a `kind`. FEED 1, the `networks()` sample below, skipped
+    // visitor rows with `if (net.kind !== "user") continue`, so the ONE thing
+    // that catches a park which happened while the socket was deaf — the
+    // refetch, since Phoenix PubSub does not replay — did not exist for them.
+    //
+    // A visitor therefore kept a redirect that works only while the WS is up,
+    // which is a worse failure than none: it looks correct in every test that
+    // fires an event, and loses exactly the case the sample was added for.
+    const visitorNet = (overrides: { connection_state: Conn }) => ({
+      kind: "visitor" as const,
+      id: 1,
+      slug: "freenode",
+      nick: "alice",
+      connection_state: overrides.connection_state,
+      connection_state_reason: null,
+      connection_state_changed_at: null,
+      inserted_at: "",
+      updated_at: "",
+    });
+
+    it("redirects a VISITOR to home when their network flips connected → parked (issue 2222)", async () => {
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks)
+        .mockResolvedValueOnce([visitorNet({ connection_state: "connected" })])
+        .mockResolvedValueOnce([visitorNet({ connection_state: "parked" })])
+        .mockResolvedValue([visitorNet({ connection_state: "parked" })]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      auth.setToken("tokRedirVisitorParked");
+      await vi.waitFor(() => {
+        const n = networks.networks()?.[0];
+        expect(n?.kind).toBe("visitor");
+        expect(n?.connection_state).toBe("connected");
+      });
+      sel.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#italia",
+        kind: "channel",
+      });
+      networks.refetchNetworks();
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.networkSlug).toBe("$home");
+      });
+    });
+
+    it("redirects a VISITOR to home when their network flips connected → failed (issue 2222)", async () => {
+      // `failed` is the observer's other trigger. Asserted separately because
+      // the two states reach it through different product paths and a fix that
+      // only carried `parked` would look complete against the case above.
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks)
+        .mockResolvedValueOnce([visitorNet({ connection_state: "connected" })])
+        .mockResolvedValueOnce([visitorNet({ connection_state: "failed" })])
+        .mockResolvedValue([visitorNet({ connection_state: "failed" })]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      auth.setToken("tokRedirVisitorFailed");
+      await vi.waitFor(() => {
+        expect(networks.networks()?.[0]?.connection_state).toBe("connected");
+      });
+      sel.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#italia",
+        kind: "channel",
+      });
+      networks.refetchNetworks();
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.networkSlug).toBe("$home");
+      });
+    });
+
     it("does NOT redirect when a different network parks", async () => {
       vi.resetModules();
       const api = await import("../lib/api");
@@ -1046,6 +1128,89 @@ describe("selection store", () => {
         expect(sel.selectedChannel()?.networkSlug).toBe("$home");
       });
       expect(sel.selectedChannel()?.kind).toBe("home");
+    });
+
+    // issue 2222, found by the audit rather than named in the report — a FIFTH
+    // site of the class, in this same file but a different function.
+    // `resolveFallbackWindow` read
+    // `closedNet.kind === "visitor" || closedNet.connection_state === "connected"`
+    // under the comment "visitor networks have no connection_state — always
+    // assume connected": the retired #211 phase 6 premise, verbatim, as a live
+    // short-circuit. A visitor's parked network satisfied the left disjunct and
+    // was treated as connected.
+    //
+    // It is also an incoherence the hiding fix CREATED: a parked network now
+    // leaves the sidebar for both kinds, so a visitor fell back into a server
+    // window whose network the sidebar no longer draws — focus somewhere they
+    // cannot navigate back to.
+    const visitorNetE = (slug: string, id: number, conn: Conn) => ({
+      kind: "visitor" as const,
+      id,
+      slug,
+      nick: "alice",
+      connection_state: conn,
+      connection_state_reason: null,
+      connection_state_changed_at: null,
+      inserted_at: "",
+      updated_at: "",
+    });
+
+    it("falls back to home when MRU is empty and a VISITOR network is parked (issue 2222)", async () => {
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([visitorNetE("freenode", 1, "parked")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([{ name: "#grappa", joined: true, source: "autojoin" }])
+        .mockResolvedValue([]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      auth.setToken("tokE3visitor");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(1);
+      });
+      sel.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#grappa",
+        kind: "channel",
+      });
+      networks.refetchChannels();
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.networkSlug).toBe("$home");
+      });
+      expect(sel.selectedChannel()?.kind).toBe("home");
+    });
+
+    it("still falls back to the server window when a VISITOR network is connected (issue 2222)", async () => {
+      // The negative, and here it is NOT vacuous: pre-fix the left disjunct
+      // made every visitor answer "connected", so this case passed for the
+      // wrong reason. It earns its keep next to the parked twin above — the two
+      // together are what pin "read the field" rather than "assume a constant".
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([visitorNetE("freenode", 1, "connected")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([{ name: "#grappa", joined: true, source: "autojoin" }])
+        .mockResolvedValue([]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      auth.setToken("tokE2visitor");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(1);
+      });
+      sel.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#grappa",
+        kind: "channel",
+      });
+      networks.refetchChannels();
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.kind).toBe("server");
+      });
+      expect(sel.selectedChannel()?.networkSlug).toBe("freenode");
     });
 
     it("skips MRU entries that are no longer live (stale entry)", async () => {
