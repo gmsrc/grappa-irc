@@ -26,8 +26,24 @@ import type { Network } from "./api";
 // through a mirror of itself. Here it is pure, importable, and the suites
 // that mock `networks.ts` run the REAL rule.
 //
-// Narrows on `kind` first: only a UserNetwork carries `connection_state`, so
-// a visitor network can never be parked and can never be hidden.
+// issue 2222 — the predicate reads `connection_state` and nothing else. It
+// used to narrow on `kind === "user"` first, justified right here by "only a
+// UserNetwork carries `connection_state`, so a visitor network can never be
+// parked and can never be hidden". #211 phase 6 converged the visitor row onto
+// the user twin and retired that premise: both
+// `NetworksWireNetworkWithNickJson` and `NetworksWireVisitorNetworkWithNickJson`
+// declare `connection_state` NON-OPTIONAL, and `tagNetwork` drops a row
+// missing it as a server contract violation for EITHER kind.
+//
+// The premise line is deleted rather than corrected on purpose: it is the
+// sentence that made the narrow look right, so leaving it would put the narrow
+// back at the next reading.
+//
+// Measured, so this is not an inert change: prod `network_credentials` id 712
+// is a visitor row at `connection_state = "parked"`, `user_id` NULL. vjt's
+// ruling (2026-09-16) is "stesso comportamento per user e visitor" — the
+// subject is not part of the rule. This changes WHO the rule applies to, not
+// WHAT it is: `failed` and `failing` stay out, for the reasons above.
 export function isNetworkParked(net: Network | undefined): boolean {
-  return net?.kind === "user" && net.connection_state === "parked";
+  return net?.connection_state === "parked";
 }

@@ -747,13 +747,30 @@ describe("Sidebar", () => {
       expect(container.querySelector(".sidebar-network-section")).not.toBeNull();
     });
 
-    it("a VISITOR network is never hidden — the predicate narrows on kind first", () => {
-      // A visitor has no credential row to park, so `connection_state` is not
-      // part of its wire shape at all. The value is planted here anyway: if
-      // the narrow were dropped, this network would vanish, and that is
-      // exactly the regression the narrow exists to prevent.
+    it("a PARKED VISITOR network leaves the sidebar too (issue 2222)", () => {
+      // This case asserted the opposite until issue 2222, on the premise that
+      // "a visitor has no credential row to park, so `connection_state` is not
+      // part of its wire shape at all". #211 phase 6 retired that: both
+      // network shapes declare `connection_state` non-optional, and prod
+      // `network_credentials` id 712 is a visitor row reading `parked`. The
+      // reporter who saw the network that would not go away WAS a visitor.
+      //
+      // Inverted rather than joined by a twin: the sidebar cannot both keep
+      // and drop the row, and a suite holding the old answer is what let the
+      // narrow survive green for as long as it did.
       mockNetworkKind = { freenode: "visitor" };
       mockNetworkConnectionState = { freenode: "parked" };
+      const { container } = render(() => <Sidebar />);
+      expect(container.querySelector(".sidebar-network-section")).toBeNull();
+      expect(screen.queryByText("#italia")).not.toBeInTheDocument();
+    });
+
+    it("a FAILED VISITOR network keeps its section, same as a user's (issue 2222)", () => {
+      // The other half of "same behaviour for both kinds": uniformity had to
+      // reach the negative cases too, or the visitor path would have been
+      // quietly generalised to "any non-connected state" while nothing looked.
+      mockNetworkKind = { freenode: "visitor" };
+      mockNetworkConnectionState = { freenode: "failed" };
       const { container } = render(() => <Sidebar />);
       expect(container.querySelector(".sidebar-network-section")).not.toBeNull();
       expect(screen.getByText("freenode")).toBeInTheDocument();
