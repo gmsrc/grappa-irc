@@ -28,6 +28,7 @@ import {
 import { isChannelName } from "./lib/chantypes";
 import { type CommandOutputEntry, commandOutputByWindow } from "./lib/commandOutput";
 import { stripCtcpAction } from "./lib/ctcpAction";
+import { formatDayLabel } from "./lib/dateFormat";
 import { diagPush } from "./lib/diagLog";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { highlightPatterns } from "./lib/highlightList";
@@ -322,15 +323,16 @@ export function resetAutoFocusedJoinsForTest(): void {
 // is guarded via the module seam without rendering the whole pane.
 export const formatTime = (epochMs: number): string => formatTimestamp(epochMs);
 
-// Format epoch-ms as a human-readable date label (e.g. "Saturday, May 3")
-// in the user's local timezone. Used for day-separator rows (C7.1).
-const formatDateLabel = (epochMs: number): string => {
-  return new Date(epochMs).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-};
+// Format epoch-ms as a human-readable date label (e.g. "Saturday, May 3") in
+// the user's local timezone. Used for day-separator rows (C7.1).
+//
+// issue 2270 — the `undefined` locale this used to pass meant "whatever the
+// runtime defaults to", i.e. the browser UI LANGUAGE. It now goes through
+// `lib/dateFormat.ts`, which resolves the locale explicitly and lets the
+// notation preference drive the ORDER while the weekday and month stay in the
+// viewer's own language. Reading the signal here makes the separators
+// re-render live when the preference changes, like the row timestamps above.
+const formatDateLabel = (epochMs: number): string => formatDayLabel(epochMs);
 
 // Returns true if a and b fall on different calendar days in local TZ.
 // Comparison is by (year, month, date) triple so DST transitions don't

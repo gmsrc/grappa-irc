@@ -10,6 +10,7 @@ import {
   modesByChannel,
   topicByChannel,
 } from "./lib/channelTopic";
+import { formatDateTime } from "./lib/dateFormat";
 import { friendlyError } from "./lib/friendlyError";
 import { isComposingKeystroke } from "./lib/imeComposition";
 import { mircPlainText } from "./lib/mircFormat";
@@ -325,13 +326,16 @@ const TopicBar: Component<Props> = (props) => {
     },
   );
 
+  // issue 2270 — the reported site. Rendered through the ONE date renderer so
+  // the notation follows the viewer's preference (or their resolved locale)
+  // instead of the browser's UI LANGUAGE. An unparseable date yields NaN, which
+  // the renderer would spell as "Invalid Date"; the guard below keeps the raw
+  // string reaching the user, exactly as the `catch` used to.
   const formatSetAt = (setAt: string | null): string => {
     if (!setAt) return "(unknown time)";
-    try {
-      return new Date(setAt).toLocaleString();
-    } catch {
-      return setAt;
-    }
+    const ms = new Date(setAt).getTime();
+    if (Number.isNaN(ms)) return setAt;
+    return formatDateTime(ms);
   };
 
   return (

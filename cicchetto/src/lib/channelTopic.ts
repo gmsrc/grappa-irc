@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import type { ChannelKey } from "./channelKey";
+import { formatDateTime } from "./dateFormat";
 import { identityScopedStore } from "./identityScopedStore";
 
 // Per-channel topic + modes store. Module-singleton reactive signals.
@@ -194,10 +195,13 @@ export function topicJoinMeta(entry: TopicEntry | null): string | null {
   return setAt ? `set by ${setBy} at ${formatTopicSetAt(setAt)}` : `set by ${setBy}`;
 }
 
+// issue 2270 — through the ONE date renderer. The NaN guard above stays where
+// it is: it is what keeps an unparseable upstream string reaching the user
+// verbatim instead of as "Invalid Date".
 function formatTopicSetAt(setAt: string): string {
   const parsed = new Date(setAt);
   if (Number.isNaN(parsed.getTime())) return setAt;
-  return parsed.toLocaleString();
+  return formatDateTime(parsed.getTime());
 }
 
 // #1914 — the `/topic` answer line. Sibling of `topicJoinLine` above, and the

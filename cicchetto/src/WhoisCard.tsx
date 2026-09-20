@@ -1,5 +1,6 @@
 import { type Component, For, Show } from "solid-js";
 import type { WhoisBundle } from "./lib/api";
+import { formatDateTime } from "./lib/dateFormat";
 import { formatDuration } from "./lib/duration";
 import { createOverlayEscape } from "./lib/overlayScrollLock";
 import { whoisBundleHasFields } from "./lib/whoisBundle";
@@ -50,9 +51,11 @@ export type Props = {
   onDismiss?: () => void;
 };
 
+// issue 2270 — through the ONE date renderer, so the signon instant does not
+// take its notation from the browser's UI language.
 const formatSignon = (epochSeconds: number | null): string | null => {
   if (epochSeconds === null) return null;
-  return new Date(epochSeconds * 1000).toLocaleString();
+  return formatDateTime(epochSeconds * 1000);
 };
 
 // P-0a — collect inline tag chips derived from typed booleans. The label
