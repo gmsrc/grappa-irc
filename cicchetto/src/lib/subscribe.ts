@@ -1311,7 +1311,32 @@ moduleRoot(() => {
         joined.delete(held);
         dmListenerKeys.delete(net.slug);
       }
-      if (joined.has(key)) continue;
+      // issue 1365 — PRECEDENCE on a contended own-nick topic: the DM listener
+      // WINS it, the query loop yields. Two loops can hold this key and only
+      // one of them routes correctly: the DM-listener handler re-keys on the
+      // SENDER, while `installChannelHandler` keys on the TOPIC — so a query
+      // subscription sitting here funnels every inbound DM, from every peer,
+      // into the own-nick bucket.
+      //
+      // The key gets contended because `ensureQueryTopicJoined` skips own-nick
+      // against the CURRENT nick: a window opened while we wore another nick
+      // keeps the key a later rename makes ours. Pre-fix this arm was a bare
+      // `if (joined.has(key)) continue`, so the release above (#1341) handed
+      // the old key back and this guard refused the new one — leaving the
+      // account with NO DM listener on any topic at all, which is the
+      // production symptom.
+      //
+      // Seizing is safe for the yielding loop: the query-windows effect reads
+      // `networks()`, so it re-runs on the very rename that triggered this and
+      // re-acquires the key with its own handler once it is no longer our own
+      // nick. Clearing `queryJoinAcks` is what keeps that re-acquire from
+      // short-circuiting on a stale in-flight ack.
+      if (joined.has(key)) {
+        if (dmListenerKeys.get(net.slug) === key) continue;
+        joined.get(key)?.leave();
+        joined.delete(key);
+        queryJoinAcks.delete(key);
+      }
       // The own-nick DM-listener topic carries inbound DMs, never peer
       // presence — nothing for `{presence: false}` to suppress.
       const phx = joinChannel(
