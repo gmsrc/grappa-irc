@@ -271,15 +271,22 @@ const exports = identityScopedStore((onIdentityChange) => {
     }
 
     // No live MRU candidate. Fall back to the fallback network's server
-    // window IF still connected (visitor networks have no connection_state
-    // — always assume connected). Otherwise home.
-    const closedNet = networkBySlug(fallbackSlug);
-    if (closedNet !== undefined) {
-      const isConnected =
-        closedNet.kind === "visitor" || closedNet.connection_state === "connected";
-      if (isConnected) {
-        return { networkSlug: fallbackSlug, channelName: SERVER_WINDOW_NAME, kind: "server" };
-      }
+    // window IF still connected, otherwise home.
+    //
+    // issue 2222 — the gate used to short-circuit on
+    // `closedNet.kind === "visitor" ||`, under "visitor networks have no
+    // connection_state — always assume connected". That is the #211 phase 6
+    // premise, retired, sitting here as a live disjunct: a visitor's PARKED
+    // network satisfied it and was treated as connected, so closing their last
+    // window dropped focus into a server window instead of home.
+    //
+    // Fixing it is also what keeps the hiding rule coherent. A parked network
+    // now leaves the sidebar for BOTH kinds (`isNetworkParked`), so the old
+    // branch would have landed a visitor in a window whose network the sidebar
+    // no longer draws — focus with no way back. The premise sentence is
+    // deleted, not corrected.
+    if (networkBySlug(fallbackSlug)?.connection_state === "connected") {
+      return { networkSlug: fallbackSlug, channelName: SERVER_WINDOW_NAME, kind: "server" };
     }
     return { networkSlug: HOME_WINDOW_SLUG, channelName: HOME_WINDOW_NAME, kind: "home" };
   };

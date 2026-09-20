@@ -1130,6 +1130,89 @@ describe("selection store", () => {
       expect(sel.selectedChannel()?.kind).toBe("home");
     });
 
+    // issue 2222, found by the audit rather than named in the report — a FIFTH
+    // site of the class, in this same file but a different function.
+    // `resolveFallbackWindow` read
+    // `closedNet.kind === "visitor" || closedNet.connection_state === "connected"`
+    // under the comment "visitor networks have no connection_state — always
+    // assume connected": the retired #211 phase 6 premise, verbatim, as a live
+    // short-circuit. A visitor's parked network satisfied the left disjunct and
+    // was treated as connected.
+    //
+    // It is also an incoherence the hiding fix CREATED: a parked network now
+    // leaves the sidebar for both kinds, so a visitor fell back into a server
+    // window whose network the sidebar no longer draws — focus somewhere they
+    // cannot navigate back to.
+    const visitorNetE = (slug: string, id: number, conn: Conn) => ({
+      kind: "visitor" as const,
+      id,
+      slug,
+      nick: "alice",
+      connection_state: conn,
+      connection_state_reason: null,
+      connection_state_changed_at: null,
+      inserted_at: "",
+      updated_at: "",
+    });
+
+    it("falls back to home when MRU is empty and a VISITOR network is parked (issue 2222)", async () => {
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([visitorNetE("freenode", 1, "parked")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([{ name: "#grappa", joined: true, source: "autojoin" }])
+        .mockResolvedValue([]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      auth.setToken("tokE3visitor");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(1);
+      });
+      sel.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#grappa",
+        kind: "channel",
+      });
+      networks.refetchChannels();
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.networkSlug).toBe("$home");
+      });
+      expect(sel.selectedChannel()?.kind).toBe("home");
+    });
+
+    it("still falls back to the server window when a VISITOR network is connected (issue 2222)", async () => {
+      // The negative, and here it is NOT vacuous: pre-fix the left disjunct
+      // made every visitor answer "connected", so this case passed for the
+      // wrong reason. It earns its keep next to the parked twin above — the two
+      // together are what pin "read the field" rather than "assume a constant".
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([visitorNetE("freenode", 1, "connected")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([{ name: "#grappa", joined: true, source: "autojoin" }])
+        .mockResolvedValue([]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      auth.setToken("tokE2visitor");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(1);
+      });
+      sel.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#grappa",
+        kind: "channel",
+      });
+      networks.refetchChannels();
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.kind).toBe("server");
+      });
+      expect(sel.selectedChannel()?.networkSlug).toBe("freenode");
+    });
+
     it("skips MRU entries that are no longer live (stale entry)", async () => {
       // Operator focused #a, #b, #c. Then #c PARTs (left from another
       // tab / kicked). Then #b PARTs. MRU is still [#c, #b, #a] but
