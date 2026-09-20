@@ -2903,27 +2903,41 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   🥇 *La morale non e' sul tmux: **un rilevatore va provato contro un soggetto che ha DAVVERO la
   proprieta' che cerchi**, e finche' quel soggetto non ce l'hai, ogni predicato che proponi e'
   un'ipotesi — per quanto ragionevole sembri.*
-  🔴🔴 **SETTIMO GIRO, E TOCCA L'UNICO SOPRAVVISSUTO: IL PID E' RIUSABILE, E DOPO IL WRAP
-  `ps -p <pid>` DIVENTA UN FALSO POSITIVO.** Misurato: **`pid_max` = 4.194.304**, pid vivo piu' alto
-  **4.093.421**, **margine 100.883** (*il RATE di consumo NON e' misurato — servirebbero due
-  campioni distanziati: dichiarato, non stimato*). Dopo il wrap i pid ripartono dal basso e possono
-  **ricapitare su un orfano**: a quel punto `ps -p 2278987` risponde **VIVO** su una sessione morta
-  da un mese. ⇒ **il socket orfano smette di essere inerte e diventa una TRAPPOLA ARMATA: oggi non
-  prova niente, dopo il wrap AFFERMA IL FALSO.**
-  🔑 **Cura: il pairing socket↔processo si verifica col TEMPO DI NASCITA, e sono DUE condizioni, non
-  una.** `ps -p <pid> -o comm=` deve dare **`claude`** **E** `lstart` deve combaciare col `mtime` del
-  socket. **Misurato su due vivi:** il mio → socket `1789042419` vs processo `1789042417`, **2
-  secondi**; il pari → `1787381912` vs `1787381911`, **1 secondo** (il socket nasce subito DOPO il
-  processo). **Neg ctrl:** l'orfano ha il socket e **nessun processo**. Un pid riciclato nascerebbe
-  **mesi dopo** il socket che porta il suo numero ⇒ **una tolleranza larga (decine di secondi) e'
-  abbondante e robusta**: il segnale e' di ordini di grandezza, non al secondo.
-  🥇🥇 **E QUESTA E' LA COSA PIU' GRANDE DELLA GIORNATA, piu' della tabella: QUATTRO strumenti
-  funzionano OGGI per una ragione che nessuno aveva DICHIARATO** — `remain-on-exit off`, la radice
-  `bash`, il socket orfano, e adesso **un contatore che non ha ancora girato**. **Non e' sfortuna:
-  e' che un predicato lo provi contro lo STATO PRESENTE del sistema, e lo stato presente e' UNA
-  delle configurazioni possibili, non la sola.** ⇒ **quando eleggi un discriminante, scrivi accanto
-  la CONDIZIONE DI CONTORNO che lo rende valido** — altrimenti la scadenza non ce l'ha nessuno, e il
-  giorno in cui quella condizione cambia il check non si rompe: **comincia a mentire.**
+  🔴🔴 **SETTIMO/OTTAVO GIRO — IL PID E' RIUSABILE, E IL RIUSO NON E' UN RISCHIO FUTURO: E' GIA'
+  IN CORSO.** ⚠️ **Il primo numero era SBAGLIATO e l'avevo gia' committato: «margine 100.883».**
+  Veniva da `pid_max` meno **il PID VIVO PIU' ALTO**, che **non e' il contatore** — e' un residuo
+  storico. **Il contatore e' `/proc/sys/kernel/ns_last_pid`.** Misurato:
+  `ns_last_pid` **2.986.768** · `pid_max` **4.194.304** ⇒ **margine vero 1.207.536**, dodici volte
+  quello pubblicato. *Due grandezze diverse lette come una — la malattia di questo file, infilata
+  nella misura con cui si stava chiudendo la giornata.*
+  🔑 **E la conseguenza NON e' un sollievo, e' il contrario: IL WRAP E' GIA' AVVENUTO.** Prova
+  indipendente, **al netto della mia contaminazione** (il primo conteggio pescava i processi che il
+  comando stesso aveva appena creato, sopra il contatore per costruzione): **29 processi VIVI con
+  pid > contatore e nati da piu' di 10 minuti**, fino a **434 ore**. Un pid sopra il contatore
+  attuale puo' esistere **solo** se il contatore c'e' passato e poi e' tornato indietro.
+  ⇒ **l'orfano `2278987` sta SOTTO il contatore, quindi quel numero e' GIA' STATO RIEMESSO**, forse
+  piu' volte. Che `ps -p 2278987` dica DEAD **significa solo che anche il riciclato e' morto** —
+  **non** che il pid sia rimasto libero. ⇒ **il pairing col TEMPO DI NASCITA serve OGGI, e il nostro
+  neg ctrl e' FORTUNATO**: bastava che il riciclato fosse vivo e il check diceva *"sessione viva"*
+  su una morta da un mese, adesso, senza aspettare niente.
+  ✅ **Rate MISURATO** (non stimato), finestra dichiarata perche' corta: **3.300 pid in 77 s ⇒
+  ~2.571 pid/min ⇒ prossimo wrap fra ~8 ore**. Per un numero robusto servono due campioni a un'ora.
+  🔑 **Cura, DUE condizioni e non una:** `ps -p <pid> -o comm=` deve dare **`claude`** **E**
+  `lstart` deve combaciare col `mtime` del socket. **Misurato su due vivi:** il mio → **2 secondi**;
+  il pari → **1 secondo** (il socket nasce subito DOPO il processo). **Neg ctrl:** l'orfano ha il
+  socket e nessun processo. **Tolleranza LARGA — decine di secondi:** il riciclato nasce **mesi**
+  dopo, quindi il segnale e' di ordini di grandezza e stringere a 1-2 s e' rigore di facciata che
+  compra zero e rompe sotto carico.
+  🥇🥇 **E LA COSA PIU' GRANDE DELLA GIORNATA, piu' della tabella: QUATTRO strumenti funzionano OGGI
+  per una ragione che nessuno aveva DICHIARATO** — `remain-on-exit off`, la radice `bash`, il socket
+  orfano, e il contatore dei pid. **Non e' sfortuna: un predicato lo provi contro lo STATO PRESENTE
+  del sistema, e lo stato presente e' UNA delle configurazioni possibili, non la sola.** ⇒ **quando
+  eleggi un discriminante, scrivi accanto la CONDIZIONE DI CONTORNO che lo rende valido** — senza,
+  la scadenza non ce l'ha nessuno, e il giorno in cui quella condizione cambia il check non si
+  rompe: **comincia a mentire.**
+  🪞 *E il numero sbagliato veniva dal comando piu' facile da girare (`ps` + `sort`) invece che dal
+  campo che rispondeva alla domanda. **Prima di pubblicare una grandezza, chiediti se la fonte che
+  hai interrogato misura QUELLA grandezza** — vale per `ns_last_pid` come per `mergedBy`.*
   🪞 **Nota di metodo sulla catena: il pari aveva verificato `%19`, che e' il pane di
   `ha-eisenberg-4c`; il SUO e' `%82`** — pos ctrl preso su un soggetto che non e' quello di cui
   parli. **L'ha confermato lui risalendo l'ancestry dal proprio `$$`**, invece di discuterla.
