@@ -18493,3 +18493,39 @@ steady state that the leak-canary and user-cap specs assert after it.
 
 The contended window is opened on a GHOST nick — one nobody holds — rather than
 on a live peer who then quits. Same contention, no nick-release race to lose.
+
+### It discriminates on WebKit too — and the tag was still declined
+
+Asked whether the green is off the defect's platform, the spec was run on the
+`webkit-iphone-15` project with a TEMPORARY `@webkit` tag, reverted afterwards.
+Three answers, kept separate because they are not the same answer:
+
+* **as committed it is NOT ELIGIBLE** for that project — `Total: 0 tests in 0
+  files`, with two positive controls (the project itself lists 160 tests; the
+  spec lists 1 on `chromium`), so the zero means "not selected", not "the
+  machinery is broken";
+* **with the tag it is GREEN** there — 1 passed, 17.3 s;
+* **with the tag AND `subscribe.ts` reverted to `587f02a9f^` it is RED** there —
+  same assertion, same `Expected: 0, Received: 1`.
+
+The third run is the one that matters and it was not asked for. A green with the
+cure present cannot tell a discriminating spec from a vacuously green one — the
+trap this config's own header describes for `issue1869`, whose assertion is
+false by construction off Safari. The RED establishes that the spec measures the
+same thing on both engines.
+
+**The tag was still declined, and the reason is not the measurement.** The
+`chromium` project is defined by SUBTRACTION (`grepInvert: /@webkit|@touch/`), so
+a tag is a MOVE and not an addition: `@webkit` would take the spec OFF desktop
+chromium. Paying that trade needs evidence about where the gap is, and the
+platform behind the original report is **not recorded anywhere** — measured
+across the issue body and every comment: zero hits for safari/ios/iphone/chrome/
+chromium/firefox/android/desktop/mobile, with a positive control (`nick`, 21
+hits) proving the search worked. Swapping one engine for another blind is not a
+trade worth a 38-minute suite.
+
+**And this config cannot express "both engines" in one entry** — that is a limit
+of the project definitions, not of the spec. Anyone who later wants WebKit
+coverage here has the answer without redoing the work: the spec holds there, the
+price is desktop chromium, and closing that gap means a second entry or a change
+to how `chromium` is defined.
