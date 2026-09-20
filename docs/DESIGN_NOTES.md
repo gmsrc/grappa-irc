@@ -18429,3 +18429,134 @@ number.** Here the count was right and the world behind it was invented.
 All of it is vitest against the socket mock; no real stack was driven, which is
 the same limitation the original report declared for itself and is carried
 forward rather than papered over.
+<!-- entry #2222 -->
+
+---
+
+## 2026-09-20 — #2222: the server retired the premise in words, and cic kept narrowing on it for three surfaces out of four
+
+A visitor's `parked` network would not leave the sidebar. The reported symptom
+was one site; the cause was a whole class of `kind === "user"` narrows, each
+resting on the same sentence, and the sentence had been false since #211
+phase 6.
+
+### The headline: this was a server/client divergence nothing was watching
+
+`NetworksController`'s moduledoc says it outright — *"visitors park/reconnect a
+network through it — visitors carry a real `connection_state` now"* — and
+`apply_transition/5` has carried **no subject-kind clause** since phase 6
+(ruling D). The wire agrees: `NetworksWireNetworkWithNickJson` and
+`NetworksWireVisitorNetworkWithNickJson` are **byte-identical modulo the `kind`
+discriminator** (measured — both 20 fields, `diff` of the stripped bodies rc=0),
+so `connection_state` and `connection_state_reason` are non-optional on both.
+
+The server had been subject-agnostic on this axis for a phase. cic narrowed on
+**three surfaces out of four**, and the fourth is the tell: **HomePane never
+narrowed, and not out of virtue** — its rows come from the `/me` envelope
+(`NetworksWireHomeNetworkRow`), which carries no `kind` to narrow *on*. So a
+visitor was told about a parked network in exactly the one place whose data
+shape made the mistake unavailable, and nowhere else.
+
+That is the general lesson worth more than the fix: **a premise retired on the
+server does not retire itself on the client, and nothing in the build says so.**
+The wire types are generated, so the shapes converged silently; a narrow is
+well-typed against a union whether or not its justification still holds.
+`protocol_version` cannot express it either — nothing was added or removed, a
+CONSTRAINT was dropped. The only detector here was a human noticing a network
+that would not go away.
+
+### Why ruling item 2 was inert, and why that is a general shape
+
+`networkReason` lost its narrow first, alone. It changed nothing, and the
+measurement is the reason the slice split in two:
+
+    title={isNetworkGreyed(slug) ? networkReason(slug) : undefined}
+                 |
+                 +-> networkGreyedState -> if (net?.kind !== "user") return null
+
+The one consumer sits behind a SECOND narrow of the same class. Dropping the
+first only moved the gate one function up. **A de-narrowing is only observable
+where the value is consumed** — when a class of gates is being removed, the fix
+is complete at the CONSUMER, not at the predicate, and a per-site count is not a
+measure of progress. This is what turned "same class, your call" into a question
+for vjt, whose answer (2026-09-20 20:24:52Z) was "tutto".
+
+### The five sites, and the one that was not ordered
+
+`isNetworkParked` (hiding), `Sidebar.networkReason` (the why),
+`Sidebar.networkGreyedState` (greying + the cascade + the `#96` sr-only word),
+`ComposeBox.networkGreyedState` (greying + the #1331 Reconnect chip), and the
+`networks()` sample effect in `selection.ts` (the home redirect).
+
+A fifth came out of the audit: `selection.resolveFallbackWindow` read
+`closedNet.kind === "visitor" || closedNet.connection_state === "connected"`
+under *"visitor networks have no connection_state — always assume connected"*.
+**Same premise, opposite spelling** — not a narrow that skips visitors, a
+disjunct that answers "connected" for them unconditionally, which is why one
+grep spelling did not find it.
+
+It is in the change for a reason that does not depend on how widely the ruling
+is read: **it is an incoherence the hiding fix CREATED.** Once a parked network
+leaves the sidebar for both kinds, that branch dropped a visitor's focus into a
+server window the sidebar no longer draws. Shipping the hiding half without it
+would have shipped our own regression. It is a separate commit so it reverts
+alone.
+
+### In every site the premise PARAGRAPH is deleted, not corrected
+
+That is deliberate and it is the durable part. The comment is the sentence that
+makes the narrow look right; a corrected comment still reads as a reason to have
+one. Two MOCK comments were struck for the same reason — a mock comment is where
+the next reader learns why the mock is shaped as it is.
+
+### The two greyed sets stay different, and the question is filed not answered
+
+`Sidebar` is `{failed}`; `ComposeBox` is `{parked, failed}`. **Untouched** — the
+diff of `ComposeBox.tsx` contains no line matching `NETWORK_GREYED_STATES`. They
+diverged on the SAME kind long before this slice, so merging them would be a
+second, unruled change riding an unrelated one: **this ruling uniforms the
+SUBJECT.** Whether they should diverge at all is issue #2267, filed with both
+readings and neither asserted. `failing` is outside both sets per #1675 and must
+not be swept into any merge.
+
+### Proving a class EMPTY counts as much as finding a site
+
+The audit had to cover spellings other than `kind [!=]== "user"`. A `switch` on
+a network kind: **zero** (`case "visitor"` has no hits; positive control, 119
+`case "` in the files that switch on some other kind). A truthiness check on a
+user-only field: **impossible by construction**, because the byte-identical wire
+shapes above mean no user-only field exists on a `Network`. A negative verdict
+of that kind is only worth stating when it is measured rather than searched for
+and not found.
+
+### A mutation that turns FEWER reds than the rule deserves is a coverage hole
+
+Each site got twins plus a mutation, and the count of reds was read, not just
+its sign. Generalising `Sidebar`'s rule to `!== "connected"` turned exactly
+**one** red — the new visitor `failing` twin. One was too few: the USER `failing`
+greying case **did not exist**, because the block's only `failing` test lives in
+the HIDING suite and asserts the section is KEPT, which a generalised greying
+rule does not disturb. `ComposeBox` had no `failing` case at all, on either kind.
+Both added; both mutations now turn 2. Three of the visitor twins on the first
+site had passed pre-fix for the same reason the narrow made them vacuous.
+
+### A de-narrowing can hand someone a NEW affordance — check before shipping it
+
+Dropping the narrow in `ComposeBox` also surfaced the #1331 Reconnect chip to
+visitors, because it rides the same derivation. Measured before shipping rather
+than assumed safe: `HomePane`'s `DisconnectedRow` already renders that identical
+chip for a visitor today, unconditionally, and the PATCH behind it is the
+subject-agnostic door above. It is the missing half of an affordance that
+existed, not a button that 403s. **The general rule: when a gate falls,
+enumerate what it was gating — a greying derivation was also gating an action.**
+
+### Not established
+
+Nothing here ran in a real browser. Four of the five sites are a visible change
+on a surface a visitor actually uses, and the evidence is jsdom only (whole cic
+suite 7555/7555, `check` 5/5). Prod's visitor `parked` row
+(`network_credentials` id 712) is cited from the issue, not re-measured — m42 is
+not reachable from the worker host. And the audit can name the spellings it
+searched and the one it proved impossible, but a narrow expressed as data, or
+reached through a wrapper whose name does not mention `kind`, would still escape
+all four greps.
