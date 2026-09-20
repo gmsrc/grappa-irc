@@ -18429,3 +18429,103 @@ number.** Here the count was right and the world behind it was invented.
 All of it is vitest against the socket mock; no real stack was driven, which is
 the same limitation the original report declared for itself and is carried
 forward rather than papered over.
+<!-- entry #1365b -->
+
+---
+
+## 2026-09-20 — #1365b: the browser witness, and why the obvious assertion is masked
+
+Entry #1365 closed with "Not established: all of it is vitest against the socket
+mock; no real stack was driven." This closes that. `issue1365-dm-bucket-after-own-nick-steal.spec.ts`
+drives a real browser against the real stack: a session takes a nick an open
+query window already holds, a third party DMs it, and the assertion is the
+BUCKET the row lands in.
+
+Two-sided, measured: GREEN on `main` (1 passed, chromium, 7.8 s); RED with
+`cicchetto/src/lib/subscribe.ts` alone reverted to `587f02a9f^` — the inverse
+mutation, −26/+1, restoring the bare `if (joined.has(key)) continue` — failing
+on the discriminating assertion with `Expected: 0, Received: 1`. The revert is
+surgical: the diff of that file between the fix commit and `origin/main` is
+empty, so nothing but the cure moved.
+
+### The trap this spec had to avoid, and it is the reusable part
+
+**The obvious assertion is masked and would be green on both sides of the fix.**
+"The body shows up in the peer's window" cannot discriminate, because an inbound
+DM is stored at `channel = fold(own_nick), dm_with = sender` and the DM read key
+is `nick_fold(COALESCE(dm_with, channel))` — the SENDER. Selecting the peer's
+window therefore fetches the row over REST and renders it correctly *however the
+live push was routed*. A spec built on it would pass against the defect it names.
+
+What the server cannot mask is the SELF window: its read key is our own nick,
+the row's key is the sender, so the row is absent from that window's REST page
+in either regime. A hit there can only be a mis-routed LIVE push. So the
+discriminating assertion is a NEGATIVE one — the body must NOT be in the focused
+self window — and the peer-window check stays only as a labelled delivery
+control, guarding against a vacuous pass where nothing was delivered at all.
+
+**General rule: when the server can serve the same row to the same window by a
+second path, the positive assertion is not a witness. Find the observable the
+server never writes.**
+
+The negative is asserted while the self window is still focused and before any
+window switch, deliberately: `loadInitialScrollback` runs on every select, so a
+switch away and back could re-seed the pane from REST and erase the evidence.
+
+### The barrier, and how its sufficiency was established
+
+A `toHaveCount(0)` is worth nothing unless the row has had its chance. Two
+server-side barriers run first and hold in both regimes: the row is persisted
+(`assertMessagePersisted` on the peer key), and the #422 auto-open's
+`query_windows_list` has reached the browser (the peer's sidebar row appears).
+That the second implies the first push was already delivered is an INFERENCE
+from same-socket ordering — and it is not what the spec rests on. The pre-fix
+run is: it failed with `9 × locator resolved to 1 element`, i.e. the mis-routed
+row was present and stayed present for the whole 5 s window. The RED measures
+the barrier; the ordering argument merely explains it.
+
+### Two setup choices worth keeping
+
+The spec mints its own visitor at runtime rather than seeding a user: it renames
+a LIVE nick, which is a destructive mutation of server-side identity and may not
+touch the shared `vjt` session (#477), and a runtime subject adds nothing to the
+steady state that the leak-canary and user-cap specs assert after it.
+
+The contended window is opened on a GHOST nick — one nobody holds — rather than
+on a live peer who then quits. Same contention, no nick-release race to lose.
+
+### It discriminates on WebKit too — and the tag was still declined
+
+Asked whether the green is off the defect's platform, the spec was run on the
+`webkit-iphone-15` project with a TEMPORARY `@webkit` tag, reverted afterwards.
+Three answers, kept separate because they are not the same answer:
+
+* **as committed it is NOT ELIGIBLE** for that project — `Total: 0 tests in 0
+  files`, with two positive controls (the project itself lists 160 tests; the
+  spec lists 1 on `chromium`), so the zero means "not selected", not "the
+  machinery is broken";
+* **with the tag it is GREEN** there — 1 passed, 17.3 s;
+* **with the tag AND `subscribe.ts` reverted to `587f02a9f^` it is RED** there —
+  same assertion, same `Expected: 0, Received: 1`.
+
+The third run is the one that matters and it was not asked for. A green with the
+cure present cannot tell a discriminating spec from a vacuously green one — the
+trap this config's own header describes for `issue1869`, whose assertion is
+false by construction off Safari. The RED establishes that the spec measures the
+same thing on both engines.
+
+**The tag was still declined, and the reason is not the measurement.** The
+`chromium` project is defined by SUBTRACTION (`grepInvert: /@webkit|@touch/`), so
+a tag is a MOVE and not an addition: `@webkit` would take the spec OFF desktop
+chromium. Paying that trade needs evidence about where the gap is, and the
+platform behind the original report is **not recorded anywhere** — measured
+across the issue body and every comment: zero hits for safari/ios/iphone/chrome/
+chromium/firefox/android/desktop/mobile, with a positive control (`nick`, 21
+hits) proving the search worked. Swapping one engine for another blind is not a
+trade worth a 38-minute suite.
+
+**And this config cannot express "both engines" in one entry** — that is a limit
+of the project definitions, not of the spec. Anyone who later wants WebKit
+coverage here has the answer without redoing the work: the spec holds there, the
+price is desktop chromium, and closing that gap means a second entry or a change
+to how `chromium` is defined.
