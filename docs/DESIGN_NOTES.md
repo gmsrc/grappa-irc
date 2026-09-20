@@ -18247,3 +18247,94 @@ broadcast was needed on re-attach: it was reasoning from a comment instead of
 from the code, which is the failure mode CLAUDE.md names under "never
 fabricate explanations". The comment is fixed in the same commit as the
 event, because the next person to reason about this will read it first.
+<!-- entry #2260 -->
+
+---
+
+## 2026-09-20 — #2260: the client protocol now enumerates its own event kinds, and the census that built it corrected the issue
+
+`docs/CLIENT_PROTOCOL.md` described the wire in prose and never enumerated the
+`kind` values a client can receive. A third-party author (Sythos) met
+`topic_changed` and `channel_modes_changed` with no document naming either. The
+additive-only rule says a client must TOLERATE an unknown kind; it never said a
+client could DISCOVER one. Section 9 is that enumeration — 56 rows, each with
+its carrier topic — and `scripts/client-protocol-gate.sh` holds it.
+
+### The issue's table was a lower bound AND carried a false positive
+
+It was built with a regex over `"kind" => "…"` / `kind: "…"` in `lib/` and
+listed seven undocumented kinds. Measured against the typespecs the count is
+**29 of 56**, so the regex missed 22. It also listed `parted`, which the server
+**deliberately does not emit**: `git grep -cE 'kind: :parted' -- lib` is 0, and
+the three sites the regex hit all say the opposite — `session/server.ex` and
+`session/window_state.ex` both carry *"there is intentionally NO `kind:
+"parted"` broadcast (absence is the signal)"*, and `subscribe.test.ts` asserts
+it client-side. The regex matched a **negated mention inside a comment**.
+
+That is the document-talks-about-itself trap seen from the SOURCE side, and it
+is why §9a documents `parted` as a NON-emission rather than omitting it: the
+next census will hit those same comments, and a reader who finds no row needs
+to know the absence was decided.
+
+### Why the gate reads the generated artefact, not `lib/`
+
+`cicchetto/src/lib/wireTypes.ts` is emitted from `lib/grappa/**/*wire.ex` by
+`mix grappa.gen_wire_types` and held by its own `--check`. Reading it reuses
+that guarantee instead of re-walking typespecs, and it carries the one fact a
+grep cannot recover: the emitting MODULE, as a `// === … ===` section marker.
+
+That marker is what makes the client/admin split DERIVED. The proof it was
+needed is `web_session_severed`: two distinct types share the name,
+`AdminEvents.Wire`'s (admin topic) and `RateLimit.Wire`'s, which
+`request_budget.ex` broadcasts on `Topic.user/1`. Subtracting the admin union
+by NAME — the obvious first move — drops a kind clients really do receive.
+Excluding by module keeps it.
+
+The client perimeter itself is decidable, not a judgement call:
+`user_socket.ex` routes exactly two topics, `grappa:user:*` to `GrappaChannel`
+and `grappa:admin:events` to `AdminChannel`. `Topic.session_log/0` and
+`Topic.server_settings/0` are routed to no channel at all.
+
+### The gate is shell, not ExUnit, because `docs/` is not mounted
+
+`scripts/_lib.sh` bind-mounts `lib`, `test`, `config`, `cicchetto/src`,
+`priv/wire`, `infra`, `bin` and a handful of root files into the test
+container. `docs/` is on none of them — measured: `SRC_ROOT/docs` appears 0
+times in that array, `SRC_ROOT/CLAUDE.md` once. An ExUnit test reading
+`docs/CLIENT_PROTOCOL.md` from a worktree would read the IMAGE's copy, i.e.
+MAIN's, and deliver a confident verdict about a file that is not the one under
+change — and it would never say so, because the file exists. No ExUnit test
+reads a `docs/` file today; the precedent for a gate over one is
+`scripts/design-notes-gate.sh`, and this follows it.
+
+### The assert is anchored to the ROW, and both arms are measured
+
+The subject of this gate is a document that discusses its own vocabulary, so a
+substring test reads §4's prose about a kind as evidence the kind is
+documented. The assert therefore matches `^| \`<kind>\` |` — a table row.
+
+Proven, not asserted: deleting the `session_identity_changed` ROW while its §4
+JSON example still stands takes the gate to rc=1 naming that kind; restoring it
+returns rc=0 and `shasum -a 256 -c` confirms the file is byte-identical.
+Mutating the GATE the other way — anchored row test swapped for a naive
+substring test — turns bats cases 3 and 4 red and leaves 1, 2, 5, 6 and 7
+green, which is the evidence that the suite guards the anchoring specifically
+and not the gate in general.
+
+### Fail-closed, deliberately
+
+Both exclusion lists are subtractive: a new `*.Wire` module is in scope by
+default and must be documented, and excluding one is a visible edit. The
+inverse polarity — an inclusion list — makes a new module silently invisible,
+which is precisely the drift the gate exists to catch.
+
+The gate is host-side, needs no lane, and rides into CI and `scripts/check.sh`
+through `scripts/bats.sh`'s existing `test/scripts/` discovery, so nothing had
+to be wired by hand.
+
+### No wire change, so no version bump
+
+Documentation and a gate only. `Grappa.Protocol` is untouched and
+`protocol_version` does not move — the rule bumps on wire-SHAPE changes, and
+nothing about the emitted set changed here. What changed is that it is now
+written down.
