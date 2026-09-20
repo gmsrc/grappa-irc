@@ -440,10 +440,22 @@ const ComposeBox: Component<Props> = (props) => {
     });
   };
 
-  // Bucket F H4: only UserNetwork carries connection_state. Narrow on
-  // network.kind before reading the field; visitor networks are
-  // never greyed at the network level (visitors have no credential
-  // row to park / fail).
+  // issue 2222 — no `kind` narrow. The premise paragraph that stood here is
+  // deleted rather than corrected (it is the sentence that would put the
+  // narrow back): it claimed only a UserNetwork carries `connection_state`
+  // and that a visitor has no credential row to park or fail. #211 phase 6
+  // retired both halves on BOTH sides of the wire — the two network shapes
+  // are byte-identical modulo `kind`, and the server states it outright:
+  // "visitors park/reconnect a network through it — visitors carry a real
+  // connection_state now" (`NetworksController` moduledoc), whose PATCH door
+  // has no subject branch. cic was the last layer still narrowing.
+  //
+  // 🔴 `NETWORK_GREYED_STATES` above is UNCHANGED and is deliberately NOT the
+  // Sidebar's. Here it is {parked, failed}; there it is {failed}, because a
+  // parked network leaves the sidebar and has no header left to grey (issue
+  // 1985). Those two differed on the same kind long before this change. The
+  // ruling uniforms WHO the rule applies to, not two rules that were distinct
+  // for a reason — merging them is a separate question, not this one.
   //
   // #1331 — split out of `greyed()` because the two causes are no longer
   // equivalent: a parked/failed NETWORK can be reconnected from here, a
@@ -452,7 +464,7 @@ const ComposeBox: Component<Props> = (props) => {
   // them for the visual, which is unchanged.
   const networkGreyedState = (): string | null => {
     const net = networkBySlug(props.networkSlug);
-    if (net?.kind !== "user") return null;
+    if (net === undefined) return null;
     return NETWORK_GREYED_STATES.has(net.connection_state) ? net.connection_state : null;
   };
 
