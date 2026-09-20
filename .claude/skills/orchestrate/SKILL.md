@@ -2289,12 +2289,18 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     tutte CORRETTE su cio' che misuravano**, e il protocollo resta valido. **A essere sbagliato era
     l'OGGETTO, non gli strumenti** — ed e' esattamente per questo che nessuno dei controlli poteva
     beccarlo: **un controllo valida lo strumento, mai l'esistenza del suo soggetto.**
-    📏 **E NON E' UN INCIDENTE, E' LO STILE DI DEFAULT DEL FILE — MISURATO SUBITO DOPO, sulle righe
-    dell'handoff che dichiarano un'attesa: 23 totali, SOLO 4 con un istante, 19 SENZA** (pos ctrl su
-    una riga che l'istante ce l'ha). ⇒ la regola *"una pendenza si registra col suo ARTEFATTO"* non
-    ripara un caso: **ripara il modo in cui questo file scrive le attese.** *Trovato il difetto, la
-    domanda successiva e' sempre «quante altre istanze ha la stessa forma?» — e qui la risposta era
-    diciannove.*
+    📏 **E NON E' UN INCIDENTE, E' LO STILE DI DEFAULT DEL FILE — misurato subito dopo sulle righe
+    dell'handoff che dichiarano un'attesa: 5 pendenze su 7 SENZA un istante** (marcatore `⏳`, neg
+    ctrl su un marcatore inventato = 0). ⇒ la regola *"una pendenza si registra col suo ARTEFATTO"*
+    non ripara un caso: **ripara il modo in cui questo file scrive le attese.** *Trovato un difetto,
+    la domanda successiva e' sempre «quante altre istanze hanno la stessa forma?».*
+    🪞 **CORREZIONE A ME STESSA, E LA PUBBLICO PERCHE' IL NUMERO SBAGLIATO L'AVEVO GIA' PUBBLICATO:
+    il primo conteggio diceva 19 su 23 ed era GONFIATO di ~4x.** Il grep cercava le PAROLE
+    (`attesa|aspetta|pendenz|⏳`) e pescava **la prosa della lezione che avevo appena scritto nello
+    stesso file** — cioe' due difetti gia' a verbale qui, insieme: *un grep su un identificatore
+    misura le OCCORRENZE DEL TESTO, non gli USI*, e **l'atto di misurare entra nel campione.**
+    🥇 *La DIREZIONE reggeva, la MAGNITUDINE no — ed e' la mia diagnosi n.1 di sempre (leggo la
+    struttura e ne deduco una grandezza mai misurata) presa mentre scrivevo una lezione sul misurare.*
     🥇🥇 **E IL PEZZO CHE SPIEGA PERCHE' E' SOPRAVVISSUTO A DIECI VERIFICHE, portato dal pari:
     L'ETICHETTA GUADAGNAVA AUTOREVOLEZZA A OGNI GIRO.** Ogni misura che le girava attorno — soglia,
     predicato, notificatore, filtro — **PRESUPPONEVA il soggetto**, e percio' lo **certificava di
@@ -2307,6 +2313,21 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     confermano a vicenda NON sono due misure se hanno copiato la stessa etichetta** — e' la regola
     dell'ECO (*una conferma che ripete la FONTE non e' una verifica*) applicata a un'ETICHETTA
     invece che a un numero, dove e' peggio perche' un'etichetta non ha nemmeno l'aria di un dato.
+    🔴🔴 **E LO SWEEP HA PESCATO UNA CLASSE NUOVA, PIU' SOTTILE DELL'ETICHETTA: UNA MISURA CORRETTA
+    CHE RISPONDE ALLA DOMANDA A, CON IL SALTO ALLA DOMANDA B RIEMPITO DA UN'ASSUNZIONE (pari,
+    2026-09-20 — auto-smentita trovata sul proprio log).** Aveva misurato bene su m42 — nessuna cron,
+    nessun log di deploy, checkout fermo — e concluso **"quindi il deploy del sito lo fa vjt"**,
+    dichiarandolo **due volte** (a me, che l'ho propagato nel mio handoff, e in canale a un terzo).
+    **Falso: l'aveva fatto LUI, cento minuti prima.** Il dato diceva solo **"a mano"**; **la domanda
+    «CHI?» non l'ha risolta la misura, l'ha riempita un'assunzione** che suonava come prudenza.
+    🔑 **REGOLA: una misura NEGATIVA delimita un'assenza («non e' automatico»); una CLAIM DI IDENTITA'
+    («lo fa Tizio») e' un'affermazione POSITIVA e vuole una misura SUA.** Il salto fra le due e'
+    invisibile perche' la prima e' vera e la seconda e' plausibile.
+    🥇 **E l'artefatto che risponde a «chi fa X» esiste ed e' banale: L'ULTIMA VOLTA CHE X E' STATO
+    FATTO, e da chi** — un log di deploy, un commit, una riga di history. **Mai una dichiarazione di
+    competenza** (*"quello e' di vjt"*), che descrive un'intenzione e non un evento. ⚠️ **Ed e'
+    esattamente la domanda che io NON gli ho fatto** mentre accettavo la claim: *"chi l'ha fatto
+    l'ultima volta?"* costava un messaggio.
     🥇🥇 **E METTERE I DUE PREDICATI UNO ACCANTO ALL'ALTRO HA TIRATO FUORI UNA COSA CHE NON E' DI
     MISURA: UNA VIOLAZIONE DI PERMESSO (pari, 2026-09-20, trovata da lui su sé stesso).** Il filtro
     del suo osservatore continuo **droppa due canali per ORDINE ESPLICITO di vjt** — non per svista —
