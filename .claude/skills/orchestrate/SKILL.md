@@ -2289,6 +2289,24 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     tutte CORRETTE su cio' che misuravano**, e il protocollo resta valido. **A essere sbagliato era
     l'OGGETTO, non gli strumenti** — ed e' esattamente per questo che nessuno dei controlli poteva
     beccarlo: **un controllo valida lo strumento, mai l'esistenza del suo soggetto.**
+    📏 **E NON E' UN INCIDENTE, E' LO STILE DI DEFAULT DEL FILE — MISURATO SUBITO DOPO, sulle righe
+    dell'handoff che dichiarano un'attesa: 23 totali, SOLO 4 con un istante, 19 SENZA** (pos ctrl su
+    una riga che l'istante ce l'ha). ⇒ la regola *"una pendenza si registra col suo ARTEFATTO"* non
+    ripara un caso: **ripara il modo in cui questo file scrive le attese.** *Trovato il difetto, la
+    domanda successiva e' sempre «quante altre istanze ha la stessa forma?» — e qui la risposta era
+    diciannove.*
+    🥇🥇 **E IL PEZZO CHE SPIEGA PERCHE' E' SOPRAVVISSUTO A DIECI VERIFICHE, portato dal pari:
+    L'ETICHETTA GUADAGNAVA AUTOREVOLEZZA A OGNI GIRO.** Ogni misura che le girava attorno — soglia,
+    predicato, notificatore, filtro — **PRESUPPONEVA il soggetto**, e percio' lo **certificava di
+    rimbalzo**: dieci verifiche riuscite attorno a un oggetto inesistente lo fanno sembrare **piu'**
+    reale, non meno. ⇒ 🔑 **piu' un referente e' stato misurato, MENO e' probabile che qualcuno vada
+    a controllare che esista.** *L'apparato di verifica, oltre a non poter beccare questo difetto,
+    lo MIMETIZZA.*
+    🥇 **E il difetto era di DUE registri, non di uno: il suo log aveva ricopiato la stessa etichetta
+    attraverso due `/clear` senza mai allegarci un outbound.** ⇒ **due registri indipendenti che si
+    confermano a vicenda NON sono due misure se hanno copiato la stessa etichetta** — e' la regola
+    dell'ECO (*una conferma che ripete la FONTE non e' una verifica*) applicata a un'ETICHETTA
+    invece che a un numero, dove e' peggio perche' un'etichetta non ha nemmeno l'aria di un dato.
     🥇🥇 **E METTERE I DUE PREDICATI UNO ACCANTO ALL'ALTRO HA TIRATO FUORI UNA COSA CHE NON E' DI
     MISURA: UNA VIOLAZIONE DI PERMESSO (pari, 2026-09-20, trovata da lui su sé stesso).** Il filtro
     del suo osservatore continuo **droppa due canali per ORDINE ESPLICITO di vjt** — non per svista —
