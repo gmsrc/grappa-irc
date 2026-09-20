@@ -2816,6 +2816,15 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   legge il path come OPZIONI, perche' comincia per `-`.** Forma che regge: `./-srv-grappa/` (o `--`).
   *Ennesima faccia dello zero falso e plausibile, costume nuovo: il nome dell'artefatto mangiato dal
   parser di flag* — e la prova che era rotto e' che **anche il positivo taceva**.
+  🥇🥇 **E DA LI' ESCE L'ASIMMETRIA FRA I DUE CONTROLLI, CHE VALE OVUNQUE E NON SOLO QUI: UNO ZERO
+  SUL NEGATIVO E' LA CONDIZIONE DI PASSAGGIO, QUINDI NON PUO' ALLARMARE; UNO ZERO SUL POSITIVO E'
+  L'UNICO ALLARME CHE ESISTE.** E' il motivo per cui uno strumento morto si smaschera **sempre dal
+  positivo**: il negativo che tace sta facendo esattamente quello che ti aspetti, e un difetto che
+  produce zero ovunque **si traveste da suite pulita.** ⇒ **quando un verificatore risponde zero,
+  guarda PRIMA il positivo**; se tace anche lui, non hai misurato niente, e nessuna quantita' di
+  negativi verdi lo compensera'. ⚠️ **Corollario per chi scrive lo strumento:** un pos ctrl va
+  scelto fra le cose che **non possono** essere assenti (regola gia' scritta sopra per `pgrep`) —
+  qui e' quella clausola vista dal lato della DIAGNOSI invece che della PROGETTAZIONE.
   🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
   2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
   UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
