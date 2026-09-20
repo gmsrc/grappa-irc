@@ -2787,6 +2787,35 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   `vjt` non distingue lui da noi. Leggere la regola nella forma larga fa buttare via un dato buono —
   ed e' lo stesso difetto gia' registrato qui sotto: *"«e' un'etichetta» e' una proprieta' del
   SINGOLO PORTATORE, non della classe."*
+  🥇🥇 **E LA CECITA' SU `vjt` NON E' UN LIMITE DEL MONDO, E' UN LIMITE DI `gh`: I TRANSCRIPT
+  DISCRIMINANO (lead del pari, 2026-09-20, RIPRODOTTO DA ME).** La fleet **redige** il testo prima
+  di postarlo, e quella redazione resta negli archivi di sessione sotto `~/.claude/projects/`,
+  per-directory (`-srv-grappa` per me e le worker, `-home-vjt-code-IRC-vjt-claude` per l'ircbot) e
+  **mai cancellati**: **1160 jsonl** al momento della misura. **Il campo autore e' un token
+  condiviso; il transcript e' il registratore di cassa.** ⇒ ogni *"questo l'ha rulato vjt"* citando
+  un commento di issue, che fino a ieri era un'ASSERZIONE, oggi e' **verificabile**.
+  ✅ **Misurato sul commento del 14-09 su `#2102`** (OIDC di iakat), quello che avevo classificato
+  *"ha la FORMA di un referto della fleet"* — e la forma e' diventata un fatto: il testo compare in
+  `-srv-grappa/332d49b5-….jsonl` alle **`2026-09-14T08:42:03.072Z`** come **`tool_use: Write` su
+  `scratchpad/pr2102-comment.md`**, e il commento su GitHub porta **`2026-09-14T08:42:17Z`,
+  `author=vjt`**. 🔑 **Quattordici secondi fra la stesura e il post: non e' una coincidenza, e' la
+  catena.** ⚠️ Letto con **parser JSON**, mai `grep -o` (tronca al primo `\"` escapato).
+  🔴🔴 **DUE MODI DI FALLIRE, E LI HO PRESI ENTRAMBI NELLA STESSA MISURA — vanno scritti o il
+  metodo si usa male.**
+  **(1) L'ARCHIVIO SI AUTO-INQUINA: cercare una stringa che stai DISCUTENDO ADESSO restituisce la
+  TUA sessione.** Il mio neg ctrl inventato (`ZORBLAX quantum pickle`) ha dato **1 hit, non 0** —
+  l'avevo appena digitato, quindi era gia' nel mio jsonl; e dei **2** hit "positivi" uno era il mio,
+  `role=user` alle `13:47:08Z`, cioe' **il messaggio del pari che mi citava il testo**. ⇒ **escludi
+  SEMPRE l'id della sessione corrente, e datati il hit: l'evidenza vera PRECEDE la discussione.**
+  Il timestamp e' il discriminante, non la presenza.
+  **(2) UN HIT MANCATO NON E' PROVA CHE L'ABBIA SCRITTO VJT.** Il metodo prova la paternita' della
+  fleet **in positivo**; il silenzio puo' voler dire postato senza bozza (heredoc inline), postato
+  da un'altra directory, o **davvero vjt** — tre cause che producono lo stesso zero. **Asimmetria da
+  dichiarare ogni volta che la citi.**
+  🪞 **E il mio primo giro ha dato `pos=0` E `neg=0`, cioe' STRUMENTO MORTO: `grep -rl … -srv-grappa/`
+  legge il path come OPZIONI, perche' comincia per `-`.** Forma che regge: `./-srv-grappa/` (o `--`).
+  *Ennesima faccia dello zero falso e plausibile, costume nuovo: il nome dell'artefatto mangiato dal
+  parser di flag* — e la prova che era rotto e' che **anche il positivo taceva**.
   🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
   2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
   UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
