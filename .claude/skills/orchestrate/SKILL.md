@@ -2862,6 +2862,33 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   stava dove nessuno dei due guardava perche' l'aveva proposto lui.*** 🥇🥇 **Quando costruisci un
   rilevatore di silenzio, chiediti su CHI termina — e poi se la grandezza che campioni misura la
   VITA o solo il LAVORO.**
+  🥇🥇 **QUINTO GIRO, ED E' IL DISCRIMINANTE MIGLIORE DEI TRE PERCHE' NON CHIEDE A NESSUNO DI
+  MORIRE PER ESSERE VALIDATO: `ListAgents` stampa il PANE di ogni peer, e quel pane si verifica in
+  proprio.** `tmux list-panes -a -F '#{pane_id} #{pane_pid} #{pane_current_command} dead=#{pane_dead}'`
+  ⇒ pos ctrl sulla liveness del **PROCESSO**, indipendente **sia dal peer sia dall'esito della
+  consegna**, e il ramo "vivo" lo eserciti OGGI. ⇒ **ORDINE FINALE, e le tre grandezze sono
+  separate per cio' che misurano davvero: (1) `tmux list-panes` — il processo ESISTE? (VITA,
+  verificabile adesso); (2) esito `SendMessage` — RISPONDE? (VITA, ramo negativo mai osservato);
+  (3) `mtime` del log — sta LAVORANDO? (LAVORO, non vita).** 🔑 **E col (1) davanti, *"mtime fermo"*
+  smette di essere ambiguo:** pane vivo + mtime fermo = *sta zitto perche' non succede niente*;
+  pane assente = morto, **e li' il mtime non serve.**
+  🔴🔴 **MA IL RAMO NEGATIVO NON E' `dead=1`, E' L'ASSENZA — e scritto come `dead=1` il check NON
+  PUO' SCATTARE (misurato da me, non dedotto).** `tmux show-options -g remain-on-exit` ⇒ **`off`**
+  su questo host, quindi **un pane il cui processo muore viene DISTRUTTO, non conservato con
+  `dead=1`**: oggi **16 pane su 16 leggono `dead=0`** e non esiste nessun valore diverso. ⇒ un
+  verificatore chiavato su `dead=1` **tace per sempre, e il suo silenzio si legge «e' vivo»** —
+  ennesima faccia dello zero falso e plausibile. **Il predicato giusto e' «la riga `%NN` NON compare
+  nella lista»** (neg ctrl: id inventato ⇒ 0 righe).
+  🔴🔴 **E IL LIMITE CHE NESSUNO DEI DUE AVEVA NOMINATO: SU UNA WORKER IL PANE NON MISURA LA
+  WORKER.** Misurato: `%16` e `%28` portano **`ssh`**, non `claude` — le worker girano su voyager
+  attraverso una ssh — ⇒ **il pane vivo certifica il TUNNEL, non la sessione all'altro capo.** E'
+  gia' successo: 01-09, `Connection reset` → `[Exit 255]`, **worker morte e pane vivi**, con
+  `ctx=TBD` letto come un clear. ⇒ **il (1) vale per un peer LOCALE (`pane_current_command = claude`)
+  e NON per una worker remota**, dove restano il costo/ctx e il transcript.
+  🪞 **Nota sulla sua misura, e vale come metodo: ha verificato `%19`, che e' il pane di
+  `ha-eisenberg-4c` — il SUO e' `%82`.** Il metodo regge, **l'istanza era la riga sbagliata**: un pos
+  ctrl preso su un soggetto che non e' quello di cui parli. *Stessa classe del positivo scelto male
+  gia' a verbale qui sopra, e stavolta dentro la proposta di un discriminante.*
   🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
   2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
   UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
