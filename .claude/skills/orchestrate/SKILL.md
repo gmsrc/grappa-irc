@@ -2301,6 +2301,24 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     🔑 **E non si patcha di propria iniziativa: bot/sidecar/hook non si toccano senza il via di
     vjt** — si dichiara il buco accanto al referto e si accatasta la pendenza **senza aprirne una
     seconda ondata su un interlocutore gia' muto.**
+    🥇🥇 **E IL PAGAMENTO DEL «DICHIARA IL LIMITE», MISURATO LO STESSO GIORNO: IL LIMITE E' L'UNICA
+    PARTE DEL MIO REFERTO CHE E' STATA VERIFICATA — E STAVA PER DARMI TORTO.** Per stabilire se
+    pushare su `grappa-www` fosse innocuo ho misurato **zero workflow GitHub** (pos ctrl su un repo
+    con 6 ⇒ strumento vivo) e concluso *"un push non deploya"*, **dichiarando che avevo escluso solo
+    GitHub Actions.** Il pari e' andato a guardare **dove il mio strumento non arriva** e ha trovato
+    che il repo **HA un path di auto-deploy documentato nel suo README**: una cron a un minuto su
+    **m42** che fa fetch + hard reset del checkout ⇒ **se fosse installata, il push pubblicava entro
+    60 s.** (Misurato che NON lo e': crontab vuoto, nessun hit in `/etc/cron*`, log di deploy
+    **inesistente** ⇒ non e' solo commentata, non e' mai girata; checkout fermo al commit
+    precedente.) ⇒ conclusione confermata, **ma non dalla mia misura.**
+    🔑 **REGOLA DOPPIA.** (a) **«Nessuna CI nel repo» NON significa «nessun auto-deploy»: il percorso
+    di pubblicazione puo' vivere INTERAMENTE fuori dalla forge** — cron, webhook, hook lato host. Il
+    mio strumento guardava GitHub; il deploy stava sulla macchina. **Strumento giusto, domanda
+    giusta, UNIVERSO sbagliato** — costume nuovo della famiglia dell'artefatto sbagliato.
+    (b) 🥇 **Dichiarare un limite non e' una cautela retorica: e' un'ISTRUZIONE AL PROSSIMO LETTORE
+    SU DOVE PUNTARE IL SUO STRUMENTO**, e funziona proprio quando lui ha un accesso che tu non hai.
+    Senza quella riga il push partiva **sulla mia parola** — e il giorno in cui quella cron fosse
+    installata, sarebbe partita **una pubblicazione che nessuno aveva deciso.**
     🔴🔴 **E LA MIA CURA A QUEL BUCO ERA PEGGIO DEL BUCO — misurata dal pari nello stesso giro, ed e'
     la lezione piu' grossa delle due.** Il buco `(a)` era VERO (`vjt_` esiste, 24 righe), ma la cura
     che avevo proposto — allargare il nick a `:_*vjt[_|0-9]*!` — pesca anche **`vjt_TRUSTED`, che e'
