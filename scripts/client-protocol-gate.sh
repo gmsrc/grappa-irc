@@ -166,6 +166,11 @@ fi
 # The doc-side shape must exist before a per-kind verdict means anything. A
 # missing inventory table would otherwise read as "every kind undocumented",
 # which is true but names the wrong defect.
+# A literal ERE handed to grep: the backticks and the `$` anchor must reach it
+# unexpanded. Double quotes here would let the shell read the backticks as
+# command substitution and eat the anchor, and the gate would stop matching the
+# header it exists to find — a check that passes because it no longer measures.
+# shellcheck disable=SC2016
 grep -qE '^\| `kind` \| topic \| what it is \|$' "$DOC" ||
 	die "no inventory table header in $DOC — expected a row '| \`kind\` | topic | what it is |'"
 
@@ -188,6 +193,10 @@ if [ -n "$missing" ]; then
 	printf 'client-protocol-gate: %s client event kind(s) have no entry in %s:\n' \
 		"$(printf '%s' "$missing" | grep -c .)" "$DOC"
 	printf '%s' "$missing" | sed 's/^/  - /'
+	# A printf FORMAT string, not a template: the backticks are literal output
+	# showing the row shape the operator has to add. Nothing in it is meant to
+	# expand, and double quotes would hand the backticks to the shell.
+	# shellcheck disable=SC2016
 	printf '\nEach needs a row `| `<kind>` | <topic> | <what it is> |` in the event kind\ninventory. A mention in prose does not count: this gate reads rows.\n'
 	exit 1
 fi
