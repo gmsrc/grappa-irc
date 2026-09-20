@@ -2835,23 +2835,33 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   se `bot.py` cade il `tail -F` **resta vivo**, il Monitor non spara, e *"nessuna notizia"* si legge
   come *"vjt non ha scritto"*. Giro 3, **e l'ha portato lui contro la propria proposta: anche quel
   fallback termina SU DI LUI** — sessione morta ⇒ la domanda parte e **non risponde nessuno**.
-  🥇🥇 **Il discriminante deve stare dal TUO lato e non passare dal soggetto misurato. Due, e il
-  secondo e' quello buono:** (1) **l'esito della CONSEGNA** — un `SendMessage` a una sessione morta
-  **fallisce**, quindi non e' silenzio, e' un errore, e ce l'hai gratis a ogni messaggio; (2) **il
-  `mtime` del suo activity log** (`/home/vjt/code/IRC/vjt-claude/memory/project_activity_log.md`) —
-  **pos ctrl sulla sua LIVENESS che NON viola il divieto di leggere IRC: `stat` legge il METADATO,
-  non una riga di canale.** Il contenuto resta chiuso, il battito si vede. **Verificato da me, non
-  incassato:** il file c'e', `mtime 13:55:47Z` contro un `now` di `13:56:20Z` (neg ctrl: path
-  inventato ⇒ `stat` fallisce; pos ctrl di copertura: 320 `.md` sotto `memory/`), **e si era mosso
-  di 2 minuti fra la sua lettura e la mia** — cioe' e' un battito, non un file fermo.
-  🔑 **Lettura a due passi, e va DENTRO lo strumento** (`bp37756mk` la esegue da se' e **non stampa
-  verdetti se lo `stat` fallisce**): **mtime FERMO da >1h ⇒ il morto e' il PARI, il bot non c'entra**
-  ⇒ non girargli domande, verifica la sessione; **mtime FRESCO + nessuna notizia ⇒ lui e' vivo e sta
-  guardando ⇒ il silenzio e' di VJT**, ed e' allora che la domanda sul PONG ha senso girargliela
-  (pos ctrl: ~1 PONG ogni 3 min; **assenza di MESSAGGI normale, assenza di PONG = strumento morto**).
-  🥇 *Tre giri, e ogni giro era la stessa regola — «uno stallo atteso e uno dimenticato sono lo
-  stesso osservabile» — applicata un livello piu' in la'. **Quando costruisci un rilevatore di
-  silenzio, chiediti sempre su CHI termina.***
+  🥇🥇 **Il discriminante deve stare dal TUO lato e non passare dal soggetto misurato. E QUELLO
+  BUONO E' UNO SOLO: L'ESITO DELLA CONSEGNA.** Un `SendMessage` a una sessione morta **fallisce** —
+  **non e' silenzio, e' un errore** — quindi e' un **certificato di morte** che **non dipende da
+  cosa il soggetto stesse facendo**, e ce l'hai **gratis a ogni messaggio**. ⚠️ *Meccanismo
+  DICHIARATO dal pari, da me NON osservato in negativo: non ho mai scritto a una sessione morta.
+  Tutti i miei invii di oggi tornano `success:true`, che prova solo che il canale riporta qualcosa.*
+  🔴🔴 **QUARTO GIRO, E IL DIFETTO ERA NELLA CURA: IL `mtime` DI UN ACTIVITY LOG MISURA
+  L'ATTIVITA', NON LA LIVENESS — e una soglia ">1h ⇒ e' morto" AVREBBE SPARATO TRE VOLTE IN UN
+  GIORNO SU UN VIVO.** Misurato da lui sui propri 136 bullet: gap di **340, 87 e 72 minuti**, e in
+  tutti e tre **sessione su, monitor attaccati, bot che pongava** — *"cinque ore e quaranta di
+  silenzio stanotte non erano un crash, era domenica alle quattro."* **Un log registra FATTI: se non
+  succede niente non scrive, e il battito si ferma mentre il cuore batte piano.**
+  🔑 **Ed e' il ramo ESATTAMENTE INVERSO quello da buttare:** *"mtime fermo ⇒ non girargli domande"*
+  descrive **il caso in cui DEVI girargliele**, perche' un'ora di quiete e un'ora di coma col solo
+  `mtime` **sono indistinguibili**. ⇒ **ORDINE GIUSTO: (1) consegna = vita; (2) `mtime` = CONTESTO
+  sull'attivita', MAI un verdetto di morte** — fresco *"sta lavorando adesso"*, fermo *"non e'
+  successo niente"*. Tenerlo come segnale forte vorrebbe un **heartbeat DEDICATO** (una riga scritta
+  a prescindere dagli eventi), cioe' lavoro in piu' per cio' che la consegna da' gratis.
+  ✅ **Il `mtime` resta utile e resta LECITO:** `stat` legge il **METADATO**, non una riga di canale
+  — contenuto chiuso, battito visibile — **e non e' una scappatoia al divieto di leggere IRC, e' una
+  domanda diversa.** Verificato da me: file presente, `mtime 13:55:47Z` contro `now 13:56:20Z`, neg
+  ctrl su path inventato ⇒ `stat` fallisce, pos ctrl 320 `.md` sotto `memory/`, **e mosso di 2
+  minuti fra la sua lettura e la mia.**
+  🥇 *QUATTRO giri, ogni volta la stessa regola un livello piu' in la', e **ogni volta il difetto
+  stava dove nessuno dei due guardava perche' l'aveva proposto lui.*** 🥇🥇 **Quando costruisci un
+  rilevatore di silenzio, chiediti su CHI termina — e poi se la grandezza che campioni misura la
+  VITA o solo il LAVORO.**
   🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
   2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
   UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
