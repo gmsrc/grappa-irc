@@ -2872,23 +2872,40 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   (3) `mtime` del log — sta LAVORANDO? (LAVORO, non vita).** 🔑 **E col (1) davanti, *"mtime fermo"*
   smette di essere ambiguo:** pane vivo + mtime fermo = *sta zitto perche' non succede niente*;
   pane assente = morto, **e li' il mtime non serve.**
-  🔴🔴 **MA IL RAMO NEGATIVO NON E' `dead=1`, E' L'ASSENZA — e scritto come `dead=1` il check NON
-  PUO' SCATTARE (misurato da me, non dedotto).** `tmux show-options -g remain-on-exit` ⇒ **`off`**
-  su questo host, quindi **un pane il cui processo muore viene DISTRUTTO, non conservato con
-  `dead=1`**: oggi **16 pane su 16 leggono `dead=0`** e non esiste nessun valore diverso. ⇒ un
-  verificatore chiavato su `dead=1` **tace per sempre, e il suo silenzio si legge «e' vivo»** —
-  ennesima faccia dello zero falso e plausibile. **Il predicato giusto e' «la riga `%NN` NON compare
-  nella lista»** (neg ctrl: id inventato ⇒ 0 righe).
-  🔴🔴 **E IL LIMITE CHE NESSUNO DEI DUE AVEVA NOMINATO: SU UNA WORKER IL PANE NON MISURA LA
-  WORKER.** Misurato: `%16` e `%28` portano **`ssh`**, non `claude` — le worker girano su voyager
-  attraverso una ssh — ⇒ **il pane vivo certifica il TUNNEL, non la sessione all'altro capo.** E'
-  gia' successo: 01-09, `Connection reset` → `[Exit 255]`, **worker morte e pane vivi**, con
-  `ctx=TBD` letto come un clear. ⇒ **il (1) vale per un peer LOCALE (`pane_current_command = claude`)
-  e NON per una worker remota**, dove restano il costo/ctx e il transcript.
-  🪞 **Nota sulla sua misura, e vale come metodo: ha verificato `%19`, che e' il pane di
-  `ha-eisenberg-4c` — il SUO e' `%82`.** Il metodo regge, **l'istanza era la riga sbagliata**: un pos
-  ctrl preso su un soggetto che non e' quello di cui parli. *Stessa classe del positivo scelto male
-  gia' a verbale qui sopra, e stavolta dentro la proposta di un discriminante.*
+  🔴🔴 **SESTO GIRO, E QUI CROLLANO TRE PREDICATI SU SEI — TUTTI E TRE SEMBRAVANO RAGIONEVOLI
+  QUANDO LI ABBIAMO PROPOSTI, E DUE LI AVEVO PROPOSTI IO. La svolta e' che il pari ha TROVATO UN
+  MORTO VERO, dopo quaranta minuti in cui nessuno dei due ne aveva uno.** Soggetto:
+  `/run/user/1000/cc-socks/2278987.sock`, **orfano dal 2026-08-21**. **Misurato da me:** il file
+  c'e', **`ps -p 2278987` ⇒ rc=1, output vuoto** (pos ctrl `ps -p 1` ⇒ `systemd`; neg ctrl pid
+  impossibile ⇒ morto).
+  | predicato | verdetto, misurato contro `2278987` |
+  |---|---|
+  | **il socket ESISTE** | 🔴 **FALSO VIVO** — orfano da 30 giorni e il file e' li' |
+  | **`tmux … dead=1`** | ⚪ **IRRAGGIUNGIBILE** — `remain-on-exit` = `off` ⇒ il pane morto e' DISTRUTTO; **16/16 leggono `dead=0`** |
+  | **la riga `%NN` e' ASSENTE** | ⚪ **IRRAGGIUNGIBILE** — **la radice del pane e' `bash`**, che sopravvive a `claude` ⇒ il pane RESTA |
+  | **`ps -p <pid>`** | ✅ **DISCRIMINA** |
+  | **`pane_current_command != claude`** | ✅ **DISCRIMINA** |
+  | **assente da `ListAgents`** | ⚠️ **NON prova la morte** — filtra i morti, **ma nasconde anche dei vivi** |
+  🔴 **«La riga assente» era MIA e cade per una ragione diversa da `dead=1`:** misurato sui quattro
+  pane con `claude`, **`pane_pid` e' SEMPRE una `bash`** (`%80` → `pane_pid 2280286 = bash`, figlio
+  `claude 4092656`) ⇒ **se `claude` muore la bash resta e il pane non sparisce**, torna solo a
+  mostrare `bash`. ⚠️ **E `pane_pid` NON E' MAI il pid di `claude`: qualunque check che li confronti
+  e' rotto in partenza.** ⚠️ **`pane_current_command` e `ps -p <pane_pid>` rispondono a DUE domande
+  diverse** — il primo segue il processo in foreground del tty (`claude`), il secondo la radice
+  (`bash`): **non sono intercambiabili.**
+  🥇🥇 **E LA FORMA GENERALE, che e' la cosa da portare via: LO STESSO ARTEFATTO E' INUTILE COME
+  PREDICATO E INDISPENSABILE COME CHIAVE.** Del socket, **l'ESISTENZA non prova niente** (orfano);
+  **il NOME porta il pid**, che e' l'unica cosa che discrimina. ⇒ *prima di usare un artefatto come
+  prova, chiediti se stai guardando la sua PRESENZA o il suo CONTENUTO.*
+  ⚠️ **Collaterale misurato, e ribalta una comodita': UNA SESSIONE VIVA PUO' ESSERE
+  IRRAGGIUNGIBILE.** `claude 2637153` su `%21`, **etime 57 giorni**, **nessun socket a suo nome** e
+  **assente da `ListAgents`** ⇒ *"non compare"* **non e' un verdetto di morte.**
+  🥇 *La morale non e' sul tmux: **un rilevatore va provato contro un soggetto che ha DAVVERO la
+  proprieta' che cerchi**, e finche' quel soggetto non ce l'hai, ogni predicato che proponi e'
+  un'ipotesi — per quanto ragionevole sembri.*
+  🪞 **Nota di metodo sulla catena: il pari aveva verificato `%19`, che e' il pane di
+  `ha-eisenberg-4c`; il SUO e' `%82`** — pos ctrl preso su un soggetto che non e' quello di cui
+  parli. **L'ha confermato lui risalendo l'ancestry dal proprio `$$`**, invece di discuterla.
   🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
   2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
   UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
