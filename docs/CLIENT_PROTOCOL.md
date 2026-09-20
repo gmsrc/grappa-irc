@@ -919,6 +919,109 @@ They are published so the operator's own knob is readable in the admin
 surface; that is the whole reason, and it is recorded here so a client
 author does not read their presence as an invitation.
 
+## 9. Event kind inventory (issue 2260)
+
+Every `"event"` frame carries a `kind`. This is the complete set the server
+can push to a client, so you can see at a glance what exists rather than
+meeting a kind on the wire and guessing. It is held by
+`scripts/client-protocol-gate.sh`: a kind emitted with no row here fails CI.
+
+**The `topic` column tells you where to listen**, and getting it wrong is
+the one mistake that costs you hours:
+
+* **`user`** — `grappa:user:{user}`. Subscribe at connect.
+* **`channel`** — the per-channel topic. Post-join-handshake traffic only.
+* **`requester`** — the user topic, but delivered **only to the connection
+  that issued the command** (#1088). Not a broadcast; your other devices do
+  not see it. If your socket dies before the ircd answers, the reply dies
+  with it — re-issue.
+
+🔴 Window state (`joined`, `join_failed`, `kicked`, `window_pending`,
+`window_invited`) is on the **user** topic, not the channel topic. §4 explains
+why; a client waiting on the per-channel topic for a live `joined` waits
+forever.
+
+| `kind` | topic | what it is |
+|---|---|---|
+| `archive_changed` | user | the archive listing for a network changed — refetch it |
+| `archive_purged` | user | archived scrollback for one target was deleted |
+| `auto_away_debounce_changed` | user | the subject's auto-away debounce setting changed |
+| `auto_away_reason_changed` | user | the subject's remembered auto-away text changed |
+| `away_confirmed` | user | upstream acked an AWAY / BACK |
+| `banlist_bundle` | requester | the folded `+b` / `+e` / `+I` list for one channel (§5c) |
+| `bundle_hash` | user | a new cic bundle is live — hash + version |
+| `channel_created` | channel | 329 RPL_CREATIONTIME for the window |
+| `channel_modes_changed` | channel | the channel's mode set changed (§5d) |
+| `channels_changed` | user | the active channel set changed |
+| `connection_progress` | user | transient connect-progress badge (`connecting` / `connected`) |
+| `connection_state_changed` | user | a credential's `connection_state` moved; refreshes `GET /networks` |
+| `dcc_offer` | user | an inbound `DCC SEND` awaiting consent (§4b) |
+| `dcc_offer_resolved` | user | that offer left the held set (§4b) |
+| `directory_complete` | user | the `/LIST` channel-directory scan finished |
+| `directory_failed` | user | the `/LIST` scan failed or timed out |
+| `directory_progress` | user | `/LIST` scan progress count |
+| `invite_ack` | user | 341 RPL_INVITING — an INVITE you sent was accepted by the ircd |
+| `isupport_changed` | user | the network's 005 capability set (§5c, §5) |
+| `join_failed` | user | the window reached `:failed`, with reason + numeric |
+| `joined` | user | the window reached `:joined` |
+| `kicked` | user | the window reached `:kicked`, with `by` + reason |
+| `links_bundle` | requester | `/LINKS` answer |
+| `lusers_bundle` | user | `/LUSERS` answer — **fans out to every connection**, because the server also emits it unsolicited at connect (§4) |
+| `members_seeded` | channel | pre-sorted member list on 366 RPL_ENDOFNAMES |
+| `mentions_bundle` | user | cross-channel mention summary, fired on the auto-away → present transition |
+| `message` | channel | a scrollback row; its own `message.kind` (`privmsg`, `notice`, `join`, `part`, `quit`, `nick_change`, `mode`, …) is a **different axis** from this one |
+| `names_reply` | requester | `/NAMES` answer |
+| `network_attached` | user | the subject re-attached a network binding (§4e) |
+| `network_detached` | user | the subject hid a network binding (§4e) |
+| `notify_list` | user | the subject's notify / watch list |
+| `own_nick_changed` | user | our own nick changed — carries `network_id`, not a slug |
+| `peer_away` | user | a peer's away text |
+| `presence_changed` | user | our presence / away state changed |
+| `presence_error` | user | upstream watch-list rejection (`ERR_MONLISTFULL`, `ERR_TOOMANYWATCH`) |
+| `presence_snapshot` | user | cold-join presence snapshot, pushed to your socket alone |
+| `query_windows_list` | user | the full DM window list; also the "rename fully applied" barrier after a peer NICK |
+| `quit_part_reason_changed` | user | the subject's remembered quit / part text changed (§4d) |
+| `read_cursor_set` | channel | the read cursor moved — `last_read_message_id` + badge count |
+| `recover_progress` | user | ghost-recovery progress |
+| `recover_result` | user | ghost-recovery outcome (`succeeded` / `failed` + reason) |
+| `server_reply` | requester | MOTD and other server text |
+| `server_settings_changed` | user | operator-owned server settings changed (§8) |
+| `session_identity_changed` | user | the NickServ identification verdict — gate on `identified`, never a mode letter (§4) |
+| `supported_umodes_changed` | user | the umode letters this ircd supports |
+| `topic_changed` | channel | the channel topic changed |
+| `umode_changed` | user | our own user modes changed |
+| `web_session_severed` | user | the flood ladder severed this bearer (§6); the socket is about to close |
+| `who_reply` | requester | `/WHO` answer |
+| `whois_avatar_ready` | user | a peer avatar finished caching; carries the route to it |
+| `whois_bundle` | requester | `/WHOIS` answer |
+| `whowas_bundle` | requester | `/WHOWAS` answer |
+| `window_counts` | channel | unread + mention counts for the window |
+| `window_invite_declined` | user | the operator refused an invite — drop the `:invited` banner |
+| `window_invited` | user | an inbound INVITE opened a not-joined window (§4) |
+| `window_pending` | user | a join is in flight |
+
+### 9a. What is deliberately NOT in this table
+
+**`parted` does not exist.** An own-PART archives the window by **removing**
+it from the window-state map: absence IS the signal, and the `:part` row that
+ships alongside is the feed line. There is no `kind: "parted"` and there never
+was — if you are waiting for one, you are waiting for nothing. (Issue 2260
+listed it as undocumented; it was a regex matching the server comments that
+say it is not emitted.)
+
+**Admin events are not here.** `grappa:admin:events` is a separate topic on a
+separate channel (`GrappaWeb.AdminChannel`) with its own 29 kinds. It is an
+operator surface, not a client one.
+
+**Message kinds are a different axis.** `join`, `part`, `quit`, `nick_change`,
+`mode`, `privmsg`, `notice`, `action` are values of `message.kind` **inside** a
+`kind: "message"` event — which is why §4a can talk about suppressing `join` /
+`part` / `quit` while none of them appears above.
+
+**One name, two payloads:** `web_session_severed` exists on both the admin
+topic and your user topic, with different shapes. The row above describes the
+client one.
+
 ---
 
 *This document tracks a live contract. When it disagrees with the code,
