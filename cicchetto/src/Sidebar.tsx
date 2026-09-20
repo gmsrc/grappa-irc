@@ -185,10 +185,18 @@ const Sidebar: Component<Props> = (props) => {
 
   const isGreyed = (slug: string, name: string): boolean => greyedState(slug, name) !== null;
 
+  // issue 2222 — no `kind` narrow. It carried the same premise #211 phase 6
+  // retired as `isNetworkParked`'s did: `connection_state_reason` is declared
+  // on BOTH network shapes in `wireTypes.ts`, so gating on `kind` only meant a
+  // visitor never got told WHY a network failed.
+  //
+  // On its own this was INERT, and that measurement is why it did not ship
+  // with the hiding half: the one consumer is the header `title` below, gated
+  // behind `isNetworkGreyed` → `networkGreyedState`, which narrowed the same
+  // way. Dropping the narrow here only moved the gate one function up. It is
+  // live because that one falls in the same change.
   const networkReason = (slug: string): string | undefined => {
-    const net = networkBySlug(slug);
-    if (net?.kind !== "user") return undefined;
-    return net.connection_state_reason ?? undefined;
+    return networkBySlug(slug)?.connection_state_reason ?? undefined;
   };
 
   // Synthetic non-joined window rows come from the shared projection in
