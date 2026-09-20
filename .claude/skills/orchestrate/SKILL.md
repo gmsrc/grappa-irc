@@ -2140,6 +2140,28 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     ⚠️ **E quando la catena e' stabilita, guarda cosa resta CONFUSO e dillo:** l'unica sessione col
     `+v` era anche l'unica non disconnessa — **due proprieta', un esemplare** ⇒ *"il voice protegge
     dal taglio"* non e' sostenuto da nulla. **Declassato, non chiuso.**
+    🔴🔴 **E L'ASSE SBAGLIATO SI TRAVESTE ANCHE DA **CANALE** SBAGLIATO — preso da me il 2026-09-20,
+    un'ora dopo aver scritto la regola qui sopra, e beccato dal pari.** Aspettavo una ruling di vjt e
+    la sondavo col **conteggio commenti della issue** (`#1365`, 23 → 23, ottantottesima lettura).
+    **La domanda non era mai stata posta li': il pari gliel'aveva chiesta in DM su IRC** ⇒ quel 23
+    **puo' restare 23 per sempre ANCHE SE LUI RISPONDE**, perche' risponderebbe dove gli e' stato
+    chiesto. Sonda viva, che gira, con un numero stabile — **e il numero non e' l'osservabile della
+    domanda.** Il silenzio di una grandezza che non puo' muoversi si legge identico a un'attesa vera.
+    🥇 **Regola: la misura di un'attesa vive sul CANALE IN CUI LA DOMANDA E' USCITA, e su nessun
+    altro.** Prima di contare qualcosa per la N-esima volta, chiediti *dove e' stata posta la domanda*
+    — non *dove mi e' comodo guardare*. ⚠️ **E se quel canale non lo puoi leggere** (a me IRC e'
+    vietato) **allora la misura NON E' TUA: la chiedi a chi puo', e la registri come SUA.**
+    🥇🥇 **META' PEGGIORE, E INDIPENDENTE DALLA PRIMA: AVEVO IL NUMERO GIUSTO ACCANTO ALLA FONTE
+    SBAGLIATA.** Il mio *"muto da ~1h36m"* era **esatto** — ma derivava dal `12:37:52Z` che mi aveva
+    dato il PARI leggendo `bot.log`, **non dalla sonda che citavo nella riga accanto**. Un verbale
+    cosi' regge finche' nessuno lo rilegge: **fra due giorni "88 letture, nessuna risposta" si legge
+    come "il silenzio di vjt e' stato MISURATO"**, e non lo e' mai stato. ⇒ **ACCANTO A OGNI NUMERO
+    SCRIVI LA FONTE CHE LO HA PRODOTTO, non quella che stavi girando nello stesso turno.** E' la
+    sorella di *"dichiara MISURATO o STIMATO"*: qui il dato e' misurato davvero, ed e' **l'attribuzione**
+    a mentire — che e' peggio, perche' un numero giusto non invita nessuno a ricontrollarlo.
+    🥇 *Due sonde diverse vanno tenute SEPARATE nel verbale anche quando rispondono a domande vicine:
+    "e' successo qualcosa sull'issue?" e "vjt ha risposto?" sono legittime tutt'e due, e una non
+    sostituisce l'altra nemmeno per un giro.*
 
 ## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
 - 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
