@@ -108,6 +108,11 @@ vi.mock("../lib/queryWindows", () => ({
   closeQueryWindowState: vi.fn(),
   queryWindowsByNetwork: vi.fn(() => ({})),
   setQueryWindowsByNetwork: vi.fn(),
+  // The DM-listener arm re-keys an inbound row on the sender through this
+  // (#372). It was absent while the DM path was unreachable here — see the
+  // fixture note on the DM test below — so the mock is completed rather than
+  // the path avoided. Same identity passthrough `subscribe.test.ts` uses.
+  canonicalQueryNick: vi.fn((_networkId: number, nick: string) => nick),
 }));
 
 // #781 — see helpers/warmGraph.ts. `lib/subscribe` pulls `lib/selection`;
@@ -279,10 +284,17 @@ describe("focus-rule — incoming traffic never changes selectedChannel", () => 
     vi.mocked(api.listNetworks).mockResolvedValue([
       { id: 1, slug: "freenode", nick: "alice", inserted_at: "x", updated_at: "y" },
     ]);
-    // "alice" is own nick — server routes incoming DMs to this channel slot.
+    // `GET /channels` returns CHANNELS, never the own-nick DM window: the
+    // autojoin half is validated by `Identifier.valid_channel?/1`
+    // (`Credential.validate_autojoin_channels`) and the live half is
+    // `state.members |> Map.keys()`, i.e. the channels we JOINed. This fixture
+    // used to carry a bare `alice` row and a comment claiming the server
+    // routed inbound DMs "to this channel slot" — it cannot, and the cost was
+    // silent: the channels loop took the own-nick topic, the DM listener was
+    // deduped away by `joined.has(key)`, and the test below drove the CHANNEL
+    // handler while claiming to cover the DM path.
     vi.mocked(api.listChannels).mockResolvedValue([
       { name: "#grappa", joined: true, source: "autojoin" },
-      { name: "alice", joined: true, source: "autojoin" },
     ]);
     vi.mocked(api.me).mockResolvedValue({
       kind: "user",
@@ -295,8 +307,10 @@ describe("focus-rule — incoming traffic never changes selectedChannel", () => 
 
     const sel = await loadStores();
     await vi.waitFor(() => {
-      // 2 channels (#grappa + alice) + 0 DM-listener (deduped, alice in channels)
-      // + 1 $server = 3 handlers.
+      // 1 channel (#grappa) + 1 DM-listener (own-nick `alice`) + 1 $server = 3
+      // handlers. Same total as before the fixture was corrected, reached
+      // honestly: handler index 1 is now the DM listener rather than a channel
+      // handler wearing the own nick.
       expect(mockChannel.on).toHaveBeenCalledTimes(3);
     });
     sel.setSelectedChannel({
