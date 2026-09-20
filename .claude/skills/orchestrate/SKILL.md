@@ -2183,6 +2183,33 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     ⚠️ **Il costo di NON scriverlo: una grandezza che nessuno puo' ricontrollare accumula la stessa
     aria di solidita' di una che in dieci l'hanno guardata** — e nel verbale, dopo due giorni, sono
     indistinguibili.
+    🥇🥇 **E RESTA UNA TERZA CLASSE CIECA CHE NESSUNA DELLE DUE DIFESE BECCA — LA SELEZIONE (pari,
+    2026-09-20, e il caso e' REALE non ipotetico).** Con l'istante in mano rifai l'aritmetica, ma
+    **non sai cosa il predicato ha GUARDATO e cosa ha OMESSO**: *"ultima riga trovata"* significa
+    *"ultima riga che il MIO predicato ha trovato"*, e **un'assenza non porta con se' la ragione
+    della propria assenza** ⇒ un silenzio falso e' indistinguibile da uno vero, con istante giusto,
+    sottrazione giusta e fonte giusta. Caso vivo: vjt ha cambiato nick in **`_vjt`** all'01:41 per
+    schivare il tab-completion di un altro; il predicato `^[0-9:]+ < :_?vjt!` lo copre **per un pelo**
+    — scritto `vjt!` avrebbe consegnato un *"muto da due ore"* pulito **e falso**.
+    🔑 **⇒ IL PROTOCOLLO SUL CONFINE E' A TRE PEZZI, NON DUE: (1) ISTANTE letto** (grezzo, suo, non
+    contestabile) **· (2) PREDICATO LETTERALE** (la FORMA, contestabile da chi NON vede i dati) **·
+    (3) DERIVATO** (elapsed/conclusione, lo rifa' chi riceve). **Il (2) e' l'unico punto in cui
+    l'occhio del secondo lettore arriva DENTRO una misura che non puo' rifare** — stessa mossa che ha
+    chiuso il `3275 vs 3277`: non le righe, **le due stringhe una accanto all'altra.**
+    🥇 **E il (2) va CONTESTATO DAVVERO, non incassato.** Tre buchi trovati a vista su quel predicato,
+    senza un byte di dati: **(a) `_?vjt` copre il suffisso davanti e NON quello dietro** — `vjt_`,
+    `vjt__` non matchano (dopo `vjt` il predicato pretende `!`), **ed e' la forma di collisione piu'
+    comune su IRC**: generalizzata dall'unico caso osservato; **(b) «ultima riga» presuppone un ORDINE
+    che questo file documenta come ASSENTE** — *"i log del bot coprono PIU' GIORNI, NON sono ordinati
+    e NON portano la data"* ⇒ un `12:37:52` puo' essere di **ieri**, e serve un'ancora di data;
+    **(c) SELEZIONE DEL FILE, non della regex**: `bot.log` e' Azzurra, `bot.libera.log` e' un altro
+    ⇒ predicato perfetto sul file sbagliato = zero perfetto e inutile.
+    🥇🥇 **E UN QUARTO PEZZO CHE IL PROTOCOLLO NON DICEVA: UNA MISURA DI SILENZIO PROVA SOLO FINO
+    ALL'ISTANTE DI LETTURA.** *"Muto da 101 minuti"* fonde due cose diverse: **97m PROVATI** (dalla
+    riga trovata all'istante di lettura) **+ 4m NON OSSERVATI** (dall'istante di lettura ad adesso).
+    Il secondo pezzo **non e' silenzio, e' assenza di misura** — e piu' invecchia il referto, piu'
+    quella coda cresce in silenzio mentre la frase resta identica. ⇒ **riporta la COPPIA
+    `[provato fino a T_lettura] + [non osservato da T_lettura]`, mai una durata sola.**
 
 ## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
 - 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
