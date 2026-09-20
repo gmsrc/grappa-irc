@@ -800,9 +800,12 @@ const exports = identityScopedStore((onIdentityChange) => {
   // Identity rotation clears the map so a re-login doesn't carry
   // stale state from the previous identity's networks.
   //
-  // Home and visitor windows have no network credential so
-  // `networkBySlug` returns undefined → no entry in the map → no
-  // redirect (correct: home is the redirect TARGET, never the source).
+  // The HOME window has no network credential, so `networkBySlug` returns
+  // undefined → no entry in the map → no redirect (correct: home is the
+  // redirect TARGET, never the source). This used to say "home and visitor
+  // windows"; issue 2222 struck the visitor half — a visitor DOES have a
+  // credential row, carries a real `connection_state`, and is redirected
+  // exactly like a user.
   // issue 2059 — TWO FEEDS, ONE OBSERVER, ONE MEMORY.
   //
   // The Map below is the only record of "what state was this network in last
@@ -880,8 +883,14 @@ const exports = identityScopedStore((onIdentityChange) => {
     for (const slug of lastConnectionState.keys()) {
       if (!live.has(slug)) lastConnectionState.delete(slug);
     }
+    // issue 2222 — no `kind` narrow. This loop used to skip visitor rows, and
+    // the asymmetry that created was the worst shape available: FEED 2 never
+    // narrowed, so a visitor's redirect worked while the socket was up and
+    // silently lost exactly the case FEED 1 exists for — a park that happened
+    // while we were deaf, which the refetch is the only evidence of. Both
+    // network shapes have declared `connection_state` non-optional since #211
+    // phase 6, so there was never a field to protect.
     for (const net of nets) {
-      if (net.kind !== "user") continue;
       observeConnectionState(net.slug, net.connection_state);
     }
   });
