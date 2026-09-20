@@ -116,6 +116,7 @@ export const CREDITS_SPECIAL_THANKS: readonly SpecialThanks[] = [
   { who: "nextime", why: "for shottino" },
   { who: "Lucy", why: "for resentin" },
   { who: "Sonic", why: "for bicchierino" },
+  { who: "Sythos", why: "for Cordiale" },
   {
     who: "morph",
     why: "for spreading grappa, bringing people back, and throwing himself at the ircd and the services again",

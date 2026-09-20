@@ -125,9 +125,11 @@ describe("the cowsay (#1929 — bahamut's cow, speaking for grappa)", () => {
 });
 
 describe("the special thanks (#1929 — dictated, copied verbatim)", () => {
-  // vjt dictated this list in the issue. It is reproduced here in full and in
-  // order, so that changing the shipped list without changing this file is a
-  // RED — which is exactly the friction wanted around someone else's words.
+  // vjt dictated this list in the issue, and adds to it by order since. It is
+  // reproduced here in full and in order, so that changing the shipped list
+  // without changing this file is a RED — which is exactly the friction
+  // wanted around someone else's words. Every later addition carries the
+  // order that put it there, inline.
   const DICTATED: readonly (readonly [string, string])[] = [
     ["Hypnotize, Mezmerize, Sonic, scorpion, joep", "for keeping Azzurra standing"],
     ["DeepSET / Johnny^Lizard", "for embracing grappa and spreading it far and wide"],
@@ -136,6 +138,11 @@ describe("the special thanks (#1929 — dictated, copied verbatim)", () => {
     ["nextime", "for shottino"],
     ["Lucy", "for resentin"],
     ["Sonic", "for bicchierino"],
+    // Added on vjt's order, #grappa 2026-09-20: "metti sythos in special
+    // thanks nei credits". He named the person, not the reason — so the
+    // reason is the same minimal form the other client authors get above,
+    // and nothing was put in his mouth.
+    ["Sythos", "for Cordiale"],
     [
       "morph",
       "for spreading grappa, bringing people back, and throwing himself at the ircd and the services again",
