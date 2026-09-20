@@ -2296,6 +2296,26 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
       quattro sezioni erano perse e nessuna delle ruling parcheggiate sarebbe mai tornata.
   ⚠️ **Il ceiling delle ~120 righe è un obiettivo, non un verdetto.** Una potatura va giudicata da
   COSA è sparito, non da quanto è corto il risultato.
+- 🔴🔴 **UNA `assert` VERA LETTA NEL VERSO SBAGLIATO: IL TAGLIO A FETTA CHE INGHIOTTE LA SEZIONE
+  ACCANTO, E IL CONTROLLO CHE DOVEVA BECCARLO LO CONFERMA (orch, 2026-09-20, sull'handoff).**
+  Dopo il disastro della regex avevo adottato il taglio per ANCORE (`s.index(start)` / `s.index(end)`)
+  come forma sicura. **Non lo e' se l'ancora di FINE e' piu' in la' di quanto credi:** volevo
+  comprimere UN blocco flake e l'`end` stava **dopo** il registro dei conteggi ⇒ ho cancellato
+  `cp15-b6` 5, `red-issue1964` 4, `flake-1796` **18**, `flake-joinseedcost` 11, `flake-1767` 17 —
+  cioe' **esattamente i numeri che separano un flake da un pattern**, e che un `/clear` gia' cancella
+  da solo.
+  🪞 **E il pezzo che brucia: avevo messo un controllo, era VERO, e l'ho letto al contrario.**
+  `assert "cp15-b6-part-archive-rejoin" in old` — scritto per confermare *"sto prendendo la regione
+  giusta"*, **verifica in realta' che sto prendendo TROPPO**, e passando mi ha rassicurata. **Una
+  proposizione vera non e' un'approvazione: dice quello che dice, non quello per cui l'hai scritta.**
+  ⇒ **Un assert su un taglio deve nominare cio' che NON deve esserci** (`assert "<chiave della
+  sezione vicina>" NOT in old`), mai solo cio' che c'e'.
+  🔴 **E la predizione delle righe non discrimina:** avevo predetto `42 -> 14` e ho misurato `42 ->
+  14`. **La potatura riuscita e quella catastrofica hanno lo stesso osservabile — un file piu' corto —
+  e anche lo stesso NUMERO, se il di piu' che mangi sta dentro il conteggio che hai predetto.**
+  ✅ **Recuperato solo perche' il `cp` c'era** (la regola scritta dopo il caso regex, ripagata nella
+  stessa ora). Ripristino verificato per CHIAVE — sei su sei presenti, neg ctrl su una chiave
+  inventata = 0 — **mai dal conteggio righe**, che qui e' esattamente lo strumento che non vede.
 - 🥇🥇 **UN ASSERT SU CONFIGURAZIONE IL CUI SOGGETTO *DOCUMENTA SÉ STESSO* PASSERÀ SULLA
   DOCUMENTAZIONE, E SOLO CANCELLARE LA COSA CHE SORVEGLIA LO RIVELA (w1, 2026-09-14, #2125).**
   Gate bats nuovo su `integration.yml`: match a substring per `fetch-depth: 0`. **Cancellata la
