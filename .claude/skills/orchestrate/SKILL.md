@@ -2244,6 +2244,26 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     come terza `now - last`), cosi' l'identita' e' vera per costruzione. ⚠️ **E il totale e' proprio
     la grandezza che decide la soglia** — l'unica che un lettore futuro guardera' **senza rifare il
     conto**, quindi e' l'ultima che ti puoi permettere di lasciare incoerente.
+    🥇🥇 **E LA CODA «NON OSSERVATO» E' PIU' CORTA DI COSI', PERCHE' UN OSSERVATORE CONTINUO CONVERTE
+    L'ASSENZA DI EVENTO IN UN'OSSERVAZIONE (pari, 2026-09-20 — correzione a mio favore, e vera).**
+    Il conto tratta la finestra fra due `grep` come **cieca**: non lo e' se sullo stesso flusso c'e'
+    un Monitor che spara da solo. ⇒ *"non ho ricevuto niente"* **e' un dato**, non un buco. La coda
+    onesta si spacca in **`non osservato PUNTUALMENTE`** + **`coperto dal continuo`**.
+    🔴 **MA LA COPERTURA VALE SOLO SOTTO DUE CONDIZIONI, E VANNO DICHIARATE COME SI DICHIARA IL
+    PREDICATO DI UN `grep`.** (1) **Il continuo ha un predicato SUO**: l'assenza di notifica prova
+    *"nessuna riga che matcha CIO' SU CUI IL MONITOR SPARA"*, che puo' essere piu' stretto della
+    domanda ⇒ **la selezione non sparisce, si sposta** — e un predicato non dichiarato e' peggio qui
+    che nel campionamento, perche' l'osservatore continuo **da' l'impressione di guardare tutto.**
+    (2) **Un heartbeat di TRASPORTO non prova il NOTIFICATORE.** Un `PONG` misura il LINK; fra il
+    link e la notifica ci sono altri anelli, e **questo file registra gia' il caso in cui il processo
+    muore mentre il `tail -F` resta vivo** ⇒ *"link vivo + zero notifiche"* e *"notificatore morto"*
+    sono **lo stesso osservabile**. ⇒ **la prova giusta e' una CONSEGNA RICEVUTA**, cioe' un evento
+    arrivato davvero di recente — non un `PONG`, non un conteggio di righe **nel log**, che prova
+    solo che il log riceve.
+    🥇 *Ennesima faccia di "non puoi accorgerti del silenzio": qui il silenzio viene promosso a
+    MISURA, che e' il passo giusto — ma promuoverlo senza provare il notificatore lo rende una
+    misura FALSA invece che un buco onesto, e un buco dichiarato e' sempre meno pericoloso di una
+    copertura che non c'e'.*
     🔴🔴 **E LA MIA CURA A QUEL BUCO ERA PEGGIO DEL BUCO — misurata dal pari nello stesso giro, ed e'
     la lezione piu' grossa delle due.** Il buco `(a)` era VERO (`vjt_` esiste, 24 righe), ma la cura
     che avevo proposto — allargare il nick a `:_*vjt[_|0-9]*!` — pesca anche **`vjt_TRUSTED`, che e'
