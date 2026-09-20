@@ -120,6 +120,21 @@ const MIRRORS: readonly Mirror[] = [
     production: SERVER_WINDOW_NAME,
     origin: "SERVER_WINDOW_NAME (src/lib/windowKinds.ts)",
   },
+  // issue 1365 — this one arrived as a SEVENTH `"Server"`, and the census
+  // caught it exactly as the KNOWN_UNPINNED note below says it would. It is
+  // pinned rather than listed there because measuring it answered the question
+  // instead of inheriting it: `sidebarWindow` resolves the legacy `"Server"`
+  // alias and the production `"$server"` to the same
+  // `[data-window-name="$server"]` locator, so spelling it the production way
+  // costs nothing at runtime and makes the declaration a copy with an original.
+  // The six below stay open because THEIR question is whether `"Server"` itself
+  // mirrors something live; this spec simply wants the server window.
+  {
+    file: "e2e/tests/issue1365-dm-bucket-after-own-nick-steal.spec.ts",
+    name: "SERVER_WINDOW",
+    production: SERVER_WINDOW_NAME,
+    origin: "SERVER_WINDOW_NAME (src/lib/windowKinds.ts)",
+  },
 
   {
     file: "e2e/tests/issue1105-reply-quote-caret-visible.spec.ts",
@@ -274,6 +289,14 @@ const TEXT_MIRRORS: readonly TextMirror[] = [
 // them to `SERVER_WINDOW_NAME` would assert a fact nobody has measured, and
 // deleting them from the sweep silently would hide the question. They are
 // listed, so a SEVENTH one cannot appear without someone reading this.
+//
+// One did, and the mechanism worked: issue 1365's e2e landed a seventh
+// `SERVER_WINDOW = "Server"` and this sweep reddened on it. It is NOT in the
+// list below — it was respelled `"$server"` and pinned in `MIRRORS`, because
+// measuring `sidebarWindow` showed both spellings resolve to the same locator,
+// so that spec's value is a copy with an original rather than the open
+// question these six carry. The count below stays SIX, and an EIGHTH still
+// cannot appear unread.
 const KNOWN_UNPINNED: readonly { readonly file: string; readonly name: string }[] = [
   { file: "e2e/tests/issue239-hidden-msg-unread.spec.ts", name: "SERVER_WINDOW" },
   { file: "e2e/tests/issue267-mention-server-authoritative.spec.ts", name: "SERVER_WINDOW" },

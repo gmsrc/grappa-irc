@@ -90,7 +90,15 @@ import { assertMessagePersisted, GRAPPA_BASE_URL, mintVisitor } from "../fixture
 import { IrcPeer } from "../fixtures/ircClient";
 import { expect, test } from "../fixtures/test";
 
-const SERVER_WINDOW = "Server";
+// The production spelling, not the legacy `"Server"` alias six older specs
+// carry. `sidebarWindow` maps both to the same `[data-window-name="$server"]`
+// locator, so this costs nothing at runtime and makes the declaration a
+// PINNABLE copy (`e2eConstantMirrors.test.ts` MIRRORS) rather than a seventh
+// entry in `KNOWN_UNPINNED`, where the question "does `"Server"` mirror a live
+// production string?" is still open. Here it is not a question: this spec
+// wants the server window, and the server window is named by
+// `SERVER_WINDOW_NAME`.
+const SERVER_WINDOW = "$server";
 
 // Local rather than imported: `waitForNetworkState` lives inline in
 // issue260-sticky-network-tab.spec.ts too. Same shape, same `/networks`
