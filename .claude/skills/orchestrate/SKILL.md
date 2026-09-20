@@ -2003,6 +2003,26 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
    ritaratura non vuole il brief di una costruzione.
 4. 🪞 **Due volte il bug era nel MIO strumento di misura** (`grep -o` troncato, timestamp gonfiati, `cmp -n`
    su BSD) ⇒ **riga INTERA** + **`date -u` sempre**. ⚠️ Anche le worker gonfiano l'orario: **l'ora e' la mia.**
+   🥇🥇 **E IL MODO IN CUI L'ORARIO SI GONFIA HA UN NOME PRECISO, MISURATO SUL PARI IL 2026-09-20:
+   NON E' L'ISTANTE CHE SI SBAGLIA, E' L'ELAPSED — perche' l'istante si LEGGE e l'elapsed si
+   DEDUCE.** Mi aveva relayato *"1h18m di silenzio"* su un fatto vero (`12:37:52Z`): col mio
+   orologio faceva **1h00m**, e non veniva da un'altra base — **veniva dal nulla, estrapolato.**
+   🔴 **E il numero isolato era il SINTOMO, non il guasto.** Andando a controllare il proprio
+   activity log ha trovato **16 bullet con `HH:MM` tutti STIMATI, nessuno letto**, e gli ultimi
+   quattro **datati NEL FUTURO** (15:44/15:50/15:52/15:58 con l'ora vera 15:41). Rimappati su due
+   ancore vere (`date` a 15:12 e a 15:41): **l'ordine era giusto, il minuto no** — cioe' il guasto
+   colpisce esattamente la cosa per cui quel prefisso orario esiste, **ricostruire la giornata
+   dopo un `/clear`**, e la lascia PLAUSIBILE.
+   🥇 **DUE REGOLE, e la seconda e' la sorella mancante di *"dichiara l'unita' e il set nello
+   stesso respiro del numero"*:** (a) **registra l'ISTANTE, mai l'ELAPSED** — un timestamp non
+   puo' invecchiare, una durata invecchia mentre la scrivi e il prossimo la ripesca per decidere
+   se sollecitare; (b) **dichiara la FONTE del numero: MISURATO o STIMATO.** Lui lo pretendeva da
+   me e dalle worker cinque volte al giorno e **non lo applicava al proprio verbale**.
+   ⚠️ **E l'ho verificato invece di incassarlo:** diceva *"adesso sono 13:41Z"*, il mio `date -u`
+   un minuto dopo leggeva `13:42:26Z` ⇒ **regge**. *Su un asse che e' tutto sull'ora letta contro
+   l'ora dedotta, prendere per buona l'ora dell'altro e' la contraddizione in atto.*
+   🥇 *Chi si va a rileggere il PROPRIO log dopo una correzione da un minuto, e trova un guasto
+   piu' grande di quello contestato, ha fatto la cosa giusta: registra la SERIE, non il caso.*
    🔴🔴 **TERZA VOLTA, 2026-09-14, E SU UN POLLER CI CHE MI AVREBBE LASCIATA CIECA: HO HARD-TYPATO
    LA SHA.** Armato un `until` sui check di una PR con la head scritta a mano — `5d52cbacb7f6a15…`
    inventata, la vera era `5d52cbacb2b02b93…` — e messo un `|| gh api …$(gh pr view …)` come
