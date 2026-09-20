@@ -29,8 +29,16 @@ import {
 } from "./lib/conversationMute";
 import { CREDITS_LABEL, openCreditsModal } from "./lib/creditsModal";
 import {
+  DATE_FORMAT_KEYS,
+  type DateFormatKey,
+  getDateFormat,
+  renderDate,
+  resolveLocale,
+} from "./lib/dateFormat";
+import {
   syncedSetBoldMentions,
   syncedSetColoredNicklist,
+  syncedSetDateFormat,
   syncedSetShowBottomBar,
   syncedSetShowEventBadge,
   syncedSetStripFormatting,
@@ -167,9 +175,26 @@ const AUTO_AWAY_PRESETS = [
   { seconds: 3600, label: "1 hour" },
 ];
 
+// issue 2270 — the human name of each notation. UI copy, so it lives here
+// beside the markup rather than in `lib/dateFormat.ts`, matching how the
+// timestamp radios above carry their own labels.
+//
+// Typed `Record<DateFormatKey, string>` on purpose: adding a key to the union
+// without a label here is a COMPILE error, so the select can never render an
+// option with a blank descriptor. The values are words, never format patterns
+// — `dd/mm/yyyy` beside a live preview is a second spelling of the same fact
+// and the one that will drift.
+const DATE_FORMAT_LABELS: Record<DateFormatKey, string> = {
+  auto: "auto",
+  dmy: "day first",
+  mdy: "month first",
+  ymd: "year first",
+};
+
 const SettingsDrawer: Component<Props> = (props) => {
   const [fontPx, setFontPx] = createSignal<number>(getFontSizePx());
   const [timeFmt, setTimeFmt] = createSignal<TimeFormatKey>(getTimeFormat());
+  const [dateFmt, setDateFmt] = createSignal<DateFormatKey>(getDateFormat());
   const [coloredNicklist, setColoredNicklistSig] = createSignal<boolean>(getColoredNicklist());
   // issue 2157 — device-local, so the checkbox's state is a plain local signal
   // seeded from storage, exactly as `size` above is. No module signal is needed:
@@ -321,6 +346,12 @@ const SettingsDrawer: Component<Props> = (props) => {
     const value = (e.currentTarget as HTMLInputElement).value as TimeFormatKey;
     setTimeFmt(value); // local signal for optimistic drawer UI
     syncedSetTimeFormat(value); // #449 — local apply + server PUT (converges devices)
+  };
+
+  const onDateFormatChange = (e: Event) => {
+    const value = (e.currentTarget as HTMLSelectElement).value as DateFormatKey;
+    setDateFmt(value); // local signal for optimistic drawer UI
+    syncedSetDateFormat(value); // #449 — local apply + server PUT (converges devices)
   };
 
   const onColoredNicklistChange = (e: Event) => {
@@ -2505,6 +2536,47 @@ const SettingsDrawer: Component<Props> = (props) => {
                   no seconds (HH:MM)
                 </label>
               </fieldset>
+
+              {/* issue 2270 — date NOTATION. A `<select>` rather than a fourth
+              radio group (vjt asked for a select, and four options in a row
+              would crowd the two groups above), and every option carries a
+              LIVE PREVIEW.
+
+              NO fieldset, deliberately, and #1766's ruling is why: a fieldset
+              is earned by a RADIO GROUP, where the box is what makes the
+              exclusivity legible. A select is exclusive by construction and
+              carries its own `<label>`, so a box here would be a fourth
+              container to say a sentence the label already says — the exact
+              churn #1766 removed. Its count assertion caught this.
+
+              The preview is produced by `renderDate` — the same function the
+              five call sites render through — over `Date.now()`. That is the
+              explicit requirement and not a flourish: a hardcoded example in
+              the label is what goes on saying `19/08/2026` after the renderer
+              stops agreeing with it. The descriptor beside it is a WORD
+              ("day first") rather than a pattern like `dd/mm/yyyy`, for the
+              same reason — a second spelling of the format is a second thing
+              that can drift from the renderer.
+
+              `auto` sits first and is the default: it previews whatever the
+              viewer's resolved locale gives, so a viewer whose browser already
+              renders correctly can SEE that before deciding to override. */}
+              <label class="date-format-row">
+                date format:
+                <select
+                  data-testid="date-format-select"
+                  value={dateFmt()}
+                  onChange={onDateFormatChange}
+                >
+                  <For each={DATE_FORMAT_KEYS}>
+                    {(key) => (
+                      <option value={key} data-testid={`date-format-${key}`}>
+                        {DATE_FORMAT_LABELS[key]} — {renderDate(Date.now(), key, resolveLocale())}
+                      </option>
+                    )}
+                  </For>
+                </select>
+              </label>
 
               {/* #1766 — ONE fieldset for the three checkboxes (vjt: "andiamo
                 ad accorpare in un unico fieldset i checkbox esistenti e quello
