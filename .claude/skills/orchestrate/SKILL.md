@@ -2264,6 +2264,31 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     MISURA, che e' il passo giusto — ma promuoverlo senza provare il notificatore lo rende una
     misura FALSA invece che un buco onesto, e un buco dichiarato e' sempre meno pericoloso di una
     copertura che non c'e'.*
+    🔴🔴🔴 **E SOPRA TUTTO QUESTO STA LA DOMANDA CHE NESSUNO DEI DUE AVEVA FATTO, E CHE RENDE
+    L'INTERO APPARATO INUTILE SE SALTA: LA DOMANDA E' STATA POSTA DAVVERO? (orch, 2026-09-20 — il
+    difetto piu' grosso della giornata, e mio).** Per ~2h l'handoff ha registrato *"la (5) aspetta
+    vjt, muto dalle `12:37:52Z`"*, e ci ho costruito sopra una soglia, un protocollo di referto a
+    quattro pezzi e dieci giri di misure — **strumento, predicato, notificatore, filtro, tutti
+    verificati.** Poi il pari e' andato a cercare **LA DOMANDA** invece che la risposta: nei suoi
+    outbound di quel giorno ci sono altre domande, tutte **gia' chiuse**, e **della «(5)» nessuna
+    traccia.** ⇒ **non stavamo misurando un silenzio: misuravamo l'assenza di risposta a una domanda
+    mai fatta** — che produce un silenzio **PERFETTO, con tutte le difese in piedi, per sempre.**
+    🔑 **⇒ PRIMA di misurare una risposta, VERIFICA CHE LA DOMANDA SIA USCITA** — e si verifica nel
+    canale OUTBOUND, non nella memoria e non nell'handoff. E' lo stesso errore gia' scritto qui
+    sopra per l'ASSE e per il CANALE, salito di un piano: li' misuravi la cosa giusta nel posto
+    sbagliato, qui misuri **l'eco di un evento che non e' mai avvenuto.**
+    🥇🥇 **E IL MECCANISMO CHE LO PRODUCE VA NOMINATO, PERCHE' E' STRUTTURALE E NON DISTRAZIONE:
+    UNA ETICHETTA IN UN HANDOFF SOPRAVVIVE AL PROPRIO REFERENTE.** Attraverso un `/clear` il token
+    *"la (5)"* si tramanda **intatto** mentre la cosa che nominava non e' piu' verificabile da
+    nessuno — e **si rilegge come una pendenza viva**, perche' (regola gia' scritta) *una riga
+    d'attesa non scade da sola e si rilegge identica per giorni con l'aria di uno stato appena
+    verificato.* ⇒ **una pendenza si registra col suo ARTEFATTO** (l'istante e il canale in cui la
+    domanda e' USCITA), **mai con un numero d'ordine**: un numero non si puo' verificare, un
+    outbound si'.
+    ⚠️ **Cio' che NON cade, e va detto o la lezione si legge come "tutto inutile": le misure erano
+    tutte CORRETTE su cio' che misuravano**, e il protocollo resta valido. **A essere sbagliato era
+    l'OGGETTO, non gli strumenti** — ed e' esattamente per questo che nessuno dei controlli poteva
+    beccarlo: **un controllo valida lo strumento, mai l'esistenza del suo soggetto.**
     🥇🥇 **E METTERE I DUE PREDICATI UNO ACCANTO ALL'ALTRO HA TIRATO FUORI UNA COSA CHE NON E' DI
     MISURA: UNA VIOLAZIONE DI PERMESSO (pari, 2026-09-20, trovata da lui su sé stesso).** Il filtro
     del suo osservatore continuo **droppa due canali per ORDINE ESPLICITO di vjt** — non per svista —
