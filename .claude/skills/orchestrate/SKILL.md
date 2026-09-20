@@ -2282,6 +2282,25 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     (li': zero righe del soggetto nei canali droppati, su 20.000). **E' fortuna misurata, non
     progetto** — si dichiara come tale, o al primo giorno in cui il traffico cambia il check non si
     rompe: **mente.**
+    🔴🔴 **E DA LI' E' USCITO IL DIFETTO CHE SEGNA IL LIMITE DI TUTTO IL PROTOCOLLO: UN FILTRO CHE
+    MATCHA LA RIGA INTERA INVECE DEL CAMPO ⇒ SILENZIO FALSO CON LE TRE DIFESE TUTTE IN PIEDI.**
+    Chiesto se il filtro per CANALE lasciasse passare i DM (che un canale non ce l'hanno), il pari ha
+    misurato con quattro righe sintetiche: **i DM passano**, ma **un DM il cui TESTO nomina un canale
+    droppato viene DROPPATO** — il filtro non sa nemmeno che sia un messaggio diretto. ⇒ una risposta
+    in query del tipo *"si', e dillo su `#<canale escluso>`"* **non produce notifica**, e il referto
+    che ne esce ha **istante letto, predicato dichiarato e notificatore provato vivo: tre difese
+    intatte e la conclusione sbagliata.**
+    🥇 **REGOLA: un filtro si ancora al CAMPO, mai al testo della riga** — un predicato che legge il
+    BODY per decidere l'INSTRADAMENTO confonde *"parla di X"* con *"e' diretto a X"*, e le due classi
+    non hanno niente in comune.
+    🥇🥇 **E il valore di questo pezzo non e' la cura, e' che DICHIARA DOVE IL PROTOCOLLO SMETTE DI
+    PROTEGGERE.** Istante + predicato + consegna-ricevuta coprono strumento, selezione e
+    notificatore; **non coprono un filtro a monte che sbaglia classe.** ⇒ **un protocollo di verifica
+    va accompagnato dall'elenco di cio' che NON garantisce**, o la prossima lettura lo prende per
+    totale — ed e' la stessa ragione per cui *una soglia che mente e' peggio di nessuna soglia.*
+    🔑 **E non si patcha di propria iniziativa: bot/sidecar/hook non si toccano senza il via di
+    vjt** — si dichiara il buco accanto al referto e si accatasta la pendenza **senza aprirne una
+    seconda ondata su un interlocutore gia' muto.**
     🔴🔴 **E LA MIA CURA A QUEL BUCO ERA PEGGIO DEL BUCO — misurata dal pari nello stesso giro, ed e'
     la lezione piu' grossa delle due.** Il buco `(a)` era VERO (`vjt_` esiste, 24 righe), ma la cura
     che avevo proposto — allargare il nick a `:_*vjt[_|0-9]*!` — pesca anche **`vjt_TRUSTED`, che e'
