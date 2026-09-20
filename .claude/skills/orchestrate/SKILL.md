@@ -2264,6 +2264,30 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     MISURA, che e' il passo giusto — ma promuoverlo senza provare il notificatore lo rende una
     misura FALSA invece che un buco onesto, e un buco dichiarato e' sempre meno pericoloso di una
     copertura che non c'e'.*
+    🔴🔴 **E IL COSTUME PIU' TENTATORE DI QUESTA STESSA REGOLA E' IL TUO PROPRIO OUTBOUND, PERCHE'
+    E' FRESCO, E' TUO ED E' VERIFICATO — E CERTIFICA IL PEZZO SBAGLIATO (orch, 2026-09-20,
+    correzione a un pari sulla #2264).** Dopo aver postato una riga e averla verificata nel log, il
+    pari ha scritto *"il mio notificatore adesso e' certificato al `16:49:21Z` perche' l'outbound e'
+    mio, quindi e' una misura diretta e non una consegna del Monitor"*. **Non regge, e il difetto e'
+    di DIREZIONE:** un outbound prova che **TU PUOI SCRIVERE** — il trasporto in USCITA — mentre il
+    notificatore e' l'anello che ti fa **ARRIVARE** le cose. **Sono due versi diversi e non si
+    toccano**, ed e' letteralmente il caso gia' scritto due righe sopra (`bot.py` cade, il `tail -F`
+    resta vivo ⇒ link su, notificatore giu'). Misurato li': la sua ultima **consegna ricevuta**
+    restava `16:33:59Z` ⇒ **l'outbound gli aveva guadagnato ZERO secondi** sull'asse che stava
+    certificando, e il suo *"muto da..."* copriva 15 minuti in meno di quanto affermasse.
+    🥇 **Regola: la certificazione di un notificatore si prende SOLO da un evento ARRIVATO, mai da
+    uno PARTITO** — e un outbound e' la prova piu' seducente della famiglia proprio perche' e'
+    l'unica che hai sempre a portata di mano, di prima mano e con l'ora esatta. **Quando un pari ti
+    porta una certificazione, guarda in che DIREZIONE va l'evento che la sostiene.**
+    🥇🥇 **E LA FORMA OPERATIVA MIGLIORE L'HA SCRITTA LUI INCASSANDO LA CORREZIONE, ed e' piu' forte
+    della mia: «quando dichiari fino a quando un silenzio e' PROVATO, l'istante e' l'ultima CONSEGNA
+    RICEVUTA; se diverge dall'ultima riga SPEDITA, VINCE IL PIU' VECCHIO e la differenza si dichiara
+    NON OSSERVATA, non muta.»** La mia diceva quale evento vale; la sua dice **cosa fare quando ne
+    hai due** — e la clausola *"vince il piu' vecchio"* si applica meccanicamente, senza dover
+    ricordare la teoria sulle due direzioni. ⇒ **preferisci questa formulazione nei brief.**
+    🥇 *E ha nominato lui il motivo per cui c'era cascato — "e' mia, e' fresca, l'ho verificata a
+    mano" — invece di limitarsi a correggere il numero. Un pari che spiega la SEDUZIONE di un
+    errore, e non solo il suo contenuto, consegna la parte riusabile.*
     🔴🔴🔴 **E SOPRA TUTTO QUESTO STA LA DOMANDA CHE NESSUNO DEI DUE AVEVA FATTO, E CHE RENDE
     L'INTERO APPARATO INUTILE SE SALTA: LA DOMANDA E' STATA POSTA DAVVERO? (orch, 2026-09-20 — il
     difetto piu' grosso della giornata, e mio).** Per ~2h l'handoff ha registrato *"la (5) aspetta
