@@ -253,7 +253,8 @@ defmodule Grappa.UserSettings do
           show_bottom_bar: boolean(),
           strip_formatting: boolean(),
           show_event_badge: boolean(),
-          bold_mentions: boolean()
+          bold_mentions: boolean(),
+          date_format: String.t()
         }
 
   @notification_prefs_key "notification_prefs"
@@ -296,6 +297,16 @@ defmodule Grappa.UserSettings do
   @display_prefs_key "display_prefs"
   @display_time_formats ~w(hms hm)
   @display_presence_values ~w(show hide)
+  # issue 2270 — the date NOTATION set, the SECOND closed-set string here and
+  # a wire string for the same reason `@display_time_formats` is. `auto` is a
+  # REAL key (the viewer's resolved locale decides), never the absence of one:
+  # the client renders a selected option, and "never chose" is not a state the
+  # wire can carry. Deliberately NOT a strftime pattern — the ask was one axis
+  # (field order), and a pattern string is the untyped-string-for-a-closed-set
+  # CLAUDE.md bans. A new notation lands as a key here plus one arm in cic's
+  # `renderDate`, never as a parsed format.
+  @display_date_formats ~w(auto dmy mdy ymd)
+  @default_display_date_format "auto"
 
   # #543 — the subject's last-known client network prefix key, sampled at
   # client-connect and read at upstream-connect for the static_mapping
@@ -1930,9 +1941,11 @@ defmodule Grappa.UserSettings do
   an empty presence-filter map (every channel follows the size default),
   the mobile window bar SHOWN (#1766 is an opt-out, never a default change),
   mIRC formatting RENDERED (#2029 is an opt-in: colours keep working as
-  they do today until a reader asks for them to stop), and mention rows BOLD
+  they do today until a reader asks for them to stop), mention rows BOLD
   (issue 2167 is an opt-out, like #1766: the bold exists today, so leaving it
-  on is the no-change default).
+  on is the no-change default), and dates in `"auto"` notation (issue 2270 —
+  the viewer's resolved locale decides, which is what the five buggy call
+  sites were already TRYING to do, so this default changes nothing on screen).
   """
   @dialyzer {:nowarn_function, default_display_prefs: 0}
   @spec default_display_prefs() :: display_prefs()
@@ -1944,7 +1957,8 @@ defmodule Grappa.UserSettings do
       show_bottom_bar: true,
       strip_formatting: false,
       show_event_badge: false,
-      bold_mentions: true
+      bold_mentions: true,
+      date_format: @default_display_date_format
     }
   end
 
@@ -2024,6 +2038,13 @@ defmodule Grappa.UserSettings do
       constraint that rides with it is a CLIENT-side stylesheet invariant,
       not a server one: the bold is what tells a mention row from a
       watchlist-highlight row, so the opt-out must not collapse the two.
+    * `date_format` (issue 2270) ∈ #{inspect(@display_date_formats)} IF
+      PRESENT; an absent key takes `"auto"`. The second closed-set STRING
+      here, and the asymmetry with the optional booleans is deliberate:
+      absent ⇒ default (an older bundle must keep persisting its other
+      prefs), present-but-outside-the-set ⇒ 422 rather than a silent coerce
+      to `"auto"`, which would report a successful save of a preference the
+      subject never chose.
     * `presence_filter` is a `%{channel_key => "show" | "hide"}` map. Any
       other value (a boolean, a third state) is REJECTED — the tri-state's
       unset is the ABSENCE of a key, never a stored value, so the server
@@ -2724,7 +2745,11 @@ defmodule Grappa.UserSettings do
       # for this key alone: with a `true` default, a merge that treated `false`
       # as absent would restore the bold on every read and the preference would
       # be visibly set in the drawer yet gone after a reload.
-      bold_mentions: read_display_bool(stored, :bold_mentions, true)
+      bold_mentions: read_display_bool(stored, :bold_mentions, true),
+      # issue 2270 — the defensive read for the closed-set string. A value
+      # outside the set (an older hand-edited blob, a row from a future key
+      # rolled back) must never surface to a caller: cic switches on it.
+      date_format: read_display_date_format(stored)
     }
   end
 
@@ -2732,6 +2757,13 @@ defmodule Grappa.UserSettings do
     case display_fetch(stored, :time_format) do
       v when v in @display_time_formats -> v
       _ -> "hms"
+    end
+  end
+
+  defp read_display_date_format(stored) do
+    case display_fetch(stored, :date_format) do
+      v when v in @display_date_formats -> v
+      _ -> @default_display_date_format
     end
   end
 
@@ -2763,7 +2795,8 @@ defmodule Grappa.UserSettings do
          {:ok, sbb} <- fetch_optional_display_bool(prefs, :show_bottom_bar, true),
          {:ok, sf} <- fetch_optional_display_bool(prefs, :strip_formatting, false),
          {:ok, seb} <- fetch_optional_display_bool(prefs, :show_event_badge, false),
-         {:ok, bm} <- fetch_optional_display_bool(prefs, :bold_mentions, true) do
+         {:ok, bm} <- fetch_optional_display_bool(prefs, :bold_mentions, true),
+         {:ok, df} <- fetch_optional_display_date_format(prefs) do
       {:ok,
        %{
          "time_format" => tf,
@@ -2772,7 +2805,8 @@ defmodule Grappa.UserSettings do
          "show_bottom_bar" => sbb,
          "strip_formatting" => sf,
          "show_event_badge" => seb,
-         "bold_mentions" => bm
+         "bold_mentions" => bm,
+         "date_format" => df
        }}
     else
       {:error, message} -> {:error, display_prefs_changeset_error(message, subject)}
@@ -2820,6 +2854,37 @@ defmodule Grappa.UserSettings do
       fetch_display_bool(prefs, key)
     else
       {:ok, default}
+    end
+  end
+
+  # issue 2270 — the absent-tolerant CLOSED-SET reader. It is
+  # `fetch_optional_display_bool/3`'s sibling rather than a generalisation of
+  # it: one takes a default and checks `is_boolean`, this one checks membership
+  # in a fixed list, and a shared higher-order version would be a validator
+  # parameter threaded through both call sites to save four lines.
+  #
+  # ABSENT-TOLERANT for #1766's reason, which applies to every key added after
+  # the shape shipped: cic and the server deploy separately (`deploy-m42.sh`
+  # vs `--cic`), so a bundle already loaded in a tab sends the seven keys it
+  # knows. Reaching for the MANDATORY spelling here would 422 that tab's every
+  # display write — its time-format and nicklist toggles would quietly stop
+  # persisting until it reloaded.
+  #
+  # PRESENT-AND-WRONG is a different answer, and the asymmetry is the point: a
+  # value outside the set is REJECTED rather than coerced, because a coerced
+  # write reads back as `auto` and the drawer would show a preference the user
+  # never chose while claiming the save succeeded.
+  defp fetch_optional_display_date_format(prefs) do
+    if display_has_key?(prefs, :date_format) do
+      case display_fetch(prefs, :date_format) do
+        v when v in @display_date_formats ->
+          {:ok, v}
+
+        _ ->
+          {:error, "date_format must be one of #{inspect(@display_date_formats)}"}
+      end
+    else
+      {:ok, @default_display_date_format}
     end
   end
 

@@ -44,7 +44,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
         "show_bottom_bar" => true,
         "strip_formatting" => false,
         "show_event_badge" => false,
-        "bold_mentions" => true
+        "bold_mentions" => true,
+        "date_format" => "auto"
       },
       overrides
     )
@@ -65,7 +66,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                show_bottom_bar: true,
                strip_formatting: false,
                show_event_badge: false,
-               bold_mentions: true
+               bold_mentions: true,
+               date_format: "auto"
              }
     end
 
@@ -81,7 +83,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                show_bottom_bar: true,
                strip_formatting: false,
                show_event_badge: false,
-               bold_mentions: true
+               bold_mentions: true,
+               date_format: "auto"
              }
     end
 
@@ -103,7 +106,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                show_bottom_bar: true,
                strip_formatting: false,
                show_event_badge: false,
-               bold_mentions: true
+               bold_mentions: true,
+               date_format: "auto"
              }
     end
 
@@ -122,7 +126,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                show_bottom_bar: true,
                strip_formatting: false,
                show_event_badge: false,
-               bold_mentions: true
+               bold_mentions: true,
+               date_format: "auto"
              }
     end
   end
@@ -200,7 +205,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                show_bottom_bar: true,
                strip_formatting: false,
                show_event_badge: false,
-               bold_mentions: true
+               bold_mentions: true,
+               date_format: "auto"
              }
     end
 
@@ -728,6 +734,138 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                )
 
       assert cs.errors[:display_prefs]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # date_format (issue 2270) — the EIGHTH key, and the second closed-set STRING
+  # ---------------------------------------------------------------------------
+  #
+  # The reported bug: five cic sites formatted with a bare `toLocaleString()`,
+  # so the notation came from the browser's UI LANGUAGE rather than the
+  # viewer's region. The reporter's iOS device has Preferred Language English
+  # and Region Italy with its own Date Format set to `19/08/2026`; the page
+  # receives an English tag and renders `mm/dd`.
+  #
+  # Why a stored preference and not a better default: measured while vjt
+  # decided it, the web exposes no region, `en-IT` is not a real CLDR locale
+  # (ICU falls it back to `en` → `9/20/2026`), and the only day-first English
+  # locale is `en-GB`, which nothing on the page can derive. The platform
+  # default is PROVABLY unable to express a setting the user already made.
+  #
+  # Shape: a closed set, like `time_format` and unlike the six booleans —
+  # `auto | dmy | mdy | ymd`, never a strftime pattern (CLAUDE.md bans the
+  # untyped-string-for-a-closed-set). `auto` is a REAL key, not an absence: the
+  # drawer has to render something selected, and "never chose" is not a state
+  # the wire can carry.
+  #
+  # ABSENT-TOLERANT on the way in, like every key added since the shape first
+  # shipped (#1766's rule). A mandatory eighth key would 422 every display
+  # write from any bundle already loaded in a tab, because cic and the server
+  # deploy separately (`deploy-m42.sh` vs `--cic`).
+
+  describe "date_format (issue 2270)" do
+    test "defaults to auto — a real key, and the one that follows the locale" do
+      assert UserSettings.default_display_prefs().date_format == "auto"
+
+      assert UserSettings.get_display_prefs({:user, Ecto.UUID.generate()}).date_format ==
+               "auto"
+    end
+
+    test "round-trips every key in the closed set" do
+      user = user_fixture()
+
+      for key <- ~w(auto dmy mdy ymd) do
+        assert {:ok, _} =
+                 UserSettings.put_display_prefs(
+                   {:user, user.id},
+                   valid_wire(%{"date_format" => key})
+                 )
+
+        assert UserSettings.get_display_prefs({:user, user.id}).date_format == key
+      end
+    end
+
+    test "a PUT from a client predating the key is ACCEPTED, and reads as auto" do
+      user = user_fixture()
+      older_body = Map.delete(valid_wire(), "date_format")
+
+      assert {:ok, _} = UserSettings.put_display_prefs({:user, user.id}, older_body)
+      assert UserSettings.get_display_prefs({:user, user.id}).date_format == "auto"
+    end
+
+    # The direction that matters for a closed-set STRING and for no boolean
+    # sibling: a value outside the set must be REJECTED at the boundary rather
+    # than stored and coerced on read. A stored `"gg/mm/aaaa"` would read back
+    # as `auto` through the defensive merge, so the drawer would show `auto`
+    # while the user believed they had saved something — a silent discard.
+    test "rejects a notation outside the closed set with a field error" do
+      user = user_fixture()
+
+      for bad <- ["gg/mm/aaaa", "%d/%m/%Y", "DMY", "", "iso"] do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 UserSettings.put_display_prefs(
+                   {:user, user.id},
+                   valid_wire(%{"date_format" => bad})
+                 ),
+               "expected #{inspect(bad)} to be rejected"
+
+        assert cs.errors[:display_prefs]
+      end
+    end
+
+    test "rejects a non-string — the closed set is of strings" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               UserSettings.put_display_prefs(
+                 {:user, user.id},
+                 valid_wire(%{"date_format" => 3})
+               )
+
+      assert cs.errors[:display_prefs]
+    end
+
+    test "a stored non-default SURVIVES the default merge, read after read" do
+      user = user_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_display_prefs(
+                 {:user, user.id},
+                 valid_wire(%{"date_format" => "dmy"})
+               )
+
+      # The merge runs on every read, so one pass would not prove stability.
+      assert UserSettings.get_display_prefs({:user, user.id}).date_format == "dmy"
+      assert UserSettings.get_display_prefs({:user, user.id}).date_format == "dmy"
+    end
+
+    # The defensive reader, reached only by a row written before the key
+    # existed or hand-edited in the blob. It must never surface a value outside
+    # the closed set to a caller — the client switches on it.
+    test "a malformed STORED value reads back as auto, never as itself" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      settings
+      |> Settings.changeset(%{
+        data: Map.put(settings.data, "display_prefs", %{"date_format" => "yyyy/dd/mm"})
+      })
+      |> Repo.update!()
+
+      assert UserSettings.get_display_prefs({:user, user.id}).date_format == "auto"
+    end
+
+    test "visitors get the key too — display prefs are subject-polymorphic" do
+      visitor = visitor_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_display_prefs(
+                 {:visitor, visitor.id},
+                 valid_wire(%{"date_format" => "ymd"})
+               )
+
+      assert UserSettings.get_display_prefs({:visitor, visitor.id}).date_format == "ymd"
     end
   end
 end
