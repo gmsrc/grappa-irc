@@ -18429,3 +18429,67 @@ number.** Here the count was right and the world behind it was invented.
 All of it is vitest against the socket mock; no real stack was driven, which is
 the same limitation the original report declared for itself and is carried
 forward rather than papered over.
+<!-- entry #1365b -->
+
+---
+
+## 2026-09-20 — #1365b: the browser witness, and why the obvious assertion is masked
+
+Entry #1365 closed with "Not established: all of it is vitest against the socket
+mock; no real stack was driven." This closes that. `issue1365-dm-bucket-after-own-nick-steal.spec.ts`
+drives a real browser against the real stack: a session takes a nick an open
+query window already holds, a third party DMs it, and the assertion is the
+BUCKET the row lands in.
+
+Two-sided, measured: GREEN on `main` (1 passed, chromium, 7.8 s); RED with
+`cicchetto/src/lib/subscribe.ts` alone reverted to `587f02a9f^` — the inverse
+mutation, −26/+1, restoring the bare `if (joined.has(key)) continue` — failing
+on the discriminating assertion with `Expected: 0, Received: 1`. The revert is
+surgical: the diff of that file between the fix commit and `origin/main` is
+empty, so nothing but the cure moved.
+
+### The trap this spec had to avoid, and it is the reusable part
+
+**The obvious assertion is masked and would be green on both sides of the fix.**
+"The body shows up in the peer's window" cannot discriminate, because an inbound
+DM is stored at `channel = fold(own_nick), dm_with = sender` and the DM read key
+is `nick_fold(COALESCE(dm_with, channel))` — the SENDER. Selecting the peer's
+window therefore fetches the row over REST and renders it correctly *however the
+live push was routed*. A spec built on it would pass against the defect it names.
+
+What the server cannot mask is the SELF window: its read key is our own nick,
+the row's key is the sender, so the row is absent from that window's REST page
+in either regime. A hit there can only be a mis-routed LIVE push. So the
+discriminating assertion is a NEGATIVE one — the body must NOT be in the focused
+self window — and the peer-window check stays only as a labelled delivery
+control, guarding against a vacuous pass where nothing was delivered at all.
+
+**General rule: when the server can serve the same row to the same window by a
+second path, the positive assertion is not a witness. Find the observable the
+server never writes.**
+
+The negative is asserted while the self window is still focused and before any
+window switch, deliberately: `loadInitialScrollback` runs on every select, so a
+switch away and back could re-seed the pane from REST and erase the evidence.
+
+### The barrier, and how its sufficiency was established
+
+A `toHaveCount(0)` is worth nothing unless the row has had its chance. Two
+server-side barriers run first and hold in both regimes: the row is persisted
+(`assertMessagePersisted` on the peer key), and the #422 auto-open's
+`query_windows_list` has reached the browser (the peer's sidebar row appears).
+That the second implies the first push was already delivered is an INFERENCE
+from same-socket ordering — and it is not what the spec rests on. The pre-fix
+run is: it failed with `9 × locator resolved to 1 element`, i.e. the mis-routed
+row was present and stayed present for the whole 5 s window. The RED measures
+the barrier; the ordering argument merely explains it.
+
+### Two setup choices worth keeping
+
+The spec mints its own visitor at runtime rather than seeding a user: it renames
+a LIVE nick, which is a destructive mutation of server-side identity and may not
+touch the shared `vjt` session (#477), and a runtime subject adds nothing to the
+steady state that the leak-canary and user-cap specs assert after it.
+
+The contended window is opened on a GHOST nick — one nobody holds — rather than
+on a live peer who then quits. Same contention, no nick-release race to lose.
