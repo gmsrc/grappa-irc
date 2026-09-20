@@ -2376,6 +2376,30 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   conclusione spacciata per misura, nella stessa posizione, sarebbe arrivata a un contributore esterno
   come istruzione.**
 
+- 🔴🔴 **LO SPECCHIO DELLA FAMIGLIA: NON UNO ZERO FALSO, UN NUMERO FALSAMENTE **GRANDE** — E I
+  CONTROLLI CHE LO ACCOMPAGNANO POSSONO ESSERE TUTTI VIVI (orch, 2026-09-20, #1365, beccata da w1).**
+  Misurate le righe DM su una copia prod definendole *"`channel` senza sigillo `#`/`&`"*: **6.340**,
+  con pos ctrl (10 canali distinti) e neg ctrl (canale inventato = 0) **entrambi sani**. Le righe DM
+  vere erano **89**: **`$server` non ha sigillo**, ed e' un valore di `channel` legittimo per
+  costruzione (`Scrollback.Message.valid_target?/1` ha un ramo esplicito) ⇒ **6.251 notice di server,
+  il 98,6% del conteggio**, contati come DM. Sbagliato di **~70x**, e su quel numero avevo gia'
+  briefato una worker e postato su `#grappa-live`.
+  🥇🥇 **LA DIAGNOSI CHE VALE PIU' DEL DIFETTO, ed e' sua: quei controlli erano controlli sullo
+  STATEMENT, mai sul DOMINIO.** Provavano che la query girava e che il raggruppamento funzionava —
+  **nessuno dei due puo' vedere una CLASSIFICAZIONE sbagliata**, perche' un neg ctrl su un valore
+  inventato non becca un valore REALE che non appartiene alla classe che hai dichiarato di contare.
+  ⇒ **Un controllo a risposta nota valida lo STRUMENTO; la classificazione vuole un controllo
+  DIVERSO: il CENSIMENTO DELLE CLASSI dentro il bucket che stai contando** (`GROUP BY <classe>`),
+  che e' l'unica forma in cui `$server` salta fuori da solo.
+  🔎 **E il tell c'era, in chiaro, e l'ho letto passando: `dm_with NOT NULL` = 69 contro un bucket di
+  6.340.** **Due grandezze che dovrebbero misurare quasi la stessa cosa e differiscono di due ordini
+  di grandezza sono un'ACCUSA, non una curiosita'.** Chiediti quale delle due sta mentendo PRIMA di
+  costruirci sopra.
+  ⚠️ **E quando incassi una correzione, PESA LE SUE CLAUSOLE invece di prenderla in blocco** (la
+  regola della ruling da spaccare, applicata a una correzione ricevuta): la sua aveva due parti —
+  `$server` spiegava **tutto** l'errore, l'allargamento del set di sigilli a `# & ! +` e' **giusto in
+  principio e INERTE su quel dato** (ricontato: 6.340 identico). Dire "aveva ragione su tutto" avrebbe
+  messo a verbale come causa una cosa che non aveva spostato un byte.
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
