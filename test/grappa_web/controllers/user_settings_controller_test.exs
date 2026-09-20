@@ -714,7 +714,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       "show_bottom_bar" => true,
       "strip_formatting" => false,
       "show_event_badge" => false,
-      "bold_mentions" => true
+      "bold_mentions" => true,
+      "date_format" => "auto"
     }
   end
 
@@ -772,7 +773,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
                "show_bottom_bar" => true,
                "bold_mentions" => true,
                "strip_formatting" => false,
-               "show_event_badge" => false
+               "show_event_badge" => false,
+               "date_format" => "auto"
              }
     end
 
