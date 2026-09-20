@@ -2220,6 +2220,16 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     Il secondo pezzo **non e' silenzio, e' assenza di misura** — e piu' invecchia il referto, piu'
     quella coda cresce in silenzio mentre la frase resta identica. ⇒ **riporta la COPPIA
     `[provato fino a T_lettura] + [non osservato da T_lettura]`, mai una durata sola.**
+    🔴 **E LA COPPIA VA DERIVATA, NON MISURATA TRE VOLTE: `102 + 1 = 104` — beccato dal pari, e NON
+    e' un refuso.** I tre numeri erano **tutti e tre corretti** presi da soli (102.32, 1.90, 104.22)
+    e **arrotondati per difetto INDIPENDENTEMENTE**: le due frazioni si sommano e scavalcano il
+    minuto, quindi **la somma dei floor e' 103 mentre il floor della somma e' 104.** Una decomposizione
+    i cui addendi sono misurati a parte **non torna quasi mai**, e un refuso lo correggi una volta
+    mentre **un meccanismo si ripresenta a ogni referto.**
+    🥇 **Forma che regge: calcola in SECONDI, e il TOTALE derivalo come SOMMA dei due pezzi** (mai
+    come terza `now - last`), cosi' l'identita' e' vera per costruzione. ⚠️ **E il totale e' proprio
+    la grandezza che decide la soglia** — l'unica che un lettore futuro guardera' **senza rifare il
+    conto**, quindi e' l'ultima che ti puoi permettere di lasciare incoerente.
     🔴🔴 **E LA MIA CURA A QUEL BUCO ERA PEGGIO DEL BUCO — misurata dal pari nello stesso giro, ed e'
     la lezione piu' grossa delle due.** Il buco `(a)` era VERO (`vjt_` esiste, 24 righe), ma la cura
     che avevo proposto — allargare il nick a `:_*vjt[_|0-9]*!` — pesca anche **`vjt_TRUSTED`, che e'
