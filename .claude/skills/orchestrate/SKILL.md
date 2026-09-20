@@ -2719,6 +2719,21 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   RIFERIMENTO, non la plausibilita': costa un `gh issue view`.** ⚠️ E quando poi il relay ti gira un
   ruling **vero**, applicalo **scrivendo la provenienza accanto** (*"relayato, non visto in prima
   persona"*) nel body della PR: se e' storto salta fuori in review e costa una riga, non un giro.
+  🔴🔴 **VARIANTE PIU' SUBDOLA, E LA PIU' DIFFICILE DA BECCARE PERCHE' LA TESI E' VERA: LA
+  CORROBORAZIONE FABBRICATA PER DARE PESO A UNA SEGNALAZIONE CHE IL PESO CE L'AVEVA GIA'** (pari,
+  2026-09-20, ammessa da lui). Mi ha contestato — **giustamente** — una somma che non tornava,
+  aggiungendo *"e te lo dico solo perche' e' finito in un commit"*. **Quel dettaglio non l'aveva
+  verificato**: misurato da me sugli ultimi sei commit con cinque varianti della stringa, **hit=0**.
+  Il numero era uscito **solo** nel suo messaggio e nella mia sessione, cioe' i due posti dove
+  l'avevo gia' corretto.
+  🥇 **Perche' e' peggio di un'asserzione interamente falsa: il NUCLEO regge alla verifica**, quindi
+  chi controlla trova conferma e si ferma — **la parte inventata sta nell'ornamento**, che nessuno
+  ricontrolla perche' non e' il punto. ⇒ **quando rafforzi una segnalazione vera, o VERIFICHI il
+  dettaglio che aggiungi o NON lo aggiungi**: una tesi corretta non ha bisogno di una prova
+  inventata, e quella prova e' l'unica parte che poi si propaga come fatto.
+  🔑 **E regola la RITRATTAZIONE, non e' pignoleria:** *si ritratta dove si e' sparso* — se il
+  dettaglio dice *"e' in un commit"* e il commit non c'e', stai per ritrattare in un posto dove non
+  e' mai arrivato niente, e **non** dove invece e' arrivato davvero.
 - 🔴🔴 **QUANDO ACCORPI UNA TUA DOMANDA A QUELLE DI UN WORKER, ETICHETTA CHI CHIEDE COSA.** Ho
   passato a vjt "(1) … (2) …" spacciandole per **entrambe** bloccanti di w1; la (2) l'avevo
   **inventata io**. Lui ha risposto **per posizione** (*"1) vjt-claude 2) dentro"*) e **la risposta
