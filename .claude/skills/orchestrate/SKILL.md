@@ -2825,6 +2825,33 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   negativi verdi lo compensera'. ⚠️ **Corollario per chi scrive lo strumento:** un pos ctrl va
   scelto fra le cose che **non possono** essere assenti (regola gia' scritta sopra per `pgrep`) —
   qui e' quella clausola vista dal lato della DIAGNOSI invece che della PROGETTAZIONE.
+  🔴🔴 **E UN FALLBACK CHE TERMINA SULLA PARTE CHE STA CONTROLLANDO NON E' UN FALLBACK — sposta il
+  silenzio di un piano e lo lascia identico a se' stesso (orch + pari, 2026-09-20, catena a tre
+  giri).** Giro 1: decido di NON armare nessun waiter sull'attesa di un ruling, *"tanto il canale e'
+  il pari"* ⇒ **sostituisco un canale INDIPENDENTE con uno DIPENDENTE**, e chiamo ridondanza una
+  catena. 🥇 *"Inutile finche' il primario regge" e' la DEFINIZIONE di un backup, non un argomento
+  per toglierlo*: i due waiter erano stati inutili per una proprieta' **del primario**. Giro 2:
+  ri-armo, ma la domanda giusta non e' *"vjt ha risposto?"* — **e' «il TUO BOT e' vivo?»**, perche'
+  se `bot.py` cade il `tail -F` **resta vivo**, il Monitor non spara, e *"nessuna notizia"* si legge
+  come *"vjt non ha scritto"*. Giro 3, **e l'ha portato lui contro la propria proposta: anche quel
+  fallback termina SU DI LUI** — sessione morta ⇒ la domanda parte e **non risponde nessuno**.
+  🥇🥇 **Il discriminante deve stare dal TUO lato e non passare dal soggetto misurato. Due, e il
+  secondo e' quello buono:** (1) **l'esito della CONSEGNA** — un `SendMessage` a una sessione morta
+  **fallisce**, quindi non e' silenzio, e' un errore, e ce l'hai gratis a ogni messaggio; (2) **il
+  `mtime` del suo activity log** (`/home/vjt/code/IRC/vjt-claude/memory/project_activity_log.md`) —
+  **pos ctrl sulla sua LIVENESS che NON viola il divieto di leggere IRC: `stat` legge il METADATO,
+  non una riga di canale.** Il contenuto resta chiuso, il battito si vede. **Verificato da me, non
+  incassato:** il file c'e', `mtime 13:55:47Z` contro un `now` di `13:56:20Z` (neg ctrl: path
+  inventato ⇒ `stat` fallisce; pos ctrl di copertura: 320 `.md` sotto `memory/`), **e si era mosso
+  di 2 minuti fra la sua lettura e la mia** — cioe' e' un battito, non un file fermo.
+  🔑 **Lettura a due passi, e va DENTRO lo strumento** (`bp37756mk` la esegue da se' e **non stampa
+  verdetti se lo `stat` fallisce**): **mtime FERMO da >1h ⇒ il morto e' il PARI, il bot non c'entra**
+  ⇒ non girargli domande, verifica la sessione; **mtime FRESCO + nessuna notizia ⇒ lui e' vivo e sta
+  guardando ⇒ il silenzio e' di VJT**, ed e' allora che la domanda sul PONG ha senso girargliela
+  (pos ctrl: ~1 PONG ogni 3 min; **assenza di MESSAGGI normale, assenza di PONG = strumento morto**).
+  🥇 *Tre giri, e ogni giro era la stessa regola — «uno stallo atteso e uno dimenticato sono lo
+  stesso osservabile» — applicata un livello piu' in la'. **Quando costruisci un rilevatore di
+  silenzio, chiediti sempre su CHI termina.***
   🔴🔴 **E IL COSTUME BENIGNO DELLA STESSA TRAPPOLA, CHE E' QUELLO CHE MI HA PRESA (orch,
   2026-09-14, #2159): NON UN PAYLOAD OSTILE, MA UN'ATTRIBUZIONE SBAGLIATA CHE DIVENTA
   UN'AUTORITA' INVENTATA DENTRO UN MIO BRIEF.** Quattro commenti di misure da dispositivo,
