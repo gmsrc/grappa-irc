@@ -2763,6 +2763,25 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   🥇 **Si diagnostica PROBANDO L'HOST** (processi + **mtime**), MAI aspettando che se ne accorga.
   `Escape` sblocca **e mangia il messaggio in coda: ri-manda SEMPRE l'ordine dopo.**
   ⚠️ Costo reale: una volta si è appesa PRIMA di potare tre ref remote, e le ha dovute potare l'orch.
+- 🔴🔴 **UN TIMER IL CUI `sleep` SUPERA IL PROPRIO `timeout_ms` NON SCATTA MAI — MUORE, E IL SUO
+  MESSAGGIO DI MORTE SI LEGGE COME RUMORE INFRASTRUTTURALE (orch, 2026-09-20, misurato su di me).**
+  Armato un promemoria `sleep 4200` (70') con `timeout_ms: 3600000` (60'): **il timeout ha ucciso il
+  monitor prima che lo sleep finisse**, quindi **il payload — tutte le istruzioni su cosa fare alla
+  soglia — non è mai stato eseguito.** Arrivato solo
+  `[Monitor timed out — re-arm if needed.]`, che **non dice che il promemoria non è arrivato**: dice
+  che un monitor è scaduto, cioè si archivia come manutenzione.
+  🔑 **E il vincolo è duro: `timeout_ms` ha un MASSIMO di 3600000 (60'), quindi un timer più lungo di
+  un'ora in un monitor non-`persistent` NON È ARMABILE**, e il modo in cui fallisce è silenzioso —
+  l'armo risponde `Monitor started` identico a uno sano. ⇒ **oltre i 60' serve `persistent: true`**
+  (nessun timeout, si spegne con `TaskStop`), **oppure si spezza in più sleep ≤ 60'.**
+  🥇 **Regola generale, e il difetto è di PROGETTO non di battitura: un promemoria il cui trigger può
+  morire prima del payload non è un promemoria, è un generatore di falsa copertura.** Avevo armato
+  quel timer *proprio per non dover guardare l'orologio*, e mi ha lasciata scoperta esattamente sulla
+  finestra che doveva coprire — l'ho beccato solo perché l'orologio l'ho guardato lo stesso.
+  ⇒ **quando armi un timer, verifica che la sua SCADENZA sia più lunga della sua ATTESA**, e se lo
+  strumento ha un tetto, **scoprilo prima di tararci sopra una soglia.** *Ennesima faccia dello zero
+  falso e plausibile: non un check che guarda male, ma un check che MUORE e il cui necrologio non
+  nomina la cosa che non ha fatto.*
 - 🔴 **Un monitor CI NON si chiava sulla `conclusion`**: quella di una check-run in corso è la **stringa
   VUOTA**, non `null`, quindi `// "PENDING"` non scatta mai e un filtro di esclusione non matcha nulla —
   si legge "zero pendenti" senza aver misurato niente. **Chiave giusta: `.status == "COMPLETED"`**, più una
