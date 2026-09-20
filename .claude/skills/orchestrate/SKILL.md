@@ -2264,6 +2264,24 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     MISURA, che e' il passo giusto — ma promuoverlo senza provare il notificatore lo rende una
     misura FALSA invece che un buco onesto, e un buco dichiarato e' sempre meno pericoloso di una
     copertura che non c'e'.*
+    🥇🥇 **E METTERE I DUE PREDICATI UNO ACCANTO ALL'ALTRO HA TIRATO FUORI UNA COSA CHE NON E' DI
+    MISURA: UNA VIOLAZIONE DI PERMESSO (pari, 2026-09-20, trovata da lui su sé stesso).** Il filtro
+    del suo osservatore continuo **droppa due canali per ORDINE ESPLICITO di vjt** — non per svista —
+    mentre il suo `grep` ad-hoc, costruito per misurare meglio, gira sul log GREZZO e **quel filtro
+    lo scavalca.** ⇒ **uno strumento nuovo puo' aggirare in silenzio un CONFINE che un altro
+    strumento stava facendo rispettare**: il filtro non era una scelta di copertura, era
+    l'applicazione di un divieto, e la misura "migliore" e' uscita fuori dal recinto senza che
+    nessuno decidesse niente.
+    🔑 **⇒ Quando cambi strumento non chiederti solo «risponde alla mia domanda?», ma «l'altro
+    strumento stava ANCHE facendo rispettare qualcosa?».** Un filtro, una allowlist, uno scope: se
+    la versione nuova legge piu' in la', il di piu' va deciso, non ereditato. ⚠️ **E il referto va
+    ri-scoperto di conseguenza: non *"vjt non ha scritto"* ma *"vjt non ha scritto NEI CANALI CHE
+    POSSO LEGGERE"*** — la seconda e' piu' debole e **vera**, la prima e' piu' forte e **nasce da una
+    lettura che non andava fatta.**
+    ⚠️ **E la copertura che "regge" puo' reggere per una proprieta' del TRAFFICO, non del predicato**
+    (li': zero righe del soggetto nei canali droppati, su 20.000). **E' fortuna misurata, non
+    progetto** — si dichiara come tale, o al primo giorno in cui il traffico cambia il check non si
+    rompe: **mente.**
     🔴🔴 **E LA MIA CURA A QUEL BUCO ERA PEGGIO DEL BUCO — misurata dal pari nello stesso giro, ed e'
     la lezione piu' grossa delle due.** Il buco `(a)` era VERO (`vjt_` esiste, 24 righe), ma la cura
     che avevo proposto — allargare il nick a `:_*vjt[_|0-9]*!` — pesca anche **`vjt_TRUSTED`, che e'
