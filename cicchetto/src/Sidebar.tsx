@@ -139,9 +139,18 @@ const Sidebar: Component<Props> = (props) => {
   // class AND the cascading per-channel/per-query overlay in
   // `greyedState/2` below.
   //
-  // Bucket F H4: only UserNetwork carries connection_state. Narrow on
-  // network.kind first; visitor networks are never greyed at the
-  // network level (visitors have no credential row to park / fail).
+  // issue 2222 — no `kind` narrow, and the premise paragraph that justified
+  // one is deleted rather than corrected: it is the sentence that would put
+  // the narrow back at the next reading. It claimed only a UserNetwork
+  // carries `connection_state`; #211 phase 6 converged the two rows and both
+  // `NetworksWireNetworkWithNickJson` and
+  // `NetworksWireVisitorNetworkWithNickJson` declare the field non-optional.
+  //
+  // This is the narrow that made `networkReason`'s de-narrowing inert — the
+  // header `title` below reaches it only through `isNetworkGreyed`, i.e.
+  // through here. WHO the rule applies to changes; WHAT it is does not:
+  // `NETWORK_GREYED_STATES` is still `{failed}`, so `parked` (already hidden)
+  // and `failing` (#1675, retrying on its own) stay out for both kinds.
   //
   // #96 — returns the STATE WORD, not a boolean: the greyed treatment is
   // muted + italic, which is (a) invisible to a screen reader and (b)
@@ -151,7 +160,7 @@ const Sidebar: Component<Props> = (props) => {
   // word (announced) — so the two can never disagree.
   const networkGreyedState = (slug: string): string | null => {
     const net = networkBySlug(slug);
-    if (net?.kind !== "user") return null;
+    if (net === undefined) return null;
     return NETWORK_GREYED_STATES.has(net.connection_state) ? net.connection_state : null;
   };
 
