@@ -1153,8 +1153,18 @@ clearing on unverified edits leaves the next session unable to tell whether they
   🔴 **FLAGS GO BEFORE THE TARGET** — `bot.say -f …/bot.send.libera '#grappa'`, NEVER `'#grappa' -f …`: the parse loop
   stops at the first non-flag arg, so a trailing `-f` is **silently ignored and the message goes to AZZURRA**.
   🔴 **`bot.say` exits 0 even when wedged — VERIFY the PRIVMSG in `bot.log` / `bot.libera.log`.**
-  🔴 **THE BOT LOGS SPAN DAYS, ARE NOT SORTED, AND CARRY NO DATE** — anchor to `TZ=Europe/Rome date` before reading any
+  🔴 **THE BOT LOGS SPAN DAYS AND CARRY NO DATE** — anchor to `TZ=Europe/Rome date` before reading any
   line as a reply; a stale *"faccio io"* from another day nearly read as authorization.
+  ✅ **«ARE NOT SORTED» E' CADUTO — MISURATO 2026-09-20 dal pari, 20.000 righe di `bot.log`: il file
+  E' CRONOLOGICO.** Otto salti all'indietro, **tutti e soli wrap di mezzanotte** (`23:5x → 00:0x`),
+  ~9 giorni nella coda, **nessun altro disordine**. ⚠️ **Scope dichiarato:** una misura, un file,
+  la coda — non e' una garanzia sul formato. **La META' che conta resta in piedi e non dipende
+  dall'ordine: un `HH:MM:SS` NUDO e' ambiguo di N×24h**, quindi *"l'ultima riga"* va presa come
+  ultima **DEL FILE** (`tail | grep | tail -1`), mai selezionata per ora.
+  🥇🥇 **E IL CORRETTIVO PERICOLOSO E' PROPRIO FILTRARE PER ORA: `grep '^14:1'` SU UN LOG SENZA DATA
+  FABBRICA UN DISORDINE CHE NON C'E'** — righe `14:19:31` prima di `14:14:58` non sono fuori ordine,
+  sono **le 14:1x di GIORNI DIVERSI** impaginate insieme. Scoperto per caso mentre si costruiva un
+  pos ctrl filtrando per ora, cioe' **il filtro che crea l'artefatto e' lo stesso che lo mostra.**
 - 🔴 `ci.yml` triggers ONLY on push-to-main or a PR targeting main. ✅ **CORRECTED 2026-08-03: it is NO LONGER
   Elixir-only.** A `cicchetto (types + lint + unit)` job runs `bun run check` (biome + `tsc --noEmit`) AND
   `bun run test` (vitest), in a digest-pinned `oven/bun:1` container, **unconditionally — no `paths:` filter at
@@ -2210,6 +2220,25 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
     Il secondo pezzo **non e' silenzio, e' assenza di misura** — e piu' invecchia il referto, piu'
     quella coda cresce in silenzio mentre la frase resta identica. ⇒ **riporta la COPPIA
     `[provato fino a T_lettura] + [non osservato da T_lettura]`, mai una durata sola.**
+    🔴🔴 **E LA MIA CURA A QUEL BUCO ERA PEGGIO DEL BUCO — misurata dal pari nello stesso giro, ed e'
+    la lezione piu' grossa delle due.** Il buco `(a)` era VERO (`vjt_` esiste, 24 righe), ma la cura
+    che avevo proposto — allargare il nick a `:_*vjt[_|0-9]*!` — pesca anche **`vjt_TRUSTED`, che e'
+    un'ALTRA PERSONA** (`~cb@porco.el.diocane.veneto.it`, un pari che due righe dopo torna al suo
+    nick). ⇒ **allargare un predicato per non perdere un falso NEGATIVO fabbrica un falso POSITIVO in
+    una classe DIVERSA E PIU' GRAVE: un silenzio falso mi fa ASPETTARE, un'identita' falsa mi fa
+    ESEGUIRE.**
+    🥇 **REGOLA: quando allarghi un predicato, chiediti in che CLASSE cade il nuovo errore, non solo
+    se il vecchio sparisce.** I due errori non sono commensurabili e il piu' pericoloso e' quasi
+    sempre quello che l'allargamento INTRODUCE — perche' arriva travestito da cura.
+    🔑 **E la cura giusta era gia' nel sistema: un'identita' si ancora a NICK + HOST, mai al nick** —
+    `< :[^!]+!~antani@due\.dita\.di\.grappa\.chat` — **che e' esattamente come decide `bot.trust`, e
+    per la stessa ragione.** E' la regola gia' scritta piu' sopra (*un nick non e' un'identita'*,
+    *il campo autore non e' prova*) incontrata da una terza porta: **stavo per usare un nick come
+    identita' dentro il predicato di una misura.** ⇒ **prima di inventare un predicato d'identita',
+    guarda come la decide il componente che quella decisione la prende gia' in produzione.**
+    🥇 *E la conclusione reggeva lo stesso — ultima riga `12:37:52Z` identica col predicato
+    host-ancored: **il verdetto era giusto e il predicato sbagliato**, che e' la coppia peggiore da
+    lasciare in giro, perche' il risultato corretto non invita nessuno a guardare lo strumento.*
 
 ## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
 - 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
