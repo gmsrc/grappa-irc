@@ -2739,6 +2739,29 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   `STALL state=idle` atteso e uno dimenticato sono lo stesso osservabile. ⚠️ **E non riempirlo di
   lavoro finto:** ribasare una PR bloccata su un ruling brucia il suo verde e una corsia per una
   cosa che il ruling puo' ancora cambiare. **Meglio ferma che a sporcare un albero in volo.**
+  🥇🥇 **E LA REGOLA E' SCRITTA TROPPO STRETTA: NON VALE SOLO PER UNA WORKER, VALE PER CHIUNQUE
+  ABBIA CHIESTO QUALCOSA E NON SAPPIA DOVE STA (allargamento del pari, 2026-09-20, e il suo caso
+  era reale).** Una worker ferma **almeno te la ritrovi nel pane**; **una persona che ha chiesto e
+  non sente piu' niente conclude da sola, e conclude male.** Lui, passando le proprie pendenze con
+  questa domanda addosso — *la controparte SA di essere in attesa?* — ne ha trovata una a cui aveva
+  detto *"ci sta"* giorni prima: l'attesa **la sapeva solo lui**, e dall'altro lato era
+  indistinguibile da un *"ci penso"* finito nel nulla. **Cura: una riga DOVE aveva chiesto** — non
+  e' persa, e' ferma, e perche'. **Senza aprire la issue: l'enqueue resta il via di vjt, e una
+  richiesta da untrusted non lo sostituisce.**
+  🔑 **MA IL DISCRIMINANTE VA DETTO O LA REGOLA DIVENTA "ACCUSA RICEVUTA A 134 ISSUE APERTE": LA
+  CLASSE E' L'ATTESA CHE SOLO TU PUOI VEDERE.** Se lo stato e' LEGGIBILE nell'artefatto, non c'e'
+  nessun silenzio da rompere — una issue di backlog senza `status:*` **dichiara da se'** che nessuno
+  ci sta sopra, e una PR il cui ultimo commento mette la palla dall'altra parte pure. **Il caso da
+  cercare e' quello in cui TU tieni un fatto (un ruling atteso, un freeze, un "ci sta" detto a voce)
+  che l'altro non puo' dedurre da nessuna parte.**
+  ✅ **APPLICATA DA ME LO STESSO GIORNO, ESITO NEGATIVO, E IL NEGATIVO E' UN RISULTATO.** Censite le
+  PR aperte e **le issue aperte con autore != il token della fleet** (le sole in cui un terzo puo'
+  stare appeso): **zero casi.** `#2102` (iakat, OIDC) sembrava il candidato — 4 giorni di silenzio —
+  ma l'ultimo commento e' **nostro a lui** (*"puoi fare tu il test end-to-end?"*, `16-09T13:06Z`) ⇒
+  **la palla e' dichiarata sua, non nascosta**; `#1893` (abonforti) ha 0 commenti da 19 giorni ma e'
+  **backlog senza label**, cioe' stato visibile. ⚠️ Nota che va tenuta: su `#2102` **9 check su 10
+  sono rossi** sulla head `880ffcf3a` — **visibile a lui quanto a me**, quindi non e' questa classe,
+  ma non leggere quella PR come "in attesa di noi".
 - 🔴🔴 **`mergedBy` NON E' EVIDENZA DI CHI HA MERGIATO — CARDINALITA' 1, MISURATA.** Un relay ha
   detto a vjt in canale che **lui in persona** aveva mergiato la #1822, leggendolo dal campo attore.
   Falso: l'avevo mergiata io. Misurato sulle QUATTRO PR mergiate da me quella mattina —
