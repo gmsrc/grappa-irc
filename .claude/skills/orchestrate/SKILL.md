@@ -3756,3 +3756,23 @@ giusta.
   **Non la riscrivo — e' un verbale di una misura fatta davvero** — ma vale come avviso: **questo file
   contiene grafie VIVE, e citarne una in un messaggio di commit o in un body di PR la fa sparare.**
   Quando ne aggiungi una nuova, **usa un numero a sei cifre che non puo' risolvere.**
+- 🥇🥇 **DUE DOMANDE *ADIACENTI IN CANALE* SONO AMBIGUE ESATTAMENTE COME DUE DOMANDE FUSE IN UN
+  MESSAGGIO — e questa meta' non era scritta (paletto del pari, 2026-09-21).** Questo file gia'
+  ordina di **etichettare chi chiede cosa** quando ACCORPI le domande, perche' vjt risponde **per
+  posizione** e la risposta si incolla a quella sbagliata. **Ma l'adiacenza non la crea solo
+  l'accorpamento: la crea il CANALE.** Due domande mandate **separatamente**, a minuti di distanza,
+  **da due agenti diversi**, finiscono comunque una sotto l'altra — e se entrambe chiedono *"cosa si
+  fa dopo"*, **una risposta corta non dice QUALE ha colpito.** Misurato quel giorno: il *quando* del
+  deploy staging (`07:18:12`) e il *what next* per w1 (`08:05:21`), adiacenti e della stessa famiglia.
+  🥇 **La cura NON e' evitare la seconda domanda** — spesso e' legittima e tempestiva — **e' non
+  DEDURRE a quale sia arrivata la risposta: si verifica sull'ADIACENZA, e se non e' netta si chiede.**
+  Precedente vivo: alle `07:59` un «ah ok allora dopo va bene» e' stato attribuito correttamente
+  **solo perche' l'adiacenza era netta** (veniva subito dopo la spiegazione sul numero); con due
+  candidate equidistanti **la stessa frase non sarebbe stata attribuibile.**
+  🔑 **E vale per chi RICEVE il relay quanto per chi lo fa:** se il pari ti gira una risposta corta
+  senza dirti **contro quale adiacenza** l'ha risolta, **quella e' la domanda da fargli** — non
+  incassarla. *Un relay che dichiara «non tiro a indovinare, verifico e poi te lo giro» sta facendo
+  la cosa giusta: chiedigliela come forma, non come favore.*
+  ℹ️ **Corollario utile, misurato lo stesso giorno: se una domanda e' l'ULTIMA riga del canale, il suo
+  silenzio NON e' scroll depth** — e' un dato diverso, e va letto come tale invece di attribuirlo al
+  traffico. **Lo stato del CANALE e' misurabile; lo stato della sua testa no.**
