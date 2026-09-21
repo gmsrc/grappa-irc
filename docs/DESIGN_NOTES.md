@@ -18965,3 +18965,107 @@ is confined to what `lib/` does. Whether other stale-prose sites of the same
 class exist elsewhere in the tree: the greps were scoped to the two identifiers
 these issues name (`structural_row?`, `server-time`), not to the general
 question of which comments have rotted.
+<!-- entry #2282a -->
+
+---
+
+## 2026-09-21 — #2282a: the cold-open count probe is a THRESHOLD, and a threshold does not need a count
+
+Issue 2282, server half. The measurement round is recorded in the issue
+(comment `5755800352`); this entry records what was built from it and, more
+usefully, the two things the measurement KILLED.
+
+### The two axes the issue named are both dead, and they were measured dead
+
+`GET /messages/count` fires two sequential aggregates — `count_after/6` then
+`count_after_split/6` — and the issue proposed either fusing them into one
+statement or running them concurrently. Measured on a 372,651-row synthetic
+corpus at a 200,014-row cursor (5 runs, warm cache, medians):
+
+| candidate | wall | speedup | VM steps |
+|---|---|---|---|
+| today — two aggregates, sequential | 82 ms | 1.00x | 12,963,811 |
+| fused into ONE statement | 67 ms | 1.22x | 12,863,766 (−0.8 %) |
+| run concurrently (arithmetic CEILING, never executed) | 57 ms | 1.44x | unchanged |
+| **cap the threshold at `LIMIT 201`** | **1 ms** | **~82x** | **4,304 (−99.97 %)** |
+
+Neither named axis changes the class: 738 ms (the #2228 field anchor) becomes
+~600 ms or ~455 ms, still two to three orders above the ~1 ms pages it gates,
+and the concurrent form buys the smaller half of a small win by taking a
+second pool checkout on a hot path. **Neither is worth building, and that is a
+measurement rather than a preference.**
+
+**A falsified prediction, recorded as one.** The worker predicted the fusion
+would land near 2x and beat concurrency, reasoning that two scans of one
+partition become one. It came THIRD. The page-miss column says why: the second
+statement pays 4,233 page misses, *exactly* what the first paid — the pages are
+already in cache, so there was never an I/O saving to win. The cost is CPU in
+the bytecode interpreter, and fusing removes statement overhead, not per-row
+work.
+
+### What actually changes the class: the route answers TWO questions
+
+cic's branch is `isFarBehind(gap) === gap > PAGE_LIMIT`. That is a THRESHOLD
+test, and a threshold is answered by stopping the scan at `PAGE_LIMIT + 1`.
+`count_after/7` grows an explicit `cap`: `nil` is the #693 contract unchanged,
+a positive integer makes the count SATURATING (`min(true, cap)`, `== cap`
+meaning "at least cap"). The SQL is
+`SELECT count(*) FROM (SELECT 1 FROM messages WHERE <pred> LIMIT cap)` — the
+inner `select(1)` is load-bearing, since selecting the row makes the index
+non-covering and re-introduces the per-row lookup the saving is made of.
+
+The split (`messages`/`events`) is the DISPLAY question. It is read only inside
+the far-behind arm, to label the bar, and it gates nothing. So the expensive
+half is also the half nobody is waiting for — which is the finding, and it is
+the reason the client change is cheap instead of a redesign.
+
+### Why a REQUEST PARAM and not a new route
+
+`?cap=` was chosen so the two sides land separately, and the argument is that
+it degrades correctly in BOTH directions:
+
+  * a capped client against a server predating this — the unknown param is
+    ignored, the old three-key body comes back, `count` still answers the
+    threshold. Slower, never wrong.
+  * an old client against this server — never sends `cap`, gets a
+    byte-identical body. The pre-existing tests pin exactly that.
+
+`min_protocol_version` therefore stays at 1: nothing here refuses anybody.
+`protocol_version` moves 29 → 30 per #1393d, and — as with v29 — because the
+RULE says so and not because a gate went red: the capped body is hand-typed in
+`cicchetto/src/lib/api.ts` and no `*JSON` `@spec` spells the variant, so
+`mix grappa.wire_pin --check` cannot see it.
+
+### A premise that was handed down and is FALSE: "201 gives you `200+` for free"
+
+The reasoning offered for the client half was that a capped probe answering
+`201` licenses rendering "200+" in the bar immediately, so no pending state is
+needed. **It does not.** `count` is RAW rows (own-authored included, presence
+included when shown); the bar renders `messages`, which is content rows with
+own-authored excluded. Measured on the same corpus: `count = 200,014` against
+`messages + events = 193,812`, a 6,202-row own-authored difference. A gap of
+5,000 joins containing 3 messages saturates the cap and would render
+"200+ unread" — a false statement about the quantity the bar names.
+
+So the capped probe **cannot label the bar**, only branch on it. Capping a
+split is not a way out either: a `LIMIT` over the first 201 rows gives a lower
+bound in the content unit that can be 3 while the truth is 4,000. The label
+during the pending beat is a real choice and it is not this entry's; what is
+settled here is that one option is off the menu, for a measured reason.
+
+### What this does NOT cover
+
+* No `mix` ran during the measurement: every shape was reconstructed by hand
+  from source and timed under `sqlite3(1)`, never emitted by the query builder.
+  The Ecto rendering above is pinned by tests, not by the bench.
+* The 1.44x concurrency figure was never EXECUTED — it is `max(A,B)/(A+B)`
+  arithmetic, a ceiling that ignores pool contention and connection setup.
+* Synthetic corpus, mac, warm cache: **an ordering and an attribution, never a
+  latency a phone would see.** The corpus also carries 3,727 structural rows
+  (1.0 %) where the real one carries exactly one, so `OR m.structural` admits
+  ~1 % more rows here than in the field.
+* The equivalence gate covers the THRESHOLD boolean, on three cursors of one
+  corpus, in both directions with a coverage check that both verdicts occurred.
+  It says nothing about the display split, which is the half that costs.
+* Nothing client-side ships here. A server that answers `cap` while no caller
+  sends it is half a feature on purpose — see the landing argument above.
