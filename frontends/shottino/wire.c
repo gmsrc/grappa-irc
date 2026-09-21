@@ -108,6 +108,8 @@ static const struct {
     {"network_detached", WIRE_NETWORK_DETACHED},
     {"web_session_severed", WIRE_WEB_SESSION_SEVERED},
     {"window_invite_declined", WIRE_WINDOW_INVITE_DECLINED},
+    {"dcc_offer", WIRE_DCC_OFFER},
+    {"dcc_offer_resolved", WIRE_DCC_OFFER_RESOLVED},
     {"whois_bundle", WIRE_WHOIS_BUNDLE},
     {"names_reply", WIRE_NAMES_REPLY},
     {"who_reply", WIRE_WHO_REPLY},
@@ -537,6 +539,22 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
 
     case WIRE_WEB_SESSION_SEVERED:
         if (!json_str_req(p, "code", &e.u.severed.code)) return false;
+        break;
+
+    case WIRE_DCC_OFFER:
+        if (!json_str_req(p, "network", &e.u.dcc_offer.network)) return false;
+        if (!json_str_req(p, "channel", &e.u.dcc_offer.channel)) return false;
+        if (!json_str_req(p, "offer_id", &e.u.dcc_offer.offer_id)) return false;
+        if (!json_str_req(p, "from", &e.u.dcc_offer.from)) return false;
+        if (!json_str_req(p, "filename", &e.u.dcc_offer.filename)) return false;
+        if (!json_long_req(p, "size", &e.u.dcc_offer.size)) return false;
+        break;
+
+    case WIRE_DCC_OFFER_RESOLVED:
+        if (!json_str_req(p, "network", &e.u.dcc_resolved.network)) return false;
+        if (!json_str_req(p, "channel", &e.u.dcc_resolved.channel)) return false;
+        if (!json_str_req(p, "offer_id", &e.u.dcc_resolved.offer_id)) return false;
+        if (!json_str_req(p, "resolution", &e.u.dcc_resolved.resolution)) return false;
         break;
 
     case WIRE_WINDOW_INVITE_DECLINED:

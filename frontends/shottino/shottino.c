@@ -369,6 +369,7 @@ enum job_kind {
     JOB_UPLOAD,
     JOB_CALL_PROBE,
     JOB_NETWORK_ATTACHED,
+    JOB_DCC,
     JOB_HISTORY
 };
 
@@ -1073,6 +1074,20 @@ struct app {
     long log_ids[LOG_LINES];
     size_t log_count;
     struct pending_echo pending[256];
+    /* File offers the server is holding for a human (§4b). Not windows
+     * and never drawn as one: a line in the window the server named,
+     * and a table so /dcc can answer by nick or id. Bounded small — the
+     * server holds an offer for minutes, not days. */
+#define MAX_DCC_OFFERS 16
+    struct dcc_offer {
+        char network[MAX_SLUG];
+        char channel[MAX_CHANNEL];
+        char offer_id[64];
+        char from[MAX_CHANNEL];
+        char filename[256];
+        long size;
+    } dcc[MAX_DCC_OFFERS];
+    size_t dcc_count;
     size_t pending_count;
     unsigned long next_pending_id;
     enum panel_kind panel;
@@ -3050,6 +3065,131 @@ static void detach_network(struct app *app, const char *slug) {
     log_line(app, "--- network %s detached from the session — its windows are closed; "
                   "attach it again from cicchetto's home to bring it back",
              slug);
+}
+
+/* ── DCC offers (§4b) ──────────────────────────────────────────────────
+ *
+ * grappa receives DCC SEND and never dials until a human says so; the
+ * offer reaches this client as a consent prompt on the user topic. It
+ * is NOT a window and is never drawn as one — a CTCP from a stranger
+ * mints none, so the prompt lands in the window the server named, most
+ * often $server. The table exists so /dcc can name an offer by the
+ * peer's nick or its id; the resolution event is the only take-down. */
+
+/* By the peer's nick or the offer id, folded; the first held one on
+ * that network when several match a nick. Caller holds app->lock. */
+static struct dcc_offer *dcc_offer_find_locked(struct app *app, const char *network,
+                                               const char *who) {
+    for (size_t i = 0; i < app->dcc_count; i++) {
+        struct dcc_offer *o = &app->dcc[i];
+        if (!irc_name_eq(o->network, network)) continue;
+        if (irc_name_eq(o->from, who) || strcasecmp(o->offer_id, who) == 0) return o;
+    }
+    return NULL;
+}
+
+static void dcc_offer_hold(struct app *app, const struct wire_event *ev) {
+    const char *net = ev->u.dcc_offer.network;
+    pthread_mutex_lock(&app->lock);
+    /* The user-topic snapshot re-pushes every held offer on reconnect:
+     * the same id twice is one offer, and one prompt. */
+    for (size_t i = 0; i < app->dcc_count; i++) {
+        if (strcmp(app->dcc[i].offer_id, ev->u.dcc_offer.offer_id) == 0) {
+            pthread_mutex_unlock(&app->lock);
+            return;
+        }
+    }
+    if (app->dcc_count == MAX_DCC_OFFERS) {
+        memmove(app->dcc, app->dcc + 1, sizeof(app->dcc[0]) * (MAX_DCC_OFFERS - 1));
+        app->dcc_count--;
+    }
+    struct dcc_offer *o = &app->dcc[app->dcc_count++];
+    snprintf(o->network, sizeof(o->network), "%s", net);
+    snprintf(o->channel, sizeof(o->channel), "%s", ev->u.dcc_offer.channel);
+    snprintf(o->offer_id, sizeof(o->offer_id), "%s", ev->u.dcc_offer.offer_id);
+    snprintf(o->from, sizeof(o->from), "%s", ev->u.dcc_offer.from);
+    snprintf(o->filename, sizeof(o->filename), "%s", ev->u.dcc_offer.filename);
+    o->size = ev->u.dcc_offer.size;
+    pthread_mutex_unlock(&app->lock);
+    /* "ignore", never "reject": refusing sends NOTHING to the peer, by
+     * design — a DCC REJECT would tell a stranger the nick is online and
+     * that a human read their offer. */
+    log_line(app, "[%s/%s] --- %s offers a file: %s (%ld bytes) — /dcc accept %s to take it, "
+                  "/dcc ignore %s to let it lapse; the offer expires on its own",
+             net, ev->u.dcc_offer.channel, ev->u.dcc_offer.from, ev->u.dcc_offer.filename,
+             ev->u.dcc_offer.size, ev->u.dcc_offer.from, ev->u.dcc_offer.from);
+}
+
+static void dcc_offer_resolve(struct app *app, const struct wire_event *ev) {
+    char from[MAX_CHANNEL] = "";
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->dcc_count; i++) {
+        if (strcmp(app->dcc[i].offer_id, ev->u.dcc_resolved.offer_id) != 0) continue;
+        snprintf(from, sizeof(from), "%s", app->dcc[i].from);
+        memmove(app->dcc + i, app->dcc + i + 1, sizeof(app->dcc[0]) * (app->dcc_count - i - 1));
+        app->dcc_count--;
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
+    /* An offer this client never saw held (resolved before the socket
+     * came up) still gets a line: the row it refers to is on screen. */
+    const char *r = ev->u.dcc_resolved.resolution;
+    log_line(app, "[%s/%s] --- file offer%s%s %s%s", ev->u.dcc_resolved.network,
+             ev->u.dcc_resolved.channel, from[0] ? " from " : "", from, r,
+             strcmp(r, "accepted") == 0 ? " — the file lands here as a 📥 link when it arrives"
+             : strcmp(r, "expired") == 0 ? " — nobody answered in time"
+                                         : "");
+}
+
+/* The consent verbs, on the worker: both are one HTTP round trip and
+ * the answer is a line. 404 not_held is the interesting one — resolved
+ * on another device, or the hold elapsed — and is said as that. */
+static void dcc_act_target(struct app *app, const char *network, const char *offer_id,
+                           const char *verb) {
+    bool accept = strcmp(verb, "accept") == 0;
+    char *net = url_encode(network);
+    char *id = url_encode(offer_id);
+    char *path = accept ? xasprintf("/networks/%s/dcc_offers/%s/accept", net, id)
+                        : xasprintf("/networks/%s/dcc_offers/%s", net, id);
+    free(net);
+    free(id);
+    struct http_response r = http_request(app, accept ? "POST" : "DELETE", path, accept ? "{}" : NULL);
+    free(path);
+    if (r.status >= 200 && r.status < 300)
+        log_line(app, accept ? "dcc: accepted — admitted, not yet arrived; the file lands as a 📥 link"
+                             : "dcc: ignored — nothing was sent to the peer, and the offer lapses");
+    else if (r.status == 404)
+        log_line(app, "dcc: that offer is no longer held — answered on another device, or it expired");
+    else if (r.status == 429)
+        log_line(app, "dcc: refused — today's transfer allowance is used up");
+    else if (r.status == 507)
+        log_line(app, "dcc: refused — the server's spool is full");
+    else
+        log_line(app, "dcc: %s failed HTTP %d: %.200s", verb, r.status, r.body);
+    free(r.body);
+}
+
+/* Standing consent (§4c, v22): auto-accept from people you already talk
+ * to on this network — the server still decides who qualifies, and a
+ * stranger's offer still asks. Said as exactly that, never "accept
+ * everything". */
+static void dcc_auto_target(struct app *app, const char *network, const char *value) {
+    char *net = url_encode(network);
+    char *path = xasprintf("/networks/%s/dcc-auto-accept", net);
+    free(net);
+    bool on = strcmp(value, "on") == 0;
+    struct http_response r = http_request(app, "PUT", path, on ? "{\"enabled\":true}" : "{\"enabled\":false}");
+    free(path);
+    if (r.status >= 200 && r.status < 300)
+        log_line(app, on ? "dcc auto-accept ON for %s: files from people you already talk to here are taken "
+                           "without asking; a stranger's offer still asks"
+                         : "dcc auto-accept OFF for %s: every offer asks",
+                 network);
+    else if (r.status == 404)
+        log_line(app, "dcc auto-accept: the server does not have this setting (protocol v22)");
+    else
+        log_line(app, "dcc auto-accept failed HTTP %d: %.200s", r.status, r.body);
+    free(r.body);
 }
 
 /* Pane focus is asked about from everywhere a window is; defined with the
@@ -8151,6 +8291,14 @@ static void handle_wire_event(struct app *app, const char *topic_network,
                       "Your IRC session is untouched — the bouncer keeps you on every channel — "
                       "but this client's login is revoked: restart shottino to sign in again",
                  ev->u.severed.code);
+        break;
+
+    case WIRE_DCC_OFFER:
+        dcc_offer_hold(app, ev);
+        break;
+
+    case WIRE_DCC_OFFER_RESOLVED:
+        dcc_offer_resolve(app, ev);
         break;
 
     case WIRE_WINDOW_INVITE_DECLINED: {
@@ -13490,6 +13638,11 @@ static void *worker_main(void *arg) {
         case JOB_NETWORK_ATTACHED:
             attach_network_target(app, job.network);
             break;
+        case JOB_DCC:
+            /* arg1 is the offer id or the auto value; arg2 the verb. */
+            if (strcmp(job.arg2, "auto") == 0) dcc_auto_target(app, job.network, job.arg1);
+            else dcc_act_target(app, job.network, job.arg1, job.arg2);
+            break;
         }
     }
     return NULL;
@@ -14976,7 +15129,7 @@ static void cycle_window(struct app *app, int delta) {
 static const char *commands[] = {
     "/admin", "/alias", "/answer", "/approve", "/archive", "/away", "/ban", "/banlist", "/block",
     "/bot", "/call", "/camera",
-    "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dehilight", "/deny", "/deop",
+    "/chat", "/clear", "/close", "/connect", "/cs", "/ctcp", "/dcc", "/dehilight", "/deny", "/deop",
     "/devoice", "/dictate", "/die", "/disconnect", "/exec", "/exit", "/focus", "/focus-off", "/globops",
     "/hangup", "/help",
     "/highlight",
@@ -17666,6 +17819,7 @@ static void show_command_help(struct app *app, const char *raw) {
     else if (strcmp(cmd, "preview") == 0) log_line(app, "/preview [url] — render it full-screen in the terminal; an audio URL PLAYS instead (mpv/ffplay, click-only — audio never plays on arrival); bare /preview offers the last 20 pictures, clips and audio posted in this window");
     else if (strcmp(cmd, "preview-ascii") == 0) log_line(app, "/preview-ascii [url] — the same preview, forced to colour character art: skips the terminal's graphics protocol, which is what to try when a picture renders as garbage or not at all");
     else if (strcmp(cmd, "share") == 0) log_line(app, "/share — (visitor only) mint a session-share link; open it on another device to attach it to this same session");
+    else if (strcmp(cmd, "dcc") == 0) log_line(app, "/dcc — list the file offers the server is holding for you; /dcc accept <nick|id> takes one (admitted, not yet arrived — the file lands as a 📥 link when the bytes do); /dcc ignore <nick|id> lets it lapse and sends NOTHING to the peer; /dcc auto on|off takes files from people you already talk to on this network without asking (a stranger's offer still asks). An offer expires on its own");
     else if (strcmp(cmd, "reconnect") == 0) log_line(app, "/reconnect [network] — ask grappa to bring this network's session back up (PATCH connection_state=connected). What a send answering 404 usually means: grappa collapses \"no live session\" onto the same not_found body as \"no such channel\", so the message did not go anywhere and the channel name is not the problem. Bare /reconnect uses the focused window's network; /admin shows whether the live pid or the DB row is the one that disagrees");
     else if (strcmp(cmd, "call.sfu_url") == 0) log_line(app, "/set call.sfu_url <url> — where the SFU is, when the room page is NOT hosted beside it. The page normally derives that from its own path, which quietly requires it to sit on the grappa origin — and that origin belongs to the cicchetto PWA, whose service worker answers every navigation it has not denylisted with the app shell (`/call` is not on that list, so a call link opens the PWA instead of the room). Host the page anywhere without a service worker, point call.base_url at it and this at the SFU: `https://host/call/rtc`. Unset means \"beside the page\", which is what every existing link assumes");
     else if (strcmp(cmd, "mirc.contrast") == 0) log_line(app, "/set mirc.contrast auto|off|dark|light — mIRC colours were chosen against mIRC's WHITE background, so a bot writing navy into a black terminal posts text nobody can read. This lifts a foreground off the background until it is legible, keeping its hue; only when the bot set no background of its own, since a bot that picked BOTH colours already has a contrast. `auto` believes COLORFGBG and assumes dark otherwise; `off` renders exactly what was sent");
@@ -19133,6 +19287,56 @@ static void handle_command_dispatch(struct app *app, char *line) {
         admin_create_command(app, line + 7);
     } else if (strcmp(line, "/reconnect") == 0 || strncmp(line, "/reconnect ", 11) == 0) {
         reconnect_network(app, line[10] ? line + 11 : NULL);
+    } else if (verb_args(line, "/dcc")) {
+        const char *rest = verb_args(line, "/dcc");
+        while (*rest == ' ') rest++;
+        char net[MAX_SLUG];
+        if (!current_window_key(app, net, sizeof(net), NULL, 0)) return;
+        if (!*rest) {
+            /* Copied out, then said: log_line takes the same lock. */
+            struct dcc_offer held[MAX_DCC_OFFERS];
+            pthread_mutex_lock(&app->lock);
+            size_t n = app->dcc_count;
+            memcpy(held, app->dcc, sizeof(held[0]) * n);
+            pthread_mutex_unlock(&app->lock);
+            for (size_t i = 0; i < n; i++)
+                log_line(app, "dcc: %s offers %s (%ld bytes) on %s [%s]", held[i].from, held[i].filename,
+                         held[i].size, held[i].network, held[i].offer_id);
+            if (!n) log_line(app, "dcc: no file offer is being held — /dcc accept|ignore <nick|id>, /dcc auto on|off");
+        } else if (strncmp(rest, "auto ", 5) == 0 || strcmp(rest, "auto") == 0) {
+            const char *v = rest[4] ? rest + 5 : "";
+            while (*v == ' ') v++;
+            if (strcmp(v, "on") != 0 && strcmp(v, "off") != 0) {
+                log_line(app, "/dcc auto on|off — accept files from people you already talk to on this network without asking");
+                return;
+            }
+            struct job job = { .kind = JOB_DCC };
+            snprintf(job.network, sizeof(job.network), "%s", net);
+            snprintf(job.arg1, sizeof(job.arg1), "%s", v);
+            snprintf(job.arg2, sizeof(job.arg2), "auto");
+            enqueue_job(app, job);
+        } else if (strncmp(rest, "accept ", 7) == 0 || strncmp(rest, "ignore ", 7) == 0) {
+            char verb[8];
+            snprintf(verb, sizeof(verb), "%.6s", rest);
+            const char *who = rest + 7;
+            while (*who == ' ') who++;
+            char offer_id[64] = "";
+            pthread_mutex_lock(&app->lock);
+            const struct dcc_offer *o = dcc_offer_find_locked(app, net, who);
+            if (o) snprintf(offer_id, sizeof(offer_id), "%s", o->offer_id);
+            pthread_mutex_unlock(&app->lock);
+            if (!offer_id[0]) {
+                log_line(app, "dcc: no held offer from %s on %s — bare /dcc lists them", who, net);
+                return;
+            }
+            struct job job = { .kind = JOB_DCC };
+            snprintf(job.network, sizeof(job.network), "%s", net);
+            snprintf(job.arg1, sizeof(job.arg1), "%s", offer_id);
+            snprintf(job.arg2, sizeof(job.arg2), "%s", verb);
+            enqueue_job(app, job);
+        } else {
+            log_line(app, "/dcc [accept|ignore <nick|id> | auto on|off] — bare /dcc lists the file offers being held");
+        }
     } else if (strcmp(line, "/share") == 0) {
         mint_share_link(app);
     } else if (strcmp(line, "/wire") == 0) {

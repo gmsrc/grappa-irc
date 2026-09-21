@@ -652,6 +652,41 @@ TEST(severed_and_invite_declined) {
     json_free(d);
 }
 
+/* A peer offered a file (§4b, v19–21). The offer is not window state and
+ * carries none: `channel` says where to RENDER it. Its resolution is one
+ * event with a closed reason. */
+TEST(dcc_offer_and_its_resolution) {
+    struct wire_event ev;
+    bool ok;
+    json_doc *d = narrow("{\"kind\":\"dcc_offer\",\"network\":\"azzurra\",\"channel\":\"$server\","
+                         "\"offer_id\":\"n4xk\",\"from\":\"alice\",\"filename\":\"holiday.jpg\","
+                         "\"size\":12345}",
+                         &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.kind == WIRE_DCC_OFFER);
+    CHECK_STR(ev.u.dcc_offer.network, "azzurra");
+    CHECK_STR(ev.u.dcc_offer.channel, "$server");
+    CHECK_STR(ev.u.dcc_offer.offer_id, "n4xk");
+    CHECK_STR(ev.u.dcc_offer.from, "alice");
+    CHECK_STR(ev.u.dcc_offer.filename, "holiday.jpg");
+    CHECK_LONG(ev.u.dcc_offer.size, 12345);
+    json_free(d);
+    d = narrow("{\"kind\":\"dcc_offer_resolved\",\"network\":\"azzurra\",\"channel\":\"$server\","
+               "\"offer_id\":\"n4xk\",\"resolution\":\"expired\"}",
+               &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.kind == WIRE_DCC_OFFER_RESOLVED);
+    CHECK_STR(ev.u.dcc_resolved.offer_id, "n4xk");
+    CHECK_STR(ev.u.dcc_resolved.resolution, "expired");
+    json_free(d);
+    /* A handle with no id names nothing. */
+    d = narrow("{\"kind\":\"dcc_offer\",\"network\":\"azzurra\",\"channel\":\"$server\","
+               "\"from\":\"alice\",\"filename\":\"x\",\"size\":1}",
+               &ev, &ok);
+    CHECK(!ok);
+    json_free(d);
+}
+
 TEST(connection_state_changed) {
     struct wire_event ev;
     bool ok;
@@ -1025,6 +1060,7 @@ int main(void) {
     RUN(isupport);
     RUN(network_attached_and_detached);
     RUN(severed_and_invite_declined);
+    RUN(dcc_offer_and_its_resolution);
     RUN(connection_state_changed);
     RUN(simple_arms);
     RUN(server_settings);

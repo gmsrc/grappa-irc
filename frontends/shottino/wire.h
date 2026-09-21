@@ -133,6 +133,8 @@ typedef enum {
     WIRE_NETWORK_DETACHED,
     WIRE_WEB_SESSION_SEVERED,
     WIRE_WINDOW_INVITE_DECLINED,
+    WIRE_DCC_OFFER,
+    WIRE_DCC_OFFER_RESOLVED,
     WIRE_WHOIS_BUNDLE,
     WIRE_NAMES_REPLY,
     WIRE_WHO_REPLY,
@@ -352,6 +354,29 @@ struct wire_event {
         struct {
             const char *code;
         } severed;
+
+        /* dcc_offer (§4b, v19): a peer offered a file and the server is
+         * holding the offer for a human. NOT window state and carries
+         * none — `channel` is where to RENDER the prompt, very often
+         * $server. */
+        struct {
+            const char *network;
+            const char *channel;
+            const char *offer_id;
+            const char *from;
+            const char *filename;
+            long size;
+        } dcc_offer;
+
+        /* dcc_offer_resolved: the only take-down signal, on every
+         * device. `resolution` is closed at accepted/refused/expired;
+         * an unknown one still takes the banner down. */
+        struct {
+            const char *network;
+            const char *channel;
+            const char *offer_id;
+            const char *resolution;
+        } dcc_resolved;
 
         struct {
             long network_id;

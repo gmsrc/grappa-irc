@@ -1195,6 +1195,20 @@ Media link previews:
   storing it, and the PWA on your phone keeps showing it. Bare `/block` lists
   who is blocked; `/unblock <nick>` (`/unignore`) lifts it. The list lives in
   `~/.local/share/shottino/blocked` and survives a restart.
+- **Files offered to you** — grappa receives `DCC SEND` and never dials until
+  a human says so, so an offer arrives as a line in the window the server
+  names (usually `$server`, since a CTCP from a stranger opens no window) and
+  waits: `alice offers a file: holiday.jpg (12345 bytes)`. Bare `/dcc` lists
+  what is being held; `/dcc accept <nick|id>` takes one — *admitted*, not
+  arrived: the file lands later as a 📥 link in scrollback, or a server line
+  says why not; `/dcc ignore <nick|id>` lets it lapse and **sends nothing to
+  the peer** — no `DCC REJECT`, which would tell a stranger the nick is online
+  and a human read them. An offer expires on its own, and a decision taken on
+  any device takes the line's meaning down here. `/dcc auto on|off` is the
+  per-network standing consent: files from people you already talk to on that
+  network are taken without asking; a stranger's offer still asks. The
+  download link carries no auth — whoever holds it fetches the file, exactly
+  as for an upload.
 - **Watching** — `/notify [nick…|del nick|list]` watches *people*;
   `/hilight <pattern>` and `/dehilight <pattern>` watch *words*. Different
   lists, despite the shared irssi heritage.

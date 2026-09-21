@@ -242,6 +242,77 @@ TEST(a_declined_invite_closes_its_invited_window_only) {
     free_app(app);
 }
 
+/* A file offer is held, said where the server says, and taken down by
+ * its resolution — and by nothing else.
+ *
+ * It is NOT a window (§4b): a CTCP from a stranger mints none, so the
+ * prompt lands in the window the event names, usually $server, and no
+ * tab is drawn for a file nobody accepted. The user-topic snapshot
+ * re-pushes every held offer on reconnect, so the same id twice is one
+ * offer. The resolution is the only signal on every device — a decision
+ * taken on a phone takes this banner down — and it is one event with a
+ * closed reason, so an unknown reason still takes it down. */
+TEST(a_file_offer_is_held_until_its_resolution) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "$server", false);
+
+    char err[160];
+    const char *offer = "[null,null,\"grappa:user:vjt\",\"event\","
+                        "{\"kind\":\"dcc_offer\",\"network\":\"azzurra\",\"channel\":\"$server\","
+                        "\"offer_id\":\"n4xk\",\"from\":\"alice\",\"filename\":\"holiday.jpg\","
+                        "\"size\":12345}]";
+    for (int twice = 0; twice < 2; twice++) {
+        json_doc *d = json_parse(offer, strlen(offer), err, sizeof(err));
+        struct wire_frame f;
+        CHECK(wire_frame_split(json_root(d), &f));
+        struct wire_event ev;
+        CHECK(wire_narrow(f.payload, &ev));
+        handle_wire_event(app, f.network, &ev);
+        json_free(d);
+    }
+    CHECK_LONG(app->dcc_count, 1);
+    CHECK_STR(app->dcc[0].from, "alice");
+    CHECK_LONG(app->window_count, 1); /* no window minted for it */
+    /* Said in $server, with what to do — and "ignore", never "reject":
+     * refusing sends nothing to the peer (§4b). */
+    bool said = false, misworded = false;
+    for (size_t i = 0; i < app->log_count; i++) {
+        if (strstr(app->log[i], "[azzurra/$server]") && strstr(app->log[i], "alice") &&
+            strstr(app->log[i], "holiday.jpg") && strstr(app->log[i], "/dcc accept"))
+            said = true;
+        if (strstr(app->log[i], "reject")) misworded = true;
+    }
+    CHECK(said);
+    CHECK(!misworded);
+
+    /* Found by the peer's nick or by the id, folded. */
+    pthread_mutex_lock(&app->lock);
+    CHECK(dcc_offer_find_locked(app, "azzurra", "Alice") == &app->dcc[0]);
+    CHECK(dcc_offer_find_locked(app, "azzurra", "n4xk") == &app->dcc[0]);
+    CHECK(dcc_offer_find_locked(app, "libera", "alice") == NULL);
+    CHECK(dcc_offer_find_locked(app, "azzurra", "bob") == NULL);
+    pthread_mutex_unlock(&app->lock);
+
+    const char *done = "[null,null,\"grappa:user:vjt\",\"event\","
+                       "{\"kind\":\"dcc_offer_resolved\",\"network\":\"azzurra\",\"channel\":\"$server\","
+                       "\"offer_id\":\"n4xk\",\"resolution\":\"expired\"}]";
+    json_doc *d = json_parse(done, strlen(done), err, sizeof(err));
+    struct wire_frame f;
+    CHECK(wire_frame_split(json_root(d), &f));
+    struct wire_event ev;
+    CHECK(wire_narrow(f.payload, &ev));
+    handle_wire_event(app, f.network, &ev);
+    json_free(d);
+    CHECK_LONG(app->dcc_count, 0);
+    said = false;
+    for (size_t i = 0; i < app->log_count; i++)
+        if (strstr(app->log[i], "alice") && strstr(app->log[i], "expired")) said = true;
+    CHECK(said);
+
+    free_app(app);
+}
+
 /* The network list MERGES: a network already known keeps what the
  * session learned about it, one that is new is appended, and one the
  * server stopped listing is left to the detach event.
@@ -5284,6 +5355,7 @@ int main(void) {
     RUN(the_case_insensitive_search_is_ours_and_returns_where_it_matched);
     RUN(the_state_directory_follows_the_xdg_variable);
     RUN(the_bool_face_agrees_with_the_pointer_one);
+    RUN(a_file_offer_is_held_until_its_resolution);
     RUN(a_severed_session_stops_reconnecting_and_drops_its_token);
     RUN(a_declined_invite_closes_its_invited_window_only);
     RUN(the_network_list_merges_rather_than_replaces);
