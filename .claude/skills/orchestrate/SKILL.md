@@ -1105,7 +1105,18 @@ at that merge (#1632). ONE batched deploy (~4–5 already-closed issues), ONE du
   e **la proibizione `--rebase` su `DESIGN_NOTES` NON si applica** — vale quando **MAIN** ha toccato
   quel file, e qui non l'ha fatto.
   🥇 **La regola: i commit docs-only propri si pushano PRIMA di aprire la finestra di merge, o DOPO
-  che il merge e' atterrato — mai DENTRO la finestra.** Questo file ordina gia' di curare col
+  che il merge e' atterrato — mai DENTRO la finestra.**
+  🔴🔴 **SECONDA OCCORRENZA, `2026-09-21 22:0xZ`, E IL CONTEGGIO E' IL DATO: L'HO RIFATTA CON LA
+  REGOLA LETTA UN'ORA PRIMA, SULLA STESSA PR (#2286).** Due commit docs-only miei su `main` dentro
+  la finestra ⇒ il FF e' sparito (`left-right` da **0 3** a **2 3**, `--is-ancestor` da rc=0 a
+  **rc=1**). Intersezione dei file **ZERO** (PR 5 file, main 1) ⇒ danno contenuto, **ma misurato,
+  non sperato.**
+  🪞 **Il contorno che spiega la recidiva, e vale piu' del rimprovero: l'ho fatto AL RESUME.** Una
+  finestra di merge **non produce nessun osservabile** — non c'e' uno stato del repo che dica *"c'e'
+  una PR che aspetta"*, e l'handoff la registra come **un'attesa**, cioe' come la cosa su cui NON
+  devi agire. ⇒ il momento in cui ti senti piu' libero di fare pulizia e' esattamente quello in cui
+  la finestra e' aperta. **Cura: prima di QUALUNQUE push su `main`, `gh pr list --state open` — un
+  comando, e la finestra smette di essere invisibile.** Questo file ordina gia' di curare col
   `--rebase` una PR rimasta indietro per rumore mio: **e' una cura, e la cura non e' una licenza a
   fabbricare la malattia.** ⚠️ **E si DICE alla worker che la base le si e' mossa sotto**, con la
   misura: e' lei che paga il rebase, e un conto arrivato senza spiegazione si legge come un suo
