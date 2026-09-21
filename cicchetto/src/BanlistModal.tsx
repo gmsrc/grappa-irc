@@ -5,6 +5,7 @@ import { banlistModalState, closeBanlistModal, openBanlistModal } from "./lib/ba
 import { type BanMaskForm, buildBanMask } from "./lib/banMask";
 import { ownHoldsChannelEditorSigil } from "./lib/channelEditPerm";
 import { canonicalChannel, channelKey } from "./lib/channelKey";
+import { formatDateTime } from "./lib/dateFormat";
 import { friendlyError } from "./lib/friendlyError";
 import { isupportForNetwork } from "./lib/isupport";
 import { listModeLabel, listModeTitle } from "./lib/listModes";
@@ -44,12 +45,15 @@ import {
 // viewer, and the hint points at the `/mode` form that edits them.
 
 // cic owns time formatting (moved from the #376 BanlistCard). `set_ts` is the
-// raw upstream unix-epoch STRING; render it in the viewer's locale, NaN-guarded.
+// raw upstream unix-epoch STRING; render it through the ONE date renderer
+// (issue 2270 — a bare `toLocaleString()` here took its notation from the
+// browser UI language, so an English-language device in Italy read `mm/dd`),
+// NaN-guarded.
 function formatBanSetAt(setTs: string | null): string | null {
   if (setTs === null) return null;
   const epoch = Number.parseInt(setTs, 10);
   if (Number.isNaN(epoch)) return setTs; // defensive: non-numeric → show raw
-  return new Date(epoch * 1000).toLocaleString();
+  return formatDateTime(epoch * 1000);
 }
 
 // The three mask-builder forms (issue #386). Default "host" — vjt decision #1

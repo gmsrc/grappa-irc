@@ -748,7 +748,38 @@ defmodule Grappa.Protocol do
   # does not know (unknown-is-never-fatal, both directions) and ignores an
   # extra key on an admin row; it keeps working against this server, and this
   # server keeps serving it.
-  @protocol_version 28
+  #
+  # ---------------------------------------------------------------------------
+  # 29 — issue 2270: `date_format`, an eighth key on `display_prefs`
+  # ---------------------------------------------------------------------------
+  #
+  # The GET/PUT `/me/settings/display-prefs` body grows one closed-set string,
+  # `"auto" | "dmy" | "mdy" | "ymd"`. Five cic sites rendered dates with a bare
+  # `toLocaleString()`, so the notation came from the browser's UI LANGUAGE
+  # rather than the viewer's region; the reported device is an iOS phone whose
+  # Language is English and whose Region is Italy, with its own Date Format set
+  # to `19/08/2026`. The web exposes no region, so no default can recover that
+  # setting — the preference is the only channel that can carry it.
+  #
+  # MEASURED, and the two verdicts are recorded as two because they are
+  # different: `mix grappa.wire_pin --check` was GREEN at 28 with this key
+  # already added server-side. The display-prefs body is hand-typed in
+  # `cicchetto/src/lib/userSettings.ts` rather than generated, and no
+  # `GrappaWeb.*JSON` `@spec` spells its shape, so the digest cannot see this
+  # field at all. The number moves because #1393d says every wire-shape change
+  # moves it — not because a gate went red. Its seven predecessors on this same
+  # body (#1766, #2029, #2037 B, issue 2167 …) moved it for the same reason.
+  #
+  # Reason (1) of #1393d is literal here: a cic bundle that comes to REQUIRE
+  # `date_format` cannot talk to a server predating it, and nothing server-side
+  # would express that without the number.
+  #
+  # @min_protocol_version stays at 1. The key is absent-tolerant in BOTH
+  # directions by construction — the server fills it from
+  # `default_display_prefs/0` on the way in (a PUT omitting it is ACCEPTED, not
+  # 422'd), and cic coalesces it against the same default on the way out — so a
+  # bundle predating v29 keeps working and this server keeps serving it.
+  @protocol_version 29
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -783,7 +814,7 @@ defmodule Grappa.Protocol do
   # duplicated constant is positive evidence that the OTHER sites were
   # decided for you. Grep every site for the OLD number before continuing,
   # including the ones that are not Elixir.
-  @spec version() :: 28
+  @spec version() :: 29
   def version, do: @protocol_version
 
   @doc """

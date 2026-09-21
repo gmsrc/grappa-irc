@@ -3,6 +3,7 @@ import { token } from "./auth";
 import { getBoldMentions, setBoldMentions } from "./boldMentions";
 import { type ChannelKey, decodeChannelKey } from "./channelKey";
 import { getColoredNicklist, setColoredNicklist } from "./colorNicklist";
+import { type DateFormatKey, getDateFormat, setDateFormat } from "./dateFormat";
 import { getShowEventBadge, setShowEventBadge } from "./eventBadge";
 import { identityMoved } from "./identityMoved";
 import {
@@ -27,7 +28,9 @@ import { type DisplayPrefs, getDisplayPrefs, putDisplayPrefs } from "./userSetti
 //
 // #1766 added a FOURTH owner module (`showBottomBar.ts`) on exactly that shape,
 // and #2029 a FIFTH (`stripFormatting.ts`), and #2037 a SIXTH
-// (`eventBadge.ts`), and issue 2167 a SEVENTH (`boldMentions.ts`). Every
+// (`eventBadge.ts`), and issue 2167 a SEVENTH (`boldMentions.ts`), and issue 2270 an EIGHTH
+// (`dateFormat.ts` — the first closed-set STRING since `timeFormat.ts`
+// itself). Every
 // function below that names the
 // wire map has to grow with it — the default baseline, `buildWireMap`,
 // `applyServerPrefs` and a `syncedSet*` — and the server's
@@ -77,6 +80,7 @@ const DEFAULT_DISPLAY_PREFS: Required<DisplayPrefs> = {
   strip_formatting: false,
   show_event_badge: false,
   bold_mentions: true,
+  date_format: "auto",
 };
 
 // #449 (issue222 regression fix) — the "unconfirmed local write" marker.
@@ -122,6 +126,7 @@ export function buildWireMap(): Required<DisplayPrefs> {
     strip_formatting: getStripFormatting(),
     show_event_badge: getShowEventBadge(),
     bold_mentions: getBoldMentions(),
+    date_format: getDateFormat(),
   };
 }
 
@@ -162,6 +167,13 @@ export function applyServerPrefs(prefs: DisplayPrefs): void {
   // preference impossible to turn on from a second device — the exact
   // cross-device failure #449 was built to end.
   setBoldMentions(prefs.bold_mentions ?? DEFAULT_DISPLAY_PREFS.bold_mentions);
+  // issue 2270 — coalesced for the fifth time, same `--cic` skew, and the
+  // first of them whose absent value is a STRING rather than a boolean. `??`
+  // stays the operator for uniformity, not because `||` would break here:
+  // `"auto"` is truthy, so the two agree TODAY. Writing `||` would encode a
+  // fact about this key's default instead of the rule the other four follow,
+  // and the next key added beside it would inherit the wrong shape.
+  setDateFormat(prefs.date_format ?? DEFAULT_DISPLAY_PREFS.date_format);
 }
 
 // Reactive server sync — re-runs on every `token()` change (registered inside a
@@ -273,6 +285,11 @@ export function syncedSetShowEventBadge(on: boolean): void {
 
 export function syncedSetBoldMentions(on: boolean): void {
   setBoldMentions(on);
+  pushDisplayPrefs();
+}
+
+export function syncedSetDateFormat(key: DateFormatKey): void {
+  setDateFormat(key);
   pushDisplayPrefs();
 }
 

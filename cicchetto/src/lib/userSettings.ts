@@ -15,6 +15,7 @@
 // inline.
 
 import { ApiError, readError } from "./api";
+import type { DateFormatKey } from "./dateFormat";
 import { DEFAULT_NOTIFICATION_SOUND, type NotificationSound } from "./notificationSound";
 import type { PresencePref } from "./presenceFilter";
 import type { TimeFormatKey } from "./timeFormat";
@@ -367,6 +368,11 @@ export type DisplayPrefs = {
   // `true`, so an older server's omission leaves the bold ON rather than
   // silently removing it. `buildWireMap()` always populates it.
   bold_mentions?: boolean;
+  // issue 2270 — the date NOTATION key. Optional for the same `--cic` skew
+  // reason as the four above, and the FIRST of the absent-tolerant keys that
+  // is not a boolean: absent ⇒ `"auto"`, the key that defers to the resolved
+  // locale. `buildWireMap()` always populates it.
+  date_format?: DateFormatKey;
 };
 
 export type DisplayPrefsResponse = {

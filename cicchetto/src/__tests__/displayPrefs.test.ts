@@ -4,6 +4,7 @@ import { setToken } from "../lib/auth";
 import { getBoldMentions, setBoldMentions } from "../lib/boldMentions";
 import { channelKey } from "../lib/channelKey";
 import { getColoredNicklist, setColoredNicklist } from "../lib/colorNicklist";
+import { getDateFormat, setDateFormat } from "../lib/dateFormat";
 import {
   applyServerPrefs,
   buildWireMap,
@@ -11,6 +12,7 @@ import {
   syncedSetBoldMentions,
   syncedSetChannelPresencePref,
   syncedSetColoredNicklist,
+  syncedSetDateFormat,
   syncedSetShowBottomBar,
   syncedSetStripFormatting,
   syncedSetTimeFormat,
@@ -61,6 +63,7 @@ function resetLocal(): void {
   setStripFormatting(false);
   setShowEventBadge(false);
   setBoldMentions(true);
+  setDateFormat("auto");
   setToken(null);
 }
 
@@ -93,7 +96,7 @@ afterEach(() => {
 });
 
 describe("buildWireMap", () => {
-  it("reads the seven module getters into the wire shape", () => {
+  it("reads the eight module getters into the wire shape", () => {
     setTimeFormat("hm");
     setColoredNicklist(true);
     replacePresencePrefs({ [KEY_A]: "hide" });
@@ -101,6 +104,7 @@ describe("buildWireMap", () => {
     setStripFormatting(true);
     setShowEventBadge(true);
     setBoldMentions(false);
+    setDateFormat("dmy");
 
     expect(buildWireMap()).toEqual({
       time_format: "hm",
@@ -110,6 +114,7 @@ describe("buildWireMap", () => {
       strip_formatting: true,
       show_event_badge: true,
       bold_mentions: false,
+      date_format: "dmy",
     });
   });
 
@@ -130,6 +135,16 @@ describe("buildWireMap", () => {
   it("defaults bold_mentions to true — the opt-out never ships by accident", () => {
     expect(getBoldMentions()).toBe(true);
     expect(buildWireMap().bold_mentions).toBe(true);
+  });
+
+  // issue 2270 — the eighth key, and the second closed-set STRING (the six in
+  // between are booleans). Its default is pinned for the reason `auto` exists:
+  // shipping `dmy` by accident would impose a notation on every viewer whose
+  // locale already renders correctly, which is a regression in the exact
+  // direction the issue is about.
+  it("defaults date_format to auto — the locale decides until a viewer says otherwise", () => {
+    expect(getDateFormat()).toBe("auto");
+    expect(buildWireMap().date_format).toBe("auto");
   });
 
   it("emits an empty presence_filter when no channel is pinned", () => {
@@ -260,6 +275,43 @@ describe("applyServerPrefs", () => {
     expect(getShowBottomBar()).toBe(false);
   });
 
+  // issue 2270 — the fifth key to need the `--cic` skew coalesce, and the
+  // first where the absent value is a STRING. `??` still, not `||`: the
+  // default `"auto"` is truthy, so `||` would be harmless here TODAY and
+  // wrong the moment a falsy key is added next to it — the six booleans
+  // above already record why the shape is uniform.
+  it("an absent date_format (older server) takes auto, not undefined", () => {
+    setDateFormat("ymd");
+    applyServerPrefs({
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+      show_bottom_bar: true,
+      strip_formatting: false,
+      show_event_badge: false,
+      bold_mentions: true,
+    });
+    expect(getDateFormat()).toBe("auto");
+  });
+
+  // The cross-device direction the whole of #449 exists for, on this key: the
+  // reporter configures two devices differently, so a server-sent notation
+  // must beat whatever this browser had cached.
+  it("a server-sent notation OVERWRITES the local one", () => {
+    setDateFormat("auto");
+    applyServerPrefs({
+      time_format: "hms",
+      colored_nicklist: false,
+      presence_filter: {},
+      show_bottom_bar: true,
+      strip_formatting: false,
+      show_event_badge: false,
+      bold_mentions: true,
+      date_format: "dmy",
+    });
+    expect(getDateFormat()).toBe("dmy");
+  });
+
   it("tri-state: an unset channel stays ABSENT after apply (never coerced)", () => {
     // Server carries only #a. #b must not appear in the local map.
     applyServerPrefs({
@@ -363,6 +415,7 @@ describe("mountDisplayPrefsSync — login reconcile", () => {
         strip_formatting: true,
         show_event_badge: false,
         bold_mentions: false,
+        date_format: "auto",
       },
     });
 
@@ -442,6 +495,7 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
         strip_formatting: false,
         show_event_badge: false,
         bold_mentions: true,
+        date_format: "auto",
       },
     });
   });
@@ -555,6 +609,44 @@ describe("syncedSet* — optimistic local + full-map PUT", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string).display_prefs.bold_mentions).toBe(false);
   });
+
+  it("syncedSetDateFormat sets local and PUTs the full wire map", async () => {
+    setToken(TOKEN);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
+        status: 200,
+      }),
+    );
+
+    syncedSetDateFormat("dmy");
+    await flush();
+
+    expect(getDateFormat()).toBe("dmy");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/me/settings/display-prefs");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string).display_prefs.date_format).toBe("dmy");
+  });
+
+  // issue 2270 — the eighth copy of the full-map guard, and the value that has
+  // to survive a sibling's PUT is a NON-default one: a missing `buildWireMap`
+  // entry would send nothing, the server would fill `auto`, and the viewer's
+  // chosen notation would silently revert on the next unrelated toggle.
+  it("a sibling's PUT carries date_format too (the full map, not a diff)", async () => {
+    setToken(TOKEN);
+    setDateFormat("ymd");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ display_prefs: buildWireMap(), persisted: true }), {
+        status: 200,
+      }),
+    );
+
+    syncedSetColoredNicklist(true);
+    await flush();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).display_prefs.date_format).toBe("ymd");
+  });
 });
 
 // S1 (review) — clear-on-logout so a shared browser / visitor→user upgrade can
@@ -571,6 +663,7 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     strip_formatting: false,
     show_event_badge: false,
     bold_mentions: true,
+    date_format: "auto",
   };
 
   // Phase-mutable fetch stub: the GET body changes across A-login / B-login.
@@ -631,11 +724,16 @@ describe("mountDisplayPrefsSync — clear-on-logout (no cross-account bleed)", (
     // and the never-seed-a-prior-subject guarantees are exercised for the
     // fifth key too. A default-valued residual would be indistinguishable
     // from a cleared one and would assert nothing.
+    // issue 2270 — and the eighth key rides along for the same reason as the
+    // fifth and the seventh: only a NON-default residual notation can tell
+    // "cleared" from "never touched", so A carries `ymd` and B's seed-up must
+    // still go out as `auto`.
     const aPrefs = {
       time_format: "hm",
       colored_nicklist: true,
       presence_filter: { [KEY_A]: "hide" },
       strip_formatting: true,
+      date_format: "ymd",
     };
     getBody = { display_prefs: aPrefs, persisted: true };
     const fetchMock = installPhaseFetch();

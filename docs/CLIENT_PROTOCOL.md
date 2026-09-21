@@ -873,14 +873,14 @@ Source: `GrappaWeb.AuthController`
 
 ## 8. Two settings surfaces worth knowing about
 
-### 8a. `display_prefs` has SEVEN keys (issue 2167, v24)
+### 8a. `display_prefs` has EIGHT keys (issue 2270, v29)
 
 `GET` / `PUT /me/settings/display-prefs` carries the per-user display
-object. As of v24 it has seven keys, the seventh being `bold_mentions`:
+object. As of v29 it has eight keys, the eighth being `date_format`:
 
 ```
 time_format · colored_nicklist · presence_filter · show_bottom_bar ·
-strip_formatting · show_event_badge · bold_mentions
+strip_formatting · show_event_badge · bold_mentions · date_format
 ```
 
 It is absent-tolerant in BOTH directions by construction — the server
@@ -889,6 +889,18 @@ omits keys does not erase them, and a client predating a key simply never
 sees it. That is why the object can keep growing without a floor move.
 Treat the set as open: a key you do not recognise is one you drop, per §2.
 `min_protocol_version` did not move for this.
+
+**Absent-tolerant is not value-tolerant, and `date_format` is where the
+difference first bites.** Six of the eight keys are booleans and the
+seventh (`time_format`) has been there since the object shipped;
+`date_format` is the first CLOSED-SET string added after the fact, so it
+is the first key that can be both optional and wrong. Omit it and you get
+the default; send a value outside
+`"auto" | "dmy" | "mdy" | "ymd"` and the `PUT` is **rejected with a 422**
+carrying `field_errors.display_prefs`. It is not coerced to `"auto"` —
+a coerce would read back as a preference the user never chose while the
+write reported success. `"auto"` is a REAL key meaning "follow the
+viewer's resolved locale", never the absence of one.
 
 Source: `Grappa.UserSettings` (the `display_prefs` typespec and
 `default_display_prefs/0`), served by

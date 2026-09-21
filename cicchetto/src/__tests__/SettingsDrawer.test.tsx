@@ -26,6 +26,16 @@ vi.mock("../lib/timeFormat", () => ({
   setTimeFormat: vi.fn(),
 }));
 
+// issue 2270 — PARTIAL mock, and the partiality is the test. The key store is
+// stubbed so a pick is observable without a real signal, but `renderDate` and
+// `resolveLocale` stay REAL: the preview in each option has to be produced by
+// the renderer the app actually uses, and a fully-mocked module would let a
+// hardcoded label pass.
+vi.mock("../lib/dateFormat", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../lib/dateFormat")>();
+  return { ...real, getDateFormat: vi.fn(() => "auto"), setDateFormat: vi.fn() };
+});
+
 vi.mock("../lib/colorNicklist", () => ({
   getColoredNicklist: vi.fn(() => false),
   setColoredNicklist: vi.fn(),
@@ -437,6 +447,70 @@ describe("SettingsDrawer", () => {
     openSub("display-settings-entry");
     fireEvent.click(screen.getByTestId("time-format-hm"));
     expect(timeFormat.setTimeFormat).toHaveBeenCalledWith("hm");
+  });
+
+  // -------------------------------------------------------------------------
+  // issue 2270 — the date-notation select
+  // -------------------------------------------------------------------------
+
+  it("renders the four date-notation options with auto selected", () => {
+    wrap(true);
+    openSub("display-settings-entry");
+    const select = screen.getByTestId("date-format-select") as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect([...select.options].map((o) => o.value)).toEqual(["auto", "dmy", "mdy", "ymd"]);
+    // getDateFormat is stubbed to "auto" → that is the selected option.
+    expect(select.value).toBe("auto");
+  });
+
+  it("picking a notation fires setDateFormat with the chosen key", async () => {
+    const dateFormat = await import("../lib/dateFormat");
+    wrap(true);
+    openSub("display-settings-entry");
+    const select = screen.getByTestId("date-format-select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "dmy" } });
+    expect(dateFormat.setDateFormat).toHaveBeenCalledWith("dmy");
+  });
+
+  // vjt's explicit requirement, and the one worth a real assertion: "The
+  // preview has to be produced by the SAME renderer the app uses, formatting a
+  // real instant — a hardcoded example string in the option label is exactly
+  // the thing that keeps saying `19/08/2026` after the renderer starts
+  // disagreeing with it."
+  //
+  // So the expectations below are COMPUTED by calling the production renderer,
+  // never written out as literals: if `renderDate` changes, this test follows
+  // it, and a label that stopped calling it fails.
+  it("each option previews the notation through the PRODUCTION renderer", async () => {
+    // A date whose day and month DIFFER, deliberately: on the 5th of May the
+    // `dmy` and `mdy` previews would be the same string, and the distinctness
+    // assertion below — the one that catches a single placeholder pasted into
+    // all four labels — would pass while proving nothing.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 21, 12, 0, 0));
+    try {
+      const { renderDate, resolveLocale } = await import("../lib/dateFormat");
+      const now = Date.now();
+      const locale = resolveLocale();
+
+      wrap(true);
+      openSub("display-settings-entry");
+      const select = screen.getByTestId("date-format-select") as HTMLSelectElement;
+      const labelFor = (value: string): string =>
+        [...select.options].find((o) => o.value === value)?.textContent ?? "";
+
+      for (const key of ["auto", "dmy", "mdy", "ymd"] as const) {
+        expect(labelFor(key)).toContain(renderDate(now, key, locale));
+      }
+
+      // The three explicit notations must render DISTINCT previews on this
+      // instant. One placeholder copied into every option would satisfy the
+      // `toContain` loop above for whichever key happened to match.
+      const previews = ["dmy", "mdy", "ymd"].map(labelFor);
+      expect(new Set(previews).size).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("#986 — carries NO session-lifecycle verb for the loading null subject", () => {
