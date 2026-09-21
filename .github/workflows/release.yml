@@ -1373,7 +1373,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build multi-arch release image (push only on a real tag)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.release
@@ -1423,7 +1423,7 @@ jobs:
         # — the same call DESIGN_NOTES makes for the jail deploy, where a
         # CLIENT compile must never withhold a SERVER artifact. Reversed, one
         # bad C commit would hold back the thing people actually came for.
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.shottino
@@ -1590,7 +1590,7 @@ jobs:
       - name: Re-export the amd64 image from the build cache (dry-run path)
         id: build
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_validation }}
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.release
