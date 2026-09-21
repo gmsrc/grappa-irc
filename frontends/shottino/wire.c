@@ -896,5 +896,15 @@ bool wire_frame_split(const json_value *root, struct wire_frame *out) {
     out->topic = topic;
     out->event = event;
     out->payload = json_at(root, 4);
+    out->network[0] = 0;
+    const char *net = strstr(topic, "/network:");
+    if (net) {
+        net += strlen("/network:");
+        const char *end = strstr(net, "/channel:");
+        size_t n = end ? (size_t)(end - net) : strlen(net);
+        if (n >= sizeof(out->network)) n = sizeof(out->network) - 1;
+        memcpy(out->network, net, n);
+        out->network[n] = 0;
+    }
     return true;
 }

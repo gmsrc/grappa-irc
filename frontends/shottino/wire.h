@@ -565,11 +565,20 @@ bool wire_presence_at(const json_value *nicks, size_t i, const char **nick, wire
  * A v2 socket frame is `[join_ref, ref, topic, event, payload]`. Splits it
  * without assuming any field is non-null (join_ref and ref are null on
  * server-initiated pushes). Returns false if the frame is not a v2 array. */
+/* The network a topic names: what sits between `/network:` and the next
+ * `/channel:` (or the end). Empty on the user topic. Filled at the
+ * split because some per-channel events — window_counts, read_cursor_set
+ * — carry no network of their own and are scoped by the topic they
+ * arrive on; a handler that matched them by channel alone gave #chan on
+ * one network the other network's badge. Copied, not borrowed: the
+ * topic string is one field and the slug is a slice of it. */
+#define WIRE_MAX_SLUG 128
 struct wire_frame {
     const char *topic;
     const char *event;
     const json_value *payload;
     const char *ref; /* nullable */
+    char network[WIRE_MAX_SLUG];
 };
 bool wire_frame_split(const json_value *root, struct wire_frame *out);
 

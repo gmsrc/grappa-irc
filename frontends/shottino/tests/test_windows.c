@@ -1453,7 +1453,7 @@ TEST(an_away_mention_is_replayed_in_the_window_it_was_said_in) {
     if (!doc) { free_app(app); return; }
     struct wire_event ev;
     CHECK(wire_narrow(json_root(doc), &ev));
-    handle_wire_event(app, &ev);
+    handle_wire_event(app, "", &ev); /* a user-topic frame names no network */
     json_free(doc);
 
     /* Each mention under the channel it came from... */
@@ -2461,6 +2461,46 @@ TEST(a_client_local_window_is_never_fetched_from_the_server) {
     /* A real channel still goes. */
     enqueue_fetch(app, "azzurra", "#sniffo");
     CHECK(app->jobs_head != app->jobs_tail);
+
+    free_app(app);
+}
+
+/* Two channels with one name on two networks are two windows, and a
+ * count for one is not a count for the other.
+ *
+ * window_counts carries no network — it is scoped by the per-channel
+ * topic it arrives on — and the handler matched windows by channel
+ * alone, so #chan on libera inherited azzurra's badge and vice versa:
+ * the sidebar showed unread on a channel nobody had spoken in. The
+ * topic's network rides in with the event and the match is (network,
+ * channel), like every other window lookup. */
+TEST(a_count_lands_on_the_window_of_its_topic_only) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    struct network *n2 = &app->networks[app->network_count++];
+    snprintf(n2->slug, sizeof(n2->slug), "libera");
+    n2->id = 2;
+    add_window_ex(app, "azzurra", "#chan", false);
+    add_window_ex(app, "libera", "#chan", false);
+    app->windows[0].unread = 7;
+
+    char err[160];
+    const char *text = "[null,null,\"grappa:user:vjt/network:libera/channel:#chan\",\"event\","
+                       "{\"kind\":\"window_counts\",\"channel\":\"#chan\",\"messages\":3,"
+                       "\"mentions\":1,\"events\":0,\"severity\":\"mention\"}]";
+    json_doc *d = json_parse(text, strlen(text), err, sizeof(err));
+    CHECK(d != NULL);
+    struct wire_frame f;
+    CHECK(wire_frame_split(json_root(d), &f));
+    struct wire_event ev;
+    CHECK(wire_narrow(f.payload, &ev));
+    handle_wire_event(app, f.network, &ev);
+    json_free(d);
+
+    CHECK_LONG(app->windows[1].unread, 3);
+    CHECK_LONG(app->windows[1].mentions, 1);
+    CHECK_LONG(app->windows[0].unread, 7); /* untouched */
+    CHECK_LONG(app->windows[0].mentions, 0);
 
     free_app(app);
 }
@@ -5116,6 +5156,7 @@ int main(void) {
     RUN(the_call_tile_map_is_parsed_or_rejected_whole);
     RUN(a_refused_grid_leaves_the_last_one_up);
     RUN(a_client_local_window_is_never_fetched_from_the_server);
+    RUN(a_count_lands_on_the_window_of_its_topic_only);
     RUN(a_conversation_is_remembered_and_rolls_to_fit);
     RUN(the_context_budget_leaves_room_for_the_fixed_parts);
     RUN(a_config_write_leaves_the_previous_version_behind);

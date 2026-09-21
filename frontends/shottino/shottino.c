@@ -7868,7 +7868,10 @@ static void push_read_cursor(struct app *app, const char *network, const char *c
     free(r.body);
 }
 
-static void handle_wire_event(struct app *app, const struct wire_event *ev) {
+/* `topic_network` is the network the frame's topic names — empty on the
+ * user topic — for the events that carry none of their own. */
+static void handle_wire_event(struct app *app, const char *topic_network,
+                              const struct wire_event *ev) {
     switch (ev->kind) {
     case WIRE_MESSAGE:
         render_message(app, &ev->u.message, true);
@@ -8096,7 +8099,11 @@ static void handle_wire_event(struct app *app, const struct wire_event *ev) {
          * incremented badge drifts from the truth in both directions. */
         pthread_mutex_lock(&app->lock);
         for (size_t i = 0; i < app->window_count; i++) {
-            if (!irc_name_eq(app->windows[i].channel, ev->u.window_counts.channel)) continue;
+            /* By (network, channel), like every other window lookup: the
+             * event names only the channel, the topic names the
+             * network, and #chan on two networks is two windows. */
+            if (!window_matches(&app->windows[i], topic_network, ev->u.window_counts.channel))
+                continue;
             app->windows[i].unread = (unsigned)ev->u.window_counts.messages;
             app->windows[i].mentions = (unsigned)ev->u.window_counts.mentions;
             app->windows[i].severity = ev->u.window_counts.severity;
@@ -8213,7 +8220,7 @@ static void handle_ws_frame(struct app *app, const char *frame) {
     } else if (strcmp(f.event, "event") == 0) {
         struct wire_event ev;
         if (wire_narrow(f.payload, &ev)) {
-            handle_wire_event(app, &ev);
+            handle_wire_event(app, f.network, &ev);
         } else {
             /* A payload we KNOW the kind of and refused anyway is a bug —
              * ours or the server's — and it used to vanish without a

@@ -807,9 +807,34 @@ TEST(phoenix_frame) {
     CHECK_STR(f.topic, "grappa:user:vjt");
     CHECK_STR(f.event, "event");
     CHECK(f.ref == NULL);
+    /* The user topic names no network. */
+    CHECK(f.network[0] == 0);
     struct wire_event ev;
     CHECK(wire_narrow(f.payload, &ev));
     CHECK(ev.kind == WIRE_CHANNELS_CHANGED);
+    json_free(d);
+
+    /* A per-channel topic does, and the frame says which: window_counts
+     * and read_cursor_set carry no network of their own — they are
+     * scoped by the topic they arrive on — and #chan on two networks is
+     * two windows with two counts. The slug is what sits between
+     * `/network:` and `/channel:`, however the channel is spelled. */
+    text = "[null,null,\"grappa:user:vjt/network:libera/channel:#chan\",\"event\","
+           "{\"kind\":\"window_counts\",\"channel\":\"#chan\",\"messages\":3,"
+           "\"mentions\":0,\"events\":0,\"severity\":\"message\"}]";
+    d = json_parse(text, strlen(text), err, sizeof(err));
+    CHECK(wire_frame_split(json_root(d), &f));
+    CHECK_STR(f.network, "libera");
+    json_free(d);
+    text = "[null,null,\"grappa:user:v/network:azzurra/channel:some/one\",\"event\",{}]";
+    d = json_parse(text, strlen(text), err, sizeof(err));
+    CHECK(wire_frame_split(json_root(d), &f));
+    CHECK_STR(f.network, "azzurra");
+    json_free(d);
+    text = "[null,null,\"grappa:user:vjt/network:azzurra\",\"event\",{}]";
+    d = json_parse(text, strlen(text), err, sizeof(err));
+    CHECK(wire_frame_split(json_root(d), &f));
+    CHECK_STR(f.network, "azzurra");
     json_free(d);
 
     /* A reply frame carries a ref. */
