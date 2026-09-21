@@ -1593,9 +1593,125 @@ defmodule Grappa.ScrollbackTest do
       for hide <- [true, false] do
         page = Scrollback.fetch_after({:user, user.id}, net.id, "#sniffo", 0, 100, nil, hide)
 
-        assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, hide) ==
+        assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, hide, nil) ==
                  length(page)
       end
+    end
+  end
+
+  # issue 2282 — the SATURATING arm of the same question. cic's branch is
+  # `isFarBehind(gap) === gap > PAGE_LIMIT`, a THRESHOLD test, and a threshold
+  # does not need the count: stopping the scan at `PAGE_LIMIT + 1` answers the
+  # same boolean. Measured on a 372,651-row synthetic corpus at a 200,014-row
+  # cursor: 12,963,811 VM steps for the uncapped pair against 4,304 for this
+  # shape (−99.97 %), 82 ms against 1 ms. Synthetic, mac, warm cache — an
+  # ORDERING, not a latency a phone would see.
+  #
+  # The tests below are the two-sided gate that measurement ran BEFORE any
+  # timing, expressed as ExUnit: a cap that agrees with the uncapped count on
+  # the boolean in BOTH directions, and a cap that cannot be reached by
+  # short-circuiting the predicate.
+  describe "count_after/7 with a cap" do
+    test "saturates AT the cap when more rows follow the anchor",
+         %{user: user, network: net} do
+      for i <- 0..299, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
+
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, 201) == 201
+    end
+
+    test "returns the EXACT count when it sits below the cap",
+         %{user: user, network: net} do
+      for i <- 0..40, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
+
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, 201) == 41
+    end
+
+    test "a cap of exactly the row count is exact, not saturated",
+         %{user: user, network: net} do
+      for i <- 0..200, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
+
+      # 201 rows, cap 201: saturating and exact agree here, which is the
+      # boundary the threshold rides. One row fewer and the answer must fall.
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, 201) == 201
+    end
+
+    # THE load-bearing property, two-sided. `cap = PAGE_LIMIT + 1` must give
+    # `capped > PAGE_LIMIT` exactly when `uncapped > PAGE_LIMIT` — the whole
+    # justification for capping the probe. A one-off in the LIMIT (200 instead
+    # of 201) turns the 201-row case from far to near and this catches it.
+    test "the threshold boolean is identical to the uncapped one, in both directions",
+         %{user: user, network: net} do
+      page_limit = 200
+      cap = page_limit + 1
+
+      for i <- 0..300, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
+
+      rows =
+        Scrollback.fetch_after({:user, user.id}, net.id, "#sniffo", 0, 500, nil, false)
+        |> Enum.map(& &1.id)
+
+      # Anchors chosen to straddle the threshold: 0 rows after, 200 after
+      # (NEAR — the line `isFarBehind` already draws), 201 after (FAR by one).
+      anchors = [
+        List.last(rows),
+        Enum.at(rows, length(rows) - 1 - page_limit),
+        Enum.at(rows, length(rows) - 1 - cap),
+        0
+      ]
+
+      verdicts =
+        for anchor <- anchors do
+          uncapped =
+            Scrollback.count_after({:user, user.id}, net.id, "#sniffo", anchor, nil, false, nil)
+
+          capped =
+            Scrollback.count_after({:user, user.id}, net.id, "#sniffo", anchor, nil, false, cap)
+
+          assert capped == min(uncapped, cap)
+          assert capped > page_limit == uncapped > page_limit
+
+          uncapped > page_limit
+        end
+
+      # COVERAGE: a gate that only ever saw far-behind cursors would pass
+      # while the near arm was broken. Refuse to call this proven unless both
+      # verdicts actually occurred — the same coverage check the measurement
+      # carried.
+      assert Enum.any?(verdicts), "no FAR-behind anchor was exercised"
+      assert Enum.any?(verdicts, &(!&1)), "no NEAR anchor was exercised"
+    end
+
+    # The cap is a LIMIT on the rows the predicate ALREADY selected, never a
+    # short-circuit ahead of it. 500 hidden JOINs and 5 messages is a 5-row
+    # gap for a hiding client (#458); a cap applied outside the presence
+    # filter would read 201 and flip the channel to far-behind.
+    test "the presence filter still applies under a cap (#458)",
+         %{user: user, network: net} do
+      {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 0))
+
+      for i <- 1..300,
+          do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i, %{kind: :join, body: nil}))
+
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, true, 201) == 1
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, 201) == 201
+    end
+
+    # Same subject / channel isolation the uncapped arm has. A cap that
+    # escaped `subject_where` would count another user's rows toward
+    # saturation and report far-behind on an empty window.
+    test "isolation by (subject, network, channel) survives the cap",
+         %{user: user, network: net} do
+      {:ok, alice} =
+        Accounts.create_user(%{name: "alice-#{uniq()}", password: "correct horse battery"})
+
+      {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 0, %{body: "mine"}))
+
+      for i <- 1..300,
+          do:
+            {:ok, _} =
+              ScrollbackHelpers.insert(sample(alice, net, i, %{sender: "alice", body: "theirs"}))
+
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, 201) == 1
     end
   end
 

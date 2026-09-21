@@ -561,6 +561,100 @@ defmodule GrappaWeb.MessagesControllerTest do
       assert json_response(conn, 200) == %{"count" => 5, "messages" => 5, "events" => 0}
     end
 
+    # issue 2282 — `?cap=` is the THRESHOLD-only mode. The route answers two
+    # questions with different costs (`count_after/7` measured at 25 ms, the
+    # display split at 57 ms on a 200,014-row gap) and only the threshold
+    # gates cic's paint. `cap` opts into the cheap half ALONE: the count
+    # saturates and the split is never computed.
+    #
+    # Landable separately in BOTH directions, which is why it is a request
+    # param and not a new route. A capped client against a server predating
+    # this reads the uncapped `count` out of the old body — slower, still the
+    # right boolean. An old client never sends `cap` and gets a byte-identical
+    # response (the tests above are unchanged and pin exactly that).
+    test "?cap= saturates the count and omits the display split (issue 2282)",
+         %{conn: conn, user: user, network: network} do
+      for i <- 0..299 do
+        {:ok, _} =
+          ScrollbackHelpers.insert(%{
+            user_id: user.id,
+            network_id: network.id,
+            channel: "#sniffo",
+            server_time: i,
+            kind: :privmsg,
+            sender: "vjt",
+            body: "m#{i}"
+          })
+      end
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap=201")
+
+      # Exact equality, not a subset match: the ABSENT keys are the point.
+      # `messages`/`events` present here would mean the expensive query ran.
+      assert json_response(conn, 200) == %{"count" => 201}
+    end
+
+    test "?cap= returns the exact count when the gap is below the cap (issue 2282)",
+         %{conn: conn, user: user, network: network} do
+      seed(user, network)
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap=201")
+
+      assert json_response(conn, 200) == %{"count" => 5}
+    end
+
+    # The capped count must survive the same presence posture the uncapped
+    # one does, or a denoised channel saturates on rows it does not render
+    # and flips to far-behind (#458, under a cap).
+    test "?cap= still applies the channel's presence filter (issue 2282)",
+         %{conn: conn, user: user, network: network} do
+      :ok = put_presence_pref(user, "azzurra #sniffo", "hide")
+      seed_mixed(user, network)
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap=201")
+
+      assert json_response(conn, 200) == %{"count" => 1}
+    end
+
+    test "a zero ?cap returns 400 (issue 2282)", %{conn: conn, user: user, network: network} do
+      # `cap=0` would answer 0 for every gap — a saturating count that can
+      # never saturate, i.e. a threshold that always reads NEAR. Refuse it at
+      # the boundary rather than serve a number that means nothing.
+      seed(user, network)
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap=0")
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
+    test "a negative ?cap returns 400 (issue 2282)", %{conn: conn, user: user, network: network} do
+      seed(user, network)
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap=-1")
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
+    test "an unparseable ?cap returns 400 (issue 2282)",
+         %{conn: conn, user: user, network: network} do
+      seed(user, network)
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap=banana")
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
+    test "a list-valued ?cap returns 400, not a 500 (issue 2282)",
+         %{conn: conn, user: user, network: network} do
+      # Same catch-all contract `parse_after/1` carries: `?cap[]=1` decodes to
+      # a LIST and must not reach the action as a FunctionClauseError.
+      seed(user, network)
+
+      conn = get(conn, "/networks/azzurra/channels/%23sniffo/messages/count?after=0&cap[]=1")
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
     test "without Bearer returns 401" do
       conn =
         get(
