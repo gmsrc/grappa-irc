@@ -2501,21 +2501,33 @@ TEST(a_conversation_is_remembered_and_rolls_to_fit) {
     llm_history_append(app, "azzurra", "#sniffo", false, "user", "private question");
     llm_history_append(app, "azzurra", "#sniffo", true, "user", "a stranger asked something");
     n = llm_history_load(app, "azzurra", "#sniffo", false, text, role, LLM_HISTORY_TURNS, 9999);
-    CHECK_LONG(n, 1);
-    CHECK_STR(text[0], "private question");
-    free(text[0]);
+    CHECK_LONG(n, 3);
+    CHECK_STR(text[2], "private question");
+    for (size_t i = 0; i < n; i++) free(text[i]);
     n = llm_history_load(app, "azzurra", "#sniffo", true, text, role, LLM_HISTORY_TURNS, 9999);
     CHECK_LONG(n, 1);
     CHECK_STR(text[0], "a stranger asked something");
     free(text[0]);
 
-    /* Different windows are different conversations too. */
+    /* The owner's conversation is ONE per network, whatever window the
+     * question was typed in. The reply always lands in $llm, so $llm is
+     * the transcript the owner reads — and a follow-up typed THERE must
+     * continue what was asked from a query, or the window shows one
+     * conversation while the model is handed two halves of it: asked
+     * from a query, followed up in $llm, "it" referred to nothing. */
     n = llm_history_load(app, "azzurra", "$llm", false, text, role, LLM_HISTORY_TURNS, 9999);
-    CHECK_LONG(n, 2);
+    CHECK_LONG(n, 3);
+    CHECK_STR(text[2], "private question");
     for (size_t i = 0; i < n; i++) free(text[i]);
+    /* Another network is another $llm window, and another conversation. */
+    CHECK_LONG(llm_history_load(app, "libera", "$llm", false, text, role, LLM_HISTORY_TURNS, 9999), 0);
+    /* The bot's stays per channel: a stranger in #sniffo is not a
+     * stranger in #other. */
+    CHECK_LONG(llm_history_load(app, "azzurra", "#other", true, text, role, LLM_HISTORY_TURNS, 9999), 0);
 
-    /* Clearing one leaves the others alone. */
-    llm_history_clear(app, "azzurra", "$llm", false);
+    /* Clearing the owner's from ANY window clears the one conversation,
+     * and leaves the bot's alone. */
+    llm_history_clear(app, "azzurra", "#sniffo", false);
     CHECK_LONG(llm_history_load(app, "azzurra", "$llm", false, text, role, LLM_HISTORY_TURNS, 9999), 0);
     n = llm_history_load(app, "azzurra", "#sniffo", true, text, role, LLM_HISTORY_TURNS, 9999);
     CHECK_LONG(n, 1);

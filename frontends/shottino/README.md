@@ -645,7 +645,8 @@ system prompt whatsoever.
 
 ### Context
 
-The conversation is **remembered**, per window and per door. Until recently it
+The conversation is **remembered** — one per network for you, one per channel
+for the bot. Until recently it
 was not: every request was built from the current prompt and nothing else, so
 the model met you fresh each time and a follow-up like "and the other one?"
 referred to nothing. Both backends had the hole for different reasons — the
@@ -670,10 +671,19 @@ The budget is **80%** of the window, and tokens are estimated at four bytes
 each — a rule of thumb, not a tokenizer, which is exactly why a fifth of the
 window is left spare for the guess to be wrong in.
 
+Yours is keyed to the **`$llm` window**, whatever window you typed `/llm` in:
+the reply always lands there, so `$llm` is the transcript you read, and a
+follow-up typed into it continues what you asked from a query. It used to be
+keyed by the window the question came from, which split one visible
+conversation into pieces the model could not see across — asked from a query,
+followed up in `$llm`, "it" referred to nothing. `/llm-clear` from any window
+of the network clears that one conversation.
+
 `/llm` and `/bot` keep **separate** conversations even in the same channel. One
 is you thinking out loud with a model; the other is a bot answering strangers,
-under a different prompt and a different trust model. Letting either read the
-other's history would be neither.
+under a different prompt and a different trust model — and the bot's stays per
+channel, because a stranger in one room is not a stranger in another. Letting
+either read the other's history would be neither.
 
 It runs on its **own thread**, never the job worker: a model call takes seconds
 to minutes, and sharing the worker would park scrollback fetches and sends

@@ -1541,7 +1541,9 @@ struct app {
     } llm_queue[8];
     size_t llm_head, llm_tail;
     /* What has been said in each conversation, so the next question can
-     * refer to the last answer.
+     * refer to the last answer. The owner has one per network (keyed to
+     * $llm, where every reply lands); the bot has one per channel — see
+     * llm_conv_for_locked for why the two are keyed differently.
      *
      * There was NO history at all: every request built its turn array
      * from the current prompt and nothing else, so the model met the
@@ -11779,13 +11781,19 @@ static size_t llm_fixed_cost(struct app *app, const struct llm_config *cfg, int 
 
 /* ── Conversation memory ────────────────────────────────────────────────
  *
- * One conversation per (network, window): /llm in the $llm window and a
- * bot answering in #channel are different conversations and must not
- * bleed into each other. Caller holds app->lock. */
+ * The OWNER'S conversation is one per network, keyed to $llm whatever
+ * window the question was typed in. The reply always lands in $llm, so
+ * $llm is the transcript the owner reads; keying by the typing window
+ * split that transcript into conversations the model could not see
+ * across — asked from a query, followed up in $llm, "it" referred to
+ * nothing, and the window showed one conversation while the model was
+ * handed two halves of it. The BOT'S stays per channel: a stranger in
+ * #a is not a stranger in #b, and the two must not bleed into each
+ * other. Caller holds app->lock. */
 static struct llm_conv *llm_conv_for_locked(struct app *app, const char *network,
                                             const char *channel, bool from_bot) {
     char scope[MAX_SLUG + MAX_CHANNEL + 8];
-    window_scope_key(network, channel, scope, sizeof(scope));
+    window_scope_key(network, from_bot ? channel : LLM_WINDOW, scope, sizeof(scope));
     /* /llm and /bot are SEPARATE conversations even in the same window.
      * One is the owner thinking out loud with a model; the other is a
      * bot answering strangers, under a different prompt and a different
