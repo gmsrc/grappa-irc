@@ -779,7 +779,42 @@ defmodule Grappa.Protocol do
   # `default_display_prefs/0` on the way in (a PUT omitting it is ACCEPTED, not
   # 422'd), and cic coalesces it against the same default on the way out — so a
   # bundle predating v29 keeps working and this server keeps serving it.
-  @protocol_version 29
+  #
+  # ---------------------------------------------------------------------------
+  # 30 — issue 2282: `?cap=` on `/messages/count`, a THRESHOLD-only response
+  # ---------------------------------------------------------------------------
+  #
+  # `GET /networks/:slug/channels/:name/messages/count` grows one optional
+  # request param. With `cap` present the response is `{"count": N}` alone,
+  # saturating at `cap`; without it the three-key `{count, messages, events}`
+  # body of #693 + #2037 is byte-identical to what it was at v29.
+  #
+  # The route answers two questions with different costs, and only one of them
+  # gates cic's paint. Measured on a 372,651-row synthetic corpus at a
+  # 200,014-row gap: the pair is 82 ms / 12,963,811 VM steps, the display split
+  # alone 57 ms, and the same threshold answered with `cap = 201` is 1 ms /
+  # 4,304 steps — a class change, on the same covering index, only the `LIMIT`
+  # moving. cic's `isFarBehind(gap) === gap > PAGE_LIMIT` needs the boolean and
+  # nothing else, so the split can follow AFTER the rows are on screen.
+  # Synthetic, mac, warm cache: an ORDERING and an attribution, never a latency
+  # a phone would see — #2228's 738 ms is the field anchor.
+  #
+  # MEASURED, same two verdicts as v29 and for the same reason: this response
+  # is hand-typed in `cicchetto/src/lib/api.ts` (`countMessagesAfter`) and no
+  # `GrappaWeb.*JSON` `@spec` the digest reads spells the capped variant, so
+  # `mix grappa.wire_pin --check` cannot see it. The number moves because
+  # #1393d says every wire-shape change moves it, not because a gate went red.
+  #
+  # Reason (1) of #1393d, literally: a cic bundle that comes to REQUIRE the
+  # capped mode — which is exactly what a bundle built on it does — cannot get
+  # it from a server predating this, and nothing server-side would say so.
+  #
+  # @min_protocol_version stays at 1, and the degradation is why. `cap` is a
+  # REQUEST param, so an old server IGNORES it and answers the uncapped body;
+  # the capped caller reads `count` out of that body and gets the SAME boolean,
+  # slower. An old client never sends `cap` and cannot tell this server from
+  # v29. Both directions keep working, so nothing here refuses anybody.
+  @protocol_version 30
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -814,7 +849,7 @@ defmodule Grappa.Protocol do
   # duplicated constant is positive evidence that the OTHER sites were
   # decided for you. Grep every site for the OLD number before continuing,
   # including the ones that are not Elixir.
-  @spec version() :: 29
+  @spec version() :: 30
   def version, do: @protocol_version
 
   @doc """

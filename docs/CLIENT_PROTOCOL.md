@@ -726,6 +726,54 @@ Check `protocol_version >= 25`.
 
 ---
 
+### 5e. Ask `/messages/count` only the THRESHOLD (issue 2282, v30)
+
+`GET /networks/:network_id/channels/:channel_id/messages/count?after=<id>`
+answers **two** questions in one body, and they cost very different amounts:
+
+| key | question | cost |
+|---|---|---|
+| `count` | raw rows after the anchor — "can I page this gap contiguously?" | cheap-ish |
+| `messages` + `events` | the content / presence split the bar renders | the expensive half |
+
+Add **`&cap=<positive int>`** to ask the first one ALONE. The response is
+then `{"count": N}` — one key — with `N = min(true_count, cap)`. `N == cap`
+means "at least `cap`"; below `cap` the number is exact.
+
+```
+GET …/messages/count?after=41234&cap=201   →   {"count": 201}
+GET …/messages/count?after=41234           →   {"count": 3412, "messages": 2880, "events": 532}
+```
+
+**Why you want it.** If your branch is a threshold — grappa's own client
+asks `gap > 200` — you do not need the count. Measured on a 372,651-row
+corpus at a 200,014-row gap: the two-question body costs 12,963,811 SQLite
+VM steps, the capped one **4,304**. Same covering index; only the `LIMIT`
+moves.
+
+**`cap` does not shrink what is counted.** It is a limit on rows the
+predicate already selected, so your presence filter, the subject narrowing
+and the channel-or-DM shape all still apply. A window holding one visible
+message in a thousand hidden joins answers `1`, not `201`.
+
+**The split is not gone, it is deferred.** Ask again without `cap` when you
+need the labels — after you have painted, which is the whole point.
+
+**Both directions degrade, so you can adopt this before the server has it:**
+
+- capped client → older server: the unknown param is ignored and you get the
+  three-key body. Read `count` out of it; the threshold is the same boolean,
+  just paid for in full.
+- old client → this server: never sends `cap`, gets a byte-identical body.
+
+`cap=0` is `400 bad_request` — a count that saturates at zero reads "near"
+for every gap — as are negatives, non-integers and `?cap[]=1`.
+
+Check `protocol_version >= 30`, or just send it: the fallback above is why
+you do not have to.
+
+---
+
 ## 6. Rate limiting & flood protection (#630)
 
 grappa applies a **coarse per-subject inbound budget** across BOTH doors —
