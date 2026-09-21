@@ -461,7 +461,7 @@ TEST(closing_a_window_renumbers_every_pane) {
  * here is how a test starts asserting a buffer the client never
  * builds. */
 static void seed_log(struct app *app, const char *line) {
-    log_push_locked(app, strdup(line), false, false);
+    log_push_locked(app, strdup(line), false, 0);
 }
 
 /* An operational line — preview progress, an upload result, a command's

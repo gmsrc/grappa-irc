@@ -1060,7 +1060,12 @@ struct app {
     enum split_axis split;
     char *log[LOG_LINES];
     bool log_mentions[LOG_LINES];
-    bool log_pending[LOG_LINES];
+    /* The pending_echo id of an optimistic row, 0 for a confirmed one.
+     * The id, not a flag: the row is retired by matching the RECORD
+     * (folded names, raw body) and then taking the row that carries its
+     * id — searching the rendered text for the channel as typed and the
+     * raw body failed a folded query and every /me. */
+    unsigned long log_pending[LOG_LINES];
     /* Scrollback id per log row (0 = not a scrollback message). Lets the
      * unread divider be placed at the exact row the server's read cursor
      * points at, rather than guessed from position. */
@@ -2023,7 +2028,7 @@ static log_scope_id log_scope_of_locked(struct app *app, const char *line) {
 
 static void desktop_notify(const char *title, const char *body);
 
-static void log_push_locked(struct app *app, char *line, bool mention, bool pending) {
+static void log_push_locked(struct app *app, char *line, bool mention, unsigned long pending) {
     if (app->log_count == LOG_LINES) log_shift_locked(app);
     size_t i = app->log_count;
     /* An older page goes above what is already there, one row at a time,
@@ -2303,14 +2308,19 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
     char *line = action ? xasprintf("[%s/%s] %s * %s %s", network, channel, clock, who, action)
                         : xasprintf("[%s/%s] %s <%s> %s", network, channel, clock, who, body);
     pthread_mutex_lock(&app->lock);
-    log_push_locked(app, line, false, true);
+    /* The record first, so the row can carry its id. A full table means
+     * the row is drawn confirmed rather than pending forever: a row with
+     * no record has nothing that could ever retire it. */
+    unsigned long id = 0;
     if (app->pending_count < sizeof(app->pending) / sizeof(app->pending[0])) {
         struct pending_echo *p = &app->pending[app->pending_count++];
         p->id = ++app->next_pending_id;
         snprintf(p->network, sizeof(p->network), "%s", network);
         snprintf(p->channel, sizeof(p->channel), "%s", channel);
         snprintf(p->body, sizeof(p->body), "%s", body);
+        id = p->id;
     }
+    log_push_locked(app, line, false, id);
     for (size_t p = 0; p < app->pane_count; p++) {
         app->panes[p].scroll_offset = 0;
         app->panes[p].scroll_pinned = false;
@@ -2321,9 +2331,23 @@ static void add_pending_echo(struct app *app, const char *network, const char *c
 
 static void clear_matching_pending_echo(struct app *app, const char *network, const char *channel, const char *body) {
     pthread_mutex_lock(&app->lock);
-    for (size_t i = 0; i < app->log_count; i++) {
-        if (!app->log_pending[i]) continue;
-        if (strstr(app->log[i], body) && strstr(app->log[i], network) && strstr(app->log[i], channel)) {
+    /* The RECORD decides which row goes: names compared the way every
+     * other lookup compares them (the server folds the channel it
+     * echoes back), the body byte-exact and raw (an ACTION's row never
+     * contained it). A body that merely appears in some other row is
+     * not a match. */
+    unsigned long id = 0;
+    for (size_t i = 0; i < app->pending_count; i++) {
+        if (irc_name_eq(app->pending[i].network, network) && irc_name_eq(app->pending[i].channel, channel) && strcmp(app->pending[i].body, body) == 0) {
+            id = app->pending[i].id;
+            memmove(app->pending + i, app->pending + i + 1, sizeof(app->pending[0]) * (app->pending_count - i - 1));
+            app->pending_count--;
+            break;
+        }
+    }
+    for (size_t i = 0; id && i < app->log_count; i++) {
+        if (app->log_pending[i] != id) continue;
+        {
             free(app->log[i]);
             /* Through log_row_move_locked, which is one of the two
              * functions allowed to know how many parallel arrays there
@@ -2340,13 +2364,6 @@ static void clear_matching_pending_echo(struct app *app, const char *network, co
             for (size_t k = i; k + 1 < app->log_count; k++) log_row_move_locked(app, k, k + 1);
             app->log_count--;
             log_row_removed_locked(app, i);
-            break;
-        }
-    }
-    for (size_t i = 0; i < app->pending_count; i++) {
-        if (irc_name_eq(app->pending[i].network, network) && irc_name_eq(app->pending[i].channel, channel) && strcmp(app->pending[i].body, body) == 0) {
-            memmove(app->pending + i, app->pending + i + 1, sizeof(app->pending[0]) * (app->pending_count - i - 1));
-            app->pending_count--;
             break;
         }
     }
@@ -9346,7 +9363,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
             last_drawn_vi = (int)vi;
             drawn_rows++;
             draw_message_line(msg_y, x + 1, width - 2, text_skip, draw_lines, app->log[i],
-                              app->log_mentions[i], app->log_pending[i]);
+                              app->log_mentions[i], app->log_pending[i] != 0);
             /* EVERY link is clickable, not only the ones that turn into
              * pictures: `kind` decides whether the click previews or hands
              * the URL to the browser. */

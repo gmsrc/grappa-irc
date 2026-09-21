@@ -2966,10 +2966,10 @@ TEST(retiring_an_echo_moves_every_row_not_just_its_text) {
 
     /* Three rows, each with metadata that names it, and the pending echo
      * FIRST so the two below it have to slide. */
+    add_pending_echo(app, "azzurra", "#sniffo", "vjt", "hello there");
     pthread_mutex_lock(&app->lock);
-    log_push_locked(app, strdup("[azzurra/#sniffo] 10:00 <vjt> hello there"), false, true);
-    log_push_locked(app, strdup("[azzurra/#sniffo] 10:01 <alice> second"), true, false);
-    log_push_locked(app, strdup("[azzurra/#altro] 10:02 <bob> third"), false, false);
+    log_push_locked(app, strdup("[azzurra/#sniffo] 10:01 <alice> second"), true, 0);
+    log_push_locked(app, strdup("[azzurra/#altro] 10:02 <bob> third"), false, 0);
     app->log_ids[0] = 100; app->log_media[0] = 0;
     app->log_ids[1] = 101; app->log_media[1] = 1;
     app->log_ids[2] = 102; app->log_media[2] = 2;
@@ -2997,6 +2997,51 @@ TEST(retiring_an_echo_moves_every_row_not_just_its_text) {
     /* The two rows came from different channels, so a scope that did not
      * move would file one of them into the other's window. */
     CHECK(scope1 != scope2);
+
+    free_app(app);
+}
+
+/* An echo is retired by its ID, not by searching the rendered line.
+ *
+ * The row was found by strstr on the text it was drawn with — the
+ * network, the channel AS TYPED, and the raw body — and the server's
+ * copy comes back with the channel FOLDED (`SomeOne` → `someone`), so a
+ * query opened in the spelling the peer uses never matched its own
+ * echo: "[sending]" stayed on the line for good, under the confirmed
+ * copy. A /me had the same fate from the other side — its row is drawn
+ * as `* nick text` while the body carries ^AACTION, so the raw body was
+ * never in the line at all. The pending record already had an id that
+ * nothing read; the row carries it now, and the record is matched the
+ * way the rest of the client compares names. */
+TEST(an_echo_is_retired_whatever_the_channel_case_or_the_verb) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+
+    add_pending_echo(app, "azzurra", "SomeOne", "vjt", "hi there");
+    add_pending_echo(app, "azzurra", "#sniffo", "vjt", "\x01ACTION waves\x01");
+    CHECK_LONG(app->log_count, 2);
+    CHECK_LONG(app->pending_count, 2);
+    CHECK(app->log_pending[0] != 0 && app->log_pending[1] != 0);
+    CHECK(app->log_pending[0] != app->log_pending[1]);
+
+    /* The server's copy: folded channel, same body. */
+    clear_matching_pending_echo(app, "azzurra", "someone", "hi there");
+    CHECK_LONG(app->log_count, 1);
+    CHECK_LONG(app->pending_count, 1);
+    CHECK(strstr(app->log[0], "waves") != NULL);
+
+    /* The action, by its raw body — the line never contained it. */
+    clear_matching_pending_echo(app, "azzurra", "#SNIFFO", "\x01ACTION waves\x01");
+    CHECK_LONG(app->log_count, 0);
+    CHECK_LONG(app->pending_count, 0);
+
+    /* A body that merely APPEARS in some other row is not a match: the
+     * record decides, not the text. */
+    pthread_mutex_lock(&app->lock);
+    log_push_locked(app, strdup("[azzurra/#sniffo] 10:01 <alice> hi there"), false, 0);
+    pthread_mutex_unlock(&app->lock);
+    clear_matching_pending_echo(app, "azzurra", "#sniffo", "hi there");
+    CHECK_LONG(app->log_count, 1);
 
     free_app(app);
 }
@@ -3306,7 +3351,7 @@ static struct app *view_app(size_t rows) {
     for (size_t k = 0; k < rows; k++) {
         char *line = xasprintf("[azzurra/#sniffo] 10:00 <alice> line %zu", k);
         pthread_mutex_lock(&app->lock);
-        log_push_locked(app, line, false, false);
+        log_push_locked(app, line, false, 0);
         pthread_mutex_unlock(&app->lock);
     }
     return app;
@@ -3388,7 +3433,7 @@ TEST(the_topmost_row_in_view_is_cut_where_the_region_starts) {
     for (int k = 0; k < 3; k++) {
         char *line = xasprintf("[azzurra/#sniffo] %d aaaaaaaa bbbbbbbb cccccccc", k);
         pthread_mutex_lock(&app->lock);
-        log_push_locked(app, line, false, false);
+        log_push_locked(app, line, false, 0);
         pthread_mutex_unlock(&app->lock);
     }
     struct pane_view v;
@@ -5167,6 +5212,7 @@ int main(void) {
     RUN(a_websocket_ref_is_never_handed_out_twice);
     RUN(the_model_thread_announces_that_it_stopped);
     RUN(retiring_an_echo_moves_every_row_not_just_its_text);
+    RUN(an_echo_is_retired_whatever_the_channel_case_or_the_verb);
     RUN(older_history_lands_above_what_is_already_there);
     RUN(a_message_arriving_during_a_page_is_still_news);
     RUN(a_page_is_asked_for_before_the_oldest_and_written_above_the_first);
