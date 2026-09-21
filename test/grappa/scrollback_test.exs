@@ -1648,9 +1648,8 @@ defmodule Grappa.ScrollbackTest do
 
       for i <- 0..300, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
 
-      rows =
-        Scrollback.fetch_after({:user, user.id}, net.id, "#sniffo", 0, 500, nil, false)
-        |> Enum.map(& &1.id)
+      page = Scrollback.fetch_after({:user, user.id}, net.id, "#sniffo", 0, 500, nil, false)
+      rows = Enum.map(page, & &1.id)
 
       # Anchors chosen to straddle the threshold: 0 rows after, 200 after
       # (NEAR — the line `isFarBehind` already draws), 201 after (FAR by one).

@@ -776,13 +776,20 @@ defmodule Grappa.Scrollback do
     |> Repo.one()
   end
 
-  # Capped: `SELECT count(*) FROM (SELECT 1 FROM messages WHERE <pred> LIMIT
-  # cap)`. The inner `select(1)` matters — selecting the row would make the
-  # index non-covering and re-introduce the per-row table lookup the whole
-  # saving is made of. This is the exact shape the issue-2282 bench timed.
+  # Capped: `SELECT count(*) FROM (SELECT 1 AS one FROM messages WHERE <pred>
+  # LIMIT cap)`. Selecting a CONSTANT matters — selecting the row would make
+  # the index non-covering and re-introduce the per-row table lookup the whole
+  # saving is made of. This is the shape the issue-2282 bench timed
+  # (`SELECT 1 … LIMIT 201`); the `AS one` alias is Ecto's doing, not a
+  # different query.
+  #
+  # It is a one-key MAP and not a bare `select([m], 1)` because Ecto refuses
+  # the latter inside a subquery — "subquery/cte must select a source (t), a
+  # field (t.field) or a map". A map whose value is the literal renders the
+  # same constant, so the measured shape survives the constraint.
   defp count_rows(query, cap) when is_integer(cap) and cap > 0 do
     query
-    |> select([m], 1)
+    |> select([m], %{one: 1})
     |> limit(^cap)
     |> subquery()
     |> select([s], count())

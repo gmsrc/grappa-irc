@@ -799,11 +799,27 @@ defmodule Grappa.Protocol do
   # Synthetic, mac, warm cache: an ORDERING and an attribution, never a latency
   # a phone would see — #2228's 738 ms is the field anchor.
   #
-  # MEASURED, same two verdicts as v29 and for the same reason: this response
-  # is hand-typed in `cicchetto/src/lib/api.ts` (`countMessagesAfter`) and no
-  # `GrappaWeb.*JSON` `@spec` the digest reads spells the capped variant, so
-  # `mix grappa.wire_pin --check` cannot see it. The number moves because
-  # #1393d says every wire-shape change moves it, not because a gate went red.
+  # MEASURED, and NOT the v29 verdict — the first draft of this block claimed
+  # it was, by copying v29's reasoning without checking that it applied. It
+  # does not. **`wire_pin` SAW this change and went red on it**, and the pin
+  # was stale in both fields at once (`:pin_stale`, not the violation):
+  #
+  #     shape digest  pinned sha256:b0e5d018…  now sha256:e4ce7cff…
+  #     protocol      pinned 29                now 30
+  #
+  # The digest's THIRD component is `json_view_spec_text/0` — the `@spec`s of
+  # the exported functions of every `GrappaWeb.*JSON`, read from BEAM chunks —
+  # and #2037 added it after measuring the hole on `MessagesJSON.count/1`,
+  # which is this very function. This change widens that `@spec` (a `| nil`
+  # argument, a second return alternative), so it is squarely inside the
+  # coverage that was built for it. In the same job
+  # `mix grappa.gen_wire_types --check` answered `is in sync.` on all three
+  # artefacts, which is the pin earning its existence rather than a blind spot.
+  #
+  # v29's claim was true of v29 for a reason that is absent here: a
+  # `display_prefs` key moves no `*JSON` `@spec` at all. The lesson worth
+  # keeping is that the invisibility argument is PER CHANGE and has to be
+  # measured each time, never inherited from the entry above it.
   #
   # Reason (1) of #1393d, literally: a cic bundle that comes to REQUIRE the
   # capped mode — which is exactly what a bundle built on it does — cannot get

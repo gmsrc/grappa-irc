@@ -19031,10 +19031,38 @@ it degrades correctly in BOTH directions:
     byte-identical body. The pre-existing tests pin exactly that.
 
 `min_protocol_version` therefore stays at 1: nothing here refuses anybody.
-`protocol_version` moves 29 → 30 per #1393d, and — as with v29 — because the
-RULE says so and not because a gate went red: the capped body is hand-typed in
-`cicchetto/src/lib/api.ts` and no `*JSON` `@spec` spells the variant, so
-`mix grappa.wire_pin --check` cannot see it.
+`protocol_version` moves 29 → 30 per #1393d.
+
+### A claim this entry made and got WRONG, corrected with the measurement
+
+The first draft said the bump was owed to the rule and not to a gate, "as with
+v29", because the capped body is hand-typed in `cicchetto/src/lib/api.ts`.
+**That was inherited reasoning, not a measurement, and it is false.**
+`mix grappa.wire_pin --check` went RED on this change:
+
+    shape digest  pinned sha256:b0e5d018…  now sha256:e4ce7cff…
+    protocol      pinned 29                now 30
+
+Both fields moved, so the class is `:pin_stale` rather than the
+`:shape_moved_without_bump` violation, and `--update` is permitted. The digest
+moved because its THIRD component is `json_view_spec_text/0` — the `@spec`s of
+exported `GrappaWeb.*JSON` functions, read from BEAM chunks — and this change
+widens `MessagesJSON.count/1`'s spec with a `| nil` argument and a second
+return alternative. Neither generated artefact changed
+(`mix grappa.gen_wire_types --check` answered `is in sync.` on all three in the
+same job, and this branch touches neither `wireTypes.ts` nor `wireSchema.ts`),
+so the third component is the only thing that could have moved it.
+
+The sharp part: #2037 added that third component **after measuring the hole on
+`MessagesJSON.count/1`**, this exact function. Citing it as a blind spot was
+wrong twice over, and the episode strengthens rather than weakens the argument
+for keeping the pin — it caught a change that lives ONLY in a typespec, which
+is precisely the class the codegen's own `--check` answers `in sync.` for.
+
+**The general rule, which is the part worth keeping:** the
+"`wire_pin` cannot see this" argument is PER CHANGE. It must be measured on the
+change being made, never inherited from the entry above it. v29's version of it
+was true of v29 — a `display_prefs` key moves no `*JSON` `@spec` at all.
 
 ### A premise that was handed down and is FALSE: "201 gives you `200+` for free"
 
