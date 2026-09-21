@@ -67,8 +67,23 @@ defmodule Grappa.Scrollback.Message do
 
   ## Cross-system identifier (deferred to Phase 6)
 
-  `server_time` is epoch milliseconds. IRC's `server-time` IRCv3 tag is
-  RFC3339; the conversion happens at the parser/inserter boundary.
+  `server_time` is epoch milliseconds, and it is sampled LOCALLY: every
+  producer writes `System.system_time(:millisecond)` from inside the
+  owning `(subject, network)` `Session.Server`, immediately before the
+  insert that mints the `id`. IRC's `server-time` IRCv3 tag is RFC3339,
+  but the cap is not in the REQ set — `IRC.AuthFSM` asks for `sasl` /
+  `labeled-response` only — so no upstream clock reaches this column and
+  there is no RFC3339 value to convert. Converting the tag at the
+  parser/inserter boundary is what Phase 6 WOULD owe if the cap were ever
+  REQd; it is deferred intent, not machinery that exists.
+
+  Read as present tense that is load-bearing in the wrong direction:
+  `Grappa.Scrollback`'s `maybe_before/2` argues the `(id DESC)` seek FROM
+  the two columns advancing together, so a reader who believes an
+  upstream clock can land here has a documented reason to reintroduce the
+  `(server_time DESC, id DESC)` sort CP29 R-2 made unservable by any
+  index.
+
   Integer storage is sortable lexically and avoids TZ ambiguity in
   sqlite. The `(network_id, channel, server_time)` index makes
   per-channel paginated DESC scans cheap — Phase 6's IRCv3
