@@ -104,6 +104,8 @@ static const struct {
     {"window_pending", WIRE_WINDOW_PENDING},
     {"window_invited", WIRE_WINDOW_INVITED},
     {"connection_state_changed", WIRE_CONNECTION_STATE_CHANGED},
+    {"network_attached", WIRE_NETWORK_ATTACHED},
+    {"network_detached", WIRE_NETWORK_DETACHED},
     {"whois_bundle", WIRE_WHOIS_BUNDLE},
     {"names_reply", WIRE_NAMES_REPLY},
     {"who_reply", WIRE_WHO_REPLY},
@@ -529,6 +531,12 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
         if (!json_str_is(json_get(p, "state"),
                          kind == WIRE_WINDOW_PENDING ? "pending" : "invited"))
             return false;
+        break;
+
+    case WIRE_NETWORK_ATTACHED:
+    case WIRE_NETWORK_DETACHED:
+        if (!json_long_req(p, "network_id", &e.u.network_link.network_id)) return false;
+        if (!json_str_req(p, "network_slug", &e.u.network_link.network_slug)) return false;
         break;
 
     case WIRE_CONNECTION_STATE_CHANGED: {

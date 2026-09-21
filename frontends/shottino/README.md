@@ -345,6 +345,14 @@ numbers stay global — `/window 9` reaches a folded window as it always did.
 
 `/set sidebar.collapse off` is the full list.
 
+A network that **joins or leaves the session while shottino runs** — bound
+from cicchetto's home, or detached there — appears or disappears here without
+a restart. The server announces only *which* network moved (`network_attached`
+/ `network_detached`, protocol v28); the listing owns the rest, so shottino
+re-reads it, opens the new network's `$server` and channels and subscribes to
+them, or closes every window of the one that left. It used to need a restart
+to notice either.
+
 ## The userlist
 
 `Ctrl-U` hands the arrow keys to the member list; `Esc` gives them back.

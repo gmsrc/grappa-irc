@@ -368,6 +368,7 @@ enum job_kind {
     JOB_STT,
     JOB_UPLOAD,
     JOB_CALL_PROBE,
+    JOB_NETWORK_ATTACHED,
     JOB_HISTORY
 };
 
@@ -2954,8 +2955,18 @@ static void parse_subject(const char *json, size_t len, char *out, size_t out_sz
     json_free(doc);
 }
 
+/* Read the network list INTO the table: a slug already there keeps what
+ * the session learned about it (prefixes, the connecting flag, which DM
+ * listener is joined) and takes only the listing's own fields; a new
+ * slug is appended. One the server stopped listing is left alone here
+ * — the detach event is the word for that, and a list that is merely
+ * short (a bad reply) must not empty the sidebar.
+ *
+ * It used to replace the table wholesale, which was fine for the one
+ * time it ran, at startup. Re-reading it when a network attaches
+ * mid-session (§4e) would have thrown the runtime state of every OTHER
+ * network away. */
 static void parse_networks(struct app *app, const char *json, size_t len) {
-    app->network_count = 0;
     json_doc *doc = json_parse(json, len, NULL, 0);
     /* Said out loud. A client with no networks looks exactly like an
      * account with none, and the difference — one is a bad reply, the
@@ -2965,13 +2976,24 @@ static void parse_networks(struct app *app, const char *json, size_t len) {
         log_line(app, "could not read the network list — the server sent something unparseable");
         return;
     }
+    /* Under the lock now that it runs on the worker as well as at boot:
+     * the UI thread walks this table on every frame. log_line takes the
+     * same lock, so the report above stays outside it. */
+    pthread_mutex_lock(&app->lock);
     const json_value *list = json_root(doc);
-    for (size_t i = 0; i < json_len(list) && app->network_count < MAX_NETWORKS; i++) {
+    for (size_t i = 0; i < json_len(list); i++) {
         const json_value *row = json_at(list, i);
         const char *slug = json_string(json_get(row, "slug"));
         if (!slug || !slug[0]) continue;
-        struct network *n = &app->networks[app->network_count];
-        memset(n, 0, sizeof(*n));
+        struct network *n = NULL;
+        for (size_t k = 0; k < app->network_count && !n; k++)
+            if (irc_name_eq(app->networks[k].slug, slug)) n = &app->networks[k];
+        bool fresh = n == NULL;
+        if (fresh) {
+            if (app->network_count >= MAX_NETWORKS) continue;
+            n = &app->networks[app->network_count];
+            memset(n, 0, sizeof(*n));
+        }
         long id = 0;
         json_long(json_get(row, "id"), &id);
         n->id = (int)id;
@@ -2987,9 +3009,43 @@ static void parse_networks(struct app *app, const char *json, size_t len) {
         else if (state && strcmp(state, "parked") == 0) n->conn_state = CONN_PARKED;
         else if (state && strcmp(state, "failed") == 0) n->conn_state = CONN_FAILED;
         else n->conn_known = false;
-        app->network_count++;
+        if (fresh) app->network_count++;
     }
+    pthread_mutex_unlock(&app->lock);
     json_free(doc);
+}
+
+/* A network left the session (§4e): its windows go, and its entry —
+ * every /networks/:slug/... route answers 404 for it from now on, so a
+ * window left open on it is one keystroke from a refusal that reads
+ * like the channel's fault. remove_window renumbers the panes, so a
+ * pane that was showing one of them lands on something that exists. */
+static void remove_window(struct app *app, const char *network, const char *channel);
+static void detach_network(struct app *app, const char *slug) {
+    for (;;) {
+        char chan[MAX_CHANNEL] = "";
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->window_count; i++) {
+            if (!irc_name_eq(app->windows[i].network, slug)) continue;
+            snprintf(chan, sizeof(chan), "%s", app->windows[i].channel);
+            break;
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (!chan[0]) break;
+        remove_window(app, slug, chan);
+    }
+    pthread_mutex_lock(&app->lock);
+    for (size_t i = 0; i < app->network_count; i++) {
+        if (!irc_name_eq(app->networks[i].slug, slug)) continue;
+        memmove(app->networks + i, app->networks + i + 1,
+                sizeof(app->networks[0]) * (app->network_count - i - 1));
+        app->network_count--;
+        break;
+    }
+    pthread_mutex_unlock(&app->lock);
+    log_line(app, "--- network %s detached from the session — its windows are closed; "
+                  "attach it again from cicchetto's home to bring it back",
+             slug);
 }
 
 /* Pane focus is asked about from everywhere a window is; defined with the
@@ -3087,13 +3143,28 @@ static void remove_window(struct app *app, const char *network, const char *chan
     pthread_mutex_unlock(&app->lock);
 }
 
+static unsigned long ws_join(struct app *app, const char *topic);
 static void parse_channels(struct app *app, const char *network, const char *json, size_t len) {
     json_doc *doc = json_parse(json, len, NULL, 0);
     if (!doc) return;
     const json_value *list = json_root(doc);
     for (size_t i = 0; i < json_len(list); i++) {
         const char *name = json_string(json_get(json_at(list, i), "name"));
-        if (name && name[0]) add_window(app, network, name);
+        if (!name || !name[0]) continue;
+        add_window(app, network, name);
+        /* At startup the socket is not up yet and ws_join_topics joins
+         * every window in one pass; a network attached mid-session
+         * (§4e) arrives with the socket already open, and a window
+         * with no subscription is a window that never hears anything. */
+        if (app->ws_connected) {
+            char *net = json_escape(network);
+            char *chan = json_escape(name);
+            char *topic = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, net, chan);
+            free(net);
+            free(chan);
+            ws_join(app, topic);
+            free(topic);
+        }
     }
     json_free(doc);
 }
@@ -8050,6 +8121,18 @@ static void handle_wire_event(struct app *app, const char *topic_network,
                  ev->u.connection_state.reason ? ev->u.connection_state.reason : "");
         break;
     }
+
+    case WIRE_NETWORK_ATTACHED: {
+        /* Two HTTP round trips: the worker's job, not this thread's. */
+        struct job job = { .kind = JOB_NETWORK_ATTACHED };
+        snprintf(job.network, sizeof(job.network), "%s", ev->u.network_link.network_slug);
+        enqueue_job(app, job);
+        break;
+    }
+
+    case WIRE_NETWORK_DETACHED:
+        detach_network(app, ev->u.network_link.network_slug);
+        break;
 
     case WIRE_CONNECTION_PROGRESS: {
         pthread_mutex_lock(&app->lock);
@@ -13290,6 +13373,7 @@ static bool dequeue_job(struct app *app, struct job *job) {
     return true;
 }
 
+static void attach_network_target(struct app *app, const char *slug);
 static void *worker_main(void *arg) {
     struct app *app = arg;
     struct job job;
@@ -13364,9 +13448,60 @@ static void *worker_main(void *arg) {
         case JOB_CLOSE_QUERY:
             close_query_target(app, job.network, job.channel);
             break;
+        case JOB_NETWORK_ATTACHED:
+            attach_network_target(app, job.network);
+            break;
         }
     }
     return NULL;
+}
+
+/* A network joined the session (§4e). The event names it and nothing
+ * else — the listing owns the answer — so the listing is re-read and
+ * merged, and the new network gets what seed_state gives every network
+ * at boot: its $server window, its channels, and, the socket being up
+ * by now, their topics and the DM listener for its nick. Two round
+ * trips, so it runs on the worker, never on the socket thread. */
+static void attach_network_target(struct app *app, const char *slug) {
+    struct http_response nets = http_request(app, "GET", "/networks", NULL);
+    if (nets.status < 200 || nets.status >= 300) {
+        log_line(app, "--- network %s attached, but GET /networks failed HTTP %d — nothing opened; "
+                      "restart shottino to see it",
+                 slug, nets.status);
+        free(nets.body);
+        return;
+    }
+    parse_networks(app, nets.body, nets.body_len);
+    free(nets.body);
+    pthread_mutex_lock(&app->lock);
+    bool listed = network_by_slug_locked(app, slug) != NULL;
+    pthread_mutex_unlock(&app->lock);
+    if (!listed) {
+        /* Announced and then not listed: say which of the two the
+         * client believed, rather than open a window on nothing. */
+        log_line(app, "--- network %s attached, but GET /networks does not list it — nothing opened",
+                 slug);
+        return;
+    }
+    add_window_ex(app, slug, SERVER_WINDOW, false);
+    if (app->ws_connected) {
+        char *net = json_escape(slug);
+        char *topic = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, net,
+                                SERVER_WINDOW);
+        free(net);
+        ws_join(app, topic);
+        free(topic);
+    }
+    char *enc = url_encode(slug);
+    char *path = xasprintf("/networks/%s/channels", enc);
+    free(enc);
+    struct http_response ch = http_request(app, "GET", path, NULL);
+    free(path);
+    if (ch.status >= 200 && ch.status < 300) parse_channels(app, slug, ch.body, ch.body_len);
+    else log_line(app, "GET /networks/%s/channels failed HTTP %d", slug, ch.status);
+    free(ch.body);
+    ws_sync_dm_listeners(app);
+    log_line(app, "--- network %s attached to the session", slug);
 }
 
 /* Queue a read-cursor publish. Deliberately fire-and-forget: the cursor

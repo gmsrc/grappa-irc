@@ -129,6 +129,8 @@ typedef enum {
     WIRE_WINDOW_PENDING,
     WIRE_WINDOW_INVITED,
     WIRE_CONNECTION_STATE_CHANGED,
+    WIRE_NETWORK_ATTACHED,
+    WIRE_NETWORK_DETACHED,
     WIRE_WHOIS_BUNDLE,
     WIRE_NAMES_REPLY,
     WIRE_WHO_REPLY,
@@ -353,6 +355,14 @@ struct wire_event {
             wire_connection_state state;
             const char *state_reason; /* nullable */
         } connection_state;
+
+        /* network_attached / network_detached (§4e, v28): what moved and
+         * nothing else — no state, by contract. GET /networks owns the
+         * answer. */
+        struct {
+            long network_id;
+            const char *network_slug;
+        } network_link;
 
         struct {
             const char *network;

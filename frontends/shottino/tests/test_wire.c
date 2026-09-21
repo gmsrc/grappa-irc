@@ -599,6 +599,36 @@ TEST(isupport) {
            "\"chanmodes_b\":[],\"chanmodes_c\":[],\"chanmodes_d\":[],\"prefix\":{\"o\":7}}");
 }
 
+/* A network joined or left the session (CLIENT_PROTOCOL §4e, v28). Both
+ * name what moved and NOTHING else — no state, by contract: `GET
+ * /networks` owns the answer, and a client that infers an attach from
+ * connection_state_changed keeps showing the network as available with
+ * no row. */
+TEST(network_attached_and_detached) {
+    struct wire_event ev;
+    bool ok;
+    json_doc *d = narrow("{\"kind\":\"network_attached\",\"network_id\":7,\"network_slug\":\"libera\"}",
+                         &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.kind == WIRE_NETWORK_ATTACHED);
+    CHECK_LONG(ev.u.network_link.network_id, 7);
+    CHECK_STR(ev.u.network_link.network_slug, "libera");
+    json_free(d);
+    d = narrow("{\"kind\":\"network_detached\",\"network_id\":7,\"network_slug\":\"libera\"}",
+               &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.kind == WIRE_NETWORK_DETACHED);
+    CHECK_STR(ev.u.network_link.network_slug, "libera");
+    json_free(d);
+    /* Either name missing drops the event whole. */
+    d = narrow("{\"kind\":\"network_attached\",\"network_id\":7}", &ev, &ok);
+    CHECK(!ok);
+    json_free(d);
+    d = narrow("{\"kind\":\"network_detached\",\"network_slug\":\"libera\"}", &ev, &ok);
+    CHECK(!ok);
+    json_free(d);
+}
+
 TEST(connection_state_changed) {
     struct wire_event ev;
     bool ok;
@@ -970,6 +1000,7 @@ int main(void) {
     RUN(presence);
     RUN(maps_keyed_by_data);
     RUN(isupport);
+    RUN(network_attached_and_detached);
     RUN(connection_state_changed);
     RUN(simple_arms);
     RUN(server_settings);
