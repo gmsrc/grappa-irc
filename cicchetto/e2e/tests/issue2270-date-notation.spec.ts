@@ -82,14 +82,21 @@ async function seedBannedChannel(page: Page): Promise<string> {
   // Wait for the opening query to SETTLE before mutating: two overlapping
   // /banlist queries race on the 367/368 fold (no request-id on the wire), and
   // the first 368 would drop the added ban from the store. Same hazard #386's
-  // spec documents.
-  await expect(modal.getByTestId("banlist-add-input")).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(1_000);
+  // spec documents — and this waits on the SETTLED STATE, not on a duration:
+  // the channel is fresh, so "no bans set on" IS the empty result landing.
+  // A fixed sleep cannot express that; under the full suite bahamut's
+  // per-connection fake-lag outran a 1s one and the add was swallowed exactly
+  // as #386 predicts (measured: MODE +b in scrollback, empty list in the modal).
+  await expect(modal).toContainText("no bans set on", { timeout: 15_000 });
 
   await modal.getByTestId("banlist-add-input").fill(BAN_MASK);
   await modal.getByTestId("banlist-add-btn").click();
+  // TWO upstream frames stand between the click and the row — MODE +b, then
+  // the 367/368 re-query — each subject to that same fake-lag. 20s is headroom
+  // over the ~10s bank cap the ircClient's 15s single-frame ceiling cites; it
+  // is a condition-wait ceiling, resolved the instant the row lands, not a sleep.
   await expect(modal.locator(".banlist-modal-mask", { hasText: BAN_MASK })).toBeVisible({
-    timeout: 15_000,
+    timeout: 20_000,
   });
   await page.keyboard.press("Escape");
   await expect(modal).toBeHidden({ timeout: 10_000 });
