@@ -218,6 +218,33 @@ defmodule GrappaWeb.MessagesController do
   There is no "count everything" default: every caller is asking about a
   specific anchor it holds, and a silent `after=0` would answer a
   question nobody asked.
+
+  ## `cap` — the THRESHOLD-only mode (issue 2282)
+
+  Optional, positive integer. Present, the response carries `count` ALONE,
+  saturating at `cap`: `{"count": min(real, cap)}`, and `count == cap` reads
+  "at least `cap`". The display split is not computed at all.
+
+  It exists because the two questions have different costs and only one of
+  them gates cic's paint. Measured on a 372,651-row synthetic corpus at a
+  200,014-row gap: the pair costs 82 ms and 12,963,811 VM steps, of which the
+  split is 57 ms; the same threshold answered with `cap = 201` costs 1 ms and
+  4,304 steps. cic's branch `isFarBehind(gap) === gap > PAGE_LIMIT` needs only
+  the boolean, so a capped probe decides it and the split follows AFTER the
+  rows are on screen.
+
+  The mode is a REQUEST param and not a new route precisely so the two sides
+  land separately, in both directions:
+
+    * a capped client against a server predating this — the unknown param is
+      ignored, the old three-key body comes back, and `count` still answers
+      the threshold correctly. Slower, never wrong.
+    * an old client against this server — never sends `cap`, gets the
+      byte-identical three-key body.
+
+  Rejected: 400 for `cap=0` (a saturating count that can never saturate reads
+  NEAR for every gap), for negatives, for non-integers, and for the
+  list/map shapes `Plug.Conn.Query` decodes `?cap[]=1` into.
   """
   @spec count(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :bad_request}
   def count(conn, %{"channel_id" => channel} = params) do
@@ -225,7 +252,8 @@ defmodule GrappaWeb.MessagesController do
     network = conn.assigns.network
 
     with :ok <- validate_target_name(channel),
-         {:ok, after_id} <- parse_after(params["after"]) do
+         {:ok, after_id} <- parse_after(params["after"]),
+         {:ok, cap} <- parse_cap(params["cap"]) do
       # Same ingress fold as `index/2` (#537): the caller's spelling resolves
       # to the one window the Server keyed folded.
       channel = Identifier.canonical_target(channel, Session.casemapping(subject, network.id))
@@ -247,21 +275,29 @@ defmodule GrappaWeb.MessagesController do
       hide_presence = resolve_hide_presence(subject, network, channel)
 
       count =
-        Scrollback.count_after(subject, network.id, channel, after_id, own_nick, hide_presence)
+        Scrollback.count_after(subject, network.id, channel, after_id, own_nick, hide_presence, cap)
 
       # The DISPLAY split. `count` stays the threshold's raw feed (#693, and
       # out of scope per the #2037 ruling); `messages` is what the far-behind
       # bar renders, and it is the same partition the sidebar's bold pill
       # already shows.
+      #
+      # issue 2282 — SKIPPED entirely in the capped mode. Not "computed and
+      # dropped": it is the 57 ms of the 82 ms, and the whole point of the cap
+      # is that the caller asking the threshold has not asked this question
+      # yet. A caller that wants both asks twice, the second time off the
+      # paint path.
       split =
-        Scrollback.count_after_split(
-          subject,
-          network.id,
-          channel,
-          after_id,
-          own_nick,
-          hide_presence
-        )
+        if cap == nil do
+          Scrollback.count_after_split(
+            subject,
+            network.id,
+            channel,
+            after_id,
+            own_nick,
+            hide_presence
+          )
+        end
 
       render(conn, :count, count: count, split: split)
     end
@@ -568,6 +604,28 @@ defmodule GrappaWeb.MessagesController do
   # contract. Without the catch-all the list case is a FunctionClauseError —
   # a 500 with a stacktrace for what is plainly a malformed request.
   defp parse_after(_), do: {:error, :bad_request}
+
+  # issue 2282 — `?cap=`, and the ABSENT case is the only one that differs
+  # from `parse_after/1`: no cap is the #693 behaviour, so `nil` is a success
+  # and not a 400.
+  #
+  # Strictly positive. `cap=0` is refused rather than normalised because a
+  # saturating count capped at zero answers 0 for every gap — a threshold
+  # that reads NEAR on a channel a million rows behind. Silently promoting it
+  # to 1 would answer a question nobody asked; refusing says so.
+  @spec parse_cap(term()) :: {:ok, pos_integer() | nil} | {:error, :bad_request}
+  defp parse_cap(nil), do: {:ok, nil}
+
+  defp parse_cap(s) when is_binary(s) do
+    case parse_int(s) do
+      {:ok, n} when n > 0 -> {:ok, n}
+      _ -> {:error, :bad_request}
+    end
+  end
+
+  # Same catch-all, same reason as `parse_after/1`'s: `?cap[]=1` decodes to a
+  # LIST and must be a 400, not a FunctionClauseError past the fallback.
+  defp parse_cap(_), do: {:error, :bad_request}
 
   defp parse_int(s) when is_binary(s) do
     case Integer.parse(s) do

@@ -222,7 +222,7 @@ case argv do
     doors = [
       {"count_after/6",
        fn ->
-         Grappa.Scrollback.count_after(subject, B.net(), B.channel(), after_id, B.nick(), true)
+         Grappa.Scrollback.count_after(subject, B.net(), B.channel(), after_id, B.nick(), true, nil)
        end},
       {"count_after_split/6",
        fn ->
@@ -308,7 +308,7 @@ case argv do
     for {label, fun} <- [
           {"count_after/6",
            fn ->
-             Grappa.Scrollback.count_after(subject, B.net(), B.channel(), after_id, B.nick(), true)
+             Grappa.Scrollback.count_after(subject, B.net(), B.channel(), after_id, B.nick(), true, nil)
            end},
           {"count_after_split/6",
            fn ->

@@ -489,7 +489,8 @@ defmodule GrappaWeb.MeControllerTest do
           own_nick,
           anchor.id,
           own_nick,
-          false
+          false,
+          nil
         )
 
       %{"messages" => m, "events" => e} = body["unread_counts"][network.slug][own_nick]

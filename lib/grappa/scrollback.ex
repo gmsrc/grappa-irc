@@ -688,9 +688,10 @@ defmodule Grappa.Scrollback do
 
   Same predicates as `fetch_after/7` so the count exactly matches what a
   `fetch_after(..., :infinity)` would return — modulo the `@max_limit`
-  cap, which this function deliberately does not apply. Counts unbounded
-  by definition: a channel with 10k rows after the anchor must surface as
-  `10000`, not `@max_limit`.
+  cap, which this function deliberately does not apply. The PAGE ceiling
+  never bounds the answer: a channel with 10k rows after the anchor must
+  surface as `10000`, not `@max_limit`. The only bound is the caller's own
+  explicit `cap` (below), which is a different question and says so.
 
   ## `own_nick`
 
@@ -716,19 +717,75 @@ defmodule Grappa.Scrollback do
   the impossible-subject case (no rows match the subject + network),
   and the total count for `after_id = 0` (the initial-cursor case
   before the user has ever clicked).
+
+  ## `cap` (issue 2282)
+
+  `nil` counts to the end, which is the #693 contract above and what every
+  caller wanting the TRUE size must pass. A positive integer makes the count
+  SATURATING: the scan stops once `cap` matching rows have been seen, so the
+  answer is `min(true_count, cap)` and `== cap` means "at least `cap`".
+
+  It exists because cic's far-behind branch is not a count question at all.
+  `isFarBehind(gap) === gap > PAGE_LIMIT` (`cicchetto/src/lib/scrollback.ts`)
+  is a THRESHOLD, and a threshold is answered by `cap = PAGE_LIMIT + 1`
+  without ever visiting the rest of the partition. Measured on a 372,651-row
+  synthetic corpus at a 200,014-row gap: **4,304 VM steps against 3,458,408,
+  1 ms against 25 ms**, on the same covering index — only the `LIMIT` moves.
+  Synthetic corpus, mac, warm cache: an ORDERING and an attribution, never a
+  latency a phone would see. The field anchor is #2228's 738 ms.
+
+  The cap is a `LIMIT` on the rows the predicate ALREADY selected, never a
+  short-circuit ahead of it, so the presence filter and the subject /
+  channel-or-DM narrowing bind exactly as they do uncapped. A cap applied
+  outside them would saturate on rows the caller cannot see and report
+  far-behind on a window holding one message.
+
+  The threshold the caller is testing is the CALLER's constant, which is why
+  this takes a cap rather than knowing about `PAGE_LIMIT`: cic owns that
+  number (`@max_http_limit` is the server's own, separate, ceiling) and a
+  server that hardcoded it would have to be redeployed to change a client
+  decision.
   """
-  @spec count_after(subject(), integer(), String.t(), integer(), String.t() | nil, boolean()) ::
-          non_neg_integer()
-  def count_after(subject, network_id, channel, after_id, own_nick, hide_presence)
+  @spec count_after(
+          subject(),
+          integer(),
+          String.t(),
+          integer(),
+          String.t() | nil,
+          boolean(),
+          pos_integer() | nil
+        ) :: non_neg_integer()
+  def count_after(subject, network_id, channel, after_id, own_nick, hide_presence, cap)
       when is_integer(network_id) and is_integer(after_id) and
-             (is_binary(own_nick) or is_nil(own_nick)) and is_boolean(hide_presence) do
+             (is_binary(own_nick) or is_nil(own_nick)) and is_boolean(hide_presence) and
+             ((is_integer(cap) and cap > 0) or is_nil(cap)) do
     Message
     |> Subject.subject_where(subject)
     |> where([m], m.network_id == ^network_id)
     |> channel_or_dm_where(channel, own_nick)
     |> maybe_exclude_presence(hide_presence)
     |> where([m], m.id > ^after_id)
+    |> count_rows(cap)
+  end
+
+  # Uncapped: aggregate in place, unchanged since #693.
+  @spec count_rows(Ecto.Query.t(), pos_integer() | nil) :: non_neg_integer()
+  defp count_rows(query, nil) do
+    query
     |> select([m], count(m.id))
+    |> Repo.one()
+  end
+
+  # Capped: `SELECT count(*) FROM (SELECT 1 FROM messages WHERE <pred> LIMIT
+  # cap)`. The inner `select(1)` matters — selecting the row would make the
+  # index non-covering and re-introduce the per-row table lookup the whole
+  # saving is made of. This is the exact shape the issue-2282 bench timed.
+  defp count_rows(query, cap) when is_integer(cap) and cap > 0 do
+    query
+    |> select([m], 1)
+    |> limit(^cap)
+    |> subquery()
+    |> select([s], count())
     |> Repo.one()
   end
 

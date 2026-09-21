@@ -125,7 +125,7 @@ defmodule Grappa.Unread2037ProbeTest do
   # ---------------------------------------------------------------------------
 
   defp bar(subject, network_id, anchor, hide_presence),
-    do: Scrollback.count_after(subject, network_id, @channel, anchor, @own_nick, hide_presence)
+    do: Scrollback.count_after(subject, network_id, @channel, anchor, @own_nick, hide_presence, nil)
 
   defp split(subject, network_id, anchor, hide_presence) do
     %{messages: m, events: e} =

@@ -1135,7 +1135,7 @@ defmodule Grappa.ScrollbackTest do
     # whole point of the change is WHICH column it reads.
     test "issue 2228 B — the presence filter reads the structural COLUMN, never meta JSON",
          %{user: user, network: net} do
-      sql = capture_sql(fn -> Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, "vjt", true) end)
+      sql = capture_sql(fn -> Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, "vjt", true, nil) end)
 
       assert sql =~ ~s("structural"),
              """
@@ -1160,7 +1160,7 @@ defmodule Grappa.ScrollbackTest do
       # Positive control. With the filter off there is no exemption to express,
       # so a pin that fires here would be matching something every statement
       # carries rather than the predicate under test.
-      sql = capture_sql(fn -> Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, "vjt", false) end)
+      sql = capture_sql(fn -> Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, "vjt", false, nil) end)
 
       refute sql =~ ~s("structural")
       refute sql =~ "'$." <> Atom.to_string(Message.structural_meta_key()) <> "'"
@@ -1440,7 +1440,7 @@ defmodule Grappa.ScrollbackTest do
          %{user: user, network: net} do
       for i <- 0..4, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
 
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false) == 5
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, nil) == 5
     end
 
     test "cursor at the newest row id returns 0",
@@ -1452,13 +1452,13 @@ defmodule Grappa.ScrollbackTest do
         end
         |> List.last()
 
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", latest.id, nil, false) == 0
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", latest.id, nil, false, nil) == 0
     end
 
     test "past-tail cursor returns 0", %{user: user, network: net} do
       for i <- 0..2, do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
 
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 999_999_999, nil, false) == 0
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 999_999_999, nil, false, nil) == 0
     end
 
     test "counts only rows strictly greater than after_id",
@@ -1471,7 +1471,7 @@ defmodule Grappa.ScrollbackTest do
 
       [_, _, m2 | _] = rows
 
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", m2.id, nil, false) == 2
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", m2.id, nil, false, nil) == 2
     end
 
     test "isolated by (subject, network, channel) — same shape as fetch_after",
@@ -1484,7 +1484,7 @@ defmodule Grappa.ScrollbackTest do
       {:ok, _} = ScrollbackHelpers.insert(sample(user, other_net, 2, %{body: "wrong-net"}))
       {:ok, _} = ScrollbackHelpers.insert(sample(alice, net, 3, %{sender: "alice", body: "wrong-user"}))
 
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false) == 1
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, nil) == 1
     end
 
     test "DM bidirectional — peer target counts inbound + outbound after the cursor",
@@ -1521,7 +1521,8 @@ defmodule Grappa.ScrollbackTest do
                "peer",
                outbound.id - 1,
                "vjt-grappa",
-               false
+               false,
+               nil
              ) == 2
     end
 
@@ -1559,7 +1560,8 @@ defmodule Grappa.ScrollbackTest do
                "vjt-grappa",
                0,
                "vjt-grappa",
-               false
+               false,
+               nil
              ) == 1
     end
 
@@ -1570,7 +1572,7 @@ defmodule Grappa.ScrollbackTest do
       for i <- 0..(cap + 4), do: {:ok, _} = ScrollbackHelpers.insert(sample(user, net, i))
 
       total = cap + 5
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false) == total
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, nil) == total
     end
 
     test "hide_presence: true counts only the rows a hiding fetch would return (#693)",
@@ -1579,8 +1581,8 @@ defmodule Grappa.ScrollbackTest do
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 1, %{kind: :join, body: nil}))
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 2, %{kind: :quit, body: "bye"}))
 
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, true) == 1
-      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false) == 3
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, true, nil) == 1
+      assert Scrollback.count_after({:user, user.id}, net.id, "#sniffo", 0, nil, false, nil) == 3
     end
 
     test "the presence-filtered count equals the length of the equivalent fetch (#693)",

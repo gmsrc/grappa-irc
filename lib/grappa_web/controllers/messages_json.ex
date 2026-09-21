@@ -55,12 +55,25 @@ defmodule GrappaWeb.MessagesJSON do
   the split can never be resolved on a different presence posture than
   the count — which is precisely the divergence #2037 measured between
   the two `PresenceFilter.Resolver` doors.
+
+  ## ONE number, when the caller asked only the threshold (issue 2282)
+
+  `split: nil` is the `?cap=` mode and renders `{"count": N}` alone. The
+  missing keys are not an omission to paper over with zeros: zero is a
+  perfectly good answer to "how many messages" and the caller would have no
+  way to tell it from "not asked". A `cap` caller holds its own cap, so
+  `count == cap` is all it needs to read "at least cap".
+
+  The two shapes are separate CLAUSES rather than one clause with a
+  conditional merge, so a `split` that is neither a `count_split()` nor
+  `nil` is a FunctionClauseError here instead of a body missing keys the
+  client requires.
   """
-  @spec count(%{count: non_neg_integer(), split: Grappa.Scrollback.count_split()}) :: %{
-          count: non_neg_integer(),
-          messages: non_neg_integer(),
-          events: non_neg_integer()
-        }
+  @spec count(%{count: non_neg_integer(), split: Grappa.Scrollback.count_split() | nil}) ::
+          %{count: non_neg_integer(), messages: non_neg_integer(), events: non_neg_integer()}
+          | %{count: non_neg_integer()}
   def count(%{count: n, split: %{messages: messages, events: events}}),
     do: %{count: n, messages: messages, events: events}
+
+  def count(%{count: n, split: nil}), do: %{count: n}
 end
