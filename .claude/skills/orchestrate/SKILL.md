@@ -3723,3 +3723,21 @@ giusta.
   ~82x. ⇒ **un brief che chiede «A o B» va scritto in modo che «ne' A ne' B, ecco C» sia una risposta
   LEGITTIMA**, o la misura si piega alle lettere che le hai dato. E se il terzo candidato costa una
   **scelta di prodotto**, quella e' mia da escalare e **non** della worker da indovinare.
+- 🔴🔴 **IL MIO SCANNER CLOSING-KEYWORD AVEVA UN BUCO E LO HA TROVATO IL SUO POS CTRL, NON IO
+  (orch, 2026-09-21).** Il pattern che uso da settimane e'
+  `\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b[[:space:]]+#[0-9]+`: pretende **spazio SUBITO dopo la
+  keyword** e **il cancelletto attaccato al numero** ⇒ **non matcha `fixed: #1234`** (i due punti) **ne'
+  `Resolve vjt/grappa-irc#7`** (la forma `owner/repo#N`). **GitHub le accetta entrambe.** Misurato: pos
+  ctrl **2 su 3**. Forma riparata, verificata 3/3:
+  `(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+`
+  — con neg ctrl **decisivo** (keyword presente, numero **senza** cancelletto ⇒ 0) e la sua controparte
+  col cancelletto (⇒ 2), cioe' i due versi della regola che questo file gia' scrive.
+  🥇🥇 **LA LEZIONE NON E' IL REGEX, E' IL POS CTRL: un controllo positivo per un MATCHER deve
+  esercitare OGNI GRAFIA CHE IL PARSER VERO ACCETTA, non un esemplare.** Con un solo esemplare
+  (`Closes #99`) il mio scanner passava da mesi — era un pos ctrl **per quell'esemplare**, non per la
+  CLASSE, e un matcher validato su una grafia sola **tace esattamente sulle grafie che non conosce**.
+  ⇒ **quando il controllo positivo e' un INSIEME, il verdetto e' `hit == |insieme|`, mai `hit > 0`.**
+  🪞 **E l'ho scoperto perche' una worker ne aveva uno MIGLIORE del mio** — lei riportava *"pos ctrl
+  3/3 (`Closes #99`, `fixed: #1234`, `Resolve vjt/grappa-irc#7`)"* mentre il mio ne conosceva una.
+  **Quando pretendi uno strumento nei brief, guarda quello che ti torna indietro: puo' essere piu'
+  severo del tuo.**
