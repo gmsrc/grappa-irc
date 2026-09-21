@@ -106,6 +106,8 @@ static const struct {
     {"connection_state_changed", WIRE_CONNECTION_STATE_CHANGED},
     {"network_attached", WIRE_NETWORK_ATTACHED},
     {"network_detached", WIRE_NETWORK_DETACHED},
+    {"web_session_severed", WIRE_WEB_SESSION_SEVERED},
+    {"window_invite_declined", WIRE_WINDOW_INVITE_DECLINED},
     {"whois_bundle", WIRE_WHOIS_BUNDLE},
     {"names_reply", WIRE_NAMES_REPLY},
     {"who_reply", WIRE_WHO_REPLY},
@@ -531,6 +533,15 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
         if (!json_str_is(json_get(p, "state"),
                          kind == WIRE_WINDOW_PENDING ? "pending" : "invited"))
             return false;
+        break;
+
+    case WIRE_WEB_SESSION_SEVERED:
+        if (!json_str_req(p, "code", &e.u.severed.code)) return false;
+        break;
+
+    case WIRE_WINDOW_INVITE_DECLINED:
+        if (!json_str_req(p, "network", &e.u.window_open.network)) return false;
+        if (!json_str_req(p, "channel", &e.u.window_open.channel)) return false;
         break;
 
     case WIRE_NETWORK_ATTACHED:

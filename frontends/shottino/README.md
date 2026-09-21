@@ -1253,7 +1253,16 @@ network.
 Windows mirror the server's state machine and shottino never originates a
 transition. A non-joined window is greyed with a marker — `.` joining, `?`
 invited, `!` join failed, `x` kicked, `~` network parked — and the status line
-says why (`kicked by op: flooding`, not just an inert window).
+says why (`kicked by op: flooding`, not just an inert window). An invite
+declined from any client (`window_invite_declined`) closes the `?` tab here,
+which is the banner's terminal form; a window you are actually in under that
+name is not touched.
+
+If the server **severs the web session** — you sent past the flood ladder's
+429s — the sidebar reads `severed` instead of a reconnect countdown. This is
+not a netsplit: the bouncer keeps you on every channel, but this client's login
+is revoked, so the cached token is deleted and shottino stops reconnecting
+(every retry would be a 403 on a backoff). Restart it to sign in again.
 
 Unread state is server-owned per (subject, network, channel): reading a window
 here moves the cursor for every device attached to the same session, and the

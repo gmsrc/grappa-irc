@@ -1677,6 +1677,10 @@ struct app {
      * earliest time the next attempt may run. */
     int ws_backoff;
     time_t ws_retry_at;
+    /* The server revoked this bearer (web_session_severed, §6). Every
+     * reconnect from here is a 403 on a backoff, so none is made; the
+     * sidebar says so instead of counting down. */
+    bool ws_severed;
     SSL_CTX *ssl_ctx;
 };
 
@@ -8134,6 +8138,39 @@ static void handle_wire_event(struct app *app, const char *topic_network,
         detach_network(app, ev->u.network_link.network_slug);
         break;
 
+    case WIRE_WEB_SESSION_SEVERED:
+        /* Not a netsplit (§6): the bearer is revoked and the socket is
+         * about to close, while the IRC session is untouched. The cached
+         * token goes — a reconnect with it is a 403, and the next start
+         * must log in fresh — and the reconnect loop stops. Three facts
+         * the user needs, in one line: why, what to do, and that they
+         * are still on IRC meanwhile. */
+        app->ws_severed = true;
+        if (app->token_path[0]) unlink(app->token_path);
+        log_line(app, "--- the server severed this web session (%s): you sent too fast. "
+                      "Your IRC session is untouched — the bouncer keeps you on every channel — "
+                      "but this client's login is revoked: restart shottino to sign in again",
+                 ev->u.severed.code);
+        break;
+
+    case WIRE_WINDOW_INVITE_DECLINED: {
+        /* The greyed tab IS the invite banner here, so declining (from
+         * any client) drops it — and only it: a window you are actually
+         * in under that name is not an invite. */
+        bool invited = false;
+        pthread_mutex_lock(&app->lock);
+        for (size_t i = 0; i < app->window_count; i++)
+            if (window_matches(&app->windows[i], ev->u.window_open.network, ev->u.window_open.channel))
+                invited = app->windows[i].state == WS_INVITED;
+        pthread_mutex_unlock(&app->lock);
+        if (invited) {
+            remove_window(app, ev->u.window_open.network, ev->u.window_open.channel);
+            log_line(app, "[%s/" SERVER_WINDOW "] --- invite to %s declined", ev->u.window_open.network,
+                     ev->u.window_open.channel);
+        }
+        break;
+    }
+
     case WIRE_CONNECTION_PROGRESS: {
         pthread_mutex_lock(&app->lock);
         struct network *n = network_by_slug_locked(app, ev->u.connection_progress.network);
@@ -8441,6 +8478,7 @@ static void ws_backfill_all(struct app *app) {
 /* Attempt one reconnect if the backoff timer has expired. */
 static void ws_try_reconnect(struct app *app) {
     time_t now = time(NULL);
+    if (app->ws_severed) return;
     if (now < app->ws_retry_at) return;
 
     /* Close and reopen as ONE step. A worker holding a pointer into the
@@ -9828,7 +9866,8 @@ static void draw(struct app *app) {
          * end; the countdown says recovery is in progress. */
         long wait = (long)(app->ws_retry_at - time(NULL));
         if (wait < 0) wait = 0;
-        draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
+        if (app->ws_severed) draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "severed");
+        else draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
     }
 
     /* The window list, grouped by network in FIRST-SEEN order rather

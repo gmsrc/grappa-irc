@@ -163,6 +163,85 @@ TEST(the_bool_face_agrees_with_the_pointer_one) {
     CHECK(!contains_ci("anything", ""));
 }
 
+/* A severed web session is NOT a netsplit (§6): the bearer is revoked,
+ * the socket is about to close, and the IRC session is untouched. So
+ * the cached token goes — a reconnect with it is a 403, and the next
+ * start must log in fresh — the reconnect loop stops, because every
+ * retry would be that 403 on a backoff, and the log says which of the
+ * three the user needs to know: sent too fast, restart to sign in
+ * again, still on IRC meanwhile. */
+TEST(a_severed_session_stops_reconnecting_and_drops_its_token) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    char path[] = "/tmp/shottino-token-XXXXXX";
+    int fd = mkstemp(path);
+    CHECK(fd >= 0);
+    if (fd >= 0) close(fd);
+    snprintf(app->token_path, sizeof(app->token_path), "%s", path);
+    app->ws_connected = true;
+
+    char err[160];
+    const char *text = "[null,null,\"grappa:user:vjt\",\"event\","
+                       "{\"kind\":\"web_session_severed\",\"code\":\"rate_limit_flood\"}]";
+    json_doc *d = json_parse(text, strlen(text), err, sizeof(err));
+    struct wire_frame f;
+    CHECK(wire_frame_split(json_root(d), &f));
+    struct wire_event ev;
+    CHECK(wire_narrow(f.payload, &ev));
+    handle_wire_event(app, f.network, &ev);
+    json_free(d);
+
+    CHECK(app->ws_severed);
+    CHECK(access(path, F_OK) != 0); /* gone */
+    /* The reconnect path is a no-op now: no attempt, no "retrying in". */
+    app->ws_retry_at = 0;
+    ws_try_reconnect(app);
+    bool retried = false, said = false;
+    for (size_t i = 0; i < app->log_count; i++) {
+        if (strstr(app->log[i], "retrying")) retried = true;
+        if (strstr(app->log[i], "too fast") && strstr(app->log[i], "restart")) said = true;
+    }
+    CHECK(!retried);
+    CHECK(said);
+    unlink(path);
+    free_app(app);
+}
+
+/* A declined invite takes the invited window with it — the greyed tab
+ * IS the banner here — and only that: a window you are actually in
+ * under that name is not an invite to drop. */
+TEST(a_declined_invite_closes_its_invited_window_only) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#secret", false);
+    set_window_state(app, "azzurra", "#secret", WS_INVITED, NULL, 0);
+    add_window_ex(app, "azzurra", "#home", false);
+    set_window_state(app, "azzurra", "#home", WS_JOINED, NULL, 0);
+
+    char err[160];
+    const char *text = "[null,null,\"grappa:user:vjt\",\"event\","
+                       "{\"kind\":\"window_invite_declined\",\"network\":\"azzurra\",\"channel\":\"#secret\"}]";
+    json_doc *d = json_parse(text, strlen(text), err, sizeof(err));
+    struct wire_frame f;
+    CHECK(wire_frame_split(json_root(d), &f));
+    struct wire_event ev;
+    CHECK(wire_narrow(f.payload, &ev));
+    handle_wire_event(app, f.network, &ev);
+    /* The same event for a JOINED window does nothing. */
+    const char *joined = "[null,null,\"grappa:user:vjt\",\"event\","
+                         "{\"kind\":\"window_invite_declined\",\"network\":\"azzurra\",\"channel\":\"#home\"}]";
+    json_doc *d2 = json_parse(joined, strlen(joined), err, sizeof(err));
+    CHECK(wire_frame_split(json_root(d2), &f));
+    CHECK(wire_narrow(f.payload, &ev));
+    handle_wire_event(app, f.network, &ev);
+    json_free(d);
+    json_free(d2);
+
+    CHECK_LONG(app->window_count, 1);
+    CHECK(window_matches(&app->windows[0], "azzurra", "#home"));
+    free_app(app);
+}
+
 /* The network list MERGES: a network already known keeps what the
  * session learned about it, one that is new is appended, and one the
  * server stopped listing is left to the detach event.
@@ -5205,6 +5284,8 @@ int main(void) {
     RUN(the_case_insensitive_search_is_ours_and_returns_where_it_matched);
     RUN(the_state_directory_follows_the_xdg_variable);
     RUN(the_bool_face_agrees_with_the_pointer_one);
+    RUN(a_severed_session_stops_reconnecting_and_drops_its_token);
+    RUN(a_declined_invite_closes_its_invited_window_only);
     RUN(the_network_list_merges_rather_than_replaces);
     RUN(a_detached_network_takes_its_windows_with_it);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);

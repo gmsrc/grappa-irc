@@ -629,6 +629,29 @@ TEST(network_attached_and_detached) {
     json_free(d);
 }
 
+/* The flood ladder severed this bearer (§6): a code and nothing else,
+ * and the socket is about to close. The operator refused an invite
+ * (§9): the window it named is the banner to drop. */
+TEST(severed_and_invite_declined) {
+    struct wire_event ev;
+    bool ok;
+    json_doc *d = narrow("{\"kind\":\"web_session_severed\",\"code\":\"rate_limit_flood\"}", &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.kind == WIRE_WEB_SESSION_SEVERED);
+    CHECK_STR(ev.u.severed.code, "rate_limit_flood");
+    json_free(d);
+    d = narrow("{\"kind\":\"web_session_severed\"}", &ev, &ok);
+    CHECK(!ok);
+    json_free(d);
+    d = narrow("{\"kind\":\"window_invite_declined\",\"network\":\"azz\",\"channel\":\"#secret\"}",
+               &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.kind == WIRE_WINDOW_INVITE_DECLINED);
+    CHECK_STR(ev.u.window_open.network, "azz");
+    CHECK_STR(ev.u.window_open.channel, "#secret");
+    json_free(d);
+}
+
 TEST(connection_state_changed) {
     struct wire_event ev;
     bool ok;
@@ -1001,6 +1024,7 @@ int main(void) {
     RUN(maps_keyed_by_data);
     RUN(isupport);
     RUN(network_attached_and_detached);
+    RUN(severed_and_invite_declined);
     RUN(connection_state_changed);
     RUN(simple_arms);
     RUN(server_settings);

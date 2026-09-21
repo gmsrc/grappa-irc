@@ -131,6 +131,8 @@ typedef enum {
     WIRE_CONNECTION_STATE_CHANGED,
     WIRE_NETWORK_ATTACHED,
     WIRE_NETWORK_DETACHED,
+    WIRE_WEB_SESSION_SEVERED,
+    WIRE_WINDOW_INVITE_DECLINED,
     WIRE_WHOIS_BUNDLE,
     WIRE_NAMES_REPLY,
     WIRE_WHO_REPLY,
@@ -342,7 +344,14 @@ struct wire_event {
         struct {
             const char *network;
             const char *channel;
-        } window_open; /* window_pending / window_invited */
+        } window_open; /* window_pending / window_invited / window_invite_declined */
+
+        /* web_session_severed (§6): the flood ladder revoked this bearer
+         * and the socket is about to close. `code` is the snake_case
+         * sever code, `rate_limit_flood` being the only one today. */
+        struct {
+            const char *code;
+        } severed;
 
         struct {
             long network_id;
