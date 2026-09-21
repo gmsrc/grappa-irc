@@ -3825,3 +3825,36 @@ giusta.
   ℹ️ **Corollario utile, misurato lo stesso giorno: se una domanda e' l'ULTIMA riga del canale, il suo
   silenzio NON e' scroll depth** — e' un dato diverso, e va letto come tale invece di attribuirlo al
   traffico. **Lo stato del CANALE e' misurabile; lo stato della sua testa no.**
+## 🔒 AUDITARE UN GATE SI FA ENUMERANDO I JOB, MAI GREPANDO IL TOKEN DEL GATE (orch, 2026-09-21, bucata da w2)
+🔴🔴 **Ho autorizzato un dry-run di `release.yml` dichiarando *"misurato: deb/arch/rpm/publish
+saltano, ogni `push:` e' false"* — e la mia enumerazione dei job NON ERA UNA ENUMERAZIONE, era un
+grep.** Cercavo `!inputs.docker_validation` negli `if:` e `push:` nei `with:`. **Un job gatato
+TRANSITIVAMENTE non porta nessuno dei due token**, quindi e' invisibile per costruzione: `apt-repo:`
+(riga 1833) rigenera `grappa.chat/debian` e `/rpm` con `secrets.APT_PUBLISH_*` ed e' tenuto fermo
+**solo** da `needs: [publish]` + `if: needs.publish.result == 'success'`. **L'ha trovato w2 mappando
+i job**, non grepando — *"`curl -X POST` non matcha `gh api -X POST`"*, parole sue.
+✅ **Salvo, e verificato da me sulla corsa VIVA** (`runs/<id>/jobs`: `refresh the apt and rpm
+repositories` = **skipped**, come deb/arch/rpm/publish). **Ma salvo per un gate che la mia lista non
+copriva**: se `publish` fosse stato gatato diversamente, avrei dato il via libera a una
+pubblicazione su un dominio pubblico credendo di averla esclusa.
+🥇 **REGOLA: enumera i JOB (`^  [a-z][a-z0-9_-]*:$` sul file, o la lista dei job della corsa),
+poi per OGNUNO chiedi «cosa lo tiene fermo?».** Misurato li': **7 job veri**, la mia lista ne
+nominava **4**. Un `if:` diretto, un `needs:` che cascata, una matrice vuota e una `concurrency` che
+cancella sono **quattro meccanismi diversi** e solo il primo si trova grepando.
+🥇 *Stessa famiglia di «un grep su un identificatore misura le OCCORRENZE DEL TESTO, non gli
+USI» — ma vista dal lato in cui ASSOLVE invece di accusare, che e' il lato pericoloso: un job che
+non compare nel grep si legge come un job che non c'e'.*
+
+🧭 **E DUE MIE ATTRIBUZIONI ERANO SBAGLIATE NELLO STESSO AUDIT, entrambe corrette da w2 e
+ri-verificate da me — la garanzia era PIU' FORTE di come l'avevo scritta, e per ragioni diverse:**
+- l'`if:` a `1368` **non e' del `build-push`, e' del `Log in to ghcr.io`** ⇒ nel dry-run il job
+  `docker` (l'unico con `packages: write`) **non si autentica affatto**: due barriere INDIPENDENTI,
+  `push: false` **e** nessuna credenziale. Il commento nel file lo dice esplicitamente — *"stays a
+  property of the credentials, not of a flag someone could flip by mistake"*.
+- il login a `1567` gira davvero su ogni path, **ma sta nello `smoke`, che e' scoped
+  `packages: read`** ⇒ **non potrebbe pubblicare nemmeno volendo.** La mia frase *"e' la
+  credenziale per TIRARE il fixture"* descriveva l'INTENZIONE; la garanzia e' il **permesso**.
+🥇 **Una garanzia si cita per il MECCANISMO che la regge, non per l'effetto che osservi**: chi
+rilegge *"serve per tirare"* non sa che c'e' uno scope a proteggerlo, e il giorno che qualcuno
+aggiunge un push a quel job non trova nessun avviso. *Terza volta in una mattina che leggo la
+struttura giusta e le attribuisco il meccanismo sbagliato: e' la mia diagnosi n.1 di sempre.*
