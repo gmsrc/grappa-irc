@@ -1377,6 +1377,10 @@ struct app {
      * something to guess at across a bug report. */
     bool wire_echo;
     bool animate_media;
+    /* Fold every network but the focused window's to one sidebar row.
+     * The expanded network is DERIVED from focus, never stored: the
+     * only state is whether folding is wanted at all. */
+    bool sidebar_collapse;
     bool inline_media_enabled;
     /* #451 opt-in: also auto-render media from hosts that are NOT this
      * deployment's. OFF by default and deliberately not persisted — see
@@ -1580,7 +1584,12 @@ struct app {
      * defaults happen to BE, including the ones computed from the
      * machine (media depends on ffmpeg being installed) and the ones a
      * table column could not hold. */
-    char *setting_default[32];
+    /* One slot per row of SETTINGS. The table and this bound used to
+     * disagree silently: capture stopped at a literal 32, the table sat
+     * at exactly 32, and the 33rd row would have listed, set, and lost
+     * /unset without a word. The test pins settings_count() to this. */
+#define SETTINGS_MAX 48
+    char *setting_default[SETTINGS_MAX];
     /* CTCP pings we are waiting on.
      *
      * The stamp travels in the payload and comes back in the reply, so
@@ -9646,15 +9655,60 @@ static void draw(struct app *app) {
         draw_text(1, 1, side - 2, CP_ERROR, A_BOLD, "retry %lds", wait);
     }
 
-    char last_net[MAX_SLUG] = "";
+    /* The window list, grouped by network in FIRST-SEEN order rather
+     * than walked in arrival order: a query opened later on the first
+     * network used to earn that network a second header under the other
+     * network's rows.
+     *
+     * Only the focused window's network is spelled out. Every other one
+     * FOLDS to a single row — with three networks the list ate the whole
+     * sidebar and the roster under it, the thing that says who is in the
+     * room you are reading, was left two rows or none. The expanded
+     * network is derived from focus and never stored; the folded row
+     * carries what is waiting in the group (a mention outranks a count,
+     * exactly as a window row shows it) and its click lands on the
+     * window that most wants you. Numbers stay global, so `/window N`
+     * reaches a folded window as it always did. `/set sidebar.collapse
+     * off` is the full list. */
     int y = 3;
-    for (size_t i = 0; i < app->window_count && y < rows - 1; i++) {
-        struct window *win = &app->windows[i];
-        if (!irc_name_eq(last_net, win->network)) {
-            snprintf(last_net, sizeof(last_net), "%s", win->network);
-            draw_text(y++, 1, side - 2, CP_ACCENT, A_BOLD, "%s", win->network);
-            if (y >= rows - 1) break;
+    for (size_t gi = 0; gi < app->window_count && y < rows - 1; gi++) {
+        const char *net = app->windows[gi].network;
+        bool seen = false;
+        for (size_t k = 0; k < gi && !seen; k++) seen = irc_name_eq(app->windows[k].network, net);
+        if (seen) continue;
+        if (app->sidebar_collapse && !irc_name_eq(net, w->network)) {
+            unsigned unread = 0, mentions = 0;
+            size_t target = gi;
+            int best = 0;
+            for (size_t i = gi; i < app->window_count; i++) {
+                const struct window *win = &app->windows[i];
+                if (!irc_name_eq(win->network, net)) continue;
+                unread += win->unread;
+                mentions += win->mentions;
+                int rank = win->mentions > 0 ? 2 : (win->unread > 0 ? 1 : 0);
+                if (rank > best) {
+                    best = rank;
+                    target = i;
+                }
+            }
+            draw_text(y, 0, 1, CP_MUTED, A_DIM, "+");
+            if (mentions > 0) draw_text(y, 1, side - 1, CP_MENTION, A_BOLD, "%s (%u)", net, mentions);
+            else if (unread > 0) draw_text(y, 1, side - 1, CP_ACCENT, A_BOLD, "%s [%u]", net, unread);
+            else draw_text(y, 1, side - 1, CP_ACCENT, A_BOLD, "%s", net);
+            if (app->win_region_count < MAX_WINDOWS) {
+                struct win_region *r = &app->win_regions[app->win_region_count++];
+                r->y = y;
+                r->x0 = 0;
+                r->x1 = side - 1;
+                r->window = target;
+            }
+            y++;
+            continue;
         }
+        draw_text(y++, 1, side - 2, CP_ACCENT, A_BOLD, "%s", net);
+        for (size_t i = gi; i < app->window_count && y < rows - 1; i++) {
+        struct window *win = &app->windows[i];
+        if (!irc_name_eq(win->network, net)) continue;
         bool selected = window_is_visible_locked(app, i);
         bool unread = app->windows[i].unread > 0;
         /* A not-joined window is greyed and marked. cicchetto renders the
@@ -9687,6 +9741,7 @@ static void draw(struct app *app) {
             r->window = i;
         }
         y++;
+        }
     }
 
     /* The roster lives UNDER the window list, in whatever the window list
@@ -11959,6 +12014,8 @@ static const struct setting_def SETTINGS[] = {
     { "mouse", SET_BOOL, NULL, "click links, right-click menu, wheel scrolling" },
     { "media", SET_CHOICE, "on|off|all|first-party", "inline images, and from which hosts" },
     { "animate", SET_BOOL, NULL, "play GIFs and clips as colour art" },
+    { "sidebar.collapse", SET_BOOL, NULL,
+      "fold every network but the one you are in to a single row" },
     { "llm.backend", SET_CHOICE, "openai|claude-cli", "which model transport /llm uses" },
     { "llm.url", SET_TEXT, NULL, "openai: the API base, e.g. https://api.openai.com/v1" },
     { "llm.token", SET_TEXT, NULL, "openai: bearer token (never echoed, never shown)" },
@@ -12027,6 +12084,8 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
     if (strcmp(name, "mouse") == 0) snprintf(out, out_sz, "%s", app->mouse_enabled ? "on" : "off");
     else if (strcmp(name, "animate") == 0)
         snprintf(out, out_sz, "%s", app->animate_media ? "on" : "off");
+    else if (strcmp(name, "sidebar.collapse") == 0)
+        snprintf(out, out_sz, "%s", app->sidebar_collapse ? "on" : "off");
     else if (strcmp(name, "media") == 0)
         snprintf(out, out_sz, "%s", app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off");
     else if (strcmp(name, "llm.backend") == 0)
@@ -12130,6 +12189,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     const char *src = "";
     if (strcmp(name, "mouse") == 0) src = app->mouse_enabled ? "on" : "off";
     else if (strcmp(name, "animate") == 0) src = app->animate_media ? "on" : "off";
+    else if (strcmp(name, "sidebar.collapse") == 0) src = app->sidebar_collapse ? "on" : "off";
     else if (strcmp(name, "media") == 0)
         src = app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off";
     else if (strcmp(name, "llm.backend") == 0)
@@ -12203,6 +12263,8 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
         mouse_apply(app);
     } else if (strcmp(def->name, "animate") == 0) {
         app->animate_media = on;
+    } else if (strcmp(def->name, "sidebar.collapse") == 0) {
+        app->sidebar_collapse = on;
     } else if (strcmp(def->name, "media") == 0) {
         if (strcasecmp(value, "off") == 0) app->inline_media_enabled = false;
         else if (strcasecmp(value, "all") == 0) {
@@ -12455,7 +12517,7 @@ static void prefs_save(struct app *app) {
 static void settings_rows_refresh_locked(struct app *app);
 
 static void settings_capture_defaults(struct app *app) {
-    for (size_t i = 0; i < settings_count() && i < 32; i++) {
+    for (size_t i = 0; i < settings_count() && i < SETTINGS_MAX; i++) {
         char raw[MAX_LINE];
         setting_raw(app, SETTINGS[i].name, raw, sizeof(raw));
         free(app->setting_default[i]);
@@ -12464,7 +12526,7 @@ static void settings_capture_defaults(struct app *app) {
 }
 
 static void settings_free_defaults(struct app *app) {
-    for (size_t i = 0; i < 32; i++) {
+    for (size_t i = 0; i < SETTINGS_MAX; i++) {
         free(app->setting_default[i]);
         app->setting_default[i] = NULL;
     }
@@ -12473,7 +12535,7 @@ static void settings_free_defaults(struct app *app) {
 /* Put one preference back to what it was at boot. Returns false when the
  * name is not a setting; the caller says so. */
 static bool setting_reset(struct app *app, const char *name) {
-    for (size_t i = 0; i < settings_count() && i < 32; i++) {
+    for (size_t i = 0; i < settings_count() && i < SETTINGS_MAX; i++) {
         if (strcasecmp(SETTINGS[i].name, name) != 0) continue;
         const char *def = app->setting_default[i] ? app->setting_default[i] : "";
         /* What is about to be lost, so the report can tell "restored" from
@@ -22781,6 +22843,10 @@ int main(int argc, char **argv) {
      * you are logged in to; `/media off` stops fetching entirely. */
     app->inline_media_peers = have_ffmpeg;
     app->animate_media = have_ffmpeg;
+    /* On by default: with one network the sidebar reads exactly as
+     * before (the one network is the focused one), and with several
+     * the roster gets its rows back. */
+    app->sidebar_collapse = true;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {

@@ -328,6 +328,23 @@ of spelling `[azzurra/#sniffo]` out beside itself in a field sized for
 the longest name IRC allows. The spellings are kept once, in a table
 swept of whatever the rows have stopped referring to.
 
+## The sidebar
+
+Windows are listed by network, and only the network of the window you are IN
+is spelled out. Every other network **folds to one row** — `+libera (2)` when
+something there mentions you, `+ircnet [7]` for how many lines are waiting,
+just the name when nothing is. Click the row and you land on the window in it
+that most wants you (a mention first, then unread, then the first one), which
+unfolds it: the open network is the focused window's, derived, never stored.
+
+The reason is the roster under the list. With three networks the window list
+ate the whole sidebar and the users of the room you were reading were left two
+rows or none; windows keep priority over the roster (a channel you cannot see
+is one you cannot reach), so the list had to get shorter instead. Window
+numbers stay global — `/window 9` reaches a folded window as it always did.
+
+`/set sidebar.collapse off` is the full list.
+
 ## The userlist
 
 `Ctrl-U` hands the arrow keys to the member list; `Esc` gives them back.

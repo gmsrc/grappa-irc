@@ -1187,6 +1187,108 @@ TEST(the_sidebar_records_a_row_for_every_window) {
     free(app);
 }
 
+/* Only the network you are IN is spelled out in the sidebar; every other
+ * one folds to a single header row.
+ *
+ * With three networks the window list ate the whole sidebar and the
+ * roster under it — the thing that tells you who is in the room you are
+ * reading — was left two rows or none. Windows keep priority over the
+ * roster (a channel you cannot see in the list is one you cannot reach),
+ * so the list itself had to get shorter: a network you are not looking
+ * at is one row, carrying the sum of what is waiting there, and clicking
+ * that row takes you to the window in it that most wants you — a mention
+ * first, then unread, then whatever is first — which expands it, because
+ * the expanded network IS the focused window's, derived and never
+ * stored. Numbers stay global, so `/window 5` reaches a folded window.
+ *
+ * The grouping is by network in first-seen order, not by arrival: a
+ * query opened later on the first network used to get that network's
+ * header printed a second time under the other network's rows. */
+TEST(the_sidebar_folds_every_network_but_the_focused_one) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    app->sidebar_collapse = true;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_network(app, "libera", "ov", "@+");
+    add_test_window(app, "azzurra", "$server");   /* 0 */
+    add_test_window(app, "azzurra", "#sniffo");   /* 1, focused */
+    add_test_window(app, "libera", "$server");    /* 2 */
+    add_test_window(app, "libera", "#libera");    /* 3: unread */
+    add_test_window(app, "libera", "#elixir");    /* 4: a mention */
+    add_test_window(app, "azzurra", "someone");   /* 5: a query opened LATER */
+    add_test_window(app, "ircnet", "$server");    /* 6 */
+    add_test_window(app, "ircnet", "#ircnet");    /* 7: unread, no mention */
+    app->windows[3].unread = 4;
+    app->windows[4].unread = 2;
+    app->windows[4].mentions = 1;
+    app->windows[7].unread = 3;
+    app->pane_count = 1;
+    app->panes[0].window = 1;
+
+    erase();
+    draw(app);
+
+    /* azzurra's three windows each have a row — the late query INCLUDED,
+     * under the one azzurra header — and each other network has exactly
+     * one, whose click lands on the window that most wants you: the
+     * mention on libera, the unread on ircnet. */
+    CHECK_LONG(app->win_region_count, 5);
+    size_t seen[8] = { 0 };
+    for (size_t i = 0; i < app->win_region_count; i++) seen[app->win_regions[i].window]++;
+    CHECK_LONG(seen[0], 1);
+    CHECK_LONG(seen[1], 1);
+    CHECK_LONG(seen[5], 1);
+    CHECK_LONG(seen[4], 1); /* the mention outranks the unread */
+    CHECK_LONG(seen[7], 1);
+    CHECK_LONG(seen[2] + seen[3] + seen[6], 0);
+
+    /* The folded row names the network and what is waiting in it the
+     * way a window row does: a mention outranks the count, else the
+     * count summed over the group. */
+    char row[MAX_W + 1];
+    int header_y = -1;
+    for (size_t i = 0; i < app->win_region_count; i++)
+        if (app->win_regions[i].window == 4) header_y = app->win_regions[i].y;
+    CHECK(header_y > 0);
+    for (int x = 0; x < MAX_W; x++) row[x] = (char)(mvinch(header_y, x) & A_CHARTEXT);
+    row[MAX_W] = 0;
+    CHECK(strstr(row, "libera (1)") != NULL);
+    CHECK(row[0] == '+'); /* folded, and says so */
+    header_y = -1;
+    for (size_t i = 0; i < app->win_region_count; i++)
+        if (app->win_regions[i].window == 7) header_y = app->win_regions[i].y;
+    CHECK(header_y > 0);
+    for (int x = 0; x < MAX_W; x++) row[x] = (char)(mvinch(header_y, x) & A_CHARTEXT);
+    row[MAX_W] = 0;
+    CHECK(strstr(row, "ircnet [3]") != NULL);
+    /* Nothing of libera's windows is drawn anywhere. */
+    char screen[MAX_H][MAX_W + 1];
+    snap(screen, MAX_H, MAX_W);
+    bool libera_row = false;
+    for (int y = 0; y < MAX_H; y++)
+        if (strstr(screen[y], "#elixir") || strstr(screen[y], "#libera")) libera_row = true;
+    CHECK(!libera_row);
+    /* The late query sits under azzurra's header, and azzurra is headed once. */
+    int azzurra_headers = 0;
+    for (int y = 0; y < MAX_H; y++) {
+        /* The sidebar only — the topic bar spells the network too. */
+        char sidebar[16];
+        snprintf(sidebar, sizeof(sidebar), "%.14s", screen[y]);
+        if (strstr(sidebar, "azzurra")) azzurra_headers++;
+    }
+    CHECK_LONG(azzurra_headers, 1);
+
+    /* Off, the sidebar is the full list it always was. */
+    app->sidebar_collapse = false;
+    erase();
+    draw(app);
+    CHECK_LONG(app->win_region_count, app->window_count);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 /* A modal opened over the settings panel must actually be DRAWN.
  *
  * The panel draw path ends in `refresh(); return;` — a panel replaces
@@ -1573,6 +1675,7 @@ int main(void) {
     }
     RUN(audio_is_clickable_but_not_drawn);
     RUN(the_sidebar_records_a_row_for_every_window);
+    RUN(the_sidebar_folds_every_network_but_the_focused_one);
     RUN(a_modal_over_the_settings_panel_is_drawn);
     RUN(wrapped_text_tail_matches_full_draw);
     RUN(message_line_tail_matches_full_draw);

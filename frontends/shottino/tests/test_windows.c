@@ -5004,7 +5004,7 @@ TEST(the_settings_panel_lists_every_setting) {
      * past it loses /unset for the tail — SILENTLY, which is the part
      * that matters: the row still lists, still sets, and only "put it
      * back how it was" quietly stops working. */
-    CHECK(settings_count() <= 32);
+    CHECK(settings_count() <= SETTINGS_MAX);
 
     for (size_t i = 0; i < settings_count(); i++) {
         /* Every row names its setting and shows a value — not "?" , the
