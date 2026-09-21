@@ -3675,6 +3675,27 @@ l'artefatto sbagliato, ma **il punto di riferimento che si è mosso sotto la dom
   >0), con pos ctrl (una stringa che c'è già) e neg ctrl. Misurato:
   `settings-build-deployed-hash` **0 → 1**, pos ctrl 3 → 4, neg ctrl 0, hash `CH9WCihg → CdqZuSQZ`.
   **La mtime e la riga di broadcast non rispondono alla domanda.**
+  🔴🔴 **E QUELLA RICETTA HA DUE MODI DI FALLIRE, PRESI ENTRAMBI NELLO STESSO DEPLOY (orch,
+  2026-09-21, staging) — e il verde sano l'ho avuto per fortuna, non per metodo.**
+  **(1) UN TOKEN DERIVATO DA UN'ANNOTAZIONE DI TIPO NON ESISTE NEL BUNDLE, PER COSTRUZIONE: IL
+  BUILD I TIPI LI CANCELLA.** Avevo scelto come token di verifica un identificatore letto in una
+  **annotazione di tipo** del sorgente: nel bundle **non può esserci in nessun caso** ⇒ `after=0`
+  ⇒ **falso ROSSO su un deploy sano**, e la direzione è quella che fa rollbackare una cosa che
+  funziona. ⇒ **prima di fidarti dello zero, verifica che il token esista A MONTE** — e scegli
+  **valori di runtime** (nomi di classe, stringhe letterali, chiavi di oggetto), **mai** nomi che
+  vivono solo nei tipi, nelle interfacce o nei commenti. *Ennesima faccia dello zero falso e
+  plausibile, costume nuovo: non lo strumento rotto e non l'artefatto sbagliato, ma **un token che
+  nell'artefatto non può comparire**.*
+  **(2) UN «BEFORE» CATTURATO DOPO IL WAITER È UNO STATO POST.** Il mio l'ho preso alle `~09:53Z`
+  con il deploy già finito alle `~09:51Z`: **misurava il dopo e lo chiamava prima** ⇒ il confronto
+  before/after diventa **vacuo**, e non se ne accorge nessuno perché i due numeri *esistono*
+  entrambi. ⇒ **un before-state si congela nello STESSO BLOCCO che lancia l'azione**, mai dopo il
+  waiter, mai in un turno successivo. È la stessa regola già scritta per l'`OLD` del costo di un
+  pane — *un waiter che si misura da sé il proprio `OLD` misura da quando è partito LUI* — qui
+  applicata a un artefatto invece che a un contatore.
+  🥇 *I due difetti si coprono a vicenda e per questo il giro è passato: il before era inutile
+  **perché** il token era fasullo. **Due strumenti rotti che danno il risultato giusto non sono una
+  verifica**, e vanno contati come due, non come un giro riuscito.*
 - ⚠️ **`ci-watch.sh` stampa `NO-CHECKS (conflicting?)` anche quando l'API è semplicemente
   IRRAGGIUNGIBILE** — tre volte su tre armamenti dal Pi, sempre rete. **Quella riga asserisce una
   causa che non ha misurato** (stessa famiglia dell'etichetta cablata *"still refusing port 22"*).
