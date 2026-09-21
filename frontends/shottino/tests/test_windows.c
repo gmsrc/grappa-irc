@@ -163,6 +163,80 @@ TEST(the_bool_face_agrees_with_the_pointer_one) {
     CHECK(!contains_ci("anything", ""));
 }
 
+/* The network list MERGES: a network already known keeps what the
+ * session learned about it, one that is new is appended, and one the
+ * server stopped listing is left to the detach event.
+ *
+ * It used to be replaced wholesale. That was fine at startup, the only
+ * time it ran; re-reading it when a network ATTACHES mid-session
+ * (§4e) would have thrown away every other network's prefixes, its
+ * `connecting` flag and the record of which DM listener was joined —
+ * so every DM topic would have been joined a second time. */
+TEST(the_network_list_merges_rather_than_replaces) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    /* azzurra is there from window_app(); teach it something only the
+     * live session knows. */
+    app->networks[0].prefix_count = 2;
+    snprintf(app->networks[0].ws_dm_nick, sizeof(app->networks[0].ws_dm_nick), "vjt");
+
+    const char *two = "[{\"id\":1,\"slug\":\"azzurra\",\"nick\":\"vjt\",\"connection_state\":\"connected\"},"
+                      "{\"id\":2,\"slug\":\"libera\",\"nick\":\"vjt\",\"connection_state\":\"parked\"}]";
+    parse_networks(app, two, strlen(two));
+    CHECK_LONG(app->network_count, 2);
+    CHECK_STR(app->networks[0].slug, "azzurra");
+    CHECK_LONG(app->networks[0].prefix_count, 2);      /* kept */
+    CHECK_STR(app->networks[0].ws_dm_nick, "vjt");     /* kept */
+    CHECK_STR(app->networks[1].slug, "libera");
+    CHECK_LONG(app->networks[1].id, 2);
+    CHECK(app->networks[1].conn_state == CONN_PARKED);
+
+    /* Again with the same list: nothing doubles. */
+    parse_networks(app, two, strlen(two));
+    CHECK_LONG(app->network_count, 2);
+
+    free_app(app);
+}
+
+/* A network that left the session takes its windows with it, and its
+ * entry: every `/networks/:slug/...` route answers 404 for it from that
+ * moment (§4e), so a window still open on it is one keystroke from a
+ * refusal that reads like the channel's fault. A pane that was showing
+ * one of them lands somewhere that still exists. */
+TEST(a_detached_network_takes_its_windows_with_it) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    struct network *n2 = &app->networks[app->network_count++];
+    snprintf(n2->slug, sizeof(n2->slug), "libera");
+    n2->id = 2;
+    add_window_ex(app, "azzurra", "$server", false);
+    add_window_ex(app, "libera", "$server", false);
+    add_window_ex(app, "libera", "#elixir", true);
+    add_window_ex(app, "azzurra", "#sniffo", false);
+    CHECK_LONG(app->window_count, 4);
+    CHECK_LONG(focused_window_locked(app), 2);
+
+    detach_network(app, "libera");
+
+    CHECK_LONG(app->window_count, 2);
+    CHECK(window_matches(&app->windows[0], "azzurra", "$server"));
+    CHECK(window_matches(&app->windows[1], "azzurra", "#sniffo"));
+    CHECK(focused_window_locked(app) < app->window_count);
+    pthread_mutex_lock(&app->lock);
+    CHECK(network_by_slug_locked(app, "libera") == NULL);
+    CHECK(network_by_slug_locked(app, "azzurra") != NULL);
+    pthread_mutex_unlock(&app->lock);
+    CHECK_LONG(app->network_count, 1);
+    /* Said in the log, where the operator will look for why the sidebar
+     * changed under them. */
+    bool said = false;
+    for (size_t i = 0; i < app->log_count; i++)
+        if (strstr(app->log[i], "libera") && strstr(app->log[i], "detached")) said = true;
+    CHECK(said);
+
+    free_app(app);
+}
+
 TEST(a_channel_opened_twice_in_two_spellings_is_one_window) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -3018,7 +3092,7 @@ TEST(an_echo_is_retired_whatever_the_channel_case_or_the_verb) {
     CHECK(app != NULL);
 
     add_pending_echo(app, "azzurra", "SomeOne", "vjt", "hi there");
-    add_pending_echo(app, "azzurra", "#sniffo", "vjt", "\x01ACTION waves\x01");
+    add_pending_echo(app, "azzurra", "#sniffo", "vjt", "\x01" "ACTION waves\x01");
     CHECK_LONG(app->log_count, 2);
     CHECK_LONG(app->pending_count, 2);
     CHECK(app->log_pending[0] != 0 && app->log_pending[1] != 0);
@@ -3031,7 +3105,7 @@ TEST(an_echo_is_retired_whatever_the_channel_case_or_the_verb) {
     CHECK(strstr(app->log[0], "waves") != NULL);
 
     /* The action, by its raw body — the line never contained it. */
-    clear_matching_pending_echo(app, "azzurra", "#SNIFFO", "\x01ACTION waves\x01");
+    clear_matching_pending_echo(app, "azzurra", "#SNIFFO", "\x01" "ACTION waves\x01");
     CHECK_LONG(app->log_count, 0);
     CHECK_LONG(app->pending_count, 0);
 
@@ -5131,6 +5205,8 @@ int main(void) {
     RUN(the_case_insensitive_search_is_ours_and_returns_where_it_matched);
     RUN(the_state_directory_follows_the_xdg_variable);
     RUN(the_bool_face_agrees_with_the_pointer_one);
+    RUN(the_network_list_merges_rather_than_replaces);
+    RUN(a_detached_network_takes_its_windows_with_it);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
     RUN(a_query_answered_in_another_case_reuses_its_window);
     RUN(a_row_files_under_its_windows_canonical_key);
