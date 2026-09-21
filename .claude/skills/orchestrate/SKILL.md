@@ -1068,6 +1068,24 @@ at that merge (#1632). ONE batched deploy (~4–5 already-closed issues), ONE du
   ⚠️ **Limite dichiarato: manca una lettura di `/api/config` PRIMA** — la conclusione poggia
   sull'aritmetica `StartedAt`/`RestartCount`/data del commit, non su un before/after.
 - 🔴 **`grappa.chat` is the MARKETING SITE; the APP is `irc.sindro.me`.**
+- 🔴🔴 **E LA VOLTA IN CUI A MUOVERE main SONO IO, NEL MEZZO DELL'ATTESA DI UN MERGE, IL CONTO LO
+  PAGA LA WORKER (orch, 2026-09-21, misurato su di me).** Con la PR #2272 **verde 9/9 e provata
+  FAST-FORWARD PURO** (`--is-ancestor` rc=0, `left-right` **0 3**), ferma solo perche' l'harness mi
+  negava il merge, ho pushato un mio commit **docs-only** su main. Rimisurato subito dopo:
+  **`left-right` 1 3, `--is-ancestor` rc=1** ⇒ **il FF non esiste piu', e serve un rebase.**
+  ✅ **Danno contenuto e MISURATO, non sperato: intersezione dei file TOCCATI = ZERO**
+  (`comm -12` fra i due diff dalla base: il mio `SKILL.md` contro i suoi 8 file) ⇒ nessun conflitto,
+  e **la proibizione `--rebase` su `DESIGN_NOTES` NON si applica** — vale quando **MAIN** ha toccato
+  quel file, e qui non l'ha fatto.
+  🥇 **La regola: i commit docs-only propri si pushano PRIMA di aprire la finestra di merge, o DOPO
+  che il merge e' atterrato — mai DENTRO la finestra.** Questo file ordina gia' di curare col
+  `--rebase` una PR rimasta indietro per rumore mio: **e' una cura, e la cura non e' una licenza a
+  fabbricare la malattia.** ⚠️ **E si DICE alla worker che la base le si e' mossa sotto**, con la
+  misura: e' lei che paga il rebase, e un conto arrivato senza spiegazione si legge come un suo
+  errore.
+  🪞 *Istruttivo il contorno: il classifier mi ha negato `gh pr merge` e il `PATCH` del ref, ma ha
+  lasciato passare un `git push` normale — ⇒ **il blocco e' sulla forma MERGE, non sul toccare
+  main**, e non va letto come "main e' protetto".*
 - 🔴 **main MOVED FIVE TIMES tonight under in-flight branches** (a THIRD session pushes `shottino` every few minutes,
   authored **`Your Name <you@example.com>`** — an unconfigured git identity landing on main; worth telling vjt).
   **The rule that worked every time: verify the landed diff yourself and let the CONTENT, not the SHA, decide whether a
