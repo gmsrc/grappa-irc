@@ -3858,3 +3858,23 @@ ri-verificate da me — la garanzia era PIU' FORTE di come l'avevo scritta, e pe
 rilegge *"serve per tirare"* non sa che c'e' uno scope a proteggerlo, e il giorno che qualcuno
 aggiunge un push a quel job non trova nessun avviso. *Terza volta in una mattina che leggo la
 struttura giusta e le attribuisco il meccanismo sbagliato: e' la mia diagnosi n.1 di sempre.*
+## 🧪 IL VERDE DI UNA PR NON ATTESTA «RAMO + BASE VECCHIA»: LA CI COSTRUISCE IL **MERGE REF** (w1, 2026-09-21, correzione a un mio brief)
+🔴 Ho ordinato un rebase scrivendo *"il verde 9/9 attesta ramo + base VECCHIA, mai ramo + i
+commit nuovi di main"*. **E' FALSO su questo repo, misurato:** `ci.yml` usa `actions/checkout` con
+**0 override `ref:`**, e su `pull_request` il default e' `refs/pull/N/merge` ⇒ **la CI checka ramo +
+main AL MOMENTO IN CUI IL RUN PARTE.** ⇒ **smettere di usare quella frase nei brief.**
+🥇 **Ma la conclusione «serve un rebase» reggeva lo stesso, per 17 minuti, e va presa cosi':**
+il commit che introduceva il codice nuovo era **posteriore alla head della PR** — `is-ancestor(<quel
+commit>, <head vecchia>)` **rc=1**, sulla head ribasata **rc=0** ⇒ quel codice **non poteva stare in
+nessun verde precedente**. 🔑 **La domanda giusta non e' «la base e' vecchia?» ma «esiste gia' un
+run il cui merge ref conteneva la cosa che voglio provare?»**, e si risponde con `is-ancestor` +
+gli ORARI dei run, non con l'eta' del merge-base.
+⚠️ **Corollario:** se ti serve solo che la CI ri-veda main, **basta un push qualsiasi** — il merge
+ref viene ricalcolato. Il rebase e' il push LEGITTIMO, non un requisito in se'.
+
+## 🐚 zsh SI MANGIA `$VAR:refs/…` — INGRAFFA SEMPRE `${VAR}:refs/…` (w2, 2026-09-21, misurato su un push a main)
+`git push origin "$HEAD_SHA:refs/heads/main"` in **zsh** viene letto come il modificatore di
+espansione `:r` ⇒ `error: src refspec …c44f3efs/heads/main does not match any`, **rc=1**. ✅ Innocuo
+li' perche' **non e' stato mosso niente** (controllo: `ls-remote` leggeva ancora la sha vecchia) — ma
+il messaggio e' criptico e fa cercare il difetto nella sha. **Forma: `"${HEAD_SHA}:refs/heads/main"`,
+in OGNI ordine che passa un refspec a una worker su macOS/zsh.**
