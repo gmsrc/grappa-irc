@@ -61,9 +61,6 @@ defmodule Grappa.Scrollback do
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment, #121/#525).
   require Identifier
   require Logger
-  # issue 2176 — `Message.structural_row?/1` is a macro (the shared Ecto
-  # fragment for the structural-mode exemption), like `Identifier.nick_fold/1`.
-  require Message
 
   @max_limit 500
 

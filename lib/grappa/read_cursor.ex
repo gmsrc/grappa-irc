@@ -102,9 +102,6 @@ defmodule Grappa.ReadCursor do
   # Identifier.nick_fold/1 is a query macro (ASCII fold fragment) used by
   # rename_dm_peer/4 to match a DM cursor by the fold of the peer nick.
   require Identifier
-  # issue 2176 — Message.structural_row?/1 is the same shape: a query macro,
-  # here composing the structural-mode exemption into the #505 join condition.
-  require Message
 
   # ---------------------------------------------------------------------------
   # Types

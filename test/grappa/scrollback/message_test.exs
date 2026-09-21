@@ -3,10 +3,6 @@ defmodule Grappa.Scrollback.MessageTest do
 
   alias Grappa.Scrollback.Message
 
-  # issue 2176 — `Message.structural_row?/1` is a query macro (the shared Ecto
-  # fragment for the structural-mode exemption).
-  require Message
-
   # Phase 2 (sub-task 2e): user_id is binary_id (UUID), network_id is
   # an integer FK. assoc_constraint on both is DB-level so it doesn't
   # fire here — these tests stay sandbox-free and exercise only the
