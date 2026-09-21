@@ -3878,3 +3878,44 @@ espansione `:r` ⇒ `error: src refspec …c44f3efs/heads/main does not match an
 li' perche' **non e' stato mosso niente** (controllo: `ls-remote` leggeva ancora la sha vecchia) — ma
 il messaggio e' criptico e fa cercare il difetto nella sha. **Forma: `"${HEAD_SHA}:refs/heads/main"`,
 in OGNI ordine che passa un refspec a una worker su macOS/zsh.**
+
+## ⏰ UN VERDE DI PR SI LEGGE CON L'ORA ACCANTO AL COLORE — e su un LOCKFILE la non-sovrapposizione testuale non e' nemmeno un argomento (orch, 2026-09-21, #2279 + #2280)
+🔴🔴 **Due PR dependabot portavano `9/9 CLEAN` + `MERGEABLE` e quel verde era STANTIO.** Check
+partiti `04:23:58Z` e `04:26:11Z`; nel frattempo #2277 era atterrata `07:55:52Z` **sugli STESSI DUE
+FILE** (`cicchetto/bun.lock` + `cicchetto/package.json`). ⇒ attestavano ramo + una main che **non
+esiste piu'**, e il colore non lo dice. 🔑 **Il tell e' UN confronto: `started_at` del check-run
+piu' vecchio contro l'ora dell'ultimo commit su `origin/main`.** Se il check precede il commit,
+**quel verde e' di un'altra base: fermati.**
+🥇 **E qui la scusa abituale non esiste: su un LOCKFILE la «non-sovrapposizione testuale» non e'
+un argomento.** Due bump che toccano lo stesso `bun.lock` interagiscono **per risoluzione**, non
+per righe — e' la stessa famiglia del *budget di connessioni condiviso* che rese verde e rotto il
+batch-merge del 03-08: **il diff dei file non puo' mostrare cio' che collide.**
+🔧 **Cura per una PR dependabot: `@dependabot rebase` in un commento.** Il bot **ricrea il ramo su
+main corrente**, la CI riparte, e **quel** verde e' onesto. Misurato ai due giri: #2279 head
+`26c7a1ff9` check `08:02:0xZ` > main `07:57:53Z` ⇒ merged `08:21:56Z`; #2280 head `494e9932a`
+(forced update dalla stantia `462587980…`) check `08:24:19Z` > main `08:21:56Z` ⇒ merged
+`08:44:08Z`. ⚠️ **Una alla volta**: mergiarne una rende CONFLICTING la sorella, e **una PR
+CONFLICTING non fa girare NESSUNA CI** — quello zero si legge come *"non e' ancora partita"*.
+⚠️ **Paletto suo: se dopo il rebase la head e' ANCORA quella vecchia, il bot non ha ribasato
+⇒ FERMATI**, non leggere l'assenza di check come un'attesa.
+
+🪞🥇 **E IL PALETTO CHE AVEVO MESSO IO NEI FILE D'ORDINE ERA SBAGLIATO, CORRETTO PRIMA DI
+DISPATCHARE: «il pos ctrl su una head gia' mergiata deve contarne 9».** **FALSO, misurato:**
+`tot=5` su `658d5134a` e `tot=10` su `d7b531e1a`, entrambe tip di main in momenti diversi.
+🔑 **Un push su `main` gira un SET DI JOB DIVERSO da una `pull_request`, e il numero varia per
+sha.** Lo strumento era vivo; **la mia PREDIZIONE no** — consegnato cosi' sarebbe stato **un falso
+rosso su un verde sano, due volte**.
+🥇 **Forma che regge: pos ctrl = conteggio NON ZERO su una sha REALE; neg ctrl = sha di soli zeri
+⇒ `rc!=0`** (misurato rc=1, HTTP 422 *No commit found*). *Un pos ctrl scelto assumendo che
+risponda SI e' un pos ctrl che non c'e'* — e qui l'assunzione era su una GRANDEZZA, non
+sull'esistenza. ⚠️ **E il numero atteso di check di una PR non si copia da un'altra PR**: si deriva
+dai `paths:` che il suo diff tocca, **come PAVIMENTO (`tot >= FLOOR && DONE == tot`), mai come
+uguaglianza** — l'aggregatore `integration (all shards)` **non esiste come check-run** finche' gli
+shard non sono finiti, quindi ogni derivazione fatta all'arm sotto-conta di uno per costruzione.
+
+🪞 **Contorno, e vale per ogni patch automatica a un file d'ordine: DUE assert miei sono scattati
+durante la correzione, ENTRAMBI salvando il file** (md5 invariati). Il secondo perche'
+`'contarne 9' not in s` **non puo' essere vero se il testo di correzione CITA la frase sbagliata**
+— *citare la trappola la fa scattare*, stessa famiglia del closing-keyword quotato in un messaggio
+di commit. **Un assert che si rifiuta di patchare e' il comportamento giusto: il difetto stava
+nell'assert, non nel file.**
