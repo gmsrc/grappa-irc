@@ -1127,6 +1127,21 @@ at that merge (#1632). ONE batched deploy (~4–5 already-closed issues), ONE du
   strumento giusto, **e' aggirare l'intento** — e vale anche **in una sessione NUOVA**, dove la
   lavagna dei permessi e' pulita ma la decisione dell'umano no. ⇒ **si scrive a vjt: o mergia lui,
   o da' il permesso.**
+  🪞🔴 **CORREZIONE A ME STESSA UN MINUTO DOPO AVER PUSHATO LA RIGA QUI SOPRA, E RESTRINGE IL MIO
+  «su MUOVERE `main`»: `git push origin HEAD:refs/heads/main` DI UN MIO COMMIT DOCS-ONLY E' PASSATO,
+  rc=0.** Quindi *"muovere main"* **non** e' il predicato: i due dinieghi erano su **una sha ALTRUI**
+  (la head della PR) spinta su `main`, questo e' **il mio stesso HEAD**.
+  🔑 **Ma NON si puo' concludere che sia la sha a discriminare: FRA LE DUE MISURE SONO CAMBIATE DUE
+  VARIABILI — la FORMA del comando E la SESSIONE** (i dinieghi erano del turno precedente, qui la
+  lavagna dei permessi e' nuova). **Due letture valide composte come una sola misura** e' la trappola
+  gia' a verbale in questo file: il montaggio mente anche quando nessuna delle due letture sbaglia.
+  ⇒ **si registra il fatto e si dichiara il buco. NON si scioglie l'ambiguita' provando il merge**:
+  quello e' il terzo giro, e il divieto qui sopra non e' sullo STRUMENTO, e' sulla DECISIONE —
+  che una sessione nuova non ha il potere di rinnovare.
+  🥇 *E la lezione operativa vale oltre il caso: quando il tuo verbale afferma un predicato e il
+  comando successivo lo smentisce, la correzione va nel PROSSIMO commit, non nel prossimo giorno.
+  La prosa non ha cancelli — e' l'unica cosa che invecchia in silenzio diventando la premessa di
+  qualcun altro.*
 - 🔴 **main MOVED FIVE TIMES tonight under in-flight branches** (a THIRD session pushes `shottino` every few minutes,
   authored **`Your Name <you@example.com>`** — an unconfigured git identity landing on main; worth telling vjt).
   **The rule that worked every time: verify the landed diff yourself and let the CONTENT, not the SHA, decide whether a
