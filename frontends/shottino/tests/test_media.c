@@ -290,6 +290,34 @@ TEST(cell_fitting_corrects_aspect) {
  * scheme- and port-agnostic. A foreign host with a /uploads/ path is NOT
  * first-party (that is the whole point of the H1 fix), and an empty alias
  * list falls back restrictively to the connect host alone. */
+/* A link a stranger posts is a GET from this host's network position
+ * the moment it is fetched on view, so addresses that name THIS network
+ * are never fetched: loopback, link-local, RFC 1918, ULA, localhost,
+ * and a bare LAN name. Public addresses and names pass; only the
+ * literal is judged. */
+TEST(local_urls_are_never_fetched_on_view) {
+    CHECK(media_url_is_local("http://127.0.0.1/reboot"));
+    CHECK(media_url_is_local("http://10.0.0.5:8080/x"));
+    CHECK(media_url_is_local("https://192.168.1.1/"));
+    CHECK(media_url_is_local("http://172.16.9.9/"));
+    CHECK(!media_url_is_local("http://172.32.9.9/"));
+    CHECK(media_url_is_local("http://169.254.169.254/latest/meta-data/"));
+    CHECK(media_url_is_local("http://100.64.1.1/"));
+    CHECK(media_url_is_local("http://localhost:4000/"));
+    CHECK(media_url_is_local("http://LOCALHOST/"));
+    CHECK(media_url_is_local("http://[::1]:8080/"));
+    CHECK(media_url_is_local("http://[fe80::1]/"));
+    CHECK(media_url_is_local("http://[fd12:3456::1]/"));
+    CHECK(media_url_is_local("http://printer/status"));
+    CHECK(media_url_is_local("http://user:pw@nas/"));
+    CHECK(!media_url_is_local("https://example.com/page"));
+    CHECK(!media_url_is_local("http://8.8.8.8/"));
+    CHECK(!media_url_is_local("http://[2001:db8::1]/"));
+    CHECK(!media_url_is_local("http://user:pw@example.com/"));
+    CHECK(media_url_is_local("ftp://example.com/")); /* not fetchable at all */
+    CHECK(media_url_is_local(NULL));
+}
+
 TEST(first_party_url_classification) {
     const char *aliases[] = {"irc.sindro.me", "irc.sniffo.org"};
 
@@ -376,6 +404,7 @@ TEST(a_tool_is_found_only_if_it_is_really_there) {
 }
 
 int main(void) {
+    RUN(local_urls_are_never_fetched_on_view);
     RUN(da1_sixel_parsing);
     RUN(env_detection);
     RUN(forced_protocol_overrides);

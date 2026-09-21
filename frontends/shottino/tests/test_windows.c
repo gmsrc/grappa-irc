@@ -348,6 +348,22 @@ TEST(the_network_list_merges_rather_than_replaces) {
     free_app(app);
 }
 
+/* A network's channels arriving mid-session (§4e) open behind the user,
+ * never in front: they are typing somewhere, and a network somebody
+ * attached from cicchetto's home must not yank them onto its last
+ * channel. (At boot the landing window is chosen afterwards.) */
+TEST(channels_that_arrive_mid_session_do_not_steal_focus) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window_ex(app, "azzurra", "#home", true);
+    CHECK_LONG(focused_window_locked(app), 0);
+    const char *list = "[{\"name\":\"#one\"},{\"name\":\"#two\"}]";
+    parse_channels(app, "azzurra", list, strlen(list));
+    CHECK_LONG(app->window_count, 3);
+    CHECK_LONG(focused_window_locked(app), 0);
+    free_app(app);
+}
+
 /* A network that left the session takes its windows with it, and its
  * entry: every `/networks/:slug/...` route answers 404 for it from that
  * moment (§4e), so a window still open on it is one keystroke from a
@@ -5359,6 +5375,7 @@ int main(void) {
     RUN(a_severed_session_stops_reconnecting_and_drops_its_token);
     RUN(a_declined_invite_closes_its_invited_window_only);
     RUN(the_network_list_merges_rather_than_replaces);
+    RUN(channels_that_arrive_mid_session_do_not_steal_focus);
     RUN(a_detached_network_takes_its_windows_with_it);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
     RUN(a_query_answered_in_another_case_reuses_its_window);

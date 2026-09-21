@@ -3309,6 +3309,7 @@ static void remove_window(struct app *app, const char *network, const char *chan
 }
 
 static unsigned long ws_join(struct app *app, const char *topic);
+static void enqueue_fetch(struct app *app, const char *network, const char *channel);
 static void parse_channels(struct app *app, const char *network, const char *json, size_t len) {
     json_doc *doc = json_parse(json, len, NULL, 0);
     if (!doc) return;
@@ -3316,12 +3317,18 @@ static void parse_channels(struct app *app, const char *network, const char *jso
     for (size_t i = 0; i < json_len(list); i++) {
         const char *name = json_string(json_get(json_at(list, i), "name"));
         if (!name || !name[0]) continue;
-        add_window(app, network, name);
-        /* At startup the socket is not up yet and ws_join_topics joins
-         * every window in one pass; a network attached mid-session
-         * (§4e) arrives with the socket already open, and a window
-         * with no subscription is a window that never hears anything. */
+        /* Never with focus: at boot seed_state picks the landing window
+         * afterwards, and mid-session the user is typing somewhere —
+         * a network somebody attached from cicchetto's home must not
+         * yank them onto its last channel. */
+        add_window_ex(app, network, name, false);
+        /* At startup the socket is not up yet, ws_join_topics joins
+         * every window in one pass and main fetches every window's
+         * scrollback; a network attached mid-session (§4e) arrives with
+         * the socket already open and nothing else about to do either,
+         * so the window subscribes AND fetches here. */
         if (app->ws_connected) {
+            enqueue_fetch(app, network, name);
             char *net = json_escape(network);
             char *chan = json_escape(name);
             char *topic = xasprintf("grappa:user:%s/network:%s/channel:%s", app->subject, net, chan);
@@ -9116,8 +9123,21 @@ static int media_claim_locked(struct app *app, const char *url, bool is_video) {
     if (app->media_count < MAX_INLINE_MEDIA) {
         idx = app->media_count++;
     } else {
-        idx = app->media_next;
-        app->media_next = (app->media_next + 1) % MAX_INLINE_MEDIA;
+        /* Recycle a slot that is NOT on screen this frame. With cards,
+         * more link rows than slots on one screen is an ordinary
+         * situation (a feed bot, one link a line), and recycling
+         * round-robin regardless evicted a slot that was being drawn,
+         * whose row then re-claimed on the next frame and evicted
+         * another — a fetch per row per frame, forever. When every slot
+         * is on screen there is no room: the row stays unclaimed and
+         * asks again when something scrolls off. */
+        bool found = false;
+        for (size_t tries = 0; tries < MAX_INLINE_MEDIA && !found; tries++) {
+            idx = app->media_next;
+            app->media_next = (app->media_next + 1) % MAX_INLINE_MEDIA;
+            found = app->media[idx].painted_frame != app->frame_seq;
+        }
+        if (!found) return -1;
         /* Any log row still pointing at the recycled slot must let go, or
          * it would render someone else's picture. */
         for (size_t i = 0; i < app->log_count; i++)
@@ -9733,14 +9753,22 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
          * a failure notice for something that was never going to have
          * a frame. Clicking it still plays it; there is simply nothing
          * to render. */
+        /* A page is what is left after the media kinds — audio is not a
+         * page and not a picture, and was briefly both: rewritten to
+         * NONE for the decoder's sake, it fell into the card branch and
+         * had every voice message downloaded whole in search of HTML. */
+        bool page = mk == MEDIA_NONE && url_tok[0];
         if (mk == MEDIA_AUDIO) mk = MEDIA_NONE;
-        bool allowed = app->inline_media_enabled &&
+        /* Fetching on view is a GET from this machine's network position,
+         * so a link that names THIS network — a router, a printer, a LAN
+         * name, localhost — is never fetched, picture or page: a stranger
+         * does not get to make this client's requests for it. */
+        bool allowed = app->inline_media_enabled && !media_url_is_local(url_tok) &&
                        (app->inline_media_peers || url_is_first_party(app, url_tok));
         if (mi == LOG_MEDIA_NONE && mk != MEDIA_NONE && allowed) {
             app->log_media[i] = media_claim_locked(app, url_tok, mk == MEDIA_VIDEO);
             mi = LOG_MEDIA_NONE;
-        } else if (mi == LOG_MEDIA_NONE && mk == MEDIA_NONE && url_tok[0] && allowed &&
-                   app->link_cards) {
+        } else if (mi == LOG_MEDIA_NONE && page && allowed && app->link_cards) {
             /* A page link: the same slot, holding a CARD. Sized here,
              * so the generic 4:3 box below is never fitted for it. */
             int ci = media_claim_locked(app, url_tok, false);
@@ -9759,6 +9787,11 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
          * of links costs nothing until you scroll to them. */
         if (mi >= 0 && mi < (int)app->media_count) {
             struct inline_media *m = &app->media[mi];
+            /* On screen THIS frame, in whatever state: media_claim_locked
+             * recycles only slots that are not, or a screen with more
+             * link rows than slots would evict and re-claim every frame,
+             * fetching forever. */
+            m->painted_frame = app->frame_seq;
             if (m->state == IM_IDLE && m->cols > 0) {
                 struct job mj = {.kind = JOB_MEDIA};
                 snprintf(mj.arg1, sizeof(mj.arg1), "%d", mi);
@@ -9791,8 +9824,11 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                  * two arrays cannot overlap. */
                 char murl[MAX_LINE];
                 snprintf(murl, sizeof(murl), "%s", m->url);
+                /* A card's rows OPEN the page, like the link above them;
+                 * the picture kinds would hand the page to ffmpeg. */
                 add_link_region_locked(app, img_y, img_y + spend - 1, x + 2, x + width - 3, murl,
-                                m->is_video ? MEDIA_VIDEO : MEDIA_IMAGE);
+                                m->is_card ? MEDIA_NONE
+                                           : (m->is_video ? MEDIA_VIDEO : MEDIA_IMAGE));
             }
             if (spend > 0) {
                 if (m->state == IM_READY) {
@@ -10123,13 +10159,16 @@ static void draw(struct app *app) {
         if (app->sidebar_collapse && !irc_name_eq(net, w->network)) {
             unsigned unread = 0, mentions = 0;
             size_t target = gi;
-            int best = 0;
+            int best = -1;
             for (size_t i = gi; i < app->window_count; i++) {
                 const struct window *win = &app->windows[i];
                 if (!irc_name_eq(win->network, net)) continue;
                 unread += win->unread;
                 mentions += win->mentions;
-                int rank = win->mentions > 0 ? 2 : (win->unread > 0 ? 1 : 0);
+                /* A mention, then unread, then the first CONVERSATION:
+                 * $server is read-only, and landing there is the trap
+                 * seed_state's landing rule exists to avoid. */
+                int rank = win->mentions > 0 ? 3 : (win->unread > 0 ? 2 : (is_server_window(win->channel) ? 0 : 1));
                 if (rank > best) {
                     best = rank;
                     target = i;
@@ -11540,14 +11579,22 @@ static void bot_effective_prompt(struct app *app, char *out, size_t out_sz) {
     bot_memories_append(app, out, out_sz);
 }
 
+/* The most any single fetch reads: a file to /view or a page for a
+ * model, at the far end. A link CARD reads a small fraction of it — the
+ * <head> is in the first few KB — see CARD_MAX_BYTES. */
+#define VIEW_MAX_BYTES (32u * 1024u * 1024u)
+#define CARD_MAX_BYTES (512u * 1024u)
+
 struct fetch_result {
     int status;
     char *body;
     size_t len;
     char location[MAX_LINE];
     char content_type[128];
+    /* The read stopped at the caller's cap: `body` is a prefix. */
+    bool truncated;
 };
-static bool http_fetch(struct app *app, const char *url, struct fetch_result *out);
+static bool http_fetch(struct app *app, const char *url, size_t max_bytes, struct fetch_result *out);
 static void fetch_result_free(struct fetch_result *r);
 
 /* Markup out, words in.
@@ -11688,8 +11735,10 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
         if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)
             return xasprintf("error: only http:// and https:// URLs");
         struct fetch_result r;
-        if (!http_fetch(app, url, &r) || !r.body)
+        if (!http_fetch(app, url, VIEW_MAX_BYTES, &r) || !r.body || r.truncated) {
+            fetch_result_free(&r);
             return xasprintf("error: could not fetch %.120s", url);
+        }
         /* Tags out, text in. A model asked to read a page should get the
          * page, not its markup — and the markup is most of the bytes. */
         char *text = html_to_text(r.body);
@@ -11726,8 +11775,10 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
             snprintf(url, sizeof(url), "%s%s", endpoint, enc);
         free(enc);
         struct fetch_result r;
-        if (!http_fetch(app, url, &r) || !r.body)
+        if (!http_fetch(app, url, VIEW_MAX_BYTES, &r) || !r.body || r.truncated) {
+            fetch_result_free(&r);
             return xasprintf("error: search endpoint did not answer");
+        }
         char *text = html_to_text(r.body);
         fetch_result_free(&r);
         /* A consent wall or a bot challenge is a 200 with no results in
@@ -11865,8 +11916,10 @@ static char *tool_execute(struct app *app, const struct llm_req *req,
             return xasprintf("error: action must be list, open or close");
         }
         struct fetch_result r;
-        if (!http_fetch(app, url, &r) || !r.body)
+        if (!http_fetch(app, url, VIEW_MAX_BYTES, &r) || !r.body || r.truncated) {
+            fetch_result_free(&r);
             return xasprintf("error: no answer from %.120s", app->llm.cdp_url);
+        }
         char *out = xasprintf("%.*s", (int)LLM_TOOL_RESULT_BYTES - 512, r.body);
         fetch_result_free(&r);
         return out;
@@ -17015,7 +17068,6 @@ static void call_hangup(struct app *app) {
  * you chose, which is the bargain /open already makes by handing the
  * same URL to a browser. What #451 turned off was doing it
  * AUTOMATICALLY for every link that scrolled past. */
-#define VIEW_MAX_BYTES (32u * 1024u * 1024u)
 #define VIEW_MAX_REDIRECTS 3
 
 /* One GET. Returns false when the response never arrived; a response
@@ -17041,7 +17093,11 @@ static void header_value(const char *headers, const char *name, char *out, size_
     out[n] = 0;
 }
 
-static bool http_fetch(struct app *app, const char *url, struct fetch_result *out) {
+/* `max_bytes` bounds what is read; past it the read stops and
+ * `out->truncated` says so, with the prefix in `out->body`. Every caller
+ * decides what a prefix is worth: nothing for a file to save, the whole
+ * <head> for a page whose card wants only that. */
+static bool http_fetch(struct app *app, const char *url, size_t max_bytes, struct fetch_result *out) {
     memset(out, 0, sizeof(*out));
     struct url u;
     if (!parse_url(url, &u)) return false;
@@ -17079,11 +17135,12 @@ static bool http_fetch(struct app *app, const char *url, struct fetch_result *ou
     bool truncated = false;
     for (;;) {
         if (len == cap) {
-            if (cap >= VIEW_MAX_BYTES) {
+            if (cap >= max_bytes) {
                 truncated = true;
                 break;
             }
             cap *= 2;
+            if (cap > max_bytes) cap = max_bytes;
             char *bigger = realloc(buf, cap + 1);
             if (!bigger) {
                 free(buf);
@@ -17098,10 +17155,7 @@ static bool http_fetch(struct app *app, const char *url, struct fetch_result *ou
     }
     buf[len] = 0;
     conn_close(&conn);
-    if (truncated) {
-        free(buf);
-        return false;
-    }
+    out->truncated = truncated;
 
     char *sep = strstr(buf, "\r\n\r\n");
     if (!sep) {
@@ -17208,8 +17262,12 @@ static void view_fetch_and_open(struct app *app, const char *url) {
     snprintf(current, sizeof(current), "%s", url);
     bool got = false;
     for (int hop = 0; hop <= VIEW_MAX_REDIRECTS; hop++) {
-        if (!http_fetch(app, current, &res)) {
-            log_line(app, "/view: could not fetch %.60s", current);
+        if (!http_fetch(app, current, VIEW_MAX_BYTES, &res) || res.truncated) {
+            /* A file cut at the cap is not the file: say so, never save it. */
+            log_line(app, res.truncated ? "/view: %.60s is larger than this client will download"
+                                        : "/view: could not fetch %.60s",
+                     current);
+            fetch_result_free(&res);
             return;
         }
         if ((res.status == 301 || res.status == 302 || res.status == 303 ||
@@ -17490,7 +17548,11 @@ static void media_decode_job(struct app *app, int slot) {
         snprintf(current, sizeof(current), "%s", url);
         for (int hop = 0; hop <= VIEW_MAX_REDIRECTS; hop++) {
             struct fetch_result r;
-            if (!http_fetch(app, current, &r)) break;
+            /* A small cap, and a prefix is fine: the tags a card reads
+             * live in <head>, at the top. A link to something large —
+             * a DCC delivery, an upload that is not a picture — costs
+             * this much and no more, and yields no card. */
+            if (!http_fetch(app, current, CARD_MAX_BYTES, &r)) break;
             bool redirect = (r.status == 301 || r.status == 302 || r.status == 303 ||
                              r.status == 307 || r.status == 308) && r.location[0];
             if (redirect && (strncmp(r.location, "http://", 7) == 0 ||
@@ -17525,6 +17587,23 @@ static void media_decode_job(struct app *app, int slot) {
         }
         pthread_mutex_unlock(&app->lock);
         if (!still_mine || !have || !want_thumb) return;
+        /* The picture obeys the host policy the page did: under /media
+         * first-party a first-party page may still nominate an off-site
+         * picture, and a page anywhere may nominate a LAN one. Neither
+         * is fetched; the card stays, text only. */
+        bool thumb_allowed = !media_url_is_local(u.image) &&
+                             (app->inline_media_peers || url_is_first_party(app, u.image));
+        if (!thumb_allowed) {
+            pthread_mutex_lock(&app->lock);
+            m = (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
+            if (strcmp(m->url, page_url) == 0 && m->state == IM_FETCHING) {
+                m->image_url[0] = 0;
+                m->state = IM_READY;
+                m->drawn = false;
+            }
+            pthread_mutex_unlock(&app->lock);
+            return;
+        }
         /* On to the picture: one still, into the thumbnail box. */
         snprintf(url, sizeof(url), "%s", u.image);
         animate = false;
@@ -18517,7 +18596,7 @@ static char *stt_transcribe_local(struct app *app, const char *path) {
  * the UI. */
 static char *stt_fetch_audio(struct app *app, const char *url) {
     struct fetch_result r;
-    if (!http_fetch(app, url, &r) || !r.body || !r.len) {
+    if (!http_fetch(app, url, VIEW_MAX_BYTES, &r) || !r.body || !r.len || r.truncated) {
         fetch_result_free(&r);
         log_line(app, "/stt: could not download %.120s", url);
         return NULL;

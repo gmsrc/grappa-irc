@@ -122,6 +122,18 @@ size_t media_frame_advance(size_t frame, size_t count, long frame_ms, long now_m
  * http:// under an https deployment). A NULL/empty alias list is the
  * restrictive fallback: only `connect_host` matches, never "any
  * /uploads/ host" — in doubt, do not treat as first-party. */
+/* True when `url` names something on THIS machine or its network rather
+ * than the internet: a loopback, link-local or private (RFC 1918 /
+ * ULA) address literal, `localhost`, or a bare hostname with no dot.
+ * A link card fetches a page on view, so a stranger's link is a GET
+ * from this host's network position — and `http://192.168.1.1/reboot`
+ * or `http://printer/` is a request no card is worth. A picture is
+ * fetched by ffmpeg under the same rule (it applies to any URL this
+ * client would fetch on view, not to cards alone). Only the LITERAL is
+ * judged: a public name that resolves privately is not caught, and
+ * pretending otherwise would be a promise this function cannot keep. */
+bool media_url_is_local(const char *url);
+
 bool media_url_is_first_party(const char *url, const char *connect_host,
                               const char *const *aliases, size_t n_aliases);
 

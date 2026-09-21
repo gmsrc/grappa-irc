@@ -135,6 +135,14 @@ the same thing: a fetch, on view, of something a stranger linked. Everything
 the inline-media section says about what that costs applies here unchanged,
 and a card fetches the *page* as well as its picture.
 
+A page is read up to 512 KiB — the tags a card wants live in `<head>`, at the
+top — so a link to something large costs that much and yields no card. The
+picture a page nominates obeys the same host policy the page did. And a link
+that names **this network** — `192.168.…`, `10.…`, `localhost`, a bare LAN name
+like `printer` — is never fetched on view at all, picture or page: a stranger
+does not get to make this client's requests for it. Only the literal is judged;
+a public name that resolves privately is not caught.
+
 `/set cards off` keeps pictures and drops the cards.
 
 ## The topic bar

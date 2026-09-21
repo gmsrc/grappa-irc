@@ -1174,12 +1174,70 @@ TEST(a_page_link_earns_a_card_once_it_has_something_to_say) {
         if (strstr(app->link_regions[i].url, "ex.net/article")) linked = true;
     CHECK(linked);
 
-    /* Off, a page link is just a link: no slot, no card. */
-    app->link_cards = false;
-    seed_log(app, "[azzurra/#sniffo] 09:02 <c> https://ex.net/other");
+    /* The card's own rows OPEN the page, like the link above them — a
+     * picture kind would hand the page to ffmpeg on click. */
+    for (size_t i = 0; i < app->link_region_count; i++)
+        if (strstr(app->link_regions[i].url, "ex.net/article"))
+            CHECK_LONG(app->link_regions[i].kind, MEDIA_NONE);
+
+    /* A link that names THIS network is never fetched on view: a
+     * stranger does not get to make this client's LAN requests. */
+    seed_log(app, "[azzurra/#sniffo] 09:02 <c> http://192.168.1.1/reboot");
+    erase();
+    draw(app);
     erase();
     draw(app);
     CHECK_LONG(app->log_media[2], LOG_MEDIA_NONE);
+
+    /* Off, a page link is just a link: no slot, no card. */
+    app->link_cards = false;
+    seed_log(app, "[azzurra/#sniffo] 09:03 <c> https://ex.net/other");
+    erase();
+    draw(app);
+    CHECK_LONG(app->log_media[3], LOG_MEDIA_NONE);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
+/* More link rows on screen than slots is an ordinary screen once
+ * links earn cards (a feed bot, one link a line). The pool recycles
+ * only slots NOT on screen this frame; when every slot is, the row
+ * stays unclaimed and asks again later. It used to recycle round-robin
+ * regardless: the evicted slot's row re-claimed on the next frame and
+ * evicted another, a fetch per row per frame, forever. */
+TEST(a_screen_of_links_does_not_thrash_the_media_pool) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_window(app, "azzurra", "#feed");
+    app->inline_media_enabled = true;
+    app->inline_media_peers = true;
+    app->link_cards = true;
+    char line[160];
+    for (int i = 0; i < MAX_INLINE_MEDIA + 10; i++) {
+        snprintf(line, sizeof(line), "[azzurra/#feed] 09:%02d <bot> https://ex.net/story-%d", i, i);
+        seed_log(app, line);
+    }
+    erase();
+    draw(app);
+    erase();
+    draw(app);
+    /* At most a pool's worth claimed, each slot by exactly one row. */
+    size_t claimed = 0, per_slot[MAX_INLINE_MEDIA] = { 0 };
+    for (size_t i = 0; i < app->log_count; i++)
+        if (app->log_media[i] >= 0) { claimed++; per_slot[app->log_media[i]]++; }
+    CHECK(claimed <= MAX_INLINE_MEDIA);
+    CHECK(claimed > 0);
+    for (size_t k = 0; k < MAX_INLINE_MEDIA; k++) CHECK(per_slot[k] <= 1);
+    /* Settled: further frames move nothing — the same rows hold the
+     * same slots, and no slot went back to IDLE to be fetched again. */
+    int before[LOG_LINES];
+    memcpy(before, app->log_media, sizeof(int) * app->log_count);
+    for (int f = 0; f < 3; f++) { erase(); draw(app); }
+    for (size_t i = 0; i < app->log_count; i++) CHECK_LONG(app->log_media[i], before[i]);
+    for (size_t k = 0; k < app->media_count; k++) CHECK(app->media[k].state != IM_IDLE);
 
     for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
     free(app);
@@ -1200,6 +1258,7 @@ TEST(audio_is_clickable_but_not_drawn) {
     add_test_window(app, "azzurra", "#sniffo");
     app->inline_media_enabled = true;
     app->inline_media_peers = true;
+    app->link_cards = true; /* and not a CARD either: audio is not a page */
     seed_log(app, "[azzurra/#sniffo] 09:00 <a> https://ex.net/voice.m4a");
 
     erase();
@@ -1301,6 +1360,8 @@ TEST(the_sidebar_folds_every_network_but_the_focused_one) {
     add_test_window(app, "azzurra", "someone");   /* 5: a query opened LATER */
     add_test_window(app, "ircnet", "$server");    /* 6 */
     add_test_window(app, "ircnet", "#ircnet");    /* 7: unread, no mention */
+    add_test_window(app, "oftc", "$server");      /* 8 */
+    add_test_window(app, "oftc", "#quiet");       /* 9: nothing waiting */
     app->windows[3].unread = 4;
     app->windows[4].unread = 2;
     app->windows[4].mentions = 1;
@@ -1315,15 +1376,18 @@ TEST(the_sidebar_folds_every_network_but_the_focused_one) {
      * under the one azzurra header — and each other network has exactly
      * one, whose click lands on the window that most wants you: the
      * mention on libera, the unread on ircnet. */
-    CHECK_LONG(app->win_region_count, 5);
-    size_t seen[8] = { 0 };
+    CHECK_LONG(app->win_region_count, 6);
+    size_t seen[10] = { 0 };
     for (size_t i = 0; i < app->win_region_count; i++) seen[app->win_regions[i].window]++;
     CHECK_LONG(seen[0], 1);
     CHECK_LONG(seen[1], 1);
     CHECK_LONG(seen[5], 1);
     CHECK_LONG(seen[4], 1); /* the mention outranks the unread */
     CHECK_LONG(seen[7], 1);
-    CHECK_LONG(seen[2] + seen[3] + seen[6], 0);
+    /* Nothing waiting: the first CONVERSATION, never the read-only
+     * $server the startup landing rule exists to avoid. */
+    CHECK_LONG(seen[9], 1);
+    CHECK_LONG(seen[2] + seen[3] + seen[6] + seen[8], 0);
 
     /* The folded row names the network and what is waiting in it the
      * way a window row does: a mention outranks the count, else the
@@ -1756,6 +1820,7 @@ int main(void) {
         return no_screen("no usable terminfo entry");
     }
     RUN(a_page_link_earns_a_card_once_it_has_something_to_say);
+    RUN(a_screen_of_links_does_not_thrash_the_media_pool);
     RUN(audio_is_clickable_but_not_drawn);
     RUN(the_sidebar_records_a_row_for_every_window);
     RUN(the_sidebar_folds_every_network_but_the_focused_one);

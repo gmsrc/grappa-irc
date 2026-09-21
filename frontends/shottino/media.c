@@ -382,6 +382,50 @@ static bool media_host_eq_ci(const char *host, size_t host_len, const char *cand
     return cand && strlen(cand) == host_len && strncasecmp(host, cand, host_len) == 0;
 }
 
+bool media_url_is_local(const char *url) {
+    if (!url) return true;
+    const char *p;
+    if (strncasecmp(url, "https://", 8) == 0) p = url + 8;
+    else if (strncasecmp(url, "http://", 7) == 0) p = url + 7;
+    else return true; /* not a web URL: nothing to fetch, treat as local */
+    /* userinfo@ is skipped; a bracketed IPv6 literal keeps its colons. */
+    const char *at = p;
+    while (*at && *at != '/' && *at != '?' && *at != '#' && *at != '@') at++;
+    if (*at == '@') p = at + 1;
+    char host[256];
+    size_t n = 0;
+    if (*p == '[') {
+        p++;
+        while (*p && *p != ']' && n + 1 < sizeof(host)) host[n++] = *p++;
+    } else {
+        while (*p && *p != '/' && *p != ':' && *p != '?' && *p != '#' && n + 1 < sizeof(host))
+            host[n++] = *p++;
+    }
+    host[n] = 0;
+    if (n == 0) return true;
+    if (strcasecmp(host, "localhost") == 0) return true;
+    if (strchr(host, ':')) {
+        /* IPv6 literal: loopback, unspecified, link-local, ULA. */
+        if (strcmp(host, "::1") == 0 || strcmp(host, "::") == 0) return true;
+        if (strncasecmp(host, "fe80:", 5) == 0) return true;
+        if ((host[0] == 'f' || host[0] == 'F') && (host[1] == 'c' || host[1] == 'C' || host[1] == 'd' || host[1] == 'D'))
+            return true;
+        return false;
+    }
+    unsigned a, b, c, d;
+    char tail;
+    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) == 4 && a < 256 && b < 256 && c < 256 && d < 256) {
+        if (a == 10 || a == 127 || a == 0) return true;
+        if (a == 169 && b == 254) return true;
+        if (a == 172 && b >= 16 && b <= 31) return true;
+        if (a == 192 && b == 168) return true;
+        if (a == 100 && b >= 64 && b <= 127) return true; /* CGNAT */
+        return false;
+    }
+    /* A name with no dot is a LAN name (`printer`, `nas`, `router`). */
+    return strchr(host, '.') == NULL;
+}
+
 bool media_url_is_first_party(const char *url, const char *connect_host,
                               const char *const *aliases, size_t n_aliases) {
     if (!url) return false;
