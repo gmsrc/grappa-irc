@@ -946,6 +946,18 @@ arrived 4/5 green and had to be refused because its e2e red was a **real regress
 not infra. *Green-except-one is not a rounding error; find out which one and why before you merge.*
 
 ## 🚢 DEPLOY POSTURE (prod = m42 bastille jail; STAGING = the Pi's own docker stack)
+🔴🔴 **`runtime/grappa_prod.db` SUL PI NON E' UNA COPIA STATICA — E' IL DATABASE VIVO DELLO
+STAGING (orch, 2026-09-21, misurato dopo averlo detto sbagliato a DUE worker).** L'avevo descritto
+come un `.backup` aperto `mode=ro`: **falso**, e ogni tempo preso li' sarebbe stato contaminato.
+`lsof` ⇒ `beam.smp` lo tiene aperto **rw**, WAL da ~10 MB, `-shm` fresco, container `grappa` up.
+🥇 **Il tell non e' stato `lsof`, e' stato IL CONTEGGIO CHE SI MUOVEVA** (403.905 → 403.907 in
+pochi minuti): **un dataset che cambia sotto la misura non e' un dataset, e la prova che UNO e'
+congelato e' il conteggio STABILE su tre letture.** ⇒ **si misura SOLO su un `.backup` VERO**, e
+il `.backup` si rifa' (non sopravvive alla sessione). ⚠️ **Corollario per il deploy:** una PR che
+porta una MIGRAZIONE, deployata su staging, **la fa girare su QUEL db** — cioe' sul corpus su cui
+si prendono le misure d'arbitro. **Non e' un riflesso post-merge: e' una decisione a se'.**
+⚖️ **Il db NON si spedisce alle worker** (dati di utenti reali): non e' una decisione nostra.
+
 🚦 **vjt 2026-08-03 17:32: STAGING is UNBLOCKED, PROD waits for the whole code-review finding queue to
 close.** Staging = the Pi's `grappa` container on `127.0.0.1:4000` (private IP + internal CA); vjt reaches it
 himself and device-verifies there. `scripts/deploy-cic.sh` = bundle only, no restart; `scripts/deploy.sh` =
