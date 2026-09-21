@@ -3670,3 +3670,56 @@ silenzio di vjt**, che sono la stessa cosa vista da fuori. Misurato qui: **posta
 non si sollecita.** ⚠️ L'exit status non esisteva più (quel turno era stato clearato): **la prova
 era l'outbound, non il `$?`** — e un peer che lo dice invece di inventarsi un rc ha fatto la cosa
 giusta.
+
+## 🧭 REGOLE NATE IL 2026-09-21 (permanenti — migrate dall'handoff)
+- 🥇🥇 **UNA PENDENZA E' UN THREAD, NON UNA COPPIA `brief ↔ PRIVMSG`** (forma del relay, migliore
+  della mia). Registrala come *un thread, N righe, ognuna col suo ISTANTE di outbound E la sua
+  ORIGINE* (`brief mio` / `iniziativa del relay`). **Il pairing 1:1 perde le righe che il relay
+  scrive di sua iniziativa** — misurato: due su tre — **o le attribuisce a un brief mai mandato.**
+  ⚠️ E i due eventi sono DISTINTI: un mio istante `03:00:58Z` era **11 s PRIMA** dell'outbound reale
+  `03:00:47Z`, cioe' una direzione impossibile ⇒ era **una lettura post-hoc non marcata**, non una
+  misura. *Se il tuo istante precede l'evento che dice di registrare, non stai registrando: stai
+  ricostruendo.*
+- 🥇 **`#grappa-live` E' UN INGRESSO DEL RELAY, NON SOLO IL MIO CANALE.** Lui **legge e non scrive
+  mai** li'; il travaso verso vjt passa **solo da lui su `#grappa`** ⇒ **la mano sul canale dove la
+  pendenza vive ce l'ha LUI, io no.** Posso solo **fornire materiale relayabile** — quindi una riga
+  che scrivo li' va scritta per essere RELAYATA, non per essere letta da vjt.
+- 🥇🥇 **"IN CANALE" ≠ "LETTA" — E SBAGLIARE NEL VERSO OPPOSTO E' LO STESSO ERRORE.** Avevo assunto
+  *"non l'ha visto"*, poi mi sono corretta in *"smetto di assumere che non l'abbia visto"*:
+  **adottare l'inversa non e' abbandonare un'assunzione, e' cambiare quale stato mentale gli
+  attribuisco.** ⇒ **la forma onesta e' lo stato del CANALE** (*"la riga e' uscita alle HH:MMZ, e'
+  scesa di N posizioni"*), **mai lo stato della sua testa.** Vale per ogni referto d'attesa.
+- 🥇 **LO SCROLL DEPTH NON E' SOLO AUTOINFLITTO — IL CANALE RESPIRA DA SE'.** Misurato: due righe di
+  un terzo hanno spostato il mio messaggio da ultimo a **terzultimo** senza che io scrivessi niente.
+  ⇒ se risponde **corto e fuori bersaglio**, quella e' la causa piu' probabile — **e non e' una
+  ragione per ripetere: e' una ragione per essere l'unica riga utile quando il momento arriva.**
+- 🥇🥇 **UN PACCO DI MISURA DI UNA FETTA PRECEDENTE SI RI-DERIVA, NON SI RIUSA: UN *PREDICATO* SCADE
+  COME UN NUMERO DI RIGA (w2, 2026-09-21, issue 2282).** Le avevo lasciato a disposizione gli script
+  della gamba C di 2228; li ha **rifiutati** perche' il merge intervenuto aveva spostato il tag
+  strutturale da `json_extract(meta,'$.structural')` a una **colonna** ⇒ riusarli avrebbe **misurato
+  una forma che non esiste piu'**, con numeri perfettamente credibili. Ha riderivato tutto contro la
+  sha di main del giorno e applicato la migrazione a una **copia** del banco (originale intatto,
+  sha256 identica prima e dopo).
+  🥇 **E' la regola *"un numero di riga e' stantio appena main si muove"* applicata a una PREDICATO —
+  e li' morde di piu', perche' un ordinale sbagliato di solito non matcha, mentre un predicato
+  stantio matcha benissimo e risponde a un'altra domanda.** ⇒ **nei brief: «di' quale sha hai
+  riderivato e cosa hai rifiutato di riusare».**
+- 🥇🥇 **UN'ACCUSA CONTRO DELLA PROSA SI SPACCA IN CLAUSOLE COME UNA RULING: LA *CONCLUSIONE* E LA
+  *RAGIONE DICHIARATA* SONO SEPARATE (w2, 2026-09-21 — ha rifiutato un mio brief e aveva ragione).**
+  Avevo letto un commento di codice come *"dichiara che la sonda non costa nulla PERCHE' gira dopo il
+  fetch"* e ordinato di trattarlo come claim stantio. Verificato: **la conclusione e' VERA** — la
+  sonda sta dentro una guardia e sul caso ordinario **non viene chiamata affatto**, quindi costa zero
+  — **e solo la ragione scritta e' sciatta.** Lei ha **declinato di condannarlo**: *"prosa da
+  correggere, non una bugia da smascherare"*, e ha nominato il vero punto cieco (il caso che il
+  commento **non** nomina).
+  🥇 **Condannare una conclusione perche' la sua motivazione e' scritta male e' la stessa
+  sovra-generalizzazione di *«e' un'etichetta» applicato alla CLASSE invece che al PORTATORE*.**
+  ⚠️ **E la meta' che riguarda me: il mio brief aveva MALLETTO il commento prima di accusarlo.**
+  Prima di ordinare a una worker di trattare una riga di prosa come stantia, **rileggila alla
+  lettera** — l'accusa costa un giro e la worker la paga.
+- 🥇 **UNA MISURA PUO' ELIMINARE UN ASSE, LIMITARNE UN SECONDO E TROVARE UN TERZO CANDIDATO CHE LA
+  ISSUE NON NOMINAVA — e allora il verdetto NON e' nessuna delle lettere che hai briefato.** Misurato
+  su issue 2282: i due assi della issue valevano 1,22x e 1,44x (nessuno cambia la classe), il terzo
+  ~82x. ⇒ **un brief che chiede «A o B» va scritto in modo che «ne' A ne' B, ecco C» sia una risposta
+  LEGITTIMA**, o la misura si piega alle lettere che le hai dato. E se il terzo candidato costa una
+  **scelta di prodotto**, quella e' mia da escalare e **non** della worker da indovinare.
