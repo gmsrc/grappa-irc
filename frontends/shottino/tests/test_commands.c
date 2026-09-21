@@ -216,6 +216,92 @@ TEST(nothing_spells_its_own_version) {
     for (size_t i = 0; v[i]; i++) CHECK((v[i] >= '0' && v[i] <= '9') || v[i] == '.');
 }
 
+/* The handshake DECLARES which protocol this client speaks.
+ *
+ * `client_proto` is the query parameter the server reads (CLIENT_PROTOCOL
+ * §3b): below its floor it answers 426 rather than opening a socket that
+ * would then drop frames on the floor. Omitting it is legal and means
+ * "current", which is what shottino did — and "current" is a claim a
+ * client that was last taught the wire at v21 cannot make. The URL is
+ * built from ONE number so it cannot say something else, and that
+ * number lives in wire.h beside the parsers it describes. `vsn` is
+ * phoenix's transport serialiser version and is a different thing. */
+TEST(the_handshake_declares_the_protocol_it_speaks) {
+    char *req = ws_upgrade_request("grappa.example", "KEY==", "TOK");
+    CHECK(req != NULL);
+    if (!req) return;
+    char want[64];
+    snprintf(want, sizeof(want), "client_proto=%d", WIRE_PROTOCOL_VERSION);
+    const char *line_end = strstr(req, "\r\n");
+    CHECK(line_end != NULL);
+    CHECK(strncmp(req, "GET /socket/websocket?", 22) == 0);
+    CHECK(strstr(req, want) != NULL && strstr(req, want) < line_end);
+    CHECK(strstr(req, "vsn=2.0.0") != NULL && strstr(req, "vsn=2.0.0") < line_end);
+    /* Public, so it rides the URL; the bearer does not. */
+    CHECK(strstr(req, "TOK") > line_end);
+    CHECK(strstr(req, "Sec-WebSocket-Protocol: base64url.bearer.phx.TOK") != NULL);
+    CHECK(strstr(req, "Host: grappa.example") != NULL);
+    free(req);
+}
+
+/* At first contact the two numbers are compared and said in one line —
+ * a newer server names what the user is missing and the repair, an
+ * older one names the direction, so neither reads as "broken". */
+TEST(a_protocol_gap_names_its_direction) {
+    char line[256];
+    protocol_report(30, 1, 30, line, sizeof(line));
+    CHECK(strstr(line, "agree") != NULL);
+    protocol_report(33, 1, 30, line, sizeof(line));
+    CHECK(strstr(line, "v33") != NULL && strstr(line, "v30") != NULL);
+    CHECK(strstr(line, "update shottino") != NULL);
+    protocol_report(28, 1, 30, line, sizeof(line));
+    CHECK(strstr(line, "v28") != NULL && strstr(line, "floor v1") != NULL);
+    CHECK(strstr(line, "OLDER") != NULL);
+}
+
+/* The number shottino declares is the number the server publishes.
+ *
+ * `Grappa.Protocol` bumps `@protocol_version` on every wire-shape change,
+ * additive included, and cic's `wire_pin` reddens when the shape moves
+ * under a still number. shottino had no such tripwire, which is how it
+ * sat unaware through nine bumps. This is it: when the server's number
+ * moves, this test reddens, and whoever bumps it reads what changed
+ * (`git log -p lib/grappa/protocol.ex`), teaches wire.c the new fields
+ * or decides they do not apply to a terminal, and moves the constant.
+ * A server newer than the client is NOT a failure at runtime — the wire
+ * is additive — so this is a build-time question for a human, never a
+ * refusal for the user. Read off disk, because the constant must agree
+ * with the SOURCE the release is cut from, not with a running server. */
+TEST(the_declared_protocol_is_the_one_the_server_publishes) {
+    const char *paths[] = {"../../lib/grappa/protocol.ex", "../../../lib/grappa/protocol.ex"};
+    char *ex = NULL;
+    for (size_t i = 0; i < 2 && !ex; i++) {
+        FILE *f = fopen(paths[i], "rb");
+        if (!f) continue;
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        rewind(f);
+        if (n > 0) {
+            ex = malloc((size_t)n + 1);
+            size_t got = fread(ex, 1, (size_t)n, f);
+            ex[got] = 0;
+        }
+        fclose(f);
+    }
+    if (!ex) fprintf(stderr, "  lib/grappa/protocol.ex not found — run from the repo checkout\n");
+    CHECK(ex != NULL);
+    if (!ex) return;
+    const char *at = strstr(ex, "\n  @protocol_version ");
+    CHECK(at != NULL);
+    long server = at ? strtol(at + strlen("\n  @protocol_version "), NULL, 10) : -1;
+    if (server != WIRE_PROTOCOL_VERSION)
+        fprintf(stderr, "  server publishes v%ld, wire.h declares v%d — read what moved and "
+                        "update WIRE_PROTOCOL_VERSION\n",
+                server, WIRE_PROTOCOL_VERSION);
+    CHECK_LONG(server, WIRE_PROTOCOL_VERSION);
+    free(ex);
+}
+
 /* The two call defaults are only correct TOGETHER.
  *
  * The room page derives the SFU from its own path, so moving it off
@@ -471,6 +557,9 @@ int main(void) {
     RUN(completion_table_is_sorted);
     RUN(every_dispatched_verb_has_a_help_topic);
     RUN(nothing_spells_its_own_version);
+    RUN(the_handshake_declares_the_protocol_it_speaks);
+    RUN(a_protocol_gap_names_its_direction);
+    RUN(the_declared_protocol_is_the_one_the_server_publishes);
     RUN(the_call_defaults_move_the_page_and_the_sfu_together);
     RUN(leaving_stops_a_running_call);
     RUN(a_stopped_call_marks_its_invite_spent);

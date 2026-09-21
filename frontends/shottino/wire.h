@@ -39,6 +39,21 @@
 #ifndef SHOTTINO_WIRE_H
 #define SHOTTINO_WIRE_H
 
+/* The wire protocol this client is written against — `Grappa.Protocol`'s
+ * `@protocol_version` at the time these parsers were last taught the
+ * wire, declared to the server as `client_proto` on the upgrade URL
+ * (docs/CLIENT_PROTOCOL.md §3b).
+ *
+ * It is a claim, not a capability list: the server refuses a number
+ * below its floor with 426 and otherwise opens the socket, and the wire
+ * is additive so a server newer than this number still works — what it
+ * added since is simply not shown. The number exists so that the build
+ * can ask the question a running client cannot: test_commands pins it
+ * to lib/grappa/protocol.ex, and reddens when the server bumps, so the
+ * bump is READ (what moved, does a terminal care) rather than slept
+ * through — nine bumps went by unnoticed before the pin existed. */
+#define WIRE_PROTOCOL_VERSION 30
+
 #include <stdbool.h>
 #include <stddef.h>
 

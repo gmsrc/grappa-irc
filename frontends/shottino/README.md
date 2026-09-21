@@ -981,6 +981,28 @@ again stops it.
 It exists for one question: when a command "does nothing", did it reach the
 server, and did the server answer? That was unanswerable from inside the client.
 
+### Which protocol this speaks
+
+The upgrade URL declares `client_proto=<N>`, where `N` is `WIRE_PROTOCOL_VERSION`
+in `wire.h` — `Grappa.Protocol`'s number at the time these parsers were last
+taught the wire. Below the server's floor the handshake answers 426 and the log
+says so as "this shottino is too old", which is a different repair from the 403
+a bad bearer earns. Omitting the parameter is legal and means "current", which
+is what shottino used to do — a claim a client last taught the wire at v21
+cannot make.
+
+At first contact `GET /api/config` is compared against that number and one line
+says which way the gap runs. A newer server is not an error — the wire is
+additive — but whatever it grew since is what this build will not show, and
+the line names that rather than leaving "cicchetto has it and shottino does
+not" to a code read.
+
+The number is pinned to `lib/grappa/protocol.ex` by `test_commands`: when the
+server bumps, the test reddens, and whoever bumps it reads what moved (`git log
+-p lib/grappa/protocol.ex`), teaches `wire.c` the new fields or decides a
+terminal does not care, and moves the constant. Nine bumps went by unnoticed
+before that pin existed.
+
 ## Tests
 
 ```sh

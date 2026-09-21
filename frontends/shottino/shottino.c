@@ -6633,7 +6633,58 @@ static void logout_grappa(struct app *app) {
     free(r.body);
 }
 
+/* Which protocol the server speaks, against which this build was
+ * written. Unauthenticated, so it is the first thing asked, and it is
+ * NEVER fatal: the wire is additive, so a newer server still serves
+ * this client everything it knows how to show — but the operator should
+ * hear that there is more, and a server behind this build should be
+ * named for what it is, since a field this build requires may be
+ * missing there (§2c: that comparison is the client's side of the
+ * handshake, and the socket opening says nothing about it). */
+/* The comparison itself, as one line. Pure, so the three cases are read
+ * in a test rather than provoked on a server. */
+static void protocol_report(long server, long floor, int mine, char *out, size_t out_sz) {
+    if (server == mine)
+        snprintf(out, out_sz, "protocol v%ld — server and client agree", server);
+    else if (server > mine)
+        snprintf(out, out_sz,
+                 "protocol: server speaks v%ld, this shottino was written against v%d — "
+                 "what was added since is not shown here; update shottino",
+                 server, mine);
+    else
+        snprintf(out, out_sz,
+                 "protocol: server speaks v%ld (floor v%ld), this shottino expects v%d — "
+                 "the server is OLDER than this client; fields it does not send read as absent",
+                 server, floor, mine);
+}
+
+static void report_protocol(struct app *app) {
+    struct http_response cfg = http_request(app, "GET", "/api/config", NULL);
+    if (cfg.status < 200 || cfg.status >= 300) {
+        log_line(app, "GET /api/config: HTTP %d — cannot tell which protocol the server speaks",
+                 cfg.status);
+        free(cfg.body);
+        return;
+    }
+    long server = -1, floor = -1;
+    json_doc *doc = json_parse(cfg.body, cfg.body_len, NULL, 0);
+    if (doc) {
+        json_long(json_get(json_root(doc), "protocol_version"), &server);
+        json_long(json_get(json_root(doc), "min_protocol_version"), &floor);
+        json_free(doc);
+    }
+    free(cfg.body);
+    if (server < 0) {
+        log_line(app, "GET /api/config: no protocol_version in the reply");
+        return;
+    }
+    char line[256];
+    protocol_report(server, floor, WIRE_PROTOCOL_VERSION, line, sizeof(line));
+    log_line(app, "%s", line);
+}
+
 static void seed_state(struct app *app) {
+    report_protocol(app);
     struct http_response me = http_request(app, "GET", "/me", NULL);
     if (me.status >= 200 && me.status < 300) log_line(app, "authenticated as %s", app->subject);
     free(me.body);
@@ -6791,6 +6842,25 @@ static char *base64url_encode(const unsigned char *buf, size_t len) {
     return b64;
 }
 
+/* The upgrade request, as bytes. Pure, so the test can read what it
+ * says: the bearer rides the subprotocol and NEVER the URL (#95, #202),
+ * and the protocol version rides the URL because it is public and the
+ * server reads it there (§3b) — `vsn` beside it is phoenix's own
+ * serialiser version, a different thing. Built from WIRE_PROTOCOL_VERSION
+ * so the declaration cannot drift from the parsers it describes. */
+static char *ws_upgrade_request(const char *host, const char *key, const char *tok_b64) {
+    return xasprintf(
+        "GET /socket/websocket?vsn=2.0.0&client_proto=%d HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: %s\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: base64url.bearer.phx.%s\r\n"
+        "User-Agent: " SHOTTINO_USER_AGENT "\r\n\r\n",
+        WIRE_PROTOCOL_VERSION, host, key, tok_b64);
+}
+
 static bool ws_connect(struct app *app) {
     if (!conn_open(app, &app->ws)) return false;
     /* RFC 6455 wants a key the server cannot have seen coming; a
@@ -6817,16 +6887,7 @@ static bool ws_connect(struct app *app) {
      * handshake since #202 landed was rejected before it reached the
      * channel. That is what "websocket unavailable" was reporting. */
     char *tok_b64 = base64url_encode((const unsigned char *)app->token, strlen(app->token));
-    char *req = xasprintf(
-        "GET /socket/websocket?vsn=2.0.0 HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Key: %s\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "Sec-WebSocket-Protocol: base64url.bearer.phx.%s\r\n"
-        "User-Agent: " SHOTTINO_USER_AGENT "\r\n\r\n",
-        app->url.host, key, tok_b64);
+    char *req = ws_upgrade_request(app->url.host, key, tok_b64);
     free(tok_b64);
     free(key);
     if (!conn_write_all(&app->ws, req, strlen(req))) {
@@ -6860,6 +6921,14 @@ static bool ws_connect(struct app *app) {
         memcpy(status, hdr, status_len);
         status[status_len] = '\0';
         log_line(app, "websocket handshake rejected: %s", status[0] ? status : "(no status line)");
+        /* A 426 is the one refusal that names this BUILD and not the
+         * credential or the proxy: the server's floor has moved past
+         * what this client declares, and no amount of retrying or
+         * re-logging-in changes that. Say what the repair is. */
+        if (strstr(status, " 426 "))
+            log_line(app, "the server no longer speaks protocol v%d — this shottino is too old; "
+                          "update it",
+                     WIRE_PROTOCOL_VERSION);
         return false;
     }
     int flags = fcntl(app->ws.fd, F_GETFL, 0);
