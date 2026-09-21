@@ -733,6 +733,33 @@ dell'host**, non l'evento del daemon che hai appena dimostrato inaffidabile.
 
 **Idle debounce**: a single idle read after a busy read can be a transient tool-call gap (between Read/Bash result rendering and the next spinner line). The tick re-captures after 5s and only classifies as idle/prompt/picker/busy on the second read.
 
+🔴🔴 **CONSEGUENZA MISURATA, E RENDE `duration=` UNA GRANDEZZA CHE PUO' MENTIRE: UN TURNO CORTO
+PASSA SOTTO IL TICK, `last_state_change` NON SI MUOVE, E LO `STALL state=idle` CONTINUA A SALIRE SU
+UNA WORKER CHE HA APPENA RISPOSTO (orch, 2026-09-21).** Stesso ordine mandato alle due worker nello
+stesso blocco, stesso daemon, stesso intervallo — **unica variabile la DURATA DEL TURNO**, e l'esito
+si ribalta: w1 **`Baked for 11s`** ⇒ `last_state_change` **NON** aggiornato, `duration` proseguita
+fino a **9994s**; w2 **`Baked for 24s`** ⇒ transizione registrata, `duration` **azzerata a 302s**.
+Entrambe avevano ricevuto, processato e risposto — verificato **nel testo del pane** (*"Ricevuto.
+HOLD, ma sveglia."* / *"HOLD, disponibile."*) e sul **costo** (`$19.46→$22.22`, `$16.28→$18.92`).
+🔑 **Il meccanismo e' LETTO, non dedotto:** il daemon campiona ogni **5s** (`daemon.sh`, `sleep 5`)
+e la debounce idle ne aggiunge altri **5** prima di confermare; `last_state_change` si muove **solo
+su una transizione registrata**. Un turno che nasce e muore fra due campioni **non esiste per il
+daemon**.
+⚠️ **Limite dichiarato: due punti, NON una soglia.** Il confine sta fra 11s e 24s **e dipende dalla
+FASE dei tick**, quindi non e' nemmeno netto: e' probabilistico su dove cadono i campioni. **Non
+scrivere "sotto i 15s si perde"** — non e' misurato.
+🥇 **LA REGOLA: `state=idle` e' VERO, `duration=` NO.** Lo stato e' campionato, la durata e'
+**derivata** da un contatore che una transizione mancata lascia indietro **per sempre**. E la
+direzione e' quella che costa: un contatore che continua a salire dopo un ordine appena consegnato
+si legge come **"ingoiato"** e invita al re-invio — cioe' la **doppia/tripla sottomissione** che
+questo file registra come danno reale su un pane corto. ⇒ **la consegna si prova con COSTO/CTX e
+col TESTO DELLA RISPOSTA nel pane, mai con l'azzeramento di `duration`**; e uno `STALL state=idle`
+che arriva **dopo** un ordine che hai appena provato consegnato **non e' un secondo stallo: e' lo
+stesso contatore che non si e' mai azzerato.**
+🪞 *Ennesima faccia della famiglia, in casa mia: non lo strumento morto e non l'artefatto sbagliato,
+ma **un campo VERO (`state`) pubblicato accanto a un campo DERIVATO che ha perso l'aggancio** — e
+siccome escono sulla stessa riga, la verita' del primo presta credibilita' al secondo.*
+
 ## Decision tree per event
 
 A `wait-for-event.sh` exit may emit MULTIPLE event lines (events queued during a no-waiter window). Process each in turn:
