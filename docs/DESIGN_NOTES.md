@@ -18890,3 +18890,78 @@ the COVERING restoration holds at prod's real row count: the plan is structural
 and should, but "should" is not a measurement. That this is the cause of any
 user-visible slowness: one of the four forms of the cold open was measured, not
 the path.
+<!-- entry #2281-2283 -->
+
+---
+
+## 2026-09-21 — #2281+#2283: two comments that outlived what they described, and the third site the issue did not count
+
+Prose only. No behaviour changed, no test added, `@protocol_version` stays at 29
+and the wire pin is untouched.
+
+Two cleanups landed as ONE slice because they are the same defect in the same
+subsystem — a comment written in the PRESENT tense about something that does not
+exist — and splitting them would have put two branches on `scrollback.ex` and two
+tail-appends on this file, manufacturing a `merge=union` collision for somebody
+else to resolve.
+
+### What was false
+
+**issue 2281.** Leg B of issue 2228 deleted `Message.structural_row?/1`, the
+shared `json_extract(meta, '$.structural') IS 1` query macro, and replaced it
+with the `structural` column. Two comments kept describing it as live, and each
+sat directly above a `require Message` that it was the stated justification for.
+With zero public macros left in `Grappa.Scrollback.Message` those `require`s were
+dead: every `Message.*` reference in the affected files is a plain function call
+(`content_kinds/0`, `suppressed_presence_kinds/0`, `changeset/2`,
+`canonicalize_channel/1`) or a typespec, and neither needs `require`. The
+tombstone in `message.ex` is correct and stays — it is the one comment that
+describes the removal rather than the removed thing.
+
+**A THIRD site the issue did not enumerate**: `test/grappa/scrollback/message_test.exs`
+carried the same stale comment and the same dead `require`. It surfaced by
+grepping the CLAIM — `require Message` across `lib` AND `test` — rather than the
+two paths the issue listed. Fixing two of three would have left the tree
+teaching both patterns, which is the failure mode "total consistency or nothing"
+names.
+
+**issue 2283.** `message.ex` said, under "Cross-system identifier (deferred to
+Phase 6)", that IRC's RFC3339 `server-time` tag is converted "at the
+parser/inserter boundary". No such conversion has ever existed. `server-time`
+appears zero times in `lib/grappa/irc` and `lib/grappa/session`; the REQ set
+built by `IRC.AuthFSM` is `sasl labeled-response` combined, `sasl` alone as the
+NAK fallback, or `labeled-response` alone; and every production write of the
+column is `System.system_time(:millisecond)` sampled in the owning
+`Session.Server` — or in `EventRouter`, which is a pure module running inside
+that process, not a process of its own.
+
+Only the false clause was rewritten. The rest of the paragraph is true and
+load-bearing — epoch-ms is sortable, integer storage dodges TZ ambiguity in
+sqlite, and the `(network_id, channel, server_time)` index shape is what a
+Phase 6 `CHATHISTORY` facade leans on — so deleting the paragraph wholesale
+would have cost more than the false clause did.
+
+### Why a comment was worth a slice
+
+The false clause was not inert. `Scrollback.maybe_before/2` argues the
+`(id DESC)` seek FROM the premise that the two columns can only disagree when
+the LOCAL wall clock steps backwards, and that premise holds only while no
+upstream clock can reach `server_time`. Leave the clause standing and the next
+person to touch pagination has a DOCUMENTED reason to reintroduce the
+`(server_time DESC, id DESC)` sort that CP29 R-2 had already made unservable by
+any index. The corrected text names `maybe_before/2` so the two stop
+disagreeing, and the cross-reference runs ONE way only: the `scrollback.ex`
+comment was already right and needed nothing.
+
+Prose is the one artefact class with no gate. Code has tests, the wire has
+`mix grappa.wire_pin --check`, migrations have the deploy preflight — a comment
+that becomes false goes red nowhere, ages in silence, and is what the next
+reader reaches BEFORE the code.
+
+### Not measured, deliberately
+
+Whether any *client* infers an upstream origin for `server_time`: the claim here
+is confined to what `lib/` does. Whether other stale-prose sites of the same
+class exist elsewhere in the tree: the greps were scoped to the two identifiers
+these issues name (`structural_row?`, `server-time`), not to the general
+question of which comments have rotted.
