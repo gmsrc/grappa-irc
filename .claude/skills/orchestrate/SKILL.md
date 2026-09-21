@@ -3541,6 +3541,55 @@ dello stesso job:**
 argomento di design, è un caso misurato.** (E il digest lo si può calcolare SENZA corsia:
 `sha256(wireTypes.ts ++ "\n" ++ wireSchema.ts)` — validato riproducendo il pin di main al byte,
 con la variante senza `\n` come controllo che discrimina.)
+✅ **SECONDA ISTANZA, 2026-09-21 (PR #2284), e questa dice ANCHE dove il pin guarda che l'altro
+non guarda:** nello STESSO job `gen_wire_types --check` ha risposto **`is in sync.`** su **tutti e
+tre** gli artefatti mentre la forma era cambiata, e **solo `wire_pin` l'ha vista**. Ciò che ha
+beccato vive **soltanto dentro uno `@spec`** — `MessagesJSON.count/1` che si muove a `arg | nil` —
+cioè esattamente la classe per cui esiste il **terzo componente** del digest
+(`json_view_spec_text/0`, aggiunto da #2037 misurando il buco **su quella stessa funzione**).
+⇒ Due istanze, due anni di argomenti risparmiati: **non è un argomento di design, è un log.**
+
+🔴🔴 **E DA QUELLA STESSA FETTA, LA LEZIONE CHE VALE OLTRE IL PIN: «QUESTO CAMBIO È INVISIBILE AL
+GATE» È UN'AFFERMAZIONE **PER CAMBIO**, E VA MISURATA OGNI VOLTA — MAI EREDITATA.** Avevo propagato
+nell'handoff una riga mia: *"il bump lo deve alla REGOLA non al gate, stesso buco di v29"*. **Falsa
+su quel caso**, e me l'ha ritrattata la worker con la misura: v29 era invisibile perché **nessuno
+`@spec` si muoveva**, condizione che lì **mancava** ⇒ il terzo componente del digest si è mosso e
+**il pin l'ha visto.**
+🥇 **La forma del difetto è la solita, vista da una porta nuova: una proprietà osservata su UN
+cambio promossa a proprietà della CLASSE DI CAMBI.** Prima di dire *"questo il gate non lo becca"*,
+chiediti **quale componente del gate guarda quale grandezza**, e se **la tua modifica muove quella
+grandezza** — è una domanda a cui si risponde girando il gate, non ricordando.
+
+⚖️ **COROLLARIO SUL PURGE DEL `_build` CONDIVISO, e la domanda giusta l'ha fatta la worker:** un
+pin che si calcola dagli `@spec` **COMPILATI** invita a pensare che un `_build` contaminato possa
+falsarlo ⇒ *"purghiamo per sicurezza"*. **No, e per due ragioni misurabili:** (1) `mix` ricompila
+**per CONTENUTO**, quindi una modifica che non muove nessuno `@spec` non può spostare il digest;
+(2) **l'arbitro è la CI, che ricompila da zero** ⇒ un pin contaminato lo beccherebbe **il gate
+stesso**, cioè il modo di fallire è **visibile per costruzione**. ⇒ **il purge non si paga**, e
+spurgare mentre un'altra worker è dentro quel `_build` **non è pulizia, è sabotaggio del suo giro.**
+🥇 *Ha fatto bene a chiedere invece di purgare: una worker che chiede il permesso per un'azione che
+tocca uno stato CONDIVISO ha capito la differenza fra il proprio albero e l'host.*
+
+## 🕳️ MISURARE UN'INTERSEZIONE FRA DUE PR **DOPO** CHE UNA È ATTERRATA (orch, 2026-09-21)
+🔴🔴 **`git diff --name-only $(git merge-base origin/main <pr>)..<pr>` SU UNA PR GIÀ MERGIATA
+RESTITUISCE **ZERO FILE**, E QUELLO ZERO SI LEGGE COME «LE DUE PR NON SI TOCCANO».** Misurato su me
+stessa: dopo l'FF di #2285, `origin/main` **È** la sua head ⇒ il merge-base coincide con la head ⇒
+il diff è **vuoto per costruzione**, e l'intersezione con #2284 usciva **vuota**. Stavo per
+concludere che l'unica collisione fosse `DESIGN_NOTES`.
+🥇 **Rifatta contro il merge-base ORIGINALE (`bf21ff68a`, cioè la main da cui ENTRAMBE erano state
+tagliate): 5 file contro 13, e l'intersezione è DUE — `docs/DESIGN_NOTES.md` E
+`lib/grappa/scrollback.ex`.** Cioè la collisione di CODICE che il primo conteggio nascondeva, e che
+decide se il rebase dell'altra worker vada guardato o firmato.
+🔑 **La regola: una domanda sul rapporto fra due rami si misura contro la base che AVEVANO IN
+COMUNE, non contro la main di adesso.** Appena una atterra, `origin/main` smette di essere un punto
+di riferimento neutro e diventa **una delle due parti in causa**: chiederle di arbitrare è come
+chiedere a un testimone se era presente.
+⚠️ **E il neg ctrl del `comm` non basta a beccarlo** — un file inventato dà 0 correttamente **anche
+quando entrambe le liste sono vuote**. Il controllo che discrimina è il **conteggio delle due liste
+PRIMA di intersecarle**: se una legge **0 file** su una PR che sai aver toccato roba, la misura è
+morta, e nessun risultato dell'intersezione vale niente.
+🥇 *Ennesima faccia dello zero falso e plausibile, costume nuovo: non lo strumento rotto e non
+l'artefatto sbagliato, ma **il punto di riferimento che si è mosso sotto la domanda**.*
 
 ## 🧭 REGOLE NATE IL 2026-09-01 (permanenti — migrate dall'handoff)
 - 🔴🔴 **`ctx=TBD` NON SIGNIFICA `/clear`: SIGNIFICA "non ho letto il contesto", E UNA SESSIONE
