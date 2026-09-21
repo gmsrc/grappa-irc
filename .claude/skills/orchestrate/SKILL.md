@@ -3726,18 +3726,33 @@ giusta.
 - 🔴🔴 **IL MIO SCANNER CLOSING-KEYWORD AVEVA UN BUCO E LO HA TROVATO IL SUO POS CTRL, NON IO
   (orch, 2026-09-21).** Il pattern che uso da settimane e'
   `\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b[[:space:]]+#[0-9]+`: pretende **spazio SUBITO dopo la
-  keyword** e **il cancelletto attaccato al numero** ⇒ **non matcha `fixed: #1234`** (i due punti) **ne'
-  `Resolve vjt/grappa-irc#7`** (la forma `owner/repo#N`). **GitHub le accetta entrambe.** Misurato: pos
+  keyword** e **il cancelletto attaccato al numero** ⇒ **non matcha `fixed:` + `#1234`** (i due punti) **ne' la forma `owner/repo` + `#7`** (la forma `owner/repo#N`). **GitHub le accetta entrambe.** Misurato: pos
   ctrl **2 su 3**. Forma riparata, verificata 3/3:
   `(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+`
   — con neg ctrl **decisivo** (keyword presente, numero **senza** cancelletto ⇒ 0) e la sua controparte
   col cancelletto (⇒ 2), cioe' i due versi della regola che questo file gia' scrive.
   🥇🥇 **LA LEZIONE NON E' IL REGEX, E' IL POS CTRL: un controllo positivo per un MATCHER deve
   esercitare OGNI GRAFIA CHE IL PARSER VERO ACCETTA, non un esemplare.** Con un solo esemplare
-  (`Closes #99`) il mio scanner passava da mesi — era un pos ctrl **per quell'esemplare**, non per la
+  (keyword nuda + numero) il mio scanner passava da mesi — era un pos ctrl **per quell'esemplare**, non per la
   CLASSE, e un matcher validato su una grafia sola **tace esattamente sulle grafie che non conosce**.
   ⇒ **quando il controllo positivo e' un INSIEME, il verdetto e' `hit == |insieme|`, mai `hit > 0`.**
   🪞 **E l'ho scoperto perche' una worker ne aveva uno MIGLIORE del mio** — lei riportava *"pos ctrl
-  3/3 (`Closes #99`, `fixed: #1234`, `Resolve vjt/grappa-irc#7`)"* mentre il mio ne conosceva una.
+  3/3 su tre GRAFIE (keyword nuda, keyword coi due punti, forma `owner/repo`)"* mentre il mio ne conosceva una.
   **Quando pretendi uno strumento nei brief, guarda quello che ti torna indietro: puo' essere piu'
   severo del tuo.**
+  🔴🔴 **E IL DIFETTO VERO NON ERA IL REGEX: IL MIO POS CTRL USAVA NUMERI DI ISSUE *REALI*, E
+  QUOTARLI IN UN MESSAGGIO DI COMMIT HA CHIUSO LA 99 SUL SERIO** (`commit_id a4f61234d…`, `05:37:00Z`,
+  riaperta subito con la ragione nel commento). **L'input di un controllo positivo per questo scanner
+  E' MUNIZIONE VERA.** ⇒ **un pos ctrl per la closing-keyword usa numeri che NON POSSONO RISOLVERE**
+  (`#999999`): la grafia e' l'unica cosa che serve al matcher, il numero vero non aggiunge niente e
+  arma la trappola.
+  🪞 **E l'errore di PROCEDURA che lo ha fatto atterrare: avevo messo lo SCAN e il PUSH nello STESSO
+  blocco** ⇒ lo scan ha stampato **2** e il push era gia' partito. E' la regola *"non annunciare
+  l'esito di un'azione dal blocco che la esegue"* vista dal lato peggiore: li' stampi un verdetto
+  falso, qui **il verdetto e' giusto e arriva troppo tardi per servire a qualcosa.** ⇒ **scan in un
+  blocco, push nel blocco DOPO, sempre.**
+  ⚠️ **E LA MUNIZIONE ERA GIA' NEL FILE, PIANTATA DA UNA LEZIONE DI AGOSTO**: la riga che racconta la
+  scansione di #1830 porta l'esempio con un numero **basso e reale**, ed e' da li' che l'ho copiato.
+  **Non la riscrivo — e' un verbale di una misura fatta davvero** — ma vale come avviso: **questo file
+  contiene grafie VIVE, e citarne una in un messaggio di commit o in un body di PR la fa sparare.**
+  Quando ne aggiungi una nuova, **usa un numero a sei cifre che non puo' risolvere.**
