@@ -52,6 +52,7 @@
 #include "json.h"
 #include "version.h"
 #include "media.h"
+#include "unfurl.h"
 #include "mirc.h"
 #include "termcolor.h"
 #include "wire.h"
@@ -144,6 +145,11 @@ typedef uint16_t log_scope_id;
  * pool indices the decode job otherwise receives. */
 #define MEDIA_SLOT_PREVIEW (-2)
 #define INLINE_MAX_ROWS 14
+/* A link CARD under a page link: a title, up to two lines of what the
+ * page says about itself, and the page's own picture as a thumbnail
+ * beside them. The thumbnail box, in cells; the text takes the rest. */
+#define CARD_ROWS 3
+#define CARD_THUMB_COLS 12
 /* Animation caps. Character-art frames are downsampled to the CELL grid
  * before they are stored, so a frame is a few kilobytes and 64 of them
  * is a rounding error — the scarce resources here are ncurses colour
@@ -456,6 +462,17 @@ struct inline_media {
     size_t frame;
     long frame_ms;
     long next_frame_ms;
+    /* A link CARD rather than a picture: `url` is the PAGE, and what is
+     * drawn is its title, a line or two of its own description, and —
+     * when it nominates one — its picture, fetched into this same slot's
+     * rgb/payload as a thumbnail whose box is cols x rows. `has_thumb`
+     * says the picture decoded; a card whose picture did not is still a
+     * card, text only. */
+    bool is_card;
+    bool has_thumb;
+    char title[UNFURL_TITLE];
+    char snippet[UNFURL_DESC];
+    char image_url[UNFURL_URL];
 };
 
 /* What a URL points at, as far as this client cares. Declared up here
@@ -1402,6 +1419,10 @@ struct app {
      * The expanded network is DERIVED from focus, never stored: the
      * only state is whether folding is wanted at all. */
     bool sidebar_collapse;
+    /* Draw a card under a page link: its title, a line or two of what it
+     * says about itself, and its own picture. Same fetch-on-view cost as
+     * inline media, so it obeys the same /media policy on top of this. */
+    bool link_cards;
     bool inline_media_enabled;
     /* #451 opt-in: also auto-render media from hosts that are NOT this
      * deployment's. OFF by default and deliberately not persisted — see
@@ -8946,6 +8967,12 @@ static const char *roster_hint(const struct app *app, int width) {
  * worker cannot flip the state between the two passes. */
 static int media_extra_rows_locked(const struct inline_media *m) {
     if (!m) return 0;
+    /* A card reserves nothing until it has something to say: a link is
+     * usually just a link, and a "[loading]" line under every one of
+     * them would be noise for the many that yield no card. Ready, it
+     * is CARD_ROWS whatever the text needs — the picture is that tall
+     * and a fixed height keeps the layout from jumping per card. */
+    if (m->is_card) return m->state == IM_READY ? CARD_ROWS : 0;
     switch (m->state) {
     case IM_READY:
         return m->rows;
@@ -9161,6 +9188,42 @@ static void add_link_region_locked(struct app *app, int y0, int y1, int x0, int 
  * case the label matters. */
 static bool channel_is_moderated(const struct window *w) {
     return w->chan_modes_known && strchr(w->chan_modes, 'm') != NULL;
+}
+
+/* A link card: the page's picture, when it has one, as a thumbnail at
+ * the left, and beside it — or across the whole width when there is
+ * none — the title in the accent colour and up to two lines of what the
+ * page says about itself. Clipped and skipped exactly as a picture is,
+ * so it scrolls under the region edge like everything else. Caller
+ * holds app->lock. */
+static void draw_card_locked(struct inline_media *m, int y, int x, int skip_rows, int max_rows,
+                             int max_cols) {
+    if (m->state != IM_READY) return;
+    if (skip_rows < 0) skip_rows = 0;
+    int text_x = x;
+    int text_w = max_cols;
+    if (m->has_thumb && (m->rgb || m->payload)) {
+        draw_inline_media_locked(m, y, x, skip_rows, max_rows, max_cols);
+        text_x = x + m->cols + 1;
+        text_w = max_cols - m->cols - 1;
+    }
+    if (text_w < 8) return; /* a card too narrow to read is not a card */
+    int rows_left = max_rows;
+    int line = 0; /* the card's own row, before skipping */
+    if (m->title[0]) {
+        if (line >= skip_rows && rows_left > 0) {
+            draw_text(y + (line - skip_rows), text_x, text_w, CP_ACCENT, A_BOLD, "%s", m->title);
+            rows_left--;
+        }
+        line++;
+    }
+    if (m->snippet[0] && rows_left > 0) {
+        int skip = skip_rows > line ? skip_rows - line : 0;
+        int at = line >= skip_rows ? y + (line - skip_rows) : y;
+        int max = CARD_ROWS - line;
+        if (max > rows_left) max = rows_left;
+        draw_wrapped_text(at, text_x, text_w, skip, max, CP_MUTED, A_DIM, m->snippet);
+    }
 }
 
 /* Rows the roster occupies: one per member, plus a separator above the
@@ -9671,9 +9734,24 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
          * a frame. Clicking it still plays it; there is simply nothing
          * to render. */
         if (mk == MEDIA_AUDIO) mk = MEDIA_NONE;
-        if (mi == LOG_MEDIA_NONE && mk != MEDIA_NONE && app->inline_media_enabled &&
-            (app->inline_media_peers || url_is_first_party(app, url_tok))) {
+        bool allowed = app->inline_media_enabled &&
+                       (app->inline_media_peers || url_is_first_party(app, url_tok));
+        if (mi == LOG_MEDIA_NONE && mk != MEDIA_NONE && allowed) {
             app->log_media[i] = media_claim_locked(app, url_tok, mk == MEDIA_VIDEO);
+            mi = LOG_MEDIA_NONE;
+        } else if (mi == LOG_MEDIA_NONE && mk == MEDIA_NONE && url_tok[0] && allowed &&
+                   app->link_cards) {
+            /* A page link: the same slot, holding a CARD. Sized here,
+             * so the generic 4:3 box below is never fitted for it. */
+            int ci = media_claim_locked(app, url_tok, false);
+            if (ci >= 0) {
+                struct inline_media *c = &app->media[ci];
+                c->is_card = true;
+                media_fit_cells(4, 3, CARD_THUMB_COLS, CARD_ROWS, &c->cols, &c->rows);
+                if (c->rows < 1) c->rows = 1;
+                if (c->cols < 1) c->cols = 1;
+            }
+            app->log_media[i] = ci;
             mi = LOG_MEDIA_NONE;
         }
         /* Draw the row's image beneath it, and kick off its decode the
@@ -9728,7 +9806,10 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                     /* Claimed by THIS frame, so the reconciliation at the
                      * end of draw() knows the placement is still wanted. */
                     m->painted_frame = app->frame_seq;
-                    draw_inline_media_locked(m, img_y, x + 2, row_skip, spend, width - 4);
+                    if (m->is_card) draw_card_locked(m, img_y, x + 2, row_skip, spend, width - 4);
+                    else draw_inline_media_locked(m, img_y, x + 2, row_skip, spend, width - 4);
+                } else if (m->is_card) {
+                    /* Not ready: reserves no rows, so nothing to draw. */
                 } else if (m->state == IM_FAILED) {
                     draw_text(img_y, x + 2, width - 4, CP_MUTED, A_DIM,
                               "  [image could not be decoded — /open to view externally]");
@@ -12379,6 +12460,7 @@ static const struct setting_def SETTINGS[] = {
     { "animate", SET_BOOL, NULL, "play GIFs and clips as colour art" },
     { "sidebar.collapse", SET_BOOL, NULL,
       "fold every network but the one you are in to a single row" },
+    { "cards", SET_BOOL, NULL, "under a page link: its title, a line of it, and its picture" },
     { "llm.backend", SET_CHOICE, "openai|claude-cli", "which model transport /llm uses" },
     { "llm.url", SET_TEXT, NULL, "openai: the API base, e.g. https://api.openai.com/v1" },
     { "llm.token", SET_TEXT, NULL, "openai: bearer token (never echoed, never shown)" },
@@ -12449,6 +12531,7 @@ static void setting_value(struct app *app, const char *name, char *out, size_t o
         snprintf(out, out_sz, "%s", app->animate_media ? "on" : "off");
     else if (strcmp(name, "sidebar.collapse") == 0)
         snprintf(out, out_sz, "%s", app->sidebar_collapse ? "on" : "off");
+    else if (strcmp(name, "cards") == 0) snprintf(out, out_sz, "%s", app->link_cards ? "on" : "off");
     else if (strcmp(name, "media") == 0)
         snprintf(out, out_sz, "%s", app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off");
     else if (strcmp(name, "llm.backend") == 0)
@@ -12553,6 +12636,7 @@ static size_t setting_raw(struct app *app, const char *name, char *out, size_t o
     if (strcmp(name, "mouse") == 0) src = app->mouse_enabled ? "on" : "off";
     else if (strcmp(name, "animate") == 0) src = app->animate_media ? "on" : "off";
     else if (strcmp(name, "sidebar.collapse") == 0) src = app->sidebar_collapse ? "on" : "off";
+    else if (strcmp(name, "cards") == 0) src = app->link_cards ? "on" : "off";
     else if (strcmp(name, "media") == 0)
         src = app->inline_media_enabled ? (app->inline_media_peers ? "all" : "first-party") : "off";
     else if (strcmp(name, "llm.backend") == 0)
@@ -12628,6 +12712,8 @@ static bool setting_apply(struct app *app, const struct setting_def *def, const 
         app->animate_media = on;
     } else if (strcmp(def->name, "sidebar.collapse") == 0) {
         app->sidebar_collapse = on;
+    } else if (strcmp(def->name, "cards") == 0) {
+        app->link_cards = on;
     } else if (strcmp(def->name, "media") == 0) {
         if (strcasecmp(value, "off") == 0) app->inline_media_enabled = false;
         else if (strcasecmp(value, "all") == 0) {
@@ -17385,8 +17471,66 @@ static void media_decode_job(struct app *app, int slot) {
     if (animate) proto = MEDIA_PROTO_NONE;
     bool timed = animate && m->is_video; /* fps filter, vs native frames */
     int want_frames = animate ? MEDIA_ANIM_MAX_FRAMES : 1;
+    bool is_card = m->is_card;
     pthread_mutex_unlock(&app->lock);
     if (!url[0] || cols <= 0 || rows <= 0) return;
+
+    /* A CARD: the page first. What it says about itself is the card;
+     * the picture it nominates, if any, is decoded below into the same
+     * slot as a thumbnail — and a picture that fails still leaves a
+     * card, text only. Redirects are followed a few hops, as /view does,
+     * and only an HTML answer is read: a link to a zip yields nothing,
+     * silently, which is the right amount of card for it. */
+    char page_url[MAX_LINE];
+    snprintf(page_url, sizeof(page_url), "%s", url);
+    if (is_card) {
+        struct unfurl u;
+        bool have = false;
+        char current[MAX_LINE];
+        snprintf(current, sizeof(current), "%s", url);
+        for (int hop = 0; hop <= VIEW_MAX_REDIRECTS; hop++) {
+            struct fetch_result r;
+            if (!http_fetch(app, current, &r)) break;
+            bool redirect = (r.status == 301 || r.status == 302 || r.status == 303 ||
+                             r.status == 307 || r.status == 308) && r.location[0];
+            if (redirect && (strncmp(r.location, "http://", 7) == 0 ||
+                             strncmp(r.location, "https://", 8) == 0)) {
+                snprintf(current, sizeof(current), "%s", r.location);
+                fetch_result_free(&r);
+                continue;
+            }
+            if (r.status >= 200 && r.status < 300 && r.body &&
+                strncasecmp(r.content_type, "text/html", 9) == 0)
+                have = unfurl_extract(r.body, r.len, current, &u);
+            fetch_result_free(&r);
+            break;
+        }
+        pthread_mutex_lock(&app->lock);
+        m = (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
+        bool still_mine = strcmp(m->url, page_url) == 0 && m->state == IM_FETCHING;
+        bool want_thumb = false;
+        if (still_mine) {
+            if (!have) {
+                m->state = IM_FAILED;
+            } else {
+                snprintf(m->title, sizeof(m->title), "%s", u.title);
+                snprintf(m->snippet, sizeof(m->snippet), "%s", u.description);
+                snprintf(m->image_url, sizeof(m->image_url), "%s", u.image);
+                want_thumb = u.image[0] != 0;
+                if (!want_thumb) {
+                    m->state = IM_READY;
+                    m->drawn = false;
+                }
+            }
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (!still_mine || !have || !want_thumb) return;
+        /* On to the picture: one still, into the thumbnail box. */
+        snprintf(url, sizeof(url), "%s", u.image);
+        animate = false;
+        timed = false;
+        want_frames = 1;
+    }
 
     char dir[] = "/tmp/shottino-media-XXXXXX";
     if (!mkdtemp(dir)) return;
@@ -17519,7 +17663,7 @@ static void media_decode_job(struct app *app, int slot) {
     m = (slot == MEDIA_SLOT_PREVIEW) ? &app->preview : &app->media[slot];
     /* The slot may have been recycled while ffmpeg ran; publishing then
      * would attach this picture to a different message. */
-    if (strcmp(m->url, url) == 0 && m->state == IM_FETCHING) {
+    if (strcmp(m->url, page_url) == 0 && m->state == IM_FETCHING) {
         m->payload = payload;
         m->payload_len = payload_len;
         m->rgb = rgb;
@@ -17527,7 +17671,9 @@ static void media_decode_job(struct app *app, int slot) {
         m->frame = 0;
         m->frame_ms = 1000 / MEDIA_ANIM_FPS;
         m->next_frame_ms = 0;
-        m->state = ok ? IM_READY : IM_FAILED;
+        /* A card whose picture failed is still a card. */
+        m->state = (ok || is_card) ? IM_READY : IM_FAILED;
+        m->has_thumb = is_card && ok;
         m->drawn = false;
     } else {
         free(payload);
@@ -23318,6 +23464,9 @@ int main(int argc, char **argv) {
      * before (the one network is the focused one), and with several
      * the roster gets its rows back. */
     app->sidebar_collapse = true;
+    /* On, under the same /media policy as pictures: a card is a fetch
+     * on view like a picture is, and /media off stops both. */
+    app->link_cards = true;
     char *share_base = NULL, *share_token = NULL;
     const char *server_url;
     if (share_mode) {

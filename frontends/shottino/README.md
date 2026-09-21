@@ -115,6 +115,28 @@ protocol when there is one.
 playback back on. Both obey the same first-party rule as still images — see
 `/media all`.
 
+## Link cards
+
+A link to a **page** — not a picture or a clip — gets a card under it: the
+page's own title, a line or two of what it says about itself, and, when it
+nominates one, its picture as a small thumbnail beside them (a real bitmap on a
+terminal with a graphics protocol, coloured character art everywhere else).
+Sites publish exactly this for link previews — the Open Graph tags — and the
+card reads those, falling back to `<title>`, the meta description, and finally
+the first prose on the page. A page that says nothing gets no card, silently:
+most links yield nothing, and a `[loading]` line under every one of them would
+be noise.
+
+It is the **same mechanism as inline pictures**, not a second one: the same
+slot, claimed when the row is first on screen, decoded lazily on the worker,
+and under the **same `/media` policy** — `/media off` stops cards too, and
+`/media first-party` limits them to your own deployment's links. Because it is
+the same thing: a fetch, on view, of something a stranger linked. Everything
+the inline-media section says about what that costs applies here unchanged,
+and a card fetches the *page* as well as its picture.
+
+`/set cards off` keeps pictures and drops the cards.
+
 ## The topic bar
 
 The band at the top is at most **two lines**, whatever the topic says. The

@@ -1103,6 +1103,88 @@ TEST(the_decoder_says_what_animates_not_the_url) {
     rmdir(dir);
 }
 
+/* A page link earns a CARD: the page's own title and a line of what it
+ * says about itself, under the message, with its picture beside them
+ * when it has one.
+ *
+ * It rides the inline-media slot — same claim at draw time, same
+ * /media policy, same lazy decode — because it IS the same thing: a
+ * fetch on view of something a stranger linked. What differs is the
+ * shape: a card reserves NOTHING until it has something to say (most
+ * links yield nothing, and a "[loading]" under every one would be
+ * noise), then a fixed three rows so the layout does not jump per
+ * card. The link keeps its region and its click. */
+TEST(a_page_link_earns_a_card_once_it_has_something_to_say) {
+    struct app *app = test_app();
+    CHECK(app != NULL);
+    if (!app) return;
+    add_test_network(app, "azzurra", "ohv", "@%+");
+    add_test_window(app, "azzurra", "#sniffo");
+    app->inline_media_enabled = true;
+    app->inline_media_peers = true;
+    app->link_cards = true;
+    seed_log(app, "[azzurra/#sniffo] 09:00 <a> look https://ex.net/article");
+    seed_log(app, "[azzurra/#sniffo] 09:01 <b> after it");
+
+    erase();
+    draw(app);
+    /* Claimed on the first frame, kicked on the second — the measuring
+     * pass has to see the slot before rows are spent on it. */
+    erase();
+    draw(app);
+
+    /* Claimed as a card, promoted to fetching, and reserving nothing
+     * yet: the row after it sits directly beneath. */
+    int slot = app->log_media[0];
+    CHECK(slot >= 0);
+    if (slot < 0) { free(app); return; }
+    struct inline_media *m = &app->media[slot];
+    CHECK(m->is_card);
+    CHECK_STR(m->url, "https://ex.net/article");
+    CHECK(m->state == IM_FETCHING);
+    CHECK_LONG(media_extra_rows_locked(m), 0);
+    CHECK(!screen_has("loading"));
+
+    /* The decode landed — text only, no picture nominated. */
+    pthread_mutex_lock(&app->lock);
+    snprintf(m->title, sizeof(m->title), "An Article Title");
+    snprintf(m->snippet, sizeof(m->snippet), "What the page says about itself, in one line or two.");
+    m->state = IM_READY;
+    pthread_mutex_unlock(&app->lock);
+    CHECK_LONG(media_extra_rows_locked(m), CARD_ROWS);
+
+    erase();
+    draw(app);
+    CHECK(screen_has("An Article Title"));
+    CHECK(screen_has("What the page says"));
+    /* Drawn UNDER its message and ABOVE the next one. */
+    int title_y = -1, link_y = -1, next_y = -1;
+    char screen[MAX_H][MAX_W + 1];
+    snap(screen, MAX_H, MAX_W);
+    for (int y = 0; y < MAX_H; y++) {
+        if (strstr(screen[y], "An Article Title")) title_y = y;
+        if (strstr(screen[y], "ex.net/article")) link_y = y;
+        if (strstr(screen[y], "after it")) next_y = y;
+    }
+    CHECK(link_y >= 0 && title_y > link_y && next_y > title_y);
+
+    /* The link is still a link. */
+    bool linked = false;
+    for (size_t i = 0; i < app->link_region_count; i++)
+        if (strstr(app->link_regions[i].url, "ex.net/article")) linked = true;
+    CHECK(linked);
+
+    /* Off, a page link is just a link: no slot, no card. */
+    app->link_cards = false;
+    seed_log(app, "[azzurra/#sniffo] 09:02 <c> https://ex.net/other");
+    erase();
+    draw(app);
+    CHECK_LONG(app->log_media[2], LOG_MEDIA_NONE);
+
+    for (size_t i = 0; i < app->log_count; i++) free(app->log[i]);
+    free(app);
+}
+
 /* An audio link is clickable but never drawn as a picture.
  *
  * It was being claimed as inline media like any other URL, handed to
@@ -1673,6 +1755,7 @@ int main(void) {
         fclose(sink);
         return no_screen("no usable terminfo entry");
     }
+    RUN(a_page_link_earns_a_card_once_it_has_something_to_say);
     RUN(audio_is_clickable_but_not_drawn);
     RUN(the_sidebar_records_a_row_for_every_window);
     RUN(the_sidebar_folds_every_network_but_the_focused_one);
