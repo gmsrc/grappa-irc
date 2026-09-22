@@ -31,6 +31,12 @@ vi.mock("../AdminSettingsTab", () => ({
   default: () => <div data-testid="admin-settings-tab-mock">settings-tab</div>,
 }));
 
+// issue 2288 — the Uploads tab fetches on mount; mocked here for the same
+// reason as its siblings, so this suite stays about the pane's switching.
+vi.mock("../AdminUploadsTab", () => ({
+  default: () => <div data-testid="admin-uploads-tab-mock">uploads-tab</div>,
+}));
+
 // Mock the adminEvents subscription lifecycle. AdminPane calls these
 // at mount/unmount; the actual channel join is exercised by the
 // Playwright e2e + AdminEventsTab unit suite, not here.
@@ -117,6 +123,19 @@ describe("AdminPane", () => {
     expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-settings-tab-mock")).toBeNull();
     expect(screen.getByTestId("admin-tab-events").getAttribute("aria-selected")).toBe("true");
+  });
+
+  // issue 2288 — the uploads registry had a shipped REST surface and no door.
+  // The handle IS the feature's reachability: without it the tab is code
+  // nobody can run, which is the state this issue was filed about.
+  it("clicking the Uploads tab swaps the active panel + flips aria-selected (issue 2288)", () => {
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
+    const handle = screen.getByTestId("admin-tab-uploads");
+    expect(handle.textContent).toContain("Uploads");
+    fireEvent.click(handle);
+    expect(screen.getByTestId("admin-uploads-tab-mock")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
+    expect(handle.getAttribute("aria-selected")).toBe("true");
   });
 
   it("clicking the Session Log tab swaps the active panel + flips aria-selected (#215)", () => {
