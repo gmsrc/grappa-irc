@@ -485,9 +485,12 @@ TEST(banlist_and_links) {
 }
 
 TEST(server_reply) {
-    const char *sources[] = {"info", "version", "motd"};
-    wire_reply_source expect[] = {REPLY_INFO, REPLY_VERSION, REPLY_MOTD};
-    for (size_t i = 0; i < 3; i++) {
+    /* The server's closed set, all four. `admin` was missing here and
+     * in wire.c, and this test asserted the omission — so every /admin
+     * reply was dropped and the suite called that correct. */
+    const char *sources[] = {"info", "version", "motd", "admin"};
+    wire_reply_source expect[] = {REPLY_INFO, REPLY_VERSION, REPLY_MOTD, REPLY_ADMIN};
+    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
         char buf[256];
         snprintf(buf, sizeof(buf),
                  "{\"kind\":\"server_reply\",\"network\":\"a\",\"source\":\"%s\","
@@ -503,7 +506,7 @@ TEST(server_reply) {
         json_free(d);
     }
     /* Source outside the closed set is rejected, not tolerated. */
-    reject("{\"kind\":\"server_reply\",\"network\":\"a\",\"source\":\"admin\",\"lines\":[]}");
+    reject("{\"kind\":\"server_reply\",\"network\":\"a\",\"source\":\"stats\",\"lines\":[]}");
     reject("{\"kind\":\"server_reply\",\"network\":\"a\",\"source\":\"motd\",\"lines\":[1]}");
 }
 
@@ -684,6 +687,40 @@ TEST(dcc_offer_and_its_resolution) {
                "\"from\":\"alice\",\"filename\":\"x\",\"size\":1}",
                &ev, &ok);
     CHECK(!ok);
+    json_free(d);
+}
+
+/* `:failing` is a value of the server's set (#1675, v5): the session
+ * process is alive and the backoff is running while the upstream link
+ * is NOT registered. It was missing from the C enum, so every event
+ * that touched it — the ones an operator most wants to see — was
+ * dropped whole and the sidebar kept saying connected. */
+TEST(a_failing_link_is_a_state_and_not_a_dropped_event) {
+    struct wire_event ev;
+    bool ok;
+    json_doc *d = narrow(
+        "{\"kind\":\"connection_state_changed\",\"user_id\":\"u1\",\"network_id\":1,"
+        "\"network_slug\":\"libera\",\"from\":\"connected\",\"to\":\"failing\","
+        "\"reason\":\"connection refused\",\"at\":null,\"network\":{\"slug\":\"libera\","
+        "\"nick\":\"vjt\",\"connection_state\":\"failing\","
+        "\"connection_state_reason\":\"connection refused\","
+        "\"connection_state_changed_at\":null}}",
+        &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.u.connection_state.to == CONN_FAILING);
+    CHECK(ev.u.connection_state.state == CONN_FAILING);
+    CHECK_STR(wire_connection_state_name(CONN_FAILING), "failing");
+    CHECK_STR(ev.u.connection_state.reason, "connection refused");
+    json_free(d);
+    /* And back: failing → connected on 001. */
+    d = narrow("{\"kind\":\"connection_state_changed\",\"user_id\":\"u1\",\"network_id\":1,"
+               "\"network_slug\":\"libera\",\"from\":\"failing\",\"to\":\"connected\","
+               "\"reason\":null,\"at\":null,\"network\":{\"slug\":\"libera\",\"nick\":\"vjt\","
+               "\"connection_state\":\"connected\",\"connection_state_reason\":null,"
+               "\"connection_state_changed_at\":null}}",
+               &ev, &ok);
+    CHECK(ok);
+    CHECK(ev.u.connection_state.from == CONN_FAILING);
     json_free(d);
 }
 
@@ -1061,6 +1098,7 @@ int main(void) {
     RUN(network_attached_and_detached);
     RUN(severed_and_invite_declined);
     RUN(dcc_offer_and_its_resolution);
+    RUN(a_failing_link_is_a_state_and_not_a_dropped_event);
     RUN(connection_state_changed);
     RUN(simple_arms);
     RUN(server_settings);

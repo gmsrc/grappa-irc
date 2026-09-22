@@ -78,7 +78,13 @@ typedef enum {
     MSG_SERVER_EVENT
 } wire_message_kind;
 
-typedef enum { CONN_CONNECTED, CONN_PARKED, CONN_FAILED } wire_connection_state;
+/* Mirror of `Grappa.Networks.Credential`'s `@connection_states`, in its
+ * order. `:failing` (#1675, v5) is the session process alive with the
+ * upstream link NOT registered — a backoff running, not a terminal
+ * state; it was missing here, so every connection_state_changed that
+ * touched it was DROPPED WHOLE and the REST seed read the row unknown.
+ * The pin in test_commands now compares this table to credential.ex. */
+typedef enum { CONN_CONNECTED, CONN_FAILING, CONN_PARKED, CONN_FAILED } wire_connection_state;
 
 typedef enum { PRESENCE_ONLINE, PRESENCE_OFFLINE, PRESENCE_UNKNOWN } wire_presence;
 
@@ -91,7 +97,11 @@ typedef enum {
     COUNTS_NONE
 } wire_counts_severity;
 
-typedef enum { REPLY_INFO, REPLY_VERSION, REPLY_MOTD } wire_reply_source;
+/* Mirror of `Grappa.Session.Wire`'s `@server_reply_sources`, in its
+ * order. `:admin` was missing, so every /admin reply was dropped —
+ * the same omission that once took `Session.Server` down on the server
+ * side (#992), one hop out. Pinned to session/wire.ex. */
+typedef enum { REPLY_INFO, REPLY_VERSION, REPLY_MOTD, REPLY_ADMIN } wire_reply_source;
 
 const char *wire_message_kind_name(wire_message_kind k);
 const char *wire_connection_state_name(wire_connection_state s);
@@ -135,6 +145,13 @@ typedef enum {
     WIRE_WINDOW_INVITE_DECLINED,
     WIRE_DCC_OFFER,
     WIRE_DCC_OFFER_RESOLVED,
+    WIRE_SESSION_IDENTITY_CHANGED,
+    WIRE_RECOVER_PROGRESS,
+    WIRE_RECOVER_RESULT,
+    WIRE_WHOIS_AVATAR_READY,
+    WIRE_AUTO_AWAY_DEBOUNCE_CHANGED,
+    WIRE_AUTO_AWAY_REASON_CHANGED,
+    WIRE_QUIT_PART_REASON_CHANGED,
     WIRE_WHOIS_BUNDLE,
     WIRE_NAMES_REPLY,
     WIRE_WHO_REPLY,
@@ -155,6 +172,18 @@ typedef enum {
 } wire_kind;
 
 const char *wire_kind_name(wire_kind k);
+
+/* Is `name` an event kind this client narrows? The by-NAME inverse of
+ * `wire_kind_name` (the sibling `wire_kind_known` above answers the
+ * same question about a payload), for the parity gate: every kind
+ * cicchetto narrows must be known here, including the ones a terminal
+ * deliberately drops — see test_commands. */
+bool wire_kind_name_known(const char *name);
+
+/* The connection states this client mirrors, in the server's order —
+ * `wire_connection_state_name(i)` for i < this. Exported so the pin can
+ * compare the table to `credential.ex` without reaching into wire.c. */
+size_t wire_connection_state_count(void);
 
 /* ── Element shapes (borrowed, per-element accessors) ────────────────── */
 
@@ -367,6 +396,46 @@ struct wire_event {
             const char *filename;
             long size;
         } dcc_offer;
+
+        /* session_identity_changed (#388): whether the operator is
+         * identified to services. `identified` is the VERDICT and the
+         * only thing to gate on — never a mode letter, which is
+         * bahamut-only. `account` is display data and nullable even
+         * while identified. */
+        struct {
+            long network_id;
+            bool identified;
+            const char *account; /* nullable */
+        } identity;
+
+        /* recover_progress / recover_result: ghost recovery, step by
+         * step and then its outcome. Both closed sets on the server;
+         * kept as strings here because shottino only says them. */
+        struct {
+            const char *network;
+            const char *step;   /* progress only */
+            const char *status; /* progress only */
+            const char *outcome; /* result only */
+            const char *reason; /* nullable */
+        } recover;
+
+        /* whois_avatar_ready: a peer's avatar finished fetching. A
+         * terminal has nowhere to put a face; narrowed so the kind is
+         * KNOWN and deliberately ignored rather than unrecognised. */
+        struct {
+            const char *network;
+            const char *nick;
+            const char *avatar_url;
+        } whois_avatar;
+
+        /* The three settings echoes: a value this subject changed from
+         * some client, pushed to the others. Each is one nullable
+         * scalar. */
+        struct {
+            const char *text;    /* auto_away_reason / quit_part_reason */
+            long seconds;        /* auto_away_debounce */
+            bool has_seconds;
+        } setting_echo;
 
         /* dcc_offer_resolved: the only take-down signal, on every
          * device. `resolution` is closed at accepted/refused/expired;

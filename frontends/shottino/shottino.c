@@ -274,6 +274,11 @@ struct network {
     char away_reason[MAX_LINE];
     wire_connection_state conn_state;
     bool conn_known;
+    /* Services identity (#388), from session_identity_changed: the
+     * verdict, and the account name when the ircd exposes one (it is
+     * display data — absent does not mean unidentified). */
+    bool identified;
+    char account[MAX_CHANNEL];
     bool connecting;
     /* Which own-nick topic this network's DM listener is subscribed to,
      * or empty for none. Recorded rather than derived from `nick`
@@ -3046,6 +3051,7 @@ static void parse_networks(struct app *app, const char *json, size_t len) {
         const char *state = json_string(json_get(row, "connection_state"));
         n->conn_known = true;
         if (state && strcmp(state, "connected") == 0) n->conn_state = CONN_CONNECTED;
+        else if (state && strcmp(state, "failing") == 0) n->conn_state = CONN_FAILING;
         else if (state && strcmp(state, "parked") == 0) n->conn_state = CONN_PARKED;
         else if (state && strcmp(state, "failed") == 0) n->conn_state = CONN_FAILED;
         else n->conn_known = false;
@@ -5518,17 +5524,19 @@ static const json_value *rows_of(const json_value *root, const char *key) {
 static void render_archive_rows(struct app *app, const json_value *root) {
     const json_value *rows = rows_of(root, "archive");
     size_t n = json_len(rows);
-    panel_line(app, "  %-28s %-8s %8s  %s", "TARGET", "KIND", "ROWS", "LAST ACTIVITY");
+    /* No ROWS column: `row_count` was removed from the archive entry at
+     * protocol v8 (#1626) — the only field this wire has ever taken
+     * back, because an exact per-group count had to visit every row.
+     * Reading it anyway printed 0 for every target, silently, which is
+     * worse than not offering the number. */
+    panel_line(app, "  %-28s %-8s  %s", "TARGET", "KIND", "LAST ACTIVITY");
     for (size_t i = 0; i < n; i++) {
         const json_value *e = json_at(rows, i);
         const char *target = json_string(json_get(e, "target"));
         const char *kind = json_string(json_get(e, "kind"));
-        long count = 0;
-        json_long(json_get(e, "row_count"), &count);
         char when[32];
         human_time(json_get(e, "last_activity"), when, sizeof(when));
-        if (target)
-            panel_line(app, "  %-28s %-8s %8ld  %s", target, kind ? kind : "?", count, when);
+        if (target) panel_line(app, "  %-28s %-8s  %s", target, kind ? kind : "?", when);
     }
     if (n == 0) panel_line(app, "  (nothing archived on this network)");
 }
@@ -8042,7 +8050,8 @@ static void render_links(struct app *app, const struct wire_event *ev) {
 
 static void render_server_reply(struct app *app, const struct wire_event *ev) {
     const char *net = ev->u.server_reply.network;
-    const char *label = ev->u.server_reply.source == REPLY_INFO
+    const char *label = ev->u.server_reply.source == REPLY_ADMIN ? "ADMIN"
+                        : ev->u.server_reply.source == REPLY_INFO
                             ? "INFO"
                             : (ev->u.server_reply.source == REPLY_VERSION ? "VERSION" : "MOTD");
     card(app, net, "--- %s", label);
@@ -8319,6 +8328,58 @@ static void handle_wire_event(struct app *app, const char *topic_network,
                       "Your IRC session is untouched — the bouncer keeps you on every channel — "
                       "but this client's login is revoked: restart shottino to sign in again",
                  ev->u.severed.code);
+        break;
+
+    case WIRE_SESSION_IDENTITY_CHANGED: {
+        /* #388: `identified` is the verdict and the only thing to gate
+         * on — a mode letter answers differently on every ircd. Said
+         * in the network's own window, where the rest of the services
+         * conversation lands. */
+        pthread_mutex_lock(&app->lock);
+        struct network *n = network_by_id_locked(app, ev->u.identity.network_id);
+        char slug[MAX_SLUG] = "";
+        if (n) {
+            n->identified = ev->u.identity.identified;
+            snprintf(n->account, sizeof(n->account), "%s",
+                     ev->u.identity.account ? ev->u.identity.account : "");
+            snprintf(slug, sizeof(slug), "%s", n->slug);
+        }
+        pthread_mutex_unlock(&app->lock);
+        if (slug[0])
+            log_line(app, "[%s/" SERVER_WINDOW "] --- %s to services%s%s", slug,
+                     ev->u.identity.identified ? "identified" : "NOT identified",
+                     ev->u.identity.account ? " as " : "",
+                     ev->u.identity.account ? ev->u.identity.account : "");
+        break;
+    }
+
+    case WIRE_RECOVER_PROGRESS:
+        /* Ghost recovery, step by step: the operator asked for their
+         * nick back and this is how far it got. */
+        log_line(app, "[%s/" SERVER_WINDOW "] --- recover: %s %s%s%s", ev->u.recover.network,
+                 ev->u.recover.step, ev->u.recover.status, ev->u.recover.reason ? " — " : "",
+                 ev->u.recover.reason ? ev->u.recover.reason : "");
+        break;
+
+    case WIRE_RECOVER_RESULT:
+        log_line(app, "[%s/" SERVER_WINDOW "] --- recover %s%s%s", ev->u.recover.network,
+                 ev->u.recover.outcome, ev->u.recover.reason ? ": " : "",
+                 ev->u.recover.reason ? ev->u.recover.reason : "");
+        break;
+
+    case WIRE_WHOIS_AVATAR_READY:
+        /* A terminal has nowhere to put a face. Narrowed so the kind is
+         * KNOWN and deliberately dropped, rather than reaching the
+         * unrecognised-kind arm where a real gap would hide. */
+        break;
+
+    case WIRE_AUTO_AWAY_DEBOUNCE_CHANGED:
+    case WIRE_AUTO_AWAY_REASON_CHANGED:
+    case WIRE_QUIT_PART_REASON_CHANGED:
+        /* A setting this subject changed from another client. shottino
+         * keeps none of the three locally — the bouncer applies them —
+         * so there is nothing to mirror; narrowed for the same reason
+         * as the avatar above. */
         break;
 
     case WIRE_DCC_OFFER:
@@ -18143,6 +18204,10 @@ static const char *mime_for_path(const char *path) {
         {"mp4", "video/mp4"},   {"mov", "video/quicktime"}, {"webm", "video/webm"},
         /* document */
         {"pdf", "application/pdf"}, {"txt", "text/plain"},
+        /* #1764: txt and md open in cic's viewer as monospace source.
+         * The server accepts it; refusing here refused an upload the
+         * bouncer would have taken. */
+        {"md", "text/markdown"},
         {"odt", "application/vnd.oasis.opendocument.text"},
         {"ods", "application/vnd.oasis.opendocument.spreadsheet"},
         {"docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},

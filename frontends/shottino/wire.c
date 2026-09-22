@@ -29,7 +29,7 @@ static bool message_kind_of(const json_value *v, wire_message_kind *out) {
     return false;
 }
 
-static const char *const CONNECTION_STATE_NAMES[] = {"connected", "parked", "failed"};
+static const char *const CONNECTION_STATE_NAMES[] = {"connected", "failing", "parked", "failed"};
 /* From the table, not from a 3 written twice: the array grows, the two
  * loops that walk it did not. The sibling message_kind_of already used
  * this idiom, which is what made the odd one out visible. */
@@ -110,6 +110,13 @@ static const struct {
     {"window_invite_declined", WIRE_WINDOW_INVITE_DECLINED},
     {"dcc_offer", WIRE_DCC_OFFER},
     {"dcc_offer_resolved", WIRE_DCC_OFFER_RESOLVED},
+    {"session_identity_changed", WIRE_SESSION_IDENTITY_CHANGED},
+    {"recover_progress", WIRE_RECOVER_PROGRESS},
+    {"recover_result", WIRE_RECOVER_RESULT},
+    {"whois_avatar_ready", WIRE_WHOIS_AVATAR_READY},
+    {"auto_away_debounce_changed", WIRE_AUTO_AWAY_DEBOUNCE_CHANGED},
+    {"auto_away_reason_changed", WIRE_AUTO_AWAY_REASON_CHANGED},
+    {"quit_part_reason_changed", WIRE_QUIT_PART_REASON_CHANGED},
     {"whois_bundle", WIRE_WHOIS_BUNDLE},
     {"names_reply", WIRE_NAMES_REPLY},
     {"who_reply", WIRE_WHO_REPLY},
@@ -140,6 +147,10 @@ static wire_kind kind_of(const char *name) {
         if (strcmp(KIND_TABLE[i].name, name) == 0) return KIND_TABLE[i].kind;
     return WIRE_UNKNOWN;
 }
+
+bool wire_kind_name_known(const char *name) { return kind_of(name) != WIRE_UNKNOWN; }
+
+size_t wire_connection_state_count(void) { return CONNECTION_STATE_COUNT; }
 
 /* ── Element validation ────────────────────────────────────────────────
  * Each `check_*` validates one element; each `validate_*_array` walks the
@@ -541,6 +552,44 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
         if (!json_str_req(p, "code", &e.u.severed.code)) return false;
         break;
 
+    case WIRE_SESSION_IDENTITY_CHANGED:
+        if (!json_long_req(p, "network_id", &e.u.identity.network_id)) return false;
+        if (!json_bool_req(p, "identified", &e.u.identity.identified)) return false;
+        if (!json_str_opt(p, "account", &e.u.identity.account)) return false;
+        break;
+
+    case WIRE_RECOVER_PROGRESS:
+        if (!json_str_req(p, "network", &e.u.recover.network)) return false;
+        if (!json_str_req(p, "step", &e.u.recover.step)) return false;
+        if (!json_str_req(p, "status", &e.u.recover.status)) return false;
+        if (!json_str_opt(p, "reason", &e.u.recover.reason)) return false;
+        break;
+
+    case WIRE_RECOVER_RESULT:
+        if (!json_str_req(p, "network", &e.u.recover.network)) return false;
+        if (!json_str_req(p, "outcome", &e.u.recover.outcome)) return false;
+        if (!json_str_opt(p, "reason", &e.u.recover.reason)) return false;
+        break;
+
+    case WIRE_WHOIS_AVATAR_READY:
+        if (!json_str_req(p, "network", &e.u.whois_avatar.network)) return false;
+        if (!json_str_req(p, "nick", &e.u.whois_avatar.nick)) return false;
+        if (!json_str_req(p, "avatar_url", &e.u.whois_avatar.avatar_url)) return false;
+        break;
+
+    case WIRE_AUTO_AWAY_DEBOUNCE_CHANGED:
+        e.u.setting_echo.has_seconds =
+            json_long(json_get(p, "auto_away_debounce_seconds"), &e.u.setting_echo.seconds);
+        break;
+
+    case WIRE_AUTO_AWAY_REASON_CHANGED:
+        if (!json_str_opt(p, "auto_away_reason", &e.u.setting_echo.text)) return false;
+        break;
+
+    case WIRE_QUIT_PART_REASON_CHANGED:
+        if (!json_str_opt(p, "quit_part_reason", &e.u.setting_echo.text)) return false;
+        break;
+
     case WIRE_DCC_OFFER:
         if (!json_str_req(p, "network", &e.u.dcc_offer.network)) return false;
         if (!json_str_req(p, "channel", &e.u.dcc_offer.channel)) return false;
@@ -691,6 +740,7 @@ bool wire_narrow(const json_value *p, struct wire_event *ev) {
         if (json_str_is(src, "info")) e.u.server_reply.source = REPLY_INFO;
         else if (json_str_is(src, "version")) e.u.server_reply.source = REPLY_VERSION;
         else if (json_str_is(src, "motd")) e.u.server_reply.source = REPLY_MOTD;
+        else if (json_str_is(src, "admin")) e.u.server_reply.source = REPLY_ADMIN;
         else return false;
         const json_value *lines = json_get(p, "lines");
         if (!validate_array(lines, check_string)) return false;

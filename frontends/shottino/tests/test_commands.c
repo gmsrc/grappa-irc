@@ -259,6 +259,152 @@ TEST(a_protocol_gap_names_its_direction) {
     CHECK(strstr(line, "OLDER") != NULL);
 }
 
+/* Read a file from the repo, from either working directory the suites
+ * run in. NULL when it is not there. Caller frees. */
+static char *read_repo_file(const char *rel) {
+    const char *prefixes[] = {"../../", "../../../"};
+    for (size_t i = 0; i < 2; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s%s", prefixes[i], rel);
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        rewind(f);
+        char *buf = n > 0 ? malloc((size_t)n + 1) : NULL;
+        if (buf) {
+            size_t got = fread(buf, 1, (size_t)n, f);
+            buf[got] = 0;
+        }
+        fclose(f);
+        if (buf) return buf;
+    }
+    return NULL;
+}
+
+/* The CLOSED SETS shottino mirrors are the server's, in the server's
+ * order — pinned to the Elixir that declares them.
+ *
+ * The version pin below proves someone read `protocol.ex`; it does not
+ * prove shottino learned what moved. It did not: the 2026-09-22
+ * architecture review measured five drifts under a green pin, two of
+ * them closed sets that made shottino DROP an event whole — `:failing`
+ * (every connection_state_changed touching it) and `:admin` (every
+ * /admin reply). Both are typed by hand in C because there is no
+ * generated header; until there is, this is the gate that would have
+ * caught them, and it fails on the next value the server adds rather
+ * than on the next incident. */
+TEST(the_closed_sets_are_the_servers_in_the_servers_order) {
+    char *cred = read_repo_file("lib/grappa/networks/credential.ex");
+    if (!cred) fprintf(stderr, "  credential.ex not found — run from the repo checkout\n");
+    CHECK(cred != NULL);
+    if (cred) {
+        /* `@connection_states [:connected, :failing, :parked, :failed]` */
+        const char *at = strstr(cred, "@connection_states [");
+        CHECK(at != NULL);
+        if (at) {
+            for (size_t i = 0; i < wire_connection_state_count(); i++) {
+                char want[64];
+                snprintf(want, sizeof(want), ":%s", wire_connection_state_name((wire_connection_state)i));
+                const char *found = strstr(at, want);
+                /* Present, and in this position: the enum is ordinal,
+                 * so a reordered server set renumbers every value. */
+                CHECK(found != NULL);
+                if (i) {
+                    char prev[64];
+                    snprintf(prev, sizeof(prev), ":%s",
+                             wire_connection_state_name((wire_connection_state)(i - 1)));
+                    CHECK(found > strstr(at, prev));
+                }
+            }
+            /* And no value the server has that shottino lacks: count
+             * the commas in the literal. */
+            const char *close = strchr(at, ']');
+            CHECK(close != NULL);
+            size_t commas = 0;
+            for (const char *q = at; q && close && q < close; q++)
+                if (*q == ',') commas++;
+            CHECK_LONG(commas + 1, wire_connection_state_count());
+        }
+        free(cred);
+    }
+
+    char *swire = read_repo_file("lib/grappa/session/wire.ex");
+    CHECK(swire != NULL);
+    if (swire) {
+        /* `@server_reply_sources [:info, :version, :motd, :admin]` */
+        const char *at = strstr(swire, "@server_reply_sources [");
+        CHECK(at != NULL);
+        const char *close = at ? strchr(at, ']') : NULL;
+        CHECK(close != NULL);
+        if (at && close) {
+            static const char *const ours[] = {":info", ":version", ":motd", ":admin"};
+            size_t n = sizeof(ours) / sizeof(ours[0]);
+            const char *prev = at;
+            for (size_t i = 0; i < n; i++) {
+                const char *found = strstr(at, ours[i]);
+                CHECK(found != NULL && found < close);
+                if (found) { CHECK(found >= prev); prev = found; }
+            }
+            size_t commas = 0;
+            for (const char *q = at; q < close; q++)
+                if (*q == ',') commas++;
+            /* REPLY_ADMIN is the fourth; a fifth source must land in
+             * wire_reply_source and in the label that renders it. */
+            CHECK_LONG(commas + 1, n);
+        }
+        free(swire);
+    }
+}
+
+/* Every event kind cicchetto narrows is known to wire.c.
+ *
+ * The two clients read one contract, and the review found seven kinds
+ * cic narrowed that shottino had never heard of — they reached the
+ * unrecognised-kind arm and vanished. A kind shottino has no use for
+ * (a peer's avatar, on a terminal) is still NARROWED and dropped
+ * deliberately, so that arm keeps meaning "the server grew something
+ * nobody here has looked at". */
+TEST(every_kind_cicchetto_narrows_is_known_here) {
+    char *cic = read_repo_file("cicchetto/src/lib/userTopic.ts");
+    char *cic2 = read_repo_file("cicchetto/src/lib/wireNarrow.ts");
+    if (!cic || !cic2) {
+        /* A shottino-only checkout cannot run this; say so rather than
+         * pass silently. */
+        fprintf(stderr, "  cicchetto sources not found — kind parity not checked\n");
+        free(cic);
+        free(cic2);
+        CHECK(cic != NULL && cic2 != NULL);
+        return;
+    }
+    size_t checked = 0;
+    for (int which = 0; which < 2; which++) {
+        const char *src = which ? cic2 : cic;
+        for (const char *p = src; (p = strstr(p, "case \"")) != NULL;) {
+            p += 6;
+            const char *end = strchr(p, '"');
+            if (!end || end - p > 63) continue;
+            char kind[64];
+            size_t n = (size_t)(end - p);
+            memcpy(kind, p, n);
+            kind[n] = 0;
+            /* Only the event-kind shape: lowercase and underscores. */
+            bool plausible = n > 2;
+            for (size_t i = 0; i < n; i++)
+                if (!((kind[i] >= 'a' && kind[i] <= 'z') || kind[i] == '_')) plausible = false;
+            if (!plausible) continue;
+            if (!wire_kind_name_known(kind))
+                fprintf(stderr, "  cicchetto narrows \"%s\"; wire.c does not know it\n", kind);
+            CHECK(wire_kind_name_known(kind));
+            checked++;
+        }
+    }
+    /* A parity test that matched nothing would pass forever. */
+    CHECK(checked > 20);
+    free(cic);
+    free(cic2);
+}
+
 /* The number shottino declares is the number the server publishes.
  *
  * `Grappa.Protocol` bumps `@protocol_version` on every wire-shape change,
@@ -560,6 +706,8 @@ int main(void) {
     RUN(the_handshake_declares_the_protocol_it_speaks);
     RUN(a_protocol_gap_names_its_direction);
     RUN(the_declared_protocol_is_the_one_the_server_publishes);
+    RUN(the_closed_sets_are_the_servers_in_the_servers_order);
+    RUN(every_kind_cicchetto_narrows_is_known_here);
     RUN(the_call_defaults_move_the_page_and_the_sfu_together);
     RUN(leaving_stops_a_running_call);
     RUN(a_stopped_call_marks_its_invite_spent);

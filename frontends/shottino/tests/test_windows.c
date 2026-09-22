@@ -313,6 +313,20 @@ TEST(a_file_offer_is_held_until_its_resolution) {
     free_app(app);
 }
 
+/* An upload offered to the bouncer is typed from its extension, and
+ * that table is the server's accept-allowlist seen from the other end.
+ * `md` was missing (#1764 added it server-side), so `/upload notes.md`
+ * was refused HERE — by the client, for a file the bouncer would have
+ * taken. */
+TEST(the_upload_types_are_the_ones_the_server_accepts) {
+    CHECK_STR(mime_for_path("/tmp/notes.md"), "text/markdown");
+    CHECK_STR(mime_for_path("NOTES.MD"), "text/markdown");
+    CHECK_STR(mime_for_path("a.txt"), "text/plain");
+    CHECK_STR(mime_for_path("a.png"), "image/png");
+    CHECK(mime_for_path("a.exe") == NULL);
+    CHECK(mime_for_path("noextension") == NULL);
+}
+
 /* The network list MERGES: a network already known keeps what the
  * session learned about it, one that is new is appended, and one the
  * server stopped listing is left to the detach event.
@@ -5374,6 +5388,7 @@ int main(void) {
     RUN(a_file_offer_is_held_until_its_resolution);
     RUN(a_severed_session_stops_reconnecting_and_drops_its_token);
     RUN(a_declined_invite_closes_its_invited_window_only);
+    RUN(the_upload_types_are_the_ones_the_server_accepts);
     RUN(the_network_list_merges_rather_than_replaces);
     RUN(channels_that_arrive_mid_session_do_not_steal_focus);
     RUN(a_detached_network_takes_its_windows_with_it);
