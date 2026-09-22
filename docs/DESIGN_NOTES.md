@@ -19178,3 +19178,39 @@ that one. The in-page REST arrange it uses (`uploadPngViaRest`) was lifted out o
 `rev-g-h22-sw-denylist.spec.ts`, which had the identical helper inline: both
 specs live DOWNSTREAM of an upload, and driving the whole picker chain would make
 them fail for reasons neither is about.
+
+### The census that caught it, and what the oracle then measured
+
+The first push went RED in CI, deterministically: four failures, two tests
+× both touch projects, on `Expected: 8 Received: 9`. `ADMIN_TABS` in
+`ux-6-g-admin-mobile-h-scroll.spec.ts` is a hand-written mirror of
+`AdminPane`'s `TABS`, guarded by
+`expect(admin-pane [role=tab]).toHaveCount(ADMIN_TABS.length)` — so a ninth
+tab lands as a red on the census rather than as a tab nobody measures. That
+is the gate working, and it is worth recording WHY it is shaped that way:
+the list does not exist to be a list, it exists so that the width oracle's
+surface set cannot silently fall behind the pane.
+
+Adding the entry is the small half. The consequence is that `tab:uploads`
+enters `adminSurfaces()` and the tab is then MEASURED at 393px: no container
+inside `.admin-pane` with computed `overflow-x: auto|scroll` may have
+`scrollWidth > clientWidth`. Eight columns including a 26-char slug and a
+36-char uuid is exactly the shape that could have failed it. It does not,
+on `chromium-pixel-touch` AND `webkit-iphone-15` — the mobile stacking block
+gives `.adm-table td` `overflow-wrap: anywhere`, so the long unbroken tokens
+wrap inside the card instead of widening it. Measured on both engines, not
+argued from the CSS.
+
+**The seed is the part that was nearly missed.** The spec's own doctrine —
+*"an empty tab cannot overflow, which is how the old spec came to be green
+while watching nothing"* — applies to this tab more sharply than to the
+others, because the uploads registry is GLOBAL and gets written by unrelated
+specs. Measured in a scoped run: the touch projects saw **2** rows on
+chromium-pixel-touch and **3** on webkit-iphone-15, and every one of those
+beyond the seed was a leftover from a spec that ran earlier in the same
+stack — including SOFT-DELETED rows, which the listing keeps by design. A
+green resting on that is a green resting on run order. So the arrange mints
+its own upload (`grappaApi.createSeedUpload/3`, node-side, because an arrange
+block runs before the browser has a bearer in `localStorage`) and the count
+is PRINTED rather than merely asserted: `> 0` is a boolean, and the question
+a reader of a green run has is how much was on screen.
