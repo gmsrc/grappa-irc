@@ -30,6 +30,7 @@
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { expect, specUser, test } from "../fixtures/test";
+import { uploadPngViaRest } from "../fixtures/uploadJourney";
 
 async function waitForServiceWorkerControl(page: import("@playwright/test").Page): Promise<void> {
   // cic's SW uses skipWaiting + clients.claim so the first navigation
@@ -54,38 +55,12 @@ async function waitForServiceWorkerControl(page: import("@playwright/test").Page
   });
 }
 
-// Uploads a PNG via in-page fetch so the cic SDK's auth header (read
-// from localStorage["grappa-token"] per cicchettoPage.loginAs) is
-// honoured. page.request.post bypasses the localStorage / interceptor
-// layer.
-async function uploadPng(
-  page: import("@playwright/test").Page,
-  hex: string,
-  filename: string,
-): Promise<{ slug: string; url: string }> {
-  return await page.evaluate(
-    async ([hexBody, name]) => {
-      const bytes = new Uint8Array(hexBody.length / 2);
-      for (let i = 0; i < bytes.length; i++) {
-        bytes[i] = Number.parseInt(hexBody.slice(i * 2, i * 2 + 2), 16);
-      }
-      const form = new FormData();
-      form.append("file", new Blob([bytes], { type: "image/png" }), name);
-      const token = localStorage.getItem("grappa-token");
-      if (!token) throw new Error("missing grappa-token in localStorage");
-      const res = await fetch("/api/uploads", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-      if (res.status !== 201) {
-        throw new Error(`expected 201, got ${res.status}: ${await res.text()}`);
-      }
-      return (await res.json()) as { slug: string; url: string };
-    },
-    [hex, filename] as const,
-  );
-}
+// The in-page upload helper (`uploadPngViaRest`) moved to
+// `fixtures/uploadJourney.ts` with issue 2288, which needed the same
+// arrange: an upload that EXISTS, without driving the picker chain whose
+// behaviour is not what either spec is about. Same bytes, same door, same
+// reason for the in-page fetch — the bearer lives in localStorage, which
+// `page.request.post` cannot see. The slug-shape assertion travelled with it.
 
 test("REV-G H22 — SW does not intercept /uploads/<slug> navigation (serves image bytes)", async ({
   page,
@@ -94,8 +69,7 @@ test("REV-G H22 — SW does not intercept /uploads/<slug> navigation (serves ima
   await loginAs(page, vjt);
   await waitForServiceWorkerControl(page);
 
-  const body = await uploadPng(page, TINY_PNG_HEX, "rev-g-h22.png");
-  expect(body.slug).toMatch(/^[a-z2-7]{26}$/);
+  const body = await uploadPngViaRest(page, TINY_PNG_HEX, "rev-g-h22.png");
 
   // Top-level navigation to the upload URL — this is what tapping the
   // 📸 link in a new tab does, and what pre-REV-G the SW intercepted
