@@ -26,9 +26,12 @@ import { formatBytes } from "./lib/formatBytes";
 // Two row classes out of one list. `index/2` deliberately includes
 // soft-deleted rows — that listing IS the audit trail, so a moderated
 // attachment stays on screen with its `deleted_at` instead of vanishing.
-// A deleted row therefore carries NO delete button: the file is already
-// unlinked, so the verb could only answer 404, and an operator clicking a
-// button that cannot work learns nothing about why.
+// A deleted row therefore carries NO delete button — and the reason is worse
+// than a plain "it would fail", measured in the server: `Uploads.get_by_id/1`
+// does NOT filter soft-deleted rows and `Uploads.soft_delete/2` short-circuits
+// on a row that already carries a `deleted_at`, so a second DELETE unlinks
+// nothing, writes nothing, and answers **204**. The operator would be told the
+// work was done, about work that did not happen and cannot happen.
 //
 // What this tab does NOT do, deliberately: it does not replace the bytes with
 // a 0-byte file. `GET /uploads/:slug` collapses every failure onto one 404

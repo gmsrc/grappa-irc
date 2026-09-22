@@ -19123,8 +19123,15 @@ route, no new field, no wire-shape change, hence no `protocol_version` bump.
 **Two row classes out of one list, and the verb rides only one.** The listing is
 the operator's audit trail, so a moderated upload STAYS on screen with its
 `deleted_at` rather than vanishing. A deleted row therefore carries **no** delete
-button: the file is already unlinked, so the verb could only answer 404, and a
-button that cannot work teaches the operator nothing about why. `uploadIsLive/1`
+button — and the reason is sharper than the obvious one. It is NOT that a second
+DELETE fails: `Uploads.get_by_id/1` does not filter soft-deleted rows and
+`Uploads.soft_delete/2` short-circuits on a row that already carries a
+`deleted_at`, so the call unlinks nothing, writes nothing, and answers **204**.
+The button would report success for work that did not happen and cannot happen,
+which is the failure mode "log honesty" exists to forbid — a silent no-op
+dressed as a completed verb. (First written here as "it could only answer 404",
+which was an inference; the code says otherwise and the inference is retracted.)
+`uploadIsLive/1`
 is that one predicate, and it reads `deleted_at` ALONE — an EXPIRED row is still
 live, because the reaper and not the clock is what unlinks, and reaching a row
 before the sweep does is the entire point of the surface.

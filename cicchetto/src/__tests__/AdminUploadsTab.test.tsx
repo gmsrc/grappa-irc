@@ -20,8 +20,11 @@ import AdminUploadsTab, { budgetLabel, uploadIsLive } from "../AdminUploadsTab";
 // issue 2288 — the admin uploads tab. `GET /admin/uploads` ships the whole
 // registry INCLUDING soft-deleted rows (the operator's audit trail), so the
 // tab has to render two row classes from one list: a LIVE row, which carries
-// the destructive verb, and a MODERATED one, which must NOT — deleting a row
-// whose file is already unlinked is a second 404 wearing a button.
+// the destructive verb, and a MODERATED one, which must NOT — a second DELETE
+// on an already-soft-deleted row answers 204 while doing nothing at all (the
+// server's `get_by_id/1` does not filter deleted rows and `soft_delete/2`
+// short-circuits), so the button would report success for work that cannot
+// happen.
 
 const upload = (over: Partial<AdminUpload> & { id: string }): AdminUpload => ({
   slug: "abcdefghijklmnopqrstuvwxyz",
