@@ -1256,6 +1256,19 @@ export async function openAdminSessionsTab(page: Page): Promise<Locator> {
   return table;
 }
 
+// issue 2288 — the Uploads tab. Waits on the CARD rather than the table: the
+// table is absent when the registry is empty, and a spec that has just
+// uploaded still has to get past the render of a list that may legitimately
+// have held nothing a moment earlier. The card is there as soon as the tab's
+// fetch resolves, whatever it found.
+export async function openAdminUploadsTab(page: Page): Promise<Locator> {
+  await openAdminConsole(page);
+  await page.getByTestId("admin-tab-uploads").click();
+  const panel = page.locator("#admin-tab-uploads");
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  return panel;
+}
+
 // #1224 — the ended-sessions sub-page, reached the only way an operator can:
 // through the Sessions tab's card header. Deliberately NOT routed through
 // `openAdminSessionsTab`: that one waits on `admin-sessions-table`, which does

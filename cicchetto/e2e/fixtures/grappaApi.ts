@@ -612,6 +612,59 @@ export async function listSessionLogSessions(
   return body.session_log_sessions;
 }
 
+// issue 2288 — one upload row, minted from NODE, for specs that need the admin
+// registry to be non-EMPTY before they measure it.
+//
+// The page-side twin (`uploadJourney.uploadPngViaRest`) cannot serve that
+// arrange: it reads the bearer out of `localStorage`, so it only works after a
+// login, while an arrange block runs before the browser has one. This takes the
+// admin token the way every other seeding helper here does.
+//
+// The bytes come in as a parameter rather than from `fixtures/bytes.ts`: this
+// module imports nothing but a generated type, and that is the property which
+// keeps it cycle-free (see the note on the import above). Callers pass
+// `TINY_PNG_HEX`.
+//
+// Returns the slug, which is what `adminDeleteUploadBySlug` below takes for
+// teardown. Note what that teardown means: the admin DELETE unlinks the file
+// and SOFT-deletes, so the row stays in the listing — by design, it is the
+// audit trail. Teardown reclaims the disk, not the row.
+export async function createSeedUpload(
+  adminToken: string,
+  pngHex: string,
+  filename: string,
+): Promise<string> {
+  const bytes = new Uint8Array(pngHex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Number.parseInt(pngHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: "image/png" }), filename);
+  const res = await fetch(`${GRAPPA_BASE_URL}/api/uploads`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: form,
+  });
+  if (res.status !== 201) {
+    throw new Error(`grappaApi.createSeedUpload: ${res.status} ${await res.text()}`);
+  }
+  return ((await res.json()) as { slug: string }).slug;
+}
+
+// issue 2288 — how many rows the admin registry would show RIGHT NOW,
+// soft-deleted ones included (the listing is the audit trail, so they render
+// too). For anti-hollow-green preconditions: a spec that measures the Uploads
+// tab has to know it is measuring something.
+export async function countAdminUploads(adminToken: string): Promise<number> {
+  const res = await fetch(`${GRAPPA_BASE_URL}/admin/uploads`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`grappaApi.countAdminUploads: ${res.status} ${await res.text()}`);
+  }
+  return ((await res.json()) as { uploads: unknown[] }).uploads.length;
+}
+
 // issue 1889 — remove an upload the way an operator removes one, so a spec can
 // drive the REAL 404 the viewer has to tell apart from a broken load.
 // `Admin.UploadsController.delete` unlinks the file first and then soft-deletes

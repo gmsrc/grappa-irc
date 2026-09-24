@@ -69,6 +69,50 @@ export async function sendPickedFiles(page: Page): Promise<void> {
   await expect(confirm).toBeHidden({ timeout: 5_000 });
 }
 
+// ARRANGE-ONLY sibling of the picker journey: POST /api/uploads straight from
+// the page, no picker, no privacy modal, no IRC echo.
+//
+// For specs whose subject is DOWNSTREAM of an upload — the SW denylist on
+// `/uploads/<slug>` (rev-g-h22), the admin registry tab (issue 2288) — where
+// driving the whole picker chain would make the spec fail for reasons that
+// have nothing to do with what it asserts. Specs whose subject IS the upload
+// journey use `uploadViaPicker` and must keep doing so: this helper skips
+// exactly the client-side chain that one exists to cover.
+//
+// In-page `fetch` rather than `page.request.post`, deliberately: the bearer
+// lives in localStorage (seeded by `loginAs` / an admin spec's init script)
+// and `page.request` has no access to it.
+export async function uploadPngViaRest(
+  page: Page,
+  hex: string,
+  filename: string,
+): Promise<UploadResponse> {
+  const body = await page.evaluate(
+    async ([hexBody, name]) => {
+      const bytes = new Uint8Array(hexBody.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = Number.parseInt(hexBody.slice(i * 2, i * 2 + 2), 16);
+      }
+      const form = new FormData();
+      form.append("file", new Blob([bytes], { type: "image/png" }), name);
+      const token = localStorage.getItem("grappa-token");
+      if (!token) throw new Error("missing grappa-token in localStorage");
+      const res = await fetch("/api/uploads", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      if (res.status !== 201) {
+        throw new Error(`expected 201, got ${res.status}: ${await res.text()}`);
+      }
+      return (await res.json()) as UploadResponse;
+    },
+    [hex, filename] as const,
+  );
+  expect(body.slug).toMatch(/^[a-z2-7]{26}$/);
+  return body;
+}
+
 // Feed the hidden file input (no OS dialog under setInputFiles) and wait for
 // the privacy notice. Returns the PRIVACY modal locator for the caller to
 // Continue or Cancel.

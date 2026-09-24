@@ -2291,6 +2291,62 @@ export async function adminSearchVhostSubjects(
   return ((await res.json()) as AdminSubjectSearchResponse).results;
 }
 
+// issue 2288 — the admin uploads registry. Mirror of
+// `GrappaWeb.Admin.UploadsController` GET `/admin/uploads` + DELETE
+// `/admin/uploads/:id`, both already shipped and unchanged by this slice.
+//
+// The list INCLUDES soft-deleted rows — it is the operator's audit trail, so
+// `deleted_at` is the row's state and not a reason to omit it. `expires_at` is
+// when the reaper intends to sweep; NULL means "never" (the column supports an
+// admin pin, which no verb sets today). `original_filename` is best-effort and
+// can be null, so a row is named by its slug when the uploader sent none —
+// and the slug is what an operator can actually match against the link in the
+// channel, which is why it is a column of its own rather than a title
+// attribute.
+//
+// Hand-written rather than generated: the controller builds its JSON inline,
+// so there is no `Grappa.Uploads.AdminWire` for `mix grappa.gen_wire_types` to
+// mirror and no `S_*` schema to narrow against. Same posture as
+// `adminListVhosts`'s envelope, which is likewise a cast — the generated
+// narrowers exist per server-side `*.Wire` module, not per REST door.
+export type AdminUpload = {
+  id: string;
+  slug: string;
+  mime: string;
+  bytes: number;
+  original_filename: string | null;
+  subject_kind: "user" | "visitor";
+  subject_id: string;
+  expires_at: string | null;
+  deleted_at: string | null;
+  inserted_at: string | null;
+};
+
+export type AdminUploadsResponse = {
+  uploads: AdminUpload[];
+  live_bytes_sum: number;
+  global_cap_bytes: number;
+};
+
+// The whole envelope: the two totals are the disk budget and are only
+// meaningful beside the list they summarise.
+export async function adminListUploads(token: string): Promise<AdminUploadsResponse> {
+  const res = await fetch("/admin/uploads", { headers: buildHeaders(token) });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as AdminUploadsResponse;
+}
+
+// 204 on success. Unlinks the file first, then soft-deletes the row, so the
+// row SURVIVES the call with a `deleted_at` — the caller re-reads the list
+// rather than removing anything locally.
+export async function adminDeleteUpload(token: string, id: string): Promise<void> {
+  const res = await fetch(`/admin/uploads/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: buildHeaders(token),
+  });
+  if (!res.ok) throw await readError(res);
+}
+
 // 202 Accepted envelope: `{swept_count: number, swept_at: ISO8601}`.
 // Cic surfaces `swept_count` in a transient success line; nothing else
 // in the wire shape drives UI state today.

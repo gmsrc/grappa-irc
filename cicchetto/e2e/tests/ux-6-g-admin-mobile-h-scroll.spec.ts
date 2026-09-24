@@ -52,8 +52,12 @@
 // + autojoined #spec-wN so it can reach the mobile launcher footer.
 
 import type { Page } from "@playwright/test";
+import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
+  adminDeleteUploadBySlug,
+  countAdminUploads,
+  createSeedUpload,
   findUserIdByName,
   GRAPPA_BASE_URL,
   listSessionLogSessions,
@@ -78,6 +82,10 @@ const ADMIN_TABS = [
   // the tabs that EXIST — a stale name here reads as a 3-minute tap timeout,
   // not as a missing tab.
   "users",
+  // issue 2288 — the uploads registry. Ordered as `TABS` orders it (config
+  // group, between Users and Settings) so this list reads as the mirror it
+  // claims to be rather than as a set that happens to have the same members.
+  "uploads",
   "settings",
   "debug",
 ] as const;
@@ -263,9 +271,33 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     const admin = getSeededAdmin();
     const visitor = await mintVisitor(`ux6g-${Date.now()}`);
     let vhostId: number | null = null;
+    let uploadSlug: string | null = null;
 
     try {
       vhostId = await createSeedVhost(admin.token);
+      // issue 2288 — an Uploads row, for the same reason as the vhost and by
+      // the same rule: an empty tab cannot overflow. The registry would very
+      // often be non-empty anyway, and that is exactly what makes it worth
+      // seeding — it is non-empty because SOME OTHER spec uploaded earlier in
+      // the same stack, which is a property of the run order and not of this
+      // test. Note the listing keeps soft-deleted rows, so a leftover from an
+      // upload spec that cleaned up after itself still renders here: trusting
+      // it would be trusting two accidents instead of one.
+      uploadSlug = await createSeedUpload(
+        admin.token,
+        TINY_PNG_HEX,
+        `ux6g-${Date.now()}-wide-name-to-measure.png`,
+      );
+      const uploadRows = await countAdminUploads(admin.token);
+      expect(
+        uploadRows,
+        "precondition: the Uploads tab must have rows, or its width is measured on an empty card",
+      ).toBeGreaterThan(0);
+      // Printed, not merely asserted: `> 0` is a boolean, and the question a
+      // reader of a green run actually has is HOW MUCH was on screen. The
+      // `list` reporter prints stdout from passing tests (see #1050), so the
+      // number lands in the log beside the verdict it qualifies.
+      console.log(`[2288] uploads registry rows at measure time: ${uploadRows}`);
       // A row on the ended-sessions sub-page, by the only route that makes
       // one: a session the log remembers whose subject is gone. Without it
       // that surface renders an empty-state card and measuring it would be
@@ -349,6 +381,10 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
       ).toEqual([]);
     } finally {
       await deleteSeedVhost(admin.token, vhostId);
+      // Reclaims the BYTES. The row stays listed — the admin DELETE
+      // soft-deletes on purpose, and that listing is the operator's audit
+      // trail, so there is nothing to "clean up" about it.
+      if (uploadSlug !== null) await adminDeleteUploadBySlug(admin.token, uploadSlug);
       await reapVisitors(admin.token, visitor.id);
     }
   });

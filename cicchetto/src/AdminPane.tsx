@@ -6,6 +6,7 @@ import AdminOverviewStats from "./AdminOverviewStats";
 import AdminSessionLogTab from "./AdminSessionLogTab";
 import AdminSessionsTab from "./AdminSessionsTab";
 import AdminSettingsTab from "./AdminSettingsTab";
+import AdminUploadsTab from "./AdminUploadsTab";
 import AdminUsersTab from "./AdminUsersTab";
 import AdminVhostsTab from "./AdminVhostsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
@@ -81,6 +82,7 @@ type TabKey =
   | "networks"
   | "vhosts"
   | "users"
+  | "uploads"
   | "events"
   | "session_log"
   | "settings"
@@ -103,6 +105,12 @@ const TABS: (AdminNavTab & { key: TabKey })[] = [
   { key: "networks", label: "Networks", group: "config" },
   { key: "vhosts", label: "Vhosts", group: "config" },
   { key: "users", label: "Users", group: "config" },
+  // issue 2288 — Configuration, not Live. The Live group is process state
+  // (who is connected, what just happened); the uploads registry is stored
+  // rows an operator ACTS on, the same shape as Users and Vhosts. It sits
+  // beside Settings on purpose: the cap this tab reports against is set
+  // there.
+  { key: "uploads", label: "Uploads", group: "config" },
   { key: "settings", label: "Settings", group: "config" },
   { key: "debug", label: "Debug", group: "diag" },
 ];
@@ -213,6 +221,17 @@ const AdminPane: Component<Props> = (props) => {
           data-adm-group={currentGroup()}
         >
           <AdminUsersTab />
+        </div>
+      </Show>
+      <Show when={isActive("uploads")}>
+        <div
+          role="tabpanel"
+          id="admin-tab-uploads"
+          aria-labelledby="admin-tab-uploads-handle"
+          class="admin-tab-panel"
+          data-adm-group={currentGroup()}
+        >
+          <AdminUploadsTab />
         </div>
       </Show>
       <Show when={isActive("events")}>
