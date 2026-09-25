@@ -19214,3 +19214,73 @@ its own upload (`grappaApi.createSeedUpload/3`, node-side, because an arrange
 block runs before the browser has a bearer in `localStorage`) and the count
 is PRINTED rather than merely asserted: `> 0` is a boolean, and the question
 a reader of a green run has is how much was on screen.
+<!-- entry #2295 -->
+
+---
+
+## 2026-09-26 — #2295: the band clearance goes to 24px, and the grep that says e2e is not a reader
+
+`--ios27-band-clearance` moves `16px → 24px` on the reporter's staging verdict
+(2026-09-24 23:46): *«è meglio di niente ma non ci siamo, ci aggiungerei altri
+8px»*. Fourth value in the token; the stylesheet comment carries all four and
+their provenance.
+
+**24 IS APPROVED, NOT COMPUTED, and the literal is written out for that
+reason.** The first 16 was a borrowed constant, 38 was read off a photographed
+ruler, the second 16 was an agent's derivation from a screenshot — this one is
+a distance judged by eye against the veil, on a phone nobody on this side owns.
+Spelling it `16px * 1.5` would read as arithmetic that never happened, and
+would make the next verdict expensive to honour unless it too landed on a
+multiple. Scope stays `.shell` only: `.error-banners`, `.diag-float` and
+`.credits-chrome` are anchored outside the shell's flow, stay under the veil,
+and remain **issue 2246** — deliberately uncured here.
+
+**🔴 A grep for the token NAME says e2e is not a reader. It is — it reads
+the VALUE.** `cicchetto/e2e/` carries **zero** occurrences of
+`--ios27-band-clearance` (positive control on that same path, which the usual
+one taken on `default.css` does not give: `ios27` = 2 hits under `e2e/`), and
+the conclusion that invites is the wrong one.
+`issue2190-ios27-compositor-band.spec.ts` duplicates the constant as
+`const CLEARANCE_PX` and asserts it `toBeCloseTo` the *live computed*
+`padding-top` delta, and again as `STUB_INSET_PX + CLEARANCE_PX`. The
+duplication is deliberate and correct — `e2e/` compiles against its own
+tsconfig and cannot reach into `src/`, the same reason `BAND_CLASS` is spelled
+out there — so the class is general: **a constant that crosses the src/e2e
+tsconfig boundary is duplicated BY DESIGN, and therefore has a reader that no
+grep for its name can find.** A retune that stops at the sheet leaves that spec
+asserting the old number against the new padding, and it fails on a live box
+rather than on a string. The spec now says so at the constant.
+
+**What the unit suite guards, and what it structurally cannot, measured.**
+Mutating the sheet back to `16px` with the test left at `24px` turns **exactly
+one** red across 372 files / 7607 tests: the pin in `ios27Band.test.ts`. The
+other five readers — the calc-shape assertion, the ungated-`.shell` negative
+control, the scrollback absence, the every-selector-carries-the-class census,
+and the `safeAreaInsetToken.test.ts` row — are shape-only and do **not** move.
+That is the pin working; it is also the coverage shape. vitest holds exactly
+one guard on the value and cannot see the e2e one at all.
+
+**A figure already stale on main, in the blast radius, fixed as a class.**
+`safeAreaInsetToken.test.ts` warned that dropping the inset term «would REPLACE
+the inset with 38px» — stale since `11fe3d0b7` (2026-09-19, the 38→16 retune),
+i.e. wrong before this slice touched anything. Its *assertion* never carried
+the value and so never went stale; the prose did. Same disease at four more
+restatements («the price», «THE 16px COMES OUT OF THE CONTENT BOX», «rather than
+equalling 16px», the e2e header). All **de-restated rather than re-numbered**,
+following the precedent the ADDITIVE note in that same sheet already set:
+*"stated without the numbers on purpose … a figure here would go stale while
+the trap did not."* The value is now a LIVE number in exactly three places, all
+three load-bearing and pinned — the declaration, the unit pin, the e2e constant
+— plus once inside the provenance narrative that recounts all four, which is
+history rather than a copy.
+
+**And the sheet's own prediction was falsified, so it is corrected in place
+rather than deleted.** It read «if 16 is still too much, 8 is the next step
+already proposed». The next step was not down to 8, it was up to 24. Retuning
+this token is not a descent towards a limit: each value is an independent
+verdict on the same phone, so the next one need not move the way the last one
+did, and a candidate must not be sized by continuing the series.
+
+**Not established here:** whether 24px actually clears the veil. Only the
+device can say that — the e2e cannot see the band at all, by its own header —
+and the number is vjt's via the reporter, not retunable from this side.
