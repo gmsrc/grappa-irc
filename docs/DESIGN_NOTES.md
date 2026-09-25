@@ -19284,3 +19284,34 @@ did, and a candidate must not be sized by continuing the series.
 **Not established here:** whether 24px actually clears the veil. Only the
 device can say that — the e2e cannot see the band at all, by its own header —
 and the number is vjt's via the reporter, not retunable from this side.
+<!-- entry #2296 -->
+
+---
+
+## 2026-09-25 — #2296: the sidebar × is painted on row hover, not on every row
+
+Request from #grappa: every sidebar row (channel → leave confirm, query →
+close, network header → disconnect confirm, pseudo-row → `forceParted`)
+carried a permanent ×, next to the unread badge, which made the list noisy.
+The × is now shown only while its row is hovered or holds keyboard focus.
+
+**One CSS rule, gated on `@media (hover: hover)`, no component change.**
+Every × on the surface is a `.sidebar-close` inside a
+`.sidebar-network-section li`, so one hide + one reveal covers all four row
+kinds and no row kind can drift into a different treatment.
+
+**`opacity`, never `display` or `visibility`.** Both of those take the button
+out of the tab order, and then `:focus-within` has nothing to reveal: a
+keyboard user could no longer reach the × at all. `display: none` also
+removes the box, so the unread badge would jump sideways on every hover.
+With `opacity: 0` the × keeps its space and stays tabbable; `:focus-within`
+brings it back as soon as focus enters the row, and the #96 focus ring on
+`.sidebar-close:focus-visible` still applies.
+
+**Touch keeps the always-visible ×.** A device without hover has nothing to
+reveal it with, so outside the `(hover: hover)` gate nothing changes. The
+gate tests the PRIMARY input, the same posture as the other hover gates in
+the sheet, so an iPad with a trackpad attached gets the desktop behaviour.
+
+Not decided here: whether anyone relied on the always-visible × on desktop.
+That is a product call for vjt, and it is one CSS block to revert.
