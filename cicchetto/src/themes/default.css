@@ -2170,10 +2170,12 @@ html.resize-dragging * {
    `:focus-within`: the latter also matches after a MOUSE click (the clicked
    window button keeps focus), which pinned the × on the row just clicked
    until focus moved elsewhere. `:focus-visible` only matches focus the
-   browser judges keyboard-driven. Gated on `(hover: hover)` because a touch
-   device has no hover to reveal it with: there it stays always visible,
-   exactly as before. */
-@media (hover: hover) {
+   browser judges keyboard-driven. Gated on `(hover: hover) and
+   (pointer: fine)` because a touch device has no hover to reveal it with:
+   there it stays always visible, exactly as before. `pointer: fine` on top
+   of `hover: hover` because some Android phones/tablets (stylus, some
+   browsers) report `hover: hover` while a finger is the primary pointer. */
+@media (hover: hover) and (pointer: fine) {
   .sidebar-network-section li .sidebar-close {
     opacity: 0;
   }

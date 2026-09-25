@@ -19295,7 +19295,8 @@ close, network header → disconnect confirm, pseudo-row → `forceParted`)
 carried a permanent ×, next to the unread badge, which made the list noisy.
 The × is now shown only while its row is hovered or holds keyboard focus.
 
-**One CSS rule, gated on `@media (hover: hover)`, no component change.**
+**One CSS rule, gated on `@media (hover: hover) and (pointer: fine)`, no
+component change.**
 Every × on the surface is a `.sidebar-close` inside a
 `.sidebar-network-section li`, so one hide + one reveal covers all four row
 kinds and no row kind can drift into a different treatment.
@@ -19316,9 +19317,13 @@ box, say). That read as a stuck hover. `:focus-visible` is the browser's own
 the × on the focused row and a mouse user never has it pinned.
 
 **Touch keeps the always-visible ×.** A device without hover has nothing to
-reveal it with, so outside the `(hover: hover)` gate nothing changes. The
-gate tests the PRIMARY input, the same posture as the other hover gates in
-the sheet, so an iPad with a trackpad attached gets the desktop behaviour.
+reveal it with, so outside the gate nothing changes. The gate is
+`(hover: hover) and (pointer: fine)` rather than the sheet's usual bare
+`(hover: hover)` (review feedback on the PR): some Android phones and
+tablets, with a stylus or on some browsers, report `hover: hover` while a
+finger is the primary pointer, and they must keep the always-visible ×.
+Both features test the PRIMARY input, so a touch-primary device stays on
+the touch side even with a mouse or trackpad attached.
 
 Not decided here: whether anyone relied on the always-visible × on desktop.
 That is a product call for vjt, and it is one CSS block to revert.

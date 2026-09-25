@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { coarsePointerBlocks, hoverGatedBlocks, themeCss } from "./helpers/themeCss";
+import { coarsePointerBlocks, mediaGatedBlocks, themeCss } from "./helpers/themeCss";
 
 // issue 2296 — the × on every sidebar row (channel → leave, query → close,
 // network header → disconnect, pseudo-row → forceParted) was always painted,
 // next to the unread badge on every row. It is now shown only while the row is
-// hovered or holds keyboard focus, on hover-capable input only.
+// hovered or holds keyboard focus, on a fine, hover-capable pointer only.
 //
 // WHY A SOURCE-LEVEL TEST. jsdom applies no stylesheet and Playwright cannot
 // emulate `(hover: none)` (`page.emulateMedia()` has no `hover` key), so what
@@ -12,14 +12,21 @@ import { coarsePointerBlocks, hoverGatedBlocks, themeCss } from "./helpers/theme
 // hoverGate.test.ts; the before/after screenshots in the PR are the witness
 // for what a browser paints.
 const stripped = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
-const gated = hoverGatedBlocks().join("\n");
+// `(hover: hover) and (pointer: fine)`, not `(hover: hover)` alone: some
+// Android phones/tablets (stylus, some browsers) report `hover: hover` while a
+// finger is the primary pointer, and a touch user must keep the always-visible
+// ×. A plain `(hover: hover)` block does not count as the gate.
+const gated = mediaGatedBlocks(
+  /@media\s*\(\s*hover\s*:\s*hover\s*\)\s*and\s*\(\s*pointer\s*:\s*fine\s*\)\s*\{/g,
+  "@media (hover: hover) and (pointer: fine)",
+).join("\n");
 
 const HIDE = /\.sidebar-network-section li \.sidebar-close\s*\{([^}]*)\}/;
 const REVEAL_HOVER = ".sidebar-network-section li:hover .sidebar-close";
 const REVEAL_FOCUS = ".sidebar-network-section li:has(:focus-visible) .sidebar-close";
 
 describe("issue 2296 — sidebar × is revealed on row hover, not always painted", () => {
-  it("hides the × behind a (hover: hover) gate", () => {
+  it("hides the × behind a (hover: hover) and (pointer: fine) gate", () => {
     const body = HIDE.exec(gated)?.[1] ?? "";
     expect(body).toMatch(/opacity:\s*0\s*(;|$)/);
   });
