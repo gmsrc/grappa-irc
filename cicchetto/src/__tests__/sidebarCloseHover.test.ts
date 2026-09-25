@@ -16,7 +16,7 @@ const gated = hoverGatedBlocks().join("\n");
 
 const HIDE = /\.sidebar-network-section li \.sidebar-close\s*\{([^}]*)\}/;
 const REVEAL_HOVER = ".sidebar-network-section li:hover .sidebar-close";
-const REVEAL_FOCUS = ".sidebar-network-section li:focus-within .sidebar-close";
+const REVEAL_FOCUS = ".sidebar-network-section li:has(:focus-visible) .sidebar-close";
 
 describe("issue 2296 — sidebar × is revealed on row hover, not always painted", () => {
   it("hides the × behind a (hover: hover) gate", () => {
@@ -26,7 +26,7 @@ describe("issue 2296 — sidebar × is revealed on row hover, not always painted
 
   // opacity, never display/visibility: `display: none` reflows the row (the
   // unread badge jumps on hover), and both it and `visibility: hidden` drop the
-  // button from the tab order — so `:focus-within` could never reveal it.
+  // button from the tab order — so the focus reveal could never fire.
   it("keeps the × in layout and in the tab order while hidden", () => {
     const body = HIDE.exec(gated)?.[1] ?? "";
     expect(body).not.toMatch(/display\s*:/);
@@ -40,6 +40,15 @@ describe("issue 2296 — sidebar × is revealed on row hover, not always painted
       `${REVEAL_FOCUS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`,
     ).exec(gated);
     expect(reveal?.[1] ?? "").toMatch(/opacity:\s*1\s*(;|$)/);
+  });
+
+  // Reported in the interactive test: `:focus-within` also matches after a
+  // MOUSE click (the clicked window button keeps focus), so the × of the row
+  // just clicked stayed painted after the pointer left, until focus moved to
+  // e.g. the compose box. `:focus-visible` is the browser's own "this focus
+  // came from the keyboard" heuristic, so only a keyboard user pins it.
+  it("does not pin the × on a row that was merely clicked", () => {
+    expect(gated).not.toMatch(/li:focus-within \.sidebar-close/);
   });
 
   // Touch has no hover: the hide must not escape the gate, or a phone loses

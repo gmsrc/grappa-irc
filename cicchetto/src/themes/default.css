@@ -2165,20 +2165,21 @@ html.resize-dragging * {
 /* issue 2296 — the × is painted only while its row is hovered or holds
    keyboard focus, instead of on every row next to the unread badge.
    `opacity`, never `display`/`visibility`: the × keeps its box so the badge
-   does not jump on hover, and it stays in the tab order so `:focus-within`
-   can reveal it for a keyboard user. `:focus-within` also matches after a
-   mouse click (the clicked window button keeps focus), so the row just
-   clicked keeps its × until focus moves: accepted, it is the active
-   window. Gated on `(hover: hover)` because a
-   touch device has no hover to reveal it with: there it stays always
-   visible, exactly as before. */
+   does not jump on hover, and it stays in the tab order so a keyboard user
+   can reach it. The focus reveal is `:has(:focus-visible)`, NOT
+   `:focus-within`: the latter also matches after a MOUSE click (the clicked
+   window button keeps focus), which pinned the × on the row just clicked
+   until focus moved elsewhere. `:focus-visible` only matches focus the
+   browser judges keyboard-driven. Gated on `(hover: hover)` because a touch
+   device has no hover to reveal it with: there it stays always visible,
+   exactly as before. */
 @media (hover: hover) {
   .sidebar-network-section li .sidebar-close {
     opacity: 0;
   }
 
   .sidebar-network-section li:hover .sidebar-close,
-  .sidebar-network-section li:focus-within .sidebar-close {
+  .sidebar-network-section li:has(:focus-visible) .sidebar-close {
     opacity: 1;
   }
 }

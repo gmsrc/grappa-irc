@@ -19301,16 +19301,19 @@ Every × on the surface is a `.sidebar-close` inside a
 kinds and no row kind can drift into a different treatment.
 
 **`opacity`, never `display` or `visibility`.** Both of those take the button
-out of the tab order, and then `:focus-within` has nothing to reveal: a
+out of the tab order, and then the focus reveal has nothing to reveal: a
 keyboard user could no longer reach the × at all. `display: none` also
 removes the box, so the unread badge would jump sideways on every hover.
-With `opacity: 0` the × keeps its space and stays tabbable; `:focus-within`
-brings it back as soon as focus enters the row, and the #96 focus ring on
-`.sidebar-close:focus-visible` still applies. `:focus-within` is not
-keyboard-only: after a mouse click the window button keeps focus, so the
-row just clicked keeps its × until focus moves elsewhere. Accepted
-rather than narrowed to `li:has(:focus-visible)`, since that row is the
-active window and the one most likely to be closed next.
+With `opacity: 0` the × keeps its space and stays tabbable, and the #96
+focus ring on `.sidebar-close:focus-visible` still applies.
+
+**The focus reveal is `li:has(:focus-visible)`, not `li:focus-within`.**
+The first cut used `:focus-within`, and the interactive test caught it:
+after a MOUSE click the window button keeps focus, so the row just clicked
+kept its × after the pointer left, until focus moved elsewhere (the compose
+box, say). That read as a stuck hover. `:focus-visible` is the browser's own
+"this focus came from the keyboard" heuristic, so a keyboard user still gets
+the × on the focused row and a mouse user never has it pinned.
 
 **Touch keeps the always-visible ×.** A device without hover has nothing to
 reveal it with, so outside the `(hover: hover)` gate nothing changes. The
