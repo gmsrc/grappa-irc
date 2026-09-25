@@ -19325,5 +19325,27 @@ finger is the primary pointer, and they must keep the always-visible ×.
 Both features test the PRIMARY input, so a touch-primary device stays on
 the touch side even with a mouse or trackpad attached.
 
+**The reverse case needs its own block: `@media (any-pointer: coarse)`.** A
+2-in-1 (touchscreen laptop) whose PRIMARY pointer is the mouse matches the
+gate above, and a finger on its screen has no hover to reveal the ×.
+`any-pointer` asks whether ANY input is coarse, so a block under it forces
+the × back to `opacity: 1`. It has the hide's specificity, so it must stay
+AFTER the gate in the sheet; the test pins the order. The price is that a
+2-in-1 keeps the always-visible × even when used with the mouse, which is
+the side to err on: a hidden × on a touch screen cannot be reached at all.
+
+**The hover / selected bar is painted on the ROW, so it reaches the right
+edge (vjt, on #grappa).** Before, the bar was the window button's
+background, so it stopped short of the umode chip and the ×, which then
+sat outside the highlighted row. It is now `li:hover` / `li.selected`, and
+the old button-only backgrounds are gone rather than layered underneath.
+With the pointer ON the ×, only the × is lit: the row rule is written as
+`li:hover:not(:has(.sidebar-close:hover))`, so it stops MATCHING rather
+than painting `transparent`, which lets a network header whose × is hovered
+fall back to its #71 tint. On the selected row the accent text colour
+still marks the selection while the × is hovered. The row rule and the
+header tint have the same `(0,2,1)` base on the same `<li>`, so the row
+rule must come after the tint; the test pins that order too.
+
 Not decided here: whether anyone relied on the always-visible × on desktop.
 That is a product call for vjt, and it is one CSS block to revert.
