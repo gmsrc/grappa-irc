@@ -19306,7 +19306,11 @@ keyboard user could no longer reach the × at all. `display: none` also
 removes the box, so the unread badge would jump sideways on every hover.
 With `opacity: 0` the × keeps its space and stays tabbable; `:focus-within`
 brings it back as soon as focus enters the row, and the #96 focus ring on
-`.sidebar-close:focus-visible` still applies.
+`.sidebar-close:focus-visible` still applies. `:focus-within` is not
+keyboard-only: after a mouse click the window button keeps focus, so the
+row just clicked keeps its × until focus moves elsewhere. Accepted
+rather than narrowed to `li:has(:focus-visible)`, since that row is the
+active window and the one most likely to be closed next.
 
 **Touch keeps the always-visible ×.** A device without hover has nothing to
 reveal it with, so outside the `(hover: hover)` gate nothing changes. The

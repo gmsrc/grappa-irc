@@ -2166,7 +2166,10 @@ html.resize-dragging * {
    keyboard focus, instead of on every row next to the unread badge.
    `opacity`, never `display`/`visibility`: the × keeps its box so the badge
    does not jump on hover, and it stays in the tab order so `:focus-within`
-   can reveal it for a keyboard user. Gated on `(hover: hover)` because a
+   can reveal it for a keyboard user. `:focus-within` also matches after a
+   mouse click (the clicked window button keeps focus), so the row just
+   clicked keeps its × until focus moves: accepted, it is the active
+   window. Gated on `(hover: hover)` because a
    touch device has no hover to reveal it with: there it stays always
    visible, exactly as before. */
 @media (hover: hover) {
