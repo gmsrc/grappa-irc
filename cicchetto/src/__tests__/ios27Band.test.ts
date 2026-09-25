@@ -306,26 +306,36 @@ describe("applyIos27BandClass — the <html> hook", () => {
 });
 
 // The CSS half. The clearance is a stylesheet rule, so what is pinnable here
-// is the SOURCE: that the value is the derived 16px, that the rule ADDS it
+// is the SOURCE: that the value is the approved 24px, that the rule ADDS it
 // to the inset rather than replacing it, and — the property the ruling asks
 // for in point 5 — that no rule reading it is reachable without the class.
 // jsdom cascades none of this and resolves no length; the RESOLVED px are
 // asserted in e2e (issue2190-ios27-compositor-band.spec.ts), which is also
 // where the "exceeds the inset" half becomes a number rather than a shape.
 describe("the clearance rules are gated — no platform without the class pays", () => {
-  it("declares the derived 16px exactly once, on the gating class", () => {
-    // THREE numbers have sat in this token and they are NOT interchangeable,
+  it("declares the approved 24px exactly once, on the gating class", () => {
+    // FOUR numbers have sat in this token and they are NOT interchangeable,
     // which is why the value is asserted here at all rather than left to the
     // sheet. The FIRST 16 was a reported constant — what other PWA authors
     // had used — with nothing behind it; it shipped and did not cure the
     // report. 38 replaced it off probe photographs: the veil ends 100 CSS px
     // from the SCREEN edge, of which the first 62 are the status bar and are
     // ceded anyway. That correctly clears the whole veil, and on the device
-    // it read as too far down. THIS 16 is derived from a measured screenshot
-    // of the installed PWA and trades some residual veil at the top of the
-    // chrome for 22px of vertical space. Same digits as the first one, an
-    // entirely different claim — the stylesheet comment carries the numbers.
-    expect(ruleBody(`html.${IOS27_BAND_CLASS}`)).toMatch(/--ios27-band-clearance:\s*16px;/);
+    // it read as too far down. The SECOND 16 is derived from a measured
+    // screenshot of the installed PWA and trades some residual veil at the
+    // top of the chrome for 22px of vertical space — same digits as the
+    // first one, an entirely different claim.
+    //
+    // THIS 24 is APPROVED, NOT COMPUTED, and that is why the literal is
+    // written out here and in the sheet rather than expressed as a step off
+    // the last value. It is the reporter's verdict on staging (2026-09-24
+    // 23:46, issue 2295) that the second 16 is «meglio di niente ma non ci
+    // siamo, ci aggiungerei altri 8px» — a distance judged by eye against
+    // the veil on a phone nobody on this side owns. A `16 * 1.5` spelling
+    // would read as arithmetic that never happened, and would make the next
+    // verdict expensive to honour unless it too fell on a multiple.
+    // The stylesheet comment carries all four numbers and their provenance.
+    expect(ruleBody(`html.${IOS27_BAND_CLASS}`)).toMatch(/--ios27-band-clearance:\s*24px;/);
   });
 
   it("ADDS the clearance to the inset on `.shell` — never replaces it", () => {
@@ -342,8 +352,8 @@ describe("the clearance rules are gated — no platform without the class pays",
     // annihilates it by overwriting it.
     //
     // So the assertion is on the SUM, and deliberately NOT an equality
-    // against `16px` — an equality against the bare clearance is precisely
-    // the bug, written down and blessed. Both terms, in a calc, or red.
+    // against the bare clearance — that equality is precisely the bug,
+    // written down and blessed. Both terms, in a calc, or red.
     const gated = ruleBody(`html.${IOS27_BAND_CLASS} .shell`);
     expect(gated).toContain(
       "padding-top: calc(var(--safe-area-inset-top) + var(--ios27-band-clearance));",
