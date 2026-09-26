@@ -1,5 +1,5 @@
-// issue 2190 — the iOS/iPadOS 27 compositor band, and the 16px of clearance
-// gated under it on `.shell`.
+// issue 2190 — the iOS/iPadOS 27 compositor band, and the clearance gated
+// under it on `.shell`.
 //
 // WHAT THIS SPEC CAN AND CANNOT SEE. It cannot see the band: that is painted
 // by the iOS 27 compositor ABOVE the web view, on a device nobody on this
@@ -16,10 +16,10 @@
 // 🔴 WHY THE INSET IS STUBBED, AND WHY THE SPEC IS WORTHLESS WITHOUT IT.
 // Playwright synthesizes no safe-area inset on any engine — they resolve to
 // 0, measured in issue913-rail-menu-safe-area.spec.ts. At a zero inset
-// `calc(var(--safe-area-inset-top) + 16px)` and a bare `16px` compute the
-// SAME number, so the headline regression this rule guards against — the
-// gated declaration OVERRIDING `.shell`'s inset instead of adding to it,
-// which pulls content UP under the Dynamic Island instead of down — is
+// `calc(var(--safe-area-inset-top) + CLEARANCE_PX)` and a bare `CLEARANCE_PX`
+// compute the SAME number, so the headline regression this rule guards
+// against — the gated declaration OVERRIDING `.shell`'s inset instead of
+// adding to it, which pulls content UP under the Dynamic Island — is
 // invisible at inset 0. Re-declaring `--safe-area-inset-top` at a non-zero
 // length on a `:root:root` override is what makes the two cases different
 // numbers, and it is the same seam #913 uses to prove its own wiring.
@@ -53,11 +53,25 @@ const CHANNEL = AUTOJOIN_CHANNELS[0] as string;
 // the stylesheet (`src/__tests__/ios27Band.test.ts`).
 const BAND_CLASS = "is-ios27-band";
 
-// The clearance. DERIVED, not measured: 38px cleared the veil completely and
-// vjt's verdict on the device was «ok meglio ma TROPPO sotto», so this trades
-// some residual veil at the very top of the chrome for 22px of vertical space.
-// The stylesheet comment carries the screenshot numbers behind it.
-const CLEARANCE_PX = 16;
+// The clearance, DUPLICATED from the stylesheet on purpose: `e2e/` compiles
+// against its own tsconfig and does not reach into `src/`, the same reason
+// BAND_CLASS is spelled out above. The unit suite pins the sheet's literal;
+// this file pins what the literal RESOLVES to under a layout engine, which is
+// the only place the two halves of the calc become different numbers.
+//
+// 🔴 IT MOVES, and it has moved four times. A retune of the token that stops
+// at the sheet leaves this spec asserting the OLD number against the NEW
+// padding, and it fails on the live box rather than on a string — so a grep
+// for the token NAME does not find this file and will tell you e2e is not a
+// reader. It is; it reads the value, not the name.
+//
+// APPROVED, NOT DERIVED (issue 2295): 38px cleared the veil completely and
+// read «TROPPO sotto» on the device; the 16 that replaced it was derived off
+// a screenshot and read «meglio di niente ma non ci siamo, ci aggiungerei
+// altri 8px». 24 is that last sentence and nothing else — do not respell it
+// as a multiple of the previous value. The stylesheet comment carries all
+// four numbers and their provenance.
+const CLEARANCE_PX = 24;
 
 // The stubbed inset. An arbitrary non-zero length — its only job is to be
 // distinguishable from both 0 and from CLEARANCE_PX, so that "added" and
@@ -142,7 +156,7 @@ async function measure(page: Page): Promise<Geometry> {
   });
 }
 
-test("@webkit issue2190 — iOS 27 PWA shifts the whole shell 16px, iOS 26 renders identically", async ({
+test("@webkit issue2190 — iOS 27 PWA shifts the whole shell by the clearance, iOS 26 renders identically", async ({
   browser,
 }) => {
   const on = await bootInstalledPwa(browser, 27);

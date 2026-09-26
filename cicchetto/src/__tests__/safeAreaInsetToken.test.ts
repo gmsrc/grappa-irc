@@ -206,9 +206,14 @@ const CENSUS = [
   // it is an OVERRIDE of the `.shell | padding-top` row above, gated on the
   // iOS 27 compositor-band class, and it restates the inset precisely so it
   // can add to it. Dropping the `var(--safe-area-inset-top)` term would not
-  // shrink this census by a row, it would REPLACE the inset with 38px and
-  // pull the content up under the Dynamic Island — the #913 trap run in
-  // reverse. `ios27Band.test.ts` owns that call; this row only records that
-  // a second consumer of the top inset now exists, deliberately.
+  // shrink this census by a row, it would REPLACE the inset with the bare
+  // clearance and pull the content up under the Dynamic Island — the #913
+  // trap run in reverse. Spelled without the figure since issue 2295: it
+  // read «38px» from `11fe3d0b7` (2026-09-19, the 38→16 retune) onward, a
+  // stale number inside the warning about a trap, which is how the trap
+  // gets believed. The assertion below never carried the value and so never
+  // went stale — the prose did. Do not put it back.
+  // `ios27Band.test.ts` owns that call; this row only records that a second
+  // consumer of the top inset now exists, deliberately.
   "html.is-ios27-band .shell | padding-top: calc(var(--safe-area-inset-top) + var(--ios27-band-clearance))",
 ];

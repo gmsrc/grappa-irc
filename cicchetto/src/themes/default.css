@@ -3984,8 +3984,8 @@ button.topic-bar-windows-opener {
    BELOW it. See the ADDITIVE note at the rule for how the two combine,
    because getting that wrong is a regression and not a rounding error.
 
-   WHERE 16px COMES FROM, AND WHY IT IS NOT THE 16 THIS ISSUE STARTED WITH.
-   Three numbers have sat in this token, and conflating them is how the
+   WHERE 24px COMES FROM, AND WHY IT IS NOT THE 16 THIS ISSUE STARTED WITH.
+   FOUR numbers have sat in this token, and conflating them is how the
    history stops making sense.
 
    The FIRST 16 was a reported constant — what other PWA authors had used —
@@ -4000,7 +4000,7 @@ button.topic-bar-windows-opener {
    but too far down. Optimising for the last pixel of the veil bought more
    dead space above the chrome than the residual veil was worth.
 
-   THIS 16 is derived from that verdict, and it is a DIFFERENT KIND OF
+   The SECOND 16 is derived from that verdict, and it is a DIFFERENT KIND OF
    NUMBER from either. On a 1320x2868 @3x screenshot of the installed PWA
    the bottom of the Dynamic Island sits at 50.7 CSS px and the top of cic's
    chrome at 107, leaving 56 CSS px of dead black between them; the bar
@@ -4010,17 +4010,38 @@ button.topic-bar-windows-opener {
    the chrome to buy back vertical space, where 38 conceded space to clear
    the veil completely.
 
+   THIS 24 is the only one of the four that nobody COMPUTED. The second 16
+   went to the device, and the reporter's verdict on staging (2026-09-24
+   23:46, issue 2295) was that it is better than nothing but not there yet —
+   «ci aggiungerei altri 8px». 24 IS that sentence: a distance judged by eye
+   against the veil on the phone, not a reading off a ruler and not a ratio.
+   🔴 Do NOT re-derive it and do NOT respell it as `16px * 1.5` or any other
+   multiplier — the next verdict need not land on a multiple of anything,
+   and a constant writable only in fixed steps invites rounding the
+   MEASUREMENT to keep the factor tidy. Where it lands, by arithmetic on the
+   screenshot above and NOT a new reading: the top of the chrome at 93 with
+   42 px of black, giving back 8 of the 22 the second 16 took.
+
    🔴 PROVENANCE, and it is three different people, so do not collapse it.
    The probe measurements and the screenshot measurements above are the work
    of the fleet agent on this issue — the GitHub comments carrying them are
    authored under vjt's account because of how the fleet authenticates, and
-   the readings are NOT his. 16 is that agent's DERIVATION from those
-   numbers: vjt did not compute it, he APPROVED it («16 first», #grappa
-   2026-09-19 10:36) after supplying the verdict that 38 sat too low — and,
-   earlier, the ruling that the clearance belongs on `.shell`. Derived by
-   the agent, endorsed by him: both halves, neither collapsed into the
-   other. If 16 is still too much, 8 is the next step already proposed, and
-   it is one token.
+   the readings are NOT his. The second 16 is that agent's DERIVATION from
+   those numbers: vjt did not compute it, he APPROVED it («16 first»,
+   #grappa 2026-09-19 10:36) after supplying the verdict that 38 sat too low
+   — and, earlier, the ruling that the clearance belongs on `.shell`.
+   Derived by the agent, endorsed by him: both halves, neither collapsed
+   into the other. 24 splits the same way with the first half empty: the
+   reporter supplied the distance and vjt carried it, and no agent computed
+   anything.
+
+   🔴 AND THE PREDICTION THIS PARAGRAPH USED TO END ON WAS WRONG — kept here
+   corrected rather than deleted, because the correction is the lesson. It
+   read «if 16 is still too much, 8 is the next step already proposed». The
+   next step was not DOWN to 8, it was UP to 24. Retuning this token is not
+   a descent towards a limit: every value is an independent verdict on the
+   same phone, so do not assume the next one moves the way the last one did,
+   and do not size a candidate by continuing the series.
 
    GATED IN JS, NOT BY A MEDIA QUERY, and that is deliberate (ruling point 5):
    the gate is `isIos() AND isStandalonePwa() AND major >= 27`, which no media
@@ -4039,8 +4060,11 @@ button.topic-bar-windows-opener {
    runs from 62 to at least 110 CSS px REGARDLESS of the root font size while
    the veil dies at 100 — the whole of that window is chrome. Moving the
    clearance to the shell shifts the entire flow instead, chrome included.
-   THE PRICE, accepted with the ruling: 16 px of vertical screen, permanently,
-   on every iOS 27 installed PWA.
+   THE PRICE, accepted with the ruling: the whole of the clearance in
+   vertical screen, permanently, on every iOS 27 installed PWA. The figure
+   is NOT restated here — it is declared once, below, and it has moved four
+   times; a copy of it in this paragraph is a line that goes stale while
+   everything around it stays true.
 
    🔴 ADDITIVE, AND THE OBVIOUS SPELLING IS A REGRESSION. `.shell` ALREADY
    declares `padding-top: var(--safe-area-inset-top)`. A gated
@@ -4057,7 +4081,7 @@ button.topic-bar-windows-opener {
    the other one is easy to walk into. So the inset is RESTATED here, the way
    a padding always must be, since it cannot be written as "whatever it was,
    plus". `__tests__/ios27Band.test.ts` asserts the sum EXCEEDS the inset
-   rather than equalling 16px: an equality against the bare clearance is the
+   rather than equalling the bare clearance: that equality IS the
    regression, written down and blessed.
 
    IT SUMS THE TOKEN, NOT WHICHEVER DECLARATION WON. There are TWO ungated
@@ -4077,12 +4101,14 @@ button.topic-bar-windows-opener {
    compete in the phone's cascade; OUTSIDE it, at 0,2,1, it beats BOTH
    declarations on BOTH renders. Keep it out of the media query.
 
-   THE 16px COMES OUT OF THE CONTENT BOX — the shell does NOT get taller.
-   `box-sizing: border-box` is global and `.shell` is `height: 100dvh`, so
-   padding is consumed FROM that height rather than added to it (the same
-   mechanism the mobile inset note describes). That IS the cost vjt accepted:
-   16 px less usable vertical area, not 16 px of new box. Do not "optimise"
-   this later believing the shell grew.
+   THE CLEARANCE COMES OUT OF THE CONTENT BOX — the shell does NOT get
+   taller. `box-sizing: border-box` is global and `.shell` is
+   `height: 100dvh`, so padding is consumed FROM that height rather than
+   added to it (the same mechanism the mobile inset note describes). That IS
+   the cost vjt accepted: that much less usable vertical area, not that much
+   new box. Do not "optimise" this later believing the shell grew. Stated
+   without the figure for the same reason the ADDITIVE note above is: the
+   mechanism is fixed and the number is not.
 
    STILL VEILED AFTER THIS, and it is the only surface left: the overlays
    anchored to the top that sit OUTSIDE the shell's flow and start at the
@@ -4091,7 +4117,7 @@ button.topic-bar-windows-opener {
    needs to be readable, and it stays under the veil. Tracked separately;
    deliberately not fixed here. */
 html.is-ios27-band {
-  --ios27-band-clearance: 16px;
+  --ios27-band-clearance: 24px;
 }
 
 /* The one rule. See the ADDITIVE note above before touching the `calc`. */
